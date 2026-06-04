@@ -1,0 +1,7 @@
+node_modules/
+*.log
+tor/data/
+tor/hs/
+tor/tor.pid
+.secret
+.env
