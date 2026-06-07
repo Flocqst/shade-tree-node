@@ -68,19 +68,27 @@ Four hypotheses were run as real requests against the live gateway. All confirme
 Gateway-side tally over the run: **16 PASS, 32 DROP, 7 distinct members**, drops
 broken down as 26 invalid-proof, 4 rate-limited, 1 wrong-group-root, 1 no-proof.
 
-**End-to-end latency**, measured from the laptop through the full path to Google and
-back (laptop, shim, Tor rendezvous, droplet gateway, Google, return):
+**End-to-end latency and load.** A 1000-request load test through the full path
+(laptop, shim, Tor rendezvous, droplet gateway, destination, return) at concurrency
+10 returned **1000 of 1000 successful, zero dropped**, at 4.88 requests per second
+sustained. Latency over the run:
 
 | | time |
 |---|---|
-| direct to Google, no tunnel (baseline) | ~0.15 s |
-| through the gated path, warm | ~1.7 to 2.2 s |
-| first request after starting the client (one-time setup) | ~7 s |
+| direct, no tunnel (baseline) | ~0.15 s |
+| through the gated path, median (p50) | 2.00 s |
+| p95 / p99 | 2.28 s / 2.67 s |
+| max | 3.02 s |
+| first request after client start (one-time setup) | ~7 s |
 
-The warm overhead is the six-hop Tor path plus the gateway's own clearnet fetch.
-The one-time cost is circuit and rendezvous setup, paid once per client session, not
-per request. This is the price of having no exit node and never exposing the client
-IP, and for a search egress it is well within usable.
+900 of the 1000 requests fell between 1.8 and 2.2 s: a tight band with no long tail.
+The warm overhead is the six-hop Tor path plus the gateway's own clearnet fetch. The
+one-time setup is circuit and rendezvous, paid once per session, not per request. A
+30-request Google sample matched (~2.0 s median, all 200); the bulk ran against
+api.ipify to avoid the destination's own bot detection at volume, which is the
+single-clean-IP limit, not a transport fault. This is the price of having no exit
+node and never exposing the client IP, and for a search egress it is well within
+usable.
 
 Headline on abuse: there is nothing to IP-ban, because the gateway never sees a
 client IP. The only lever against a member is its per-epoch budget, and that touches
