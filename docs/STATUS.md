@@ -91,6 +91,19 @@ six-hop Tor path plus the gateway's own fetch; the one-time setup is circuit and
 rendezvous, paid once per session. For a search egress this is well within usable,
 and the clean IP held up under the full thousand.
 
+**Reliability under cold circuits (1-hour soak).** To stress the worst case, a
+separate run forced a fresh Tor rendezvous circuit on every request (SOCKS stream
+isolation, nothing warm) for one hour: **3903 requests, 99.90% succeeded, 0.10%
+dropped (4)**. All four drops were Tor circuit-build failures (`socks-fail`) that
+never reached the gateway, which is the proof they were transport faults and not the
+gate: the gateway's own DROP count did not move. The four landed in the first 27
+minutes; the final 33 minutes and ~2000 requests had zero. Cold latency runs higher
+because every request rebuilds a rendezvous: p50 4.95 s, p95 9.40 s, p99 13.02 s
+(one 46 s outlier). Real usage reuses warm circuits and sits near the 1.69 s warm
+median, so these cold numbers are the floor, not the typical. Every successful
+request egressed from the clean IP, and the gateway log gained ~3899 PASS across the
+8 rotated members.
+
 Headline on abuse: there is nothing to IP-ban, because the gateway never sees a
 client IP. The only lever against a member is its per-epoch budget, and that touches
 only that one nullifier. Junk is cheap to reject, a failed proof costs a verify and
