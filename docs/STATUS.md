@@ -68,27 +68,28 @@ Four hypotheses were run as real requests against the live gateway. All confirme
 Gateway-side tally over the run: **16 PASS, 32 DROP, 7 distinct members**, drops
 broken down as 26 invalid-proof, 4 rate-limited, 1 wrong-group-root, 1 no-proof.
 
-**End-to-end latency and load.** A 1000-request load test through the full path
-(laptop, shim, Tor rendezvous, droplet gateway, destination, return) at concurrency
-10 returned **1000 of 1000 successful, zero dropped**, at 4.88 requests per second
-sustained. Latency over the run:
+**End-to-end latency and load.** A 1000-request load test through the full path to
+Google and back (laptop, shim, Tor rendezvous, droplet gateway, google.com, return)
+at concurrency 10 returned **1000 of 1000 with HTTP 200, zero dropped and zero
+blocked**, at 5.46 requests per second sustained. Response sizes were uniform
+(~80 KB, the real homepage, not a captcha or block page), so the clean egress IP
+served Google at this volume without tripping bot detection. Latency:
 
 | | time |
 |---|---|
 | direct, no tunnel (baseline) | ~0.15 s |
-| through the gated path, median (p50) | 2.00 s |
-| p95 / p99 | 2.28 s / 2.67 s |
-| max | 3.02 s |
+| through the gated path, median (p50) | 1.69 s |
+| p90 / p95 | 2.09 s / 2.33 s |
+| p99 / max | 8.04 s / 8.78 s |
 | first request after client start (one-time setup) | ~7 s |
 
-900 of the 1000 requests fell between 1.8 and 2.2 s: a tight band with no long tail.
-The warm overhead is the six-hop Tor path plus the gateway's own clearnet fetch. The
-one-time setup is circuit and rendezvous, paid once per session, not per request. A
-30-request Google sample matched (~2.0 s median, all 200); the bulk ran against
-api.ipify to avoid the destination's own bot detection at volume, which is the
-single-clean-IP limit, not a transport fault. This is the price of having no exit
-node and never exposing the client IP, and for a search egress it is well within
-usable.
+About 850 of the 1000 requests fell between 1.4 and 2.0 s. The slow end is a ~1% tail
+(ten requests over 5 s) from Tor circuit variance, not the destination. An earlier
+1000-request run against api.ipify gave the same shape (zero drops, ~2.0 s median),
+so the transport is consistent across destinations. The warm overhead is the
+six-hop Tor path plus the gateway's own fetch; the one-time setup is circuit and
+rendezvous, paid once per session. For a search egress this is well within usable,
+and the clean IP held up under the full thousand.
 
 Headline on abuse: there is nothing to IP-ban, because the gateway never sees a
 client IP. The only lever against a member is its per-epoch budget, and that touches
