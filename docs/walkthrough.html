@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>One search, gated: request lifecycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f1e9; --panel:#fbf9f3; --ink:#17150f; --accent:#d6481f;
+    --slate:#2f5562; --green:#3f6b4f; --muted:#8c867a; --line:#ded7c7;
+    --line-strong:#c9c0ab; --shadow:0 1px 0 #fff, 0 18px 40px -28px rgba(23,21,15,.5);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    font-size:16px; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:32px 32px; background-position:-1px -1px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 28px 120px;position:relative}
+
+  header.top{display:flex;align-items:baseline;justify-content:space-between;gap:18px;border-bottom:1.5px solid var(--ink);padding-bottom:14px;margin-bottom:22px}
+  .brand{font-family:"Fraunces",serif;font-weight:600;font-size:25px;letter-spacing:-.01em;line-height:1.05}
+  .brand i{font-style:italic;color:var(--accent)}
+  .sub{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.16em;color:var(--muted)}
+  .counter{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--muted);white-space:nowrap}
+  .counter b{color:var(--ink)}
+
+  .livebar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--muted);margin:-4px 0 18px;padding:9px 13px;background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow)}
+  .livebar .lv{display:inline-flex;align-items:center;gap:7px;color:var(--accent);font-weight:700;letter-spacing:.16em}
+  .livebar .lv::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:beat 1.7s ease-out infinite}
+  @keyframes beat{0%{box-shadow:0 0 0 0 rgba(214,72,31,.5)}70%{box-shadow:0 0 0 7px rgba(214,72,31,0)}100%{box-shadow:0 0 0 0 rgba(214,72,31,0)}}
+  .livebar b{color:var(--ink);font-weight:700}
+
+  /* ---- schematic ---- */
+  .stage{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow);padding:6px 6px 0}
+  svg.trace{display:block;width:100%;height:auto}
+  .zoneband{fill:#efece2}
+  .zonelabel{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;fill:var(--muted)}
+  .seg{stroke:var(--line-strong);stroke-width:2;fill:none}
+  .seg.setup{stroke-dasharray:3 5;stroke:var(--line-strong)}
+  .seg.lit{stroke:var(--accent);stroke-width:3;stroke-dasharray:7 6;animation:flow 1s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-26}}
+  .node rect{fill:#fff;stroke:var(--line-strong);stroke-width:1.5;rx:3}
+  .node .nlabel{font-family:"JetBrains Mono",monospace;font-size:11.5px;fill:var(--ink);font-weight:500}
+  .node .nsub{font-family:"JetBrains Mono",monospace;font-size:9.5px;fill:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .node.lit rect{stroke:var(--accent);stroke-width:2.5;fill:#fff6f2}
+  .node.lit .nlabel{fill:var(--accent);font-weight:700}
+  .node.verify rect{fill:#fdeee9}
+  .node.verify.lit rect{stroke:var(--accent);stroke-width:3}
+  .node.dim{opacity:.42}
+  .pulse{opacity:0}
+  .node.lit .pulse{opacity:1}
+  .dot{fill:var(--accent)}
+
+  /* ---- content ---- */
+  .grid{display:grid;grid-template-columns:1.02fr .98fr;gap:26px;margin-top:24px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+  .kicker{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 8px}
+  h2.step{font-family:"Fraunces",serif;font-weight:600;font-size:30px;line-height:1.08;letter-spacing:-.015em;margin:0 0 14px}
+  h2.step i{font-style:italic}
+  .body p{margin:0 0 13px;max-width:46ch}
+  .body strong{font-weight:600}
+  .body .em{color:var(--accent);font-weight:600}
+  .tag{display:inline-block;font-family:"JetBrains Mono",monospace;font-size:12px;background:#efece2;border:1px solid var(--line-strong);border-radius:3px;padding:1px 6px;color:var(--slate)}
+
+  .data{font-family:"JetBrains Mono",monospace;font-size:12.5px;line-height:1.5}
+  .card{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow);overflow:hidden}
+  .card h4{margin:0;padding:9px 13px;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);background:#f1eee4}
+  .card .inner{padding:13px}
+  pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:"JetBrains Mono",monospace;font-size:12px;line-height:1.5;color:var(--ink)}
+  pre .k{color:var(--slate)} pre .s{color:var(--green)} pre .n{color:var(--accent)} pre .c{color:var(--muted)}
+  .trunc{color:var(--muted)}
+
+  .roster{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}
+  .roster .m{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dotted var(--line-strong);padding:3px 0}
+  .roster .m b{color:var(--ink);font-weight:700}
+  .roster .m span{color:var(--muted)}
+
+  ul.checks{list-style:none;margin:0;padding:0}
+  ul.checks li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  ul.checks li:last-child{border-bottom:0}
+  ul.checks .mark{color:var(--green);font-weight:700;flex:0 0 auto}
+  ul.checks .what b{color:var(--ink)} ul.checks .what{font-size:13px;color:var(--muted)}
+  ul.checks .val{color:var(--accent)}
+
+  table.ledger{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.ledger th,table.ledger td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.ledger th{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  table.ledger td b{font-family:"JetBrains Mono",monospace;font-size:12px}
+  .knows{color:var(--accent)} .blind{color:var(--green)}
+
+  /* ---- nav ---- */
+  .rail{position:fixed;left:0;right:0;bottom:0;background:rgba(244,241,233,.92);backdrop-filter:blur(8px);border-top:1.5px solid var(--ink);z-index:9}
+  .rail .inner{max-width:1180px;margin:0 auto;padding:10px 28px;display:flex;align-items:center;gap:14px}
+  .steps{display:flex;gap:5px;flex:1;flex-wrap:wrap}
+  .steps button{font-family:"JetBrains Mono",monospace;font-size:11px;border:1px solid var(--line-strong);background:#fff;color:var(--muted);border-radius:3px;padding:4px 8px;cursor:pointer;transition:.15s}
+  .steps button:hover{border-color:var(--ink);color:var(--ink)}
+  .steps button.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+  .arrows{display:flex;gap:8px}
+  .arrows button{font-family:"Hanken Grotesk",sans-serif;font-weight:600;font-size:13px;border:1.5px solid var(--ink);background:var(--accent);color:#fff;border-radius:3px;padding:7px 16px;cursor:pointer}
+  .arrows button.ghost{background:#fff;color:var(--ink)}
+  .arrows button:disabled{opacity:.35;cursor:default}
+  .hint{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+
+  .view{animation:rise .4s cubic-bezier(.2,.7,.2,1)}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="brand">reputation&#8209;gated onion egress · <i>one search, traced</i></div>
+      <div class="sub">alice runs a google search · her identity never leaves the laptop · the proof is checked once</div>
+    </div>
+    <div class="counter">step <b id="cur">1</b> / <span id="tot">9</span></div>
+  </header>
+
+  <div class="livebar">
+    <span class="lv">EXAMPLE RUN</span>
+    <span>set <b>8 members</b></span>
+    <span>egress is the gateway's clean IP, never yours</span>
+    <span>no exit node in the path</span>
+  </div>
+
+  <!-- ====== SCHEMATIC ====== -->
+  <div class="stage">
+  <svg class="trace" viewBox="0 0 1280 300" role="img" aria-label="request path schematic">
+    <!-- zone bands -->
+    <rect class="zoneband" x="8"   y="34" width="286" height="232" rx="4"/>
+    <rect class="zoneband" x="302" y="34" width="520" height="232" rx="4"/>
+    <rect class="zoneband" x="830" y="34" width="270" height="232" rx="4"/>
+    <rect class="zoneband" x="1108" y="34" width="164" height="232" rx="4"/>
+    <text class="zonelabel" x="20"   y="52">your laptop</text>
+    <text class="zonelabel" x="314"  y="52">the tor network · opaque cells, no exit</text>
+    <text class="zonelabel" x="842"  y="52">egress box · digitalocean</text>
+    <text class="zonelabel" x="1120" y="52">internet</text>
+
+    <!-- main spliced path (y=176) -->
+    <line class="seg" id="s_curl_shim" x1="86"  y1="176" x2="150" y2="176"/>
+    <line class="seg" id="s_shim_cg"   x1="242" y1="176" x2="318" y2="176"/>
+    <line class="seg" id="s_cg_cm"     x1="410" y1="176" x2="452" y2="176"/>
+    <line class="seg" id="s_cm_rp"     x1="544" y1="176" x2="560" y2="176"/>
+    <line class="seg" id="s_rp_gm"     x1="652" y1="176" x2="668" y2="176"/>
+    <line class="seg" id="s_gm_gg"     x1="760" y1="176" x2="778" y2="176"/>
+    <line class="seg" id="s_gg_gw"     x1="870" y1="176" x2="888" y2="176"/>
+    <line class="seg" id="s_gw_eg"     x1="980" y1="176" x2="998" y2="176"/>
+    <line class="seg" id="s_eg_goog"   x1="1090" y1="176" x2="1146" y2="176"/>
+
+    <!-- setup-only links to the intro point (dashed) -->
+    <path class="seg setup" id="s_intro1" d="M196 153 C 360 96, 470 96, 606 132"/>
+    <path class="seg setup" id="s_intro2" d="M606 132 C 760 96, 880 110, 934 153"/>
+
+    <!-- nodes -->
+    <g class="node" id="n_curl"><rect x="22"  y="156" width="64"  height="40"/><text class="nlabel" x="54"  y="174" text-anchor="middle">curl</text><text class="nsub" x="54" y="187" text-anchor="middle">cli</text><circle class="pulse dot" cx="54" cy="148" r="3"/></g>
+    <g class="node" id="n_shim"><rect x="150" y="156" width="92"  height="40"/><text class="nlabel" x="196" y="173" text-anchor="middle">shim</text><text class="nsub" x="196" y="187" text-anchor="middle">:8888</text><circle class="pulse dot" cx="196" cy="148" r="3"/></g>
+
+    <g class="node" id="n_cg"><rect x="318" y="156" width="92" height="40"/><text class="nlabel" x="364" y="173" text-anchor="middle">guard</text><text class="nsub" x="364" y="187" text-anchor="middle">client</text><circle class="pulse dot" cx="364" cy="148" r="3"/></g>
+    <g class="node" id="n_cm"><rect x="452" y="156" width="92" height="40"/><text class="nlabel" x="498" y="173" text-anchor="middle">middle</text><text class="nsub" x="498" y="187" text-anchor="middle">client</text><circle class="pulse dot" cx="498" cy="148" r="3"/></g>
+    <g class="node verify" id="n_rp"><rect x="560" y="150" width="92" height="52"/><text class="nlabel" x="606" y="171" text-anchor="middle">rendezvous</text><text class="nsub" x="606" y="186" text-anchor="middle">splice</text><circle class="pulse dot" cx="606" cy="142" r="3"/></g>
+    <g class="node" id="n_gm"><rect x="668" y="156" width="92" height="40"/><text class="nlabel" x="714" y="173" text-anchor="middle">middle</text><text class="nsub" x="714" y="187" text-anchor="middle">gateway</text><circle class="pulse dot" cx="714" cy="148" r="3"/></g>
+    <g class="node" id="n_gg"><rect x="778" y="156" width="92" height="40"/><text class="nlabel" x="824" y="173" text-anchor="middle">guard</text><text class="nsub" x="824" y="187" text-anchor="middle">gateway</text><circle class="pulse dot" cx="824" cy="148" r="3"/></g>
+
+    <!-- intro point (setup only) -->
+    <g class="node dim" id="n_intro"><rect x="560" y="112" width="92" height="34"/><text class="nlabel" x="606" y="127" text-anchor="middle">intro pt</text><text class="nsub" x="606" y="139" text-anchor="middle">setup only</text></g>
+
+    <g class="node verify" id="n_gw"><rect x="888" y="150" width="92" height="52"/><text class="nlabel" x="934" y="170" text-anchor="middle">gateway</text><text class="nsub" x="934" y="185" text-anchor="middle">verify zk</text><circle class="pulse dot" cx="934" cy="142" r="3"/></g>
+    <g class="node" id="n_eg"><rect x="998" y="156" width="92" height="40"/><text class="nlabel" x="1044" y="173" text-anchor="middle">clean ip</text><text class="nsub" x="1044" y="187" text-anchor="middle">egress</text><circle class="pulse dot" cx="1044" cy="148" r="3"/></g>
+
+    <g class="node" id="n_goog"><rect x="1146" y="156" width="118" height="40"/><text class="nlabel" x="1205" y="173" text-anchor="middle">google</text><text class="nsub" x="1205" y="187" text-anchor="middle">:443</text><circle class="pulse dot" cx="1205" cy="148" r="3"/></g>
+  </svg>
+  </div>
+
+  <!-- ====== STEP CONTENT ====== -->
+  <div class="grid">
+    <div id="left"></div>
+    <div id="right"></div>
+  </div>
+</div>
+
+<!-- ====== NAV ====== -->
+<nav class="rail">
+  <div class="inner">
+    <div class="steps" id="steps"></div>
+    <span class="hint">← → keys</span>
+    <div class="arrows">
+      <button class="ghost" id="prev">Prev</button>
+      <button id="next">Next</button>
+    </div>
+  </div>
+</nav>
+
+<script>
+// ---- real data captured from a live run (epoch 494661, 8-member set) ----
+const ROSTER = [
+  ["alice","7514916694…2583456884"],["bob","1988903801…9407670370"],
+  ["carol","1307036749…4467490391"],["dave","1799088889…3034387452"],
+  ["erin","2168191483…7968254805"],["frank","1850943819…9584894567"],
+  ["grace","8555565278…3056545324"],["heidi","1198813377…6126574953"],
+];
+const ROOT = "20224601924848189116…44962313712831172";
+const NULL = "10849201931488812010…2976316841";
+
+const ENVELOPE =
+`{
+  <span class="k">"v"</span>: <span class="n">1</span>,
+  <span class="k">"target"</span>: <span class="s">"www.google.com:443"</span>,   <span class="c">// host:port only, never the query</span>
+  <span class="k">"proof"</span>: {
+    <span class="k">"merkleTreeDepth"</span>: <span class="n">3</span>,
+    <span class="k">"merkleTreeRoot"</span>: <span class="s">"2022460192…12831172"</span>,  <span class="c">// which set she's in</span>
+    <span class="k">"nullifier"</span>:      <span class="s">"1084920193…6316841"</span>,  <span class="c">// per-epoch rate tag (live)</span>
+    <span class="k">"scope"</span>:          <span class="s">"20611"</span>,               <span class="c">// floor(now/86400) = today's epoch</span>
+    <span class="k">"message"</span>:        <span class="s">"1"</span>,
+    <span class="k">"points"</span>: [ <span class="s">"8524809936…"</span>, <span class="s">"3938163253…"</span>, <span class="trunc">… 8 total</span> ]
+  }
+}`;
+
+const STEPS = [
+  {
+    kicker:"the setup",
+    title:'A set of eight, <i>one of them anonymous</i>',
+    lit:[],
+    body:`<p>Eight people were enrolled. Each holds a private <span class="tag">RGOE_SECRET</span>; the public set holds only their <strong>commitments</strong>, hashes that reveal nothing about who they are.</p>
+          <p>The gateway will trust exactly one number: the <span class="em">Merkle root</span> of this set. Prove you're a leaf under that root and you egress. It never learns <em>which</em> leaf.</p>
+          <p>Alice is about to run a Google search. Follow her bytes.</p>`,
+    card:{h:"reputation set · group/members.json",type:"roster"}
+  },
+  {
+    kicker:"on the laptop · step 1",
+    title:'curl hands off to the <i>shim</i>',
+    lit:["s_curl_shim","n_curl","n_shim"],
+    body:`<p>Alice runs <span class="tag">curl -x http://127.0.0.1:8888 https://www.google.com/search?q=…</span></p>
+          <p>Because the URL is HTTPS, curl doesn't send the search. It asks the local shim to open a tunnel: <span class="tag">CONNECT www.google.com:443</span>. The query stays sealed inside TLS that only Google can open.</p>
+          <p>The shim now mints proof that Alice belongs to the set, <span class="em">for this epoch only</span>, and caches it.</p>`,
+    card:{h:"what the shim builds",type:"note",
+      html:`<pre><span class="c">// epoch = floor(Date.now()/1000/86400)  // a day</span>
+<span class="c">// proof = Semaphore(secret, group, scope=epoch)</span>
+<span class="c">// regenerated ~5s on first use, reused all epoch</span></pre>
+      <div style="margin-top:10px"><span class="hint" style="letter-spacing:.1em">nullifier this epoch</span><br><span class="data n">${NULL}</span></div>`}
+  },
+  {
+    kicker:"on the laptop · step 2",
+    title:'The <i>envelope</i>: proof, not identity',
+    lit:["n_shim"],
+    body:`<p>This single newline-terminated JSON object is the entire application payload the shim sends. <span class="em">932 bytes.</span></p>
+          <p>Notice what is <strong>absent</strong>: no name, no IP, no secret, no search query. <span class="tag">target</span> is just a host and port. The <span class="tag">points</span> are the zero-knowledge proof itself.</p>
+          <p>The same secret in the next epoch yields a different <span class="tag">nullifier</span>, so requests can't be linked across time.</p>`,
+    card:{h:"the wire payload · { v, target, proof }",type:"pre",html:`<pre>${ENVELOPE}</pre>`}
+  },
+  {
+    kicker:"into tor · step 3",
+    title:'Dialing the onion by <i>rendezvous</i>',
+    lit:["s_shim_cg","s_cg_cm","s_cm_rp","n_cg","n_cm","n_rp","s_intro1","s_intro2","n_intro"],
+    body:`<p>The shim opens a SOCKS connection to <span class="tag">gateway.onion:80</span> through the client's own Tor. This is not a normal circuit to an exit.</p>
+          <p>Alice's Tor picks a <span class="em">rendezvous point</span> and tells the gateway about it through a throwaway <strong>introduction point</strong> (dashed, setup only). Both sides build a 3-hop half-circuit that meets at the rendezvous and splices.</p>
+          <p>Every relay here sees only opaque cells. None can read the envelope. <span class="em">There is no exit node.</span></p>`,
+    card:{h:"the path, counted",type:"note",
+      html:`<pre>shim → guard → middle → <span class="n">RP</span> → middle → guard → gateway
+        └──── 3 hops ────┘   └──── 3 hops ────┘
+<span class="c">six hops, one splice, zero exits</span></pre>
+      <div style="margin-top:11px" class="data"><span class="blind">intro point</span> never carries data, never learns Alice.<br><span class="blind">rendezvous</span> learns two circuits met, not who, not what.</div>`}
+  },
+  {
+    kicker:"into tor · step 4",
+    title:'The envelope reaches the <i>far end</i>',
+    lit:["s_shim_cg","s_cg_cm","s_cm_rp","s_rp_gm","s_gm_gg","s_gg_gw","n_cg","n_cm","n_rp","n_gm","n_gg","n_gw"],
+    body:`<p>The bytes traverse the full spliced circuit and arrive at the gateway, which Tor maps from <span class="tag">…onion:80</span> to <span class="tag">127.0.0.1:8443</span> on the droplet.</p>
+          <p>The gateway binds <strong>loopback only</strong>. Nothing on the public internet can reach it; the onion is the sole door.</p>
+          <p>It reads exactly one line: the JSON envelope. Now it decides.</p>`,
+    card:{h:"gateway socket",type:"note",
+      html:`<pre><span class="k">listen</span> 127.0.0.1:8443   <span class="c">// onion:80 → here</span>
+<span class="k">read</span>   one \\n-terminated JSON envelope
+<span class="k">parse</span>  { v, target, proof }</pre>
+      <div style="margin-top:10px" class="data">It still knows nothing about Alice. It is holding a proof and a destination.</div>`}
+  },
+  {
+    kicker:"the gate · step 5",
+    title:'The gateway <i>verifies the proof</i>',
+    lit:["n_gw"],
+    body:`<p>This is the <span class="em">only</span> place the zero-knowledge proof is checked. Not a Tor relay, not the rendezvous. Here, on the egress box, after the circuit and before a single byte leaves.</p>
+          <p>Four checks, all or nothing. Fail any one and the connection is dropped with a reason; pass all four and Alice is, anonymously, admitted.</p>`,
+    card:{h:"checkProof() · four gates",type:"checks"}
+  },
+  {
+    kicker:"egress · step 6",
+    title:'Out to Google from a <i>clean IP</i>',
+    lit:["s_gw_eg","s_eg_goog","n_gw","n_eg","n_goog"],
+    body:`<p>Proof good. The gateway opens a plain TCP connection to <span class="tag">www.google.com:443</span> from its <span class="em">own clean IP</span> and splices Alice's tunnel to it.</p>
+          <p>Now Alice's TLS handshake flows end to end. The real <span class="tag">GET /search?q=…</span> travels <strong>inside</strong> that TLS. The gateway is a blind pipe: it sees <span class="tag">www.google.com:443</span> and ciphertext, never the query.</p>`,
+    card:{h:"egress policy",type:"note",
+      html:`<pre><span class="k">validTarget</span>(target): port === <span class="n">443</span> ? ok : drop
+<span class="k">net.connect</span>(443, "www.google.com")
+<span class="k">pipe</span>  tunnel ⇄ google   <span class="c">// TLS stays sealed</span></pre>
+      <div style="margin-top:10px" class="data">Metadata-only tunnel: <span class="blind">host:port</span> visible, <span class="blind">payload</span> not.</div>`}
+  },
+  {
+    kicker:"the return · step 7",
+    title:'Results come <i>back the same way</i>',
+    lit:["s_eg_goog","s_gw_eg","s_gg_gw","s_gm_gg","s_rp_gm","s_cm_rp","s_cg_cm","s_shim_cg","s_curl_shim","n_goog","n_eg","n_gw","n_gg","n_gm","n_rp","n_cm","n_cg","n_shim","n_curl"],
+    body:`<p>Google sees a request from the gateway's IP, a clean address, not a blocklisted Tor exit, not Alice. It serves the results page.</p>
+          <p>The encrypted response retraces the spliced circuit: gateway → rendezvous → Alice's Tor → shim → curl. It is decrypted for the first time <span class="em">on Alice's laptop</span>.</p>
+          <p>She sees her search results. No one in the middle saw the query, and no one saw her.</p>`,
+    card:{h:"verified live",type:"note",
+      html:`<pre><span class="c">$ curl -x http://127.0.0.1:8888 \\
+    https://api.ipify.org?format=json</span>
+{"ip":"<span class="n">&lt;the gateway's clean IP&gt;</span>"}
+<span class="c">gateway.log:</span> PASS egress->…:443  1/100 epoch=20611</pre>
+      <div style="margin-top:10px" class="data">Swap ipify for google and the same path carries the search.</div>`}
+  },
+  {
+    kicker:"the whole point",
+    title:'Who knew <i>what</i>',
+    lit:[],
+    body:`<p>The system's worth is in this ledger. Each party learns the minimum, and <span class="em">no single party</span> can tie Alice's identity to her search.</p>
+          <p>The trust boundary is honest: it rests entirely on who you let into the set. The proof gates membership; it doesn't create reputation.</p>`,
+    card:{h:"leak / protect ledger",type:"ledger"}
+  },
+];
+
+const LEDGER = [
+  ["Tor relays / guards","opaque cells passing through","<span class='blind'>nothing</span>: not Alice, not Google, not the proof"],
+  ["rendezvous point","two half-circuits to splice","<span class='blind'>not</span> who, <span class='blind'>not</span> what, <span class='blind'>not</span> the IPs"],
+  ["the gateway","a <span class='knows'>valid member</span> (by nullifier) wants <span class='knows'>www.google.com:443</span>","<span class='blind'>not</span> Alice's IP, <span class='blind'>not</span> which member, <span class='blind'>not</span> the query"],
+  ["Google","a request from the <span class='knows'>gateway's clean IP</span>","<span class='blind'>not</span> Alice, <span class='blind'>not</span> Tor"],
+  ["the set operator","Alice is <span class='knows'>in the set</span>","<span class='blind'>not</span> that she searched, or for what"],
+];
+
+const CHECKS = [
+  ["the zk proof verifies","<b>verifyProof(proof)</b>: valid Groth16","✓ valid"],
+  ["it's against <b>our</b> set","merkleTreeRoot === trustedRoot","✓ root match"],
+  ["it's <b>this</b> epoch","scope ∈ { now, now−1 }","✓ 20611"],
+  ["within rate budget","nullifier count &lt; 30 / epoch","✓ 1 / 30"],
+];
+
+// ---- render ----
+const left=document.getElementById('left'), right=document.getElementById('right');
+const stepsEl=document.getElementById('steps'); let i=0;
+
+STEPS.forEach((s,idx)=>{
+  const b=document.createElement('button'); b.textContent=idx+1; b.title=s.title.replace(/<[^>]+>/g,'');
+  b.onclick=()=>go(idx); stepsEl.appendChild(b);
+});
+document.getElementById('tot').textContent=STEPS.length;
+
+function cardHTML(card){
+  if(!card) return '';
+  let inner='';
+  if(card.type==='roster'){
+    inner='<div class="roster">'+ROSTER.map(m=>`<div class="m"><b>${m[0]}</b><span>${m[1]}</span></div>`).join('')+
+      `</div><div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px"><span class="hint" style="letter-spacing:.1em">merkle root the gateway trusts</span><br><span class="data n">${ROOT}</span></div>`;
+  } else if(card.type==='checks'){
+    inner='<ul class="checks">'+CHECKS.map(c=>`<li><span class="mark">✓</span><span class="what"><b>${c[0]}</b><br>${c[1]}</span><span class="val" style="margin-left:auto;white-space:nowrap">${c[2]}</span></li>`).join('')+'</ul>';
+  } else if(card.type==='ledger'){
+    inner='<table class="ledger"><thead><tr><th>party</th><th>learns</th><th>blind to</th></tr></thead><tbody>'+
+      LEDGER.map(r=>`<tr><td><b>${r[0]}</b></td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')+'</tbody></table>';
+  } else {
+    inner='<div class="data">'+card.html+'</div>';
+  }
+  return `<div class="card"><h4>${card.h}</h4><div class="inner">${inner}</div></div>`;
+}
+
+function go(n){
+  i=Math.max(0,Math.min(STEPS.length-1,n));
+  const s=STEPS[i];
+  left.innerHTML=`<div class="view"><p class="kicker">${s.kicker}</p><h2 class="step">${s.title}</h2><div class="body">${s.body}</div></div>`;
+  right.innerHTML=`<div class="view">${cardHTML(s.card)}</div>`;
+  document.getElementById('cur').textContent=i+1;
+  [...stepsEl.children].forEach((b,bi)=>b.classList.toggle('on',bi===i));
+  document.getElementById('prev').disabled=(i===0);
+  document.getElementById('next').disabled=(i===STEPS.length-1);
+  // light up the schematic
+  document.querySelectorAll('.seg').forEach(e=>e.classList.remove('lit'));
+  document.querySelectorAll('.node').forEach(e=>e.classList.remove('lit'));
+  const anyLit=s.lit.length>0;
+  document.querySelectorAll('.node').forEach(e=>e.classList.toggle('dim', anyLit && !s.lit.includes(e.id) && e.id!=='n_intro'));
+  if(!anyLit) document.querySelectorAll('.node').forEach(e=>e.classList.remove('dim'));
+  s.lit.forEach(id=>{const el=document.getElementById(id); if(el) el.classList.add('lit');});
+}
+document.getElementById('next').onclick=()=>go(i+1);
+document.getElementById('prev').onclick=()=>go(i-1);
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' ')go(i+1);
+  if(e.key==='ArrowLeft')go(i-1);
+});
+go(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Client-side Tor for the reputation-gated egress PoC.
+#
+# This is the LAPTOP role. Unlike ./torrc (the gateway/droplet role), it does
+# NOT publish a hidden service: the client only needs a SOCKS port to dial the
+# gateway's .onion through the Tor rendezvous. No onion key is created here.
+#
+# Distinct ports (9260/9261) so a client Tor can run on the SAME machine as the
+# gateway Tor (9250/9251) when simulating the split locally. On a real laptop you
+# could instead point the shim at any existing Tor SOCKS (e.g. system tor 9050,
+# or Tor Browser 9150) via RGOE_TOR_PORT and skip running this at all.
+
+SocksPort 9260
+ControlPort 9261
+CookieAuthentication 1
+
+# Client Tor keeps its own state, separate from the gateway's ./tor/data.
+DataDirectory ./tor/data-client
+
+Log notice stdout

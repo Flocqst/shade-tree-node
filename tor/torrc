@@ -18,14 +18,16 @@ DataDirectory ./tor/data
 HiddenServiceDir ./tor/hs
 HiddenServicePort 80 127.0.0.1:8443
 
-# Anti-DoS tier: Tor's built-in onion-service proof-of-work defense. This makes
-# flooding the rendezvous (before any zk verification work) costly. It is the
-# cheap outer gate; the reputation proof is the expensive inner gate.
+# Anti-DoS tier: Tor's built-in onion-service proof-of-work defense makes flooding
+# the rendezvous (before any zk verification work) costly. It is the cheap outer
+# gate; the reputation proof is the expensive inner gate.
 #
-# NOTE: requires a tor built with the 'pow' module. The Homebrew bottle does not
-# include it, so it is commented out here. To enable, install a tor with pow
-# (e.g. build with --enable-gpl, or use the Tor Browser bundle's tor) and
-# uncomment the next line. The system is fully functional without it.
-# HiddenServicePoWDefensesEnabled 1
+# We do NOT set HiddenServicePoWDefensesEnabled here, on purpose: stock tor hard-
+# fails config validation if the option is set without the 'pow' module, and the
+# Homebrew bottle ships without it (the PoW code is GPL; the bottle is BSD-only).
+# So start-tor.sh enables the defense at runtime via --HiddenServicePoWDefensesEnabled
+# only when it detects a tor that has the module (see scripts/build-tor-pow.sh).
+# That keeps this PoC running unchanged on 100% stock tor, with PoW as an
+# opportunistic upgrade rather than a hard requirement.
 
 Log notice stdout

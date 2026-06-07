@@ -43,7 +43,7 @@ async function gatewayOnion() {
 // Cache one proof per epoch. Within an epoch a member's nullifier is constant, so
 // the same proof is valid for every request and the gateway counts each
 // redemption against the rate budget. Proving is the only slow step (~1-2s); we
-// pay it once per hour, not per request.
+// pay it once per epoch, not per request.
 let cache = { epoch: null, proof: null, inflight: null };
 async function getProof() {
   const epoch = currentEpoch();

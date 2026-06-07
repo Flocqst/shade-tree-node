@@ -5,3 +5,12 @@ tor/hs/
 tor/tor.pid
 .secret
 .env
+tor/tor-pow/
+tor/tor-pow-build/
+tor/data-client/
+tor/tor-client.pid
+shim-bogus.log
+keys.local.json
+demo-keys.local.md
+docs/JOIN.local.md
+docs/walkthrough.live.html
