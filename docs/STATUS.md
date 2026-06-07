@@ -68,6 +68,20 @@ Four hypotheses were run as real requests against the live gateway. All confirme
 Gateway-side tally over the run: **16 PASS, 32 DROP, 7 distinct members**, drops
 broken down as 26 invalid-proof, 4 rate-limited, 1 wrong-group-root, 1 no-proof.
 
+**End-to-end latency**, measured from the laptop through the full path to Google and
+back (laptop, shim, Tor rendezvous, droplet gateway, Google, return):
+
+| | time |
+|---|---|
+| direct to Google, no tunnel (baseline) | ~0.15 s |
+| through the gated path, warm | ~1.7 to 2.2 s |
+| first request after starting the client (one-time setup) | ~7 s |
+
+The warm overhead is the six-hop Tor path plus the gateway's own clearnet fetch.
+The one-time cost is circuit and rendezvous setup, paid once per client session, not
+per request. This is the price of having no exit node and never exposing the client
+IP, and for a search egress it is well within usable.
+
 Headline on abuse: there is nothing to IP-ban, because the gateway never sees a
 client IP. The only lever against a member is its per-epoch budget, and that touches
 only that one nullifier. Junk is cheap to reject, a failed proof costs a verify and
