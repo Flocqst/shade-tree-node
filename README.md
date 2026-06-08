@@ -11,7 +11,10 @@ production, and it has no payments and no dynamic membership (see
 
 ## The problem
 
-Tor exit IPs are a public, auto-blocked list, so honest Tor users get locked out.
+Tor exit IPs are a public, auto-blocked list with perpetually bad reputation
+([torbulkexitlist](https://check.torproject.org/torbulkexitlist),
+[FireHOL tor_exits](https://iplists.firehol.org/?ipset=tor_exits)), so honest Tor
+users get locked out.
 The usual escape, a residential proxy, trades IP-reputation evasion for a fully
 trusted third party who links every request to your billing identity. Underneath
 both: an open clean-IP egress is blocklisted within hours, so clean IPs stay clean
