@@ -20,7 +20,8 @@ one to fix first.
 | Gateway operator | availability, honest egress | confidentiality of metadata, anonymity |
 | Enroller / set admin | the entire sybil boundary | restraint |
 | Network / global observer | nothing | (Tor's standard limits apply) |
-| Destination site | nothing | n/a |
+| Destination site (passive) | nothing | n/a |
+| Destination that can obtain membership | nothing | enumerating + blocklisting the egress fleet |
 
 ---
 
@@ -163,6 +164,132 @@ shim is a network position, not a content reader. It does hold `RGOE_SECRET`, so
 compromised client host is membership theft, the standard key-at-rest concern. Keep
 the secret out of shell history and process listings.
 
+## 10. Destination that can obtain membership: HIGH
+
+**Worst case: enumerate and blocklist the entire egress fleet, collapsing the
+unblockability the whole design exists for.**
+
+Finding 7 is the *passive* destination: it sees the gateway's egress IP (the source
+of the clearnet leg) and nothing else. That is benign — the gateway IP is published
+by design. The dangerous variant is a destination that can also become a **member**.
+A member can egress to a URL the destination controls and read the source IP, which
+deterministically maps `onion hash -> egress IP` and tags that IP as an RGOE gateway.
+In a multi-gateway fleet (see `docs/ROADMAP.md` §3), the adversary repeats this and
+harvests *every* gateway's IP, then blocklists the set. This is exactly how Tor exits
+are enumerated and killed (route through to a server you control, read the exit IP),
+and it works against any open egress.
+
+The reason it belongs as its own finding: the membership gate is usually described as
+*rate limiting*, but it is **also the only thing keeping the egress IPs out of an
+adversary's enumeration reach.** Tor exits die because Tor membership is open to
+everyone, including the parties who want to block it. RGOE's sole moat is that the
+adversary cannot join. If admission is open or cheap, the reputation gate collapses to
+Tor's situation and the clean IPs are enumerable and blockable by lunch. So admission
+is not just the sybil/rate boundary (findings 2, 3); it is the **unblockability
+boundary**, and the set must specifically *exclude the parties who would blocklist
+you*. A set that admits your adversary can be enumerated by your adversary, and no
+amount of correct cryptography fixes that.
+
+**What it cannot do:** learn any client/member IP (still behind Tor; the destination
+is on the far side of the gateway). And without a valid proof it cannot even *trigger*
+an egress — the gateway drops on `checkProof` failure before any `net.connect`, so
+hash-without-membership yields no egress connection to observe. The membership proof
+is precisely what gates the ability to cause the IP-revealing egress.
+
+**Remediation.** Admission an adversary cannot cheaply pass (stake / invite / accrued
+standing / proof-of-personhood). Partition which gateways a member can learn/use so a
+single compromised member enumerates only its slice, not the fleet; treat the gateway
+directory as members-only (§3). Rotating gateway IPs raises the cost of a stale
+blocklist. None of these are cryptographic; this finding is a reminder that the
+crypto's guarantees are bounded by who you let in.
+
+## 11. Tor-layer & network adversaries: relay positions, correlation, self-deanon
+
+Findings 1–10 are application/operator layer. This section is the network layer — Tor
+relay positions and AS-level observers — grounded in the deanonymization literature
+(guard discovery: Biryukov–Pustogarov–Weinmann 2013; the vanguards technical docs;
+the 2014 RELAY_EARLY advisory; flow correlation: DeepCorr 2018 and the DeepCoFFEA
+line; AS-level routing attacks: RAPTOR). Figures from very recent (2025–2026)
+correlation papers are reported as direction-of-travel, not load-bearing.
+
+### Single relay position — what it sees, what it can do
+
+| Position | Client IP | Gateway IP | Onion addr | Deanon alone? |
+|---|---|---|---|---|
+| Client's entry guard | **yes** | no | no | no — needs the other end |
+| Gateway's entry guard | no | **yes** | no | no — needs the other end |
+| Middle (either side) | no | no | no | no |
+| Rendezvous point | no | no | no | no |
+| Introduction point | no | no | the addr it fronts | no |
+| HSDir (v3) | no | no | **no** (blinded) | no |
+
+Corrections to common belief, both load-bearing here:
+- **The rendezvous point sees neither IP.** It sees the *middle* relay on each side
+  and that the two circuits are paired (same cookie), and relays cells it cannot read
+  — two hops short of either machine. The literature sweep flagged this as a "gap,"
+  but it follows directly from the v3 circuit structure.
+- **A v3 HSDir does not learn the `.onion` address.** Descriptors are stored under a
+  *blinded* key and encrypted to the address, so an HSDir cannot derive or enumerate
+  onion addresses. That was a v2 weakness (HSDir snooping / "honey onions"); v3 closed
+  it. An HSDir learns only a blinded index and fetch timing/popularity.
+- **The only IP-knowers are the two guards, each only on its own side.** The client's
+  guard sees the client IP but does not know it is onion traffic; the gateway's guard
+  sees the gateway IP (already public here). Neither links IP↔onion alone.
+
+### The combinations that actually break you
+
+| Adversary owns | Attack | Result |
+|---|---|---|
+| Client guard **+** gateway uplink/egress | end-to-end flow correlation | links client IP ↔ egress activity |
+| Client guard **+** an RP/intro near the gateway | traffic confirmation | same, via an in-network foothold |
+| Middle adjacent to the gateway's guard, repeated | guard discovery (Biryukov et al.) | finds the gateway's guard → then watch/coerce it |
+| One AS/IXP on both side-paths | RAPTOR / asymmetric-routing | both-ends correlation **without running relays** |
+
+**Why "both ends" is the whole game.** DeepCorr (2018) reported ~80–95% TPR at
+10⁻³–10⁻⁴ FPR; the DeepCoFFEA line cut FPR further via metric learning + amplification;
+recent work *reports* deep correlators near >99% TPR at ~10⁻⁵ FPR and robustness to
+partial/noisy observation. Treat the newest numbers as trend, not fact, but the
+direction is unambiguous: **an adversary who sees both ends wins, and no deployed Tor
+defense (WTF-PAD, DeTorrent padding, Conflux splitting) closes the gap.** Tor never
+promised to beat the both-ends adversary; this only sharpens how cheap that win is.
+
+**AS-level is the realistic both-ends adversary, and it is worse for us.** A few large
+ASes (Hurricane, Level3, **Hetzner** and hosting providers generally) sit on a majority
+of guard/exit path probability; for some paths one AS sees both ends >20% of the time.
+Two system-specific consequences: (1) the gateway lives in a **datacenter AS**
+(DigitalOcean) — exactly the centralized vantage these studies flag — so the
+gateway-side leg is disproportionately observable; (2) a datacenter egress IP is itself
+a weak fingerprint, since destinations increasingly distrust hosting ranges, which
+erodes the "clean IP" premise independent of any deanonymization. RELAY_EARLY (2014)
+does not apply to v3 in its original form.
+
+### The dominant real-world risk: client-side self-deanonymization
+
+The literature is blunt that **most real deanonymizations are operational, not protocol
+breaks.** This system inherits every one of them, because the shim is *only* a TCP
+CONNECT proxy with none of Tor Browser's hardening:
+
+- **DNS.** On the `curl -x … https://…` path the client sends `CONNECT host:443` and
+  the *gateway* resolves the name, so there is no local DNS leak. But any app that
+  resolves locally (a browser with proxy-side DNS off, a tool that pre-resolves) leaks
+  *which sites* to the local network, bypassing the tunnel. Proxy-side DNS is mandatory
+  and the shim does not enforce it.
+- **WebRTC / fingerprint.** A browser pointed at the shim can leak the real IP via
+  WebRTC ICE candidates and is linkable across sessions by canvas/WebGL/TLS (JA3/JA4)
+  fingerprint regardless of IP. The shim supplies none of these defenses.
+- **Accounts & cookies.** Logging in or carrying cookies ties activity to an identity
+  in one request and defeats the whole stack. User opsec, same as any proxy.
+- **Behavioral / timing linkability.** Hitting the same niche destinations on the same
+  schedule re-links sessions even as the per-epoch nullifier rotates — and the constant
+  within-epoch nullifier **amplifies** it: one successful correlation or fingerprint
+  match attributes the member's *entire epoch*, not one stream (finding 5).
+
+**Posture.** For machine-to-machine egress (the real use case) the CONNECT path avoids
+DNS/WebRTC leaks and the residual is metadata + correlation. For anything
+browser-driven this is **not** a Tor Browser substitute and must not be presented as
+one. Net: strong on IP-reputation, only as strong as Tor on metadata, and **weaker than
+Tor against a both-ends adversary, because the nullifier turns one hit into a day.**
+
 ---
 
 ## Priority order
@@ -175,3 +302,11 @@ the secret out of shell history and process listings.
    the reorder is a few lines in `checkProof`.
 4. **Unlinkable nullifiers (finding 5, partial).** Future upgrade 1 removes the
    within-epoch link; behavioral correlation remains.
+5. **Client-leak hardening + honest positioning (finding 11).** Document and, where
+   possible, enforce proxy-side DNS; warn that browser use leaks via WebRTC/fingerprint;
+   never present this as a Tor Browser replacement. Cheap, and it closes the
+   deanonymization vectors that actually bite in practice.
+6. **AS / datacenter exposure (finding 11).** The single datacenter egress is the
+   weakest both-ends vantage and a fingerprintable IP range. A future fleet
+   (`docs/ROADMAP.md` §3) should spread gateways across diverse ASes, not just add IPs
+   in one provider.

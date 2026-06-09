@@ -146,3 +146,82 @@ clients both read the same root from the same place with no file to sync.
   address that paid the gas. If admission is stake- or token-based that linkage is
   inherent. If you need enroller privacy, relay the `addMember` call through a
   meta-transaction or a privacy pool. Out of scope here.
+
+### 3. Egress discovery and per-request gateway selection (the fleet)
+
+**Problem.** The PoC has exactly one gateway, and the client pins it ahead of time:
+the shim dials whatever single onion `RGOE_ONION` (or the local `hostname` file)
+names (`client/shim.mjs`). That carries two costs.
+
+- **No discovery.** Onion addresses are handed out of band (the bundle ships one
+  baked-in default). There is no way to add or retire a gateway without re-handing
+  addresses, and no live notion of which gateways are up. The network will not do
+  this for us: onion descriptors are stored under a *blinded* key on the HSDir
+  hashring precisely so the gateways cannot be enumerated, so the directory has to
+  be something we build at the app layer.
+- **Pinning concentrates trust.** Whichever gateway a client pins sees *all* of that
+  client's egress for the epoch — every target `host:port`, all timing and volume —
+  bucketed under one constant nullifier. The member stays anonymous (no IP, no name)
+  but becomes a complete, coherent profile to that one operator.
+
+To be precise about the second cost: the problem is **not** that the client knows
+its own exit. A Tor client knows its own exit too; path selection runs client-side.
+Tor's property is that no single *relay* knows both ends, not that the client is
+blind to its path. The problem is the inverse — one operator knowing the whole of
+one anonymous member. The fix is therefore not to hide the exit from the client but
+to stop any one exit from seeing all of a member.
+
+**Goal.** A directory of live gateways plus **per-request, client-side selection**,
+so the client never commits to a single operator and a member's traffic spreads
+across the fleet. This is the app-layer analog of Tor rotating circuits, except our
+"exits" are destinations (onion services), so the selection lives in the shim, not
+in Tor's relay path selection.
+
+**Design.**
+
+- **Directory.** A small signed list of `{ onion, pubkey, weight, health }`,
+  refreshable. Start as a static signed JSON distributed with the member bundle and
+  served as its own onion for live updates; pin the signer key in the client. The
+  natural endgame is to source it from the same on-chain group as the reputation set
+  (#2), so the fleet and the membership share one canonical, tamper-evident root.
+  Gateways prove control of their advertised onion so a poisoned directory cannot
+  graft in a hostile address.
+- **Selection in the shim.** Per-connection weighted-random pick from the live set,
+  with health/latency feedback and failover to the next gateway on dial timeout.
+  `curl` stays dumb — the shim is the router (shim-as-router). Optionally expose a
+  pin (`RGOE_ONION` still forces one gateway) for debugging or when a caller really
+  wants a fixed egress IP.
+- **Rotation is free, cryptographically.** The membership proof is
+  gateway-independent: same trusted root + same epoch verifies at *any* gateway that
+  loads the same `members.json`. So rotating gateways needs no new proof and no new
+  circuit — the shim reuses the cached proof and just dials a different onion.
+
+**Why this is the privacy win, and how it composes with #1.** With one gateway, that
+operator sees 100% of a member's (metadata-only) targets under one nullifier. Spread
+per-request across `N` non-colluding gateways and each sees only ~`1/N`. Rotation
+alone does **not** defeat *colluding* gateways: they can still reassemble the profile
+by matching the member's constant per-epoch nullifier across their logs. Ship #1
+(a distinct nullifier per request) and even colluding gateways cannot tie the
+requests together. **Rotation + per-request unlinkable nullifiers** is the
+combination that actually delivers "no operator, even a colluding set, can profile a
+member." Neither piece is sufficient alone.
+
+**Cost and honest scope.**
+
+- **The rate limit does not compose across the fleet.** Each gateway keeps its budget
+  in an in-memory per-process `Map` (`gateway/gateway.mjs`), so a member who spreads
+  requests across `N` gateways gets `N`× their intended budget. Rotation forces a
+  choice: either accept a fleet budget of `N`× per member, or share nullifier
+  accounting across gateways (a shared spent-set store, or gateways publishing
+  per-epoch nullifier counts to a common tally). Shared accounting reintroduces a
+  cross-gateway linkage point — unless it is paired with #1, whose per-request
+  nullifiers keep the shared tally from also being a profile.
+- **The directory is a new trust and availability surface.** Who signs it, how it is
+  distributed, and what stops a stale or poisoned directory from steering a member to
+  a hostile gateway. Mitigate with a pinned signer, gateway onion-control proofs, and
+  a cached last-known-good list so a dead directory degrades to the previous fleet
+  rather than to nothing.
+- **Multi-hop gateways are explicitly not the plan.** Hiding the final egress from the
+  client (gateway A forwards to a gateway B that A picks) only moves the knowledge to
+  A and doubles latency. Knowing your own exit is not the threat, so we do not pay to
+  hide it.

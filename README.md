@@ -118,7 +118,8 @@ Does not do, on purpose:
 - **Replay within an epoch is allowed by design.** The cached proof is re-sent and
   the gateway counts redemptions. It only ever travels inside the Tor tunnel.
 - **One clean IP at volume still looks botlike.** Scaling is a fleet-of-clean-IPs
-  problem, out of scope here.
+  problem; the fleet, its discovery, and per-request gateway rotation are in the
+  [roadmap](docs/ROADMAP.md).
 - **Rendezvous DoS.** Anyone with the `.onion` can force ~30 ms of verify work each.
   Tor's onion proof-of-work defense is the outer gate: stock tor with the GPL `pow`
   module, which `scripts/start-tor.sh` enables automatically when the build has it.
