@@ -15,8 +15,9 @@ Tor exit IPs are a public, auto-blocked list with perpetually bad reputation
 ([torbulkexitlist](https://check.torproject.org/torbulkexitlist),
 [FireHOL tor_exits](https://iplists.firehol.org/?ipset=tor_exits)), so honest Tor
 users get locked out.
-The usual escape, a residential proxy, trades IP-reputation evasion for a fully
-trusted third party who links every request to your billing identity. Underneath
+The usual escape, a [residential proxy](docs/residential-proxies.md), trades
+IP-reputation evasion for a fully trusted third party who links every request to
+your billing identity. Underneath
 both: an open clean-IP egress is blocklisted within hours, so clean IPs stay clean
 only by being gated and scarce. We gate on a proof of membership instead of an
 identity, which keeps sybil and rate resistance while decoupling them from the IP
