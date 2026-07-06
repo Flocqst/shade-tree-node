@@ -9,12 +9,21 @@ This is a working proof of concept, deployed and verified live. It is not
 production, and it has no payments and no dynamic membership (see
 [Scope](#scope-what-it-is-and-is-not)).
 
+The full write-up, with the exit-blocking benchmark, the gate protocol,
+deployment numbers, and the design space for a production version, is at
+[reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app)
+(source: [`docs/post/`](docs/post/)).
+
 ## The problem
 
 Tor exit IPs are a public, auto-blocked list with perpetually bad reputation
 ([torbulkexitlist](https://check.torproject.org/torbulkexitlist),
 [FireHOL tor_exits](https://iplists.firehol.org/?ipset=tor_exits)), so honest Tor
-users get locked out.
+users get locked out. Measured directly over the same 36 sites: a home IP was
+blocked 8.3 percent of the time, a datacenter IP 16.7, and Tor 17.1, with the
+sites that wall Tor at 90 to 100 percent mostly fronted by commercial anti-bot
+vendors; method and classifier in
+[`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md).
 The usual escape, a [residential proxy](docs/residential-proxies.md), trades
 IP-reputation evasion for a fully trusted third party who links every request to
 your billing identity. Underneath
@@ -150,4 +159,6 @@ Per-party worst case and the fixes in priority order:
 | `docs/DEPLOY.md`, `docs/JOIN.md` | Two-machine deploy; friend handout |
 | `docs/STATUS.md`, `docs/ROADMAP.md` | Current status and results; scoped-but-unbuilt design |
 | `docs/walkthrough.html` | Visual request-lifecycle walkthrough |
+| `docs/exit-blocking-benchmark.md` | Exit-blocking benchmark: method and the 6-outcome classifier |
+| `docs/post/` | The published write-up (HTML + figures), live at [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app) |
 | `docs/adversarial-review.md` | Worst case per party, and the fixes |
