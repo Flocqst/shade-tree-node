@@ -148,9 +148,6 @@
     #TOC > ul {
       padding-left: 0;
     }
-    #TOC a:not(:hover) {
-      text-decoration: none;
-    }
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
     div.columns{display: flex; gap: min(4vw, 1.5em);}
@@ -181,6 +178,28 @@ identity, a response to the fate sharing problem, and the open problem
 underneath it: pricing the burn of a shared IP when anonymity forbids
 attribution, a problem that reduces to a spent set no single party may
 own.</em></p>
+<nav id="TOC" role="doc-toc">
+<p><strong>Table of contents</strong></p>
+<ul>
+<li><a href="#tor-exit-ips-are-a-public-blocklist">Tor exit IPs are a public blocklist</a></li>
+<li><a href="#gating-on-membership-not-identity">Gating on membership, not identity</a>
+<ul>
+<li><a href="#an-onion-service-instead-of-an-exit-node">An onion service instead of an exit node</a></li>
+<li><a href="#a-membership-proof-rate-limited-with-rln">A membership proof, rate-limited with RLN</a></li>
+<li><a href="#the-wire-protocol">The wire protocol</a></li>
+<li><a href="#deployment-and-results">Deployment and results</a></li>
+</ul></li>
+<li><a href="#discussion">Discussion</a>
+<ul>
+<li><a href="#the-design-space">The design space</a>
+<ul>
+<li><a href="#topology">Topology</a></li>
+<li><a href="#payment">Payment</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#references">References</a></li>
+</ul>
+</nav>
 <p>In 2016 Cloudflare, the company whose machines stand between a large
 fraction of the web and anyone wishing to read it, published its
 accusation of Tor, titled “<a
@@ -212,27 +231,6 @@ href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104">ZK
 API Usage Credits</a> is the single-verifier corner of that problem; we
 are after the general case, N mutually distrusting gateways sharing one
 spent set.</p>
-<nav id="TOC" role="doc-toc">
-<ul>
-<li><a href="#tor-exit-ips-are-a-public-blocklist">Tor exit IPs are a public blocklist</a></li>
-<li><a href="#gating-on-membership-not-identity">Gating on membership, not identity</a>
-<ul>
-<li><a href="#an-onion-service-instead-of-an-exit-node">An onion service instead of an exit node</a></li>
-<li><a href="#a-membership-proof-rate-limited-with-rln">A membership proof, rate-limited with RLN</a></li>
-<li><a href="#the-wire-protocol">The wire protocol</a></li>
-<li><a href="#deployment-and-results">Deployment and results</a></li>
-</ul></li>
-<li><a href="#discussion">Discussion</a>
-<ul>
-<li><a href="#the-design-space">The design space</a>
-<ul>
-<li><a href="#topology">Topology</a></li>
-<li><a href="#payment">Payment</a></li>
-</ul></li>
-</ul></li>
-<li><a href="#references">References</a></li>
-</ul>
-</nav>
 <h2 id="tor-exit-ips-are-a-public-blocklist">Tor exit IPs are a public
 blocklist</h2>
 <p>Blocking Tor exit nodes programmatically is easy, because Tor
