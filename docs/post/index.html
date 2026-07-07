@@ -196,6 +196,11 @@ own. Code at <a href="https://github.com/dmarzzz/reputation-gated-onion-egress">
 <li><a href="#topology">Topology</a></li>
 <li><a href="#payment">Payment</a></li>
 </ul></li>
+<li><a href="#addendum-zk-payment-channels">Addendum: zk payment channels</a>
+<ul>
+<li><a href="#how-it-would-work">How it would work</a></li>
+<li><a href="#what-it-costs">What it costs</a></li>
+</ul></li>
 </ul></li>
 <li><a href="#references">References</a></li>
 </ul>
@@ -691,10 +696,93 @@ already ships double-spend protection for anonymous credentials across
 its gateways. The next version starts there: a fee counted once across a
 small fleet of three gateways over one deposit-contract set, with the
 burn priced per member rather than per request.</p>
+<h3 id="addendum-zk-payment-channels">Addendum: zk payment channels</h3>
+<p>The payment section above treats the distributed spent set as the
+price of the flat fleet. There is a design that refuses to pay it: a zk
+payment channel per member-gateway pair. The <a
+href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104">ZK
+API Usage Credits</a> construction is fundamentally such a channel bound
+to one recipient, and the shape has a name in the literature: it is <a
+href="https://acmccs.github.io/papers/p473-greenA.pdf">BOLT</a>, the
+anonymous payment channel Green and Miers built for exactly this
+asymmetry, with RLN’s slash standing in for BOLT’s revocation tokens and
+watchtowers. Open a channel with each gateway and every gateway keeps
+its own channel state; nothing crosses between operators, because
+nothing is shared.</p>
+<h4 id="how-it-would-work">How it would work</h4>
+<p>A channel is an escrowed deposit plus a state counter. To pay, the
+member proves in zero knowledge that it holds the current signed state
+with balance remaining, the gateway blindly signs the decremented state,
+and the payment proof rides the same envelope the membership proof rides
+today. The gateway learns that some member with an open channel paid,
+and cannot link the spend to the previous one. Double-spending an old
+state is punished rather than prevented: replaying a spent index leaks
+the member’s secret through the same Shamir-line algebra RLN already
+uses, and the deposit becomes slashable by anyone. Egress pricing is
+flat, so the refund machinery that dominates the LLM version of this
+construction, where costs vary by 100x, can be deleted whole.</p>
+<p>The channels would be opened in batch at enrollment, all of them at
+once, funded through something shielded, because the funding edge is
+where the anonymity dies otherwise. A member who opens channels lazily
+on first use leaks its gateway affinities in the timing, and one who
+funds from a bare wallet links its whole gateway set through exchange
+KYC trails. BOLT’s paper says this plainly: the guarantees hold only if
+channels are funded with anonymized capital.</p>
+<h4 id="what-it-costs">What it costs</h4>
+<p>We swept the literature behind this fork, BOLT and zkChannels, the
+TumbleBit-to-Accio payment-hub line, Chaumian ecash from Chaum through
+Fedimint and the IETF credit-token drafts, the channel
+capital-efficiency work, and the formal-verification record, and the
+channel path carries three costs for this fleet.</p>
+<ul>
+<li><strong>Capital fragments N ways.</strong> Each deposit is sized to
+worst-case spend at its gateway, and spreading a member’s traffic across
+N gateways divides the request rate each channel sees. The <a
+href="https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664">channel
+economics literature</a> puts a frequency threshold below which a
+channel never pays for its lockup; a roaming member on a large fleet is
+a machine for staying under it.</li>
+<li><strong>The anonymity set partitions, then shrinks.</strong> Payment
+anonymity at a gateway is capped by the members holding an open channel
+there, and the effective set is smaller than that: every channel and hub
+system in the literature settles on the same accounting, <a
+href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf">the
+payments that actually completed this epoch</a>, a set that shrinks when
+payments abort and erodes across epochs by intersection.</li>
+<li><strong>The gateway gets an abort lever.</strong> BOLT’s own authors
+documented that the paid counterparty can shrink the anonymity set by
+inducing aborts, and can link a member across a sequence of requests by
+aborting it mid-sequence. Our adversary is the gateway.</li>
+</ul>
+<p>The sweep also returned something better than a verdict: a
+simplification. With refunds deleted and every ticket priced flat, the
+credits construction collapses into the stack this post already runs.
+Prove membership, prove one counter inequality, spend index times price
+stays inside the deposit, and emit one more nullifier. The spent set
+that checks that nullifier needs no consensus, because RLN prices its
+inconsistency: a double-spend across two gateways is caught when they
+reconcile, the secret falls out of the algebra, and the deposit is
+slashed, so the async window is bounded by the deposit rather than
+trusted away. <a
+href="https://github.com/fedimint/fedimint">Fedimint</a> runs this shape
+today with a BFT spent list; <a
+href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot">Nym</a>
+runs it with deferred reconciliation across its gateways. For a fleet
+whose requests cost the same and whose adversary is the operator, the
+distributed spent set turns out to be the cheap path, and channels
+remain the right tool where they were invented: one counterparty,
+variable costs, no fleet to gossip. The open problems that actually gate
+the next version are narrower and better than before: the bound relating
+gossip lag to the maximum extractable double-spend, the self-slash race
+where a member burns its own deposit before the gateway sweeps earned
+balance, and the deposit-edge KYC leak.</p>
 <h2 id="references">References</h2>
 <ol type="1">
 <li>The Tor Project. <a href="https://www.torproject.org/"
 class="uri">https://www.torproject.org/</a></li>
+<li>dmarz, reputation-gated-onion-egress. <a
+href="https://github.com/dmarzzz/reputation-gated-onion-egress"
+class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress</a></li>
 <li>Prince, The Trouble with Tor, Cloudflare blog, 2016. <a
 href="https://blog.cloudflare.com/the-trouble-with-tor/"
 class="uri">https://blog.cloudflare.com/the-trouble-with-tor/</a></li>
@@ -712,10 +800,6 @@ class="uri">https://www.ndss-symposium.org/wp-content/uploads/2017/09/do-you-see
 <li>Rate-Limiting Nullifier (RLN) docs. <a
 href="https://rate-limiting-nullifier.github.io/rln-docs"
 class="uri">https://rate-limiting-nullifier.github.io/rln-docs</a></li>
-<li>Crapis, Buterin, ZK API Usage Credits: LLMs and Beyond,
-ethresear.ch. <a
-href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104"
-class="uri">https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104</a></li>
 <li>The Tor Project, Bulk Tor Exit List. <a
 href="https://check.torproject.org/torbulkexitlist"
 class="uri">https://check.torproject.org/torbulkexitlist</a></li>
@@ -742,9 +826,6 @@ href="https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/"
 class="uri">https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/</a></li>
 <li>Semaphore. <a href="https://semaphore.pse.dev"
 class="uri">https://semaphore.pse.dev</a></li>
-<li>dmarz, reputation-gated-onion-egress. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress</a></li>
 <li>dmarz, reputation-gated-onion-egress: tor/torrc. <a
 href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/tor/torrc"
 class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/tor/torrc</a></li>
@@ -772,6 +853,10 @@ class="uri">https://petsymposium.org/popets/2023/popets-2023-0029.php</a></li>
 Privacy-Preserving Peer-to-Peer Economic Spam Protection, arXiv 2022. <a
 href="https://arxiv.org/abs/2207.00117"
 class="uri">https://arxiv.org/abs/2207.00117</a></li>
+<li>Crapis, Buterin, ZK API Usage Credits: LLMs and Beyond,
+ethresear.ch. <a
+href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104"
+class="uri">https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104</a></li>
 <li>Chaum, Fiat, Naor, Untraceable Electronic Cash, CRYPTO 1988. <a
 href="https://link.springer.com/chapter/10.1007/0-387-34799-2_25"
 class="uri">https://link.springer.com/chapter/10.1007/0-387-34799-2_25</a></li>
@@ -797,6 +882,10 @@ class="uri">https://dl.acm.org/doi/abs/10.1145/3419614.3423249</a></li>
 <li>Nym, zk-nym double-spend protection. <a
 href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot"
 class="uri">https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot</a></li>
+<li>Green, Miers, Bolt: Anonymous Payment Channels for Decentralized Currencies, CCS 2017. <a href="https://acmccs.github.io/papers/p473-greenA.pdf" class="uri">https://acmccs.github.io/papers/p473-greenA.pdf</a></li>
+<li>Guasoni, Huberman, Shikhelman, Lightning Network Economics: Channels, Management Science 70(6), 2024. <a href="https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664" class="uri">https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664</a></li>
+<li>Heilman, AlShenibr, Baldimtsi, Scafuro, Goldberg, TumbleBit: An Untrusted Bitcoin-Compatible Anonymous Payment Hub, NDSS 2017. <a href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf" class="uri">https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf</a></li>
+<li>Fedimint, federated Chaumian mint. <a href="https://github.com/fedimint/fedimint" class="uri">https://github.com/fedimint/fedimint</a></li>
 </ol>
 <h3 id="further-reading">Further reading</h3>
 <ol type="1">
