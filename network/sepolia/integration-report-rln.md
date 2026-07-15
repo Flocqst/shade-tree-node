@@ -98,6 +98,36 @@ the laptop's public IP appears **0 times** across every gateway — Tor rendezvo
 reveals the client. The signed directory (`directory.json`, signer `189f4511…1321`) already
 carried the three current onions, so no re-sign was needed.
 
+### Full combined e2e — over-spend + slash THROUGH a live gateway over Tor
+
+The happy-path run above proves membership + egress over Tor; this proves the *slash* path
+end to end, with nothing local. A fresh member (**carol**, `keys[2]`, leaf `1145183029…`)
+was staked on the live contract (register `0x2c2dd605…`, block 11280717). A driver then sent
+**two same-slot / same-epoch / different-signal envelopes** to ONE pinned gateway (egress-01)
+over Tor:
+
+```
+[+3.7s]  envelope 1/2 -> egress-01 over Tor -> ack {"ok":true}          (first share, egressed)
+[+14.1s] envelope 2/2 -> SAME gateway over Tor -> ack {"ok":false,"err":"over-spend-slashed"}
+```
+
+egress-01's own log:
+
+```
+PASS  egress->example.com:443  null=1137054579..
+SLASH tx 0x917e4a6083f30d2db2ce1c7b90f8593f905c2bcba1e98699d05acd33a0f1d159 commitment=114518302995674202..
+SLASH mined block 11280727
+DROP  over-spend-slashed  null=1137054579..
+```
+
+Carol's on-chain bond went `0.001 → 0`. So a **live fleet gateway**, reached **over Tor**,
+verified the RLN proofs, collected the two shares, reconstructed carol's `identitySecret`, and
+submitted the slash itself (its own hot key) — **live on Sepolia** (`0x917e4a60…d159`, block
+11280727). Nothing in this run was local: real client proofs, real Tor transport, real fleet
+gateway, real chain. Note the over-spend must hit the **same** gateway (the spent-set is
+per-gateway, in-memory) — hence the pinned onion; cross-gateway detection would need shared
+share state (a known follow-up).
+
 One operator note (not a fault): a freshly started **client** tor has marginal onion-connect
 success for the first several minutes (measured ~1/10 at one point); the shim's directory
 mode requires `RGOE_DIR_SIGNER` set or it silently falls back to a stale local
