@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Cheats} from "./Cheats.sol";
 import {StakedReputationSet, IWithdrawVerifier, ICommitmentHasher} from "../contracts/StakedReputationSet.sol";
-import {MockCommitmentHasher} from "../contracts/MockCommitmentHasher.sol";
+import {RateCommitmentHasher} from "../contracts/RateCommitmentHasher.sol";
 import {MockWithdrawVerifier} from "../contracts/MockWithdrawVerifier.sol";
 
 contract StakedReputationSetTest is Cheats {
@@ -13,12 +13,17 @@ contract StakedReputationSetTest is Cheats {
     uint256 constant MIN_UNBONDING = 270;
 
     StakedReputationSet set;
-    MockCommitmentHasher hasher;
+    RateCommitmentHasher hasher;
     MockWithdrawVerifier verifier;
 
-    // Two demo members. secret in [0, F); commitment = Poseidon([secret]).
+    // Two demo members. identitySecret in [0, F); the membership leaf is the RLN rate
+    // commitment  = Poseidon(2)([ Poseidon(1)([identitySecret]), 8 ]).
     uint256 constant SECRET_A = 111;
     uint256 constant SECRET_B = 222;
+    // Hardcoded rate commitment for SECRET_A=111, from poseidon-lite:
+    //   poseidon2([poseidon1([111n]), 8n]). Pins the leaf a demo member registers.
+    uint256 constant COMMIT_A_EXPECTED =
+        11302006078516901731073162965056551612114122314181142374993834332168998510316;
     uint256 commitA;
     uint256 commitB;
 
@@ -26,7 +31,7 @@ contract StakedReputationSetTest is Cheats {
     address constant RECEIVER = address(0xCAFE); // gateway/treasury slash receiver
 
     function setUp() public {
-        hasher = new MockCommitmentHasher();
+        hasher = new RateCommitmentHasher();
         verifier = new MockWithdrawVerifier(ICommitmentHasher(address(hasher)));
         set = new StakedReputationSet(
             BOND,
@@ -186,6 +191,34 @@ contract StakedReputationSetTest is Cheats {
     }
 
     // ---- slash (R3) -----------------------------------------------------------
+
+    /// The linchpin, end to end: register the hardcoded rate-commitment leaf for a demo
+    /// identitySecret, then slash by revealing that identitySecret. Proves the on-chain
+    /// leaf (poseidon2([poseidon1([s]),8])) matches the value the crypto side computes,
+    /// so a reconstructed secret slashes the right leaf and pays out.
+    function test_Slash_RateCommitmentLeaf_RevealedSecret_Pays() public {
+        // the leaf a member registers is exactly the poseidon-lite rate commitment
+        assertEq(commitA, COMMIT_A_EXPECTED, "commitA must equal the hardcoded rate commitment");
+        assertEq(
+            hasher.commitmentOf(SECRET_A),
+            COMMIT_A_EXPECTED,
+            "on-chain commitmentOf(identitySecret) must equal poseidon2([poseidon1([s]),8])"
+        );
+
+        set.register{value: BOND}(COMMIT_A_EXPECTED);
+        uint256 before = RECEIVER.balance;
+
+        // revealing the identitySecret slashes the leaf
+        set.slash(COMMIT_A_EXPECTED, SECRET_A, RECEIVER);
+        assertEq(RECEIVER.balance - before, BOND, "revealed identitySecret pays out the bond");
+        (uint256 bond,,) = set.members(COMMIT_A_EXPECTED);
+        assertEq(bond, 0, "slashed leaf deleted");
+
+        // a WRONG secret does not hash to the leaf => BadSecret
+        set.register{value: BOND}(commitB);
+        vm.expectRevert(StakedReputationSet.BadSecret.selector);
+        set.slash(commitB, SECRET_A, RECEIVER);
+    }
 
     function test_Slash_ActiveMember_BurnsBondPaysReceiver() public {
         set.register{value: BOND}(commitA);

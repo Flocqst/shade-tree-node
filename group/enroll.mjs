@@ -26,19 +26,20 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { identityFor, MEMBERS_PATH, loadGroup } from "../lib/semaphore.mjs";
+import { identityFor, rateCommitmentOf, MEMBERS_PATH, loadGroup } from "../lib/rln.mjs";
 
 const args = process.argv.slice(2);
 const commitmentOnly = args.includes("--commitment-only") || args.includes("--no-local");
 const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2).toString("hex");
 
 // The identity is generated HERE, on the member's machine. The secret never leaves.
-// 0x-hex so the lib's toField() parses it as a field element; identityFor(secret) is
-// the SAME derivation proveForSlot uses, so this commitment IS the membership leaf the
-// gateway verifies proofs against (and, under RGOE_COMMITMENT_SCHEME=identity, also the
-// leaf the on-chain slash names — see the report's commitment-scheme note).
+// 0x-hex so the lib's toField() parses it as a field element; identityFor(secret) is the
+// SAME derivation proveForSlot uses. The published leaf is the RLN rateCommitment
+// (Poseidon2(Poseidon1(identitySecret), K)) — the exact leaf the gateway verifies proofs
+// against AND the leaf the on-chain slash names (a reconstructed identitySecret ->
+// deriveCommitment() lands here). One coherent leaf, no scheme flag.
 const secret = "0x" + randomBytes(32).toString("hex");
-const commitment = identityFor(secret).commitment.toString();
+const commitment = rateCommitmentOf(identityFor(secret)).toString();
 
 if (commitmentOnly) {
   // Machine path: stdout is the commitment alone, so it can be piped straight to
@@ -54,7 +55,7 @@ if (commitmentOnly) {
 
 // Local demo path: seed the commitment into the PoC set so the whole thing stays
 // runnable without a chain. Only the COMMITMENT is written; the secret is not.
-let doc = { version: 1, members: [] };
+let doc = { version: 2, members: [] };
 if (existsSync(MEMBERS_PATH)) doc = JSON.parse(await readFile(MEMBERS_PATH, "utf8"));
 if (!doc.members.includes(commitment)) doc.members.push(commitment);
 await writeFile(MEMBERS_PATH, JSON.stringify(doc, null, 2) + "\n");

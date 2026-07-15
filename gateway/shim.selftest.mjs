@@ -5,10 +5,10 @@
 // control flow against it:
 //
 //   Gateway spent-set (makeSpentSet):
-//     - first share for a (scope, nullifier) => egress, no slash
+//     - first share for a nullifier => egress, no slash
 //     - identical replay (same share.x) => deduped, NO slash
-//     - second DISTINCT signal on the same slot => reconstruct + slash EXACTLY once
-//     - a distinct signal on a DIFFERENT slot => no slash (independent counter)
+//     - second DISTINCT signal on the same nullifier => reconstruct + slash EXACTLY once
+//     - a distinct signal on a DIFFERENT nullifier => no slash (independent counter)
 //
 //   Shim slot pool (makeSlotPool / buildEnvelope):
 //     - one slot per request, cursor rotates and wraps at K
@@ -37,15 +37,16 @@ export const EPOCH_SECONDS = 120;
 export const K_SLOTS = 8;
 export const MEMBERS_PATH = "/dev/null/members.json";
 export function currentEpoch() { return 7n; }
-export function slotScope(epoch, i) { return "scope(" + epoch + "," + i + ")"; }
+export function externalNullifierFor(epoch) { return "extnull(" + epoch + ")"; }
 export function requestSignal(target, nonce) { return "sig(" + target + "|" + nonce + ")"; }
 export async function proveForSlot(secret, epoch, i, signal, opts) {
-  // Mirror the real lib: the membership proof BINDS the signal (proof.message === signal),
+  // Mirror the real lib: the RLN proof BINDS the signal (proof's public x === signal),
   // and the share is evaluated at the same signal. proof + share are one coherent bundle.
+  // The slot (messageId) is a PRIVATE witness returned for local bookkeeping only.
   return {
     proof: { message: signal, merkleTreeRoot: "ROOT" },
     nullifier: "null#" + i,
-    scope: slotScope(epoch, i),
+    externalNullifier: externalNullifierFor(epoch),
     slot: i,
     share: { x: signal, y: "y(" + i + "," + signal + ")" },
   };
@@ -53,7 +54,7 @@ export async function proveForSlot(secret, epoch, i, signal, opts) {
 export async function verifyEnvelope(env, recentRoots) {
   // Mirror the real cheap binding: the share must be evaluated at the proof's signal.
   if (String(env.proof.message) !== String(env.share.x)) return { ok: false, reason: "signal-mismatch" };
-  return { ok: true, reason: "ok", nullifier: env.nullifier, scope: env.scope, slot: env.slot, share: env.share };
+  return { ok: true, reason: "ok", nullifier: env.nullifier, externalNullifier: env.externalNullifier, share: env.share };
 }
 export async function loadGroup() { return { group: null, root: "ROOT", count: 1 }; }
 export async function loadGroupOnchain() { return { recentRoots: ["ROOT"] }; }
@@ -103,7 +104,7 @@ console.log("gateway spent-set:");
 await test("first share egresses, no slash", async () => {
   const slashes = [];
   const s = makeSpentSet({ reconstruct: (a, b) => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
-  const r = await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });
+  const r = await s.admit("null#3", { x: "sigA", y: "yA" });
   assert.equal(r.ok, true);
   assert.equal(r.action, "first");
   assert.equal(slashes.length, 0);
@@ -112,39 +113,39 @@ await test("first share egresses, no slash", async () => {
 await test("identical replay is deduped, NO slash", async () => {
   const slashes = [];
   const s = makeSpentSet({ reconstruct: (a, b) => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
-  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });
-  const r = await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" }); // same evaluation point
+  await s.admit("null#3", { x: "sigA", y: "yA" });
+  const r = await s.admit("null#3", { x: "sigA", y: "yA" }); // same evaluation point
   assert.equal(r.action, "replay");
   assert.equal(r.ok, true);
   assert.equal(slashes.length, 0, "replay must not slash");
 });
 
-await test("second DISTINCT signal on one slot reconstructs + slashes EXACTLY once", async () => {
+await test("second DISTINCT signal on one nullifier reconstructs + slashes EXACTLY once", async () => {
   const slashes = [];
   const s = makeSpentSet({
     reconstruct: (a, b) => "SECRET(" + a.y + "|" + b.y + ")",
     derive: (secret) => "COMMIT(" + secret + ")",
     slash: async (commitment, secret) => slashes.push({ commitment, secret }),
   });
-  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });                 // first
-  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });                 // replay (no slash)
-  const r = await s.admit("scope#3", "null#3", { x: "sigB", y: "yB" });       // distinct => slash
+  await s.admit("null#3", { x: "sigA", y: "yA" });                 // first
+  await s.admit("null#3", { x: "sigA", y: "yA" });                 // replay (no slash)
+  const r = await s.admit("null#3", { x: "sigB", y: "yB" });       // distinct => slash
   assert.equal(r.action, "slash");
   assert.equal(r.ok, false, "the over-spending request itself is refused");
   assert.equal(slashes.length, 1, "slash exactly once");
   assert.equal(slashes[0].commitment, "COMMIT(SECRET(yA|yB))");
   assert.equal(slashes[0].secret, "SECRET(yA|yB)");
   // a further distinct signal must NOT slash again
-  const r2 = await s.admit("scope#3", "null#3", { x: "sigC", y: "yC" });
+  const r2 = await s.admit("null#3", { x: "sigC", y: "yC" });
   assert.equal(r2.ok, false);
   assert.equal(slashes.length, 1, "no double slash");
 });
 
-await test("distinct signal on a DIFFERENT slot does not slash (independent counter)", async () => {
+await test("distinct signal on a DIFFERENT nullifier does not slash (independent counter)", async () => {
   const slashes = [];
   const s = makeSpentSet({ reconstruct: () => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
-  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" }); // slot 3
-  const r = await s.admit("scope#4", "null#4", { x: "sigB", y: "yB" }); // slot 4, first for its key
+  await s.admit("null#3", { x: "sigA", y: "yA" }); // nullifier for slot 3
+  const r = await s.admit("null#4", { x: "sigB", y: "yB" }); // distinct nullifier, first for its key
   assert.equal(r.action, "first");
   assert.equal(slashes.length, 0);
 });
@@ -162,7 +163,7 @@ function mockProve(calls) {
     return {
       proof: { message: signal, merkleTreeRoot: "ROOT" },
       nullifier: "null#" + i,
-      scope: "scope#" + i,
+      externalNullifier: "extnull(" + epoch + ")",
       slot: i,
       share: { x: signal, y: "y(" + i + "," + signal + ")" },
     };
@@ -177,16 +178,18 @@ await test("one slot per request; cursor rotates and wraps at K", async () => {
   assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per request and wrap at K");
 });
 
-await test("envelope is a coherent v2 bundle; share bound to requestSignal(target,nonce)", async () => {
+await test("envelope is a coherent v3 bundle; share bound to requestSignal(target,nonce)", async () => {
   const calls = [];
   const prove = mockProve(calls);
   const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
-  const { envelope, signal } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
+  const { envelope, signal, slot } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
 
-  assert.equal(envelope.v, 2);
+  assert.equal(envelope.v, 3);
   assert.equal(envelope.target, "example.com:443");
-  assert.equal(typeof envelope.slot, "number");
-  for (const k of ["proof", "nullifier", "scope", "share"]) assert.ok(k in envelope, "missing " + k);
+  assert.equal(typeof slot, "number");
+  assert.ok(!("slot" in envelope), "slot is a private witness — never on the wire");
+  assert.ok(!("scope" in envelope), "scope is gone in v3");
+  for (const k of ["proof", "nullifier", "externalNullifier", "share"]) assert.ok(k in envelope, "missing " + k);
 
   // request-bound: share is evaluated at H(target, nonce) ...
   assert.ok(signal.startsWith("sig(example.com:443|"), "signal is H(target, nonce)");
@@ -202,7 +205,7 @@ await test("each request gets a fresh nonce (distinct signals across requests)",
   const a = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
   const b = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
   assert.notEqual(a.signal, b.signal, "fresh per-request nonce => distinct signals");
-  assert.notEqual(a.envelope.slot, b.envelope.slot, "slot also rotates between requests");
+  assert.notEqual(a.slot, b.slot, "slot also rotates between requests");
 });
 
 console.log("");

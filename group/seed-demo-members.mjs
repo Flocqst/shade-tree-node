@@ -18,7 +18,7 @@ import { writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { identityFor, MEMBERS_PATH } from "../lib/semaphore.mjs";
+import { identityFor, rateCommitmentOf, MEMBERS_PATH } from "../lib/rln.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,18 +26,19 @@ const DEFAULT = ["alice", "bob", "carol", "dave", "erin", "frank", "grace", "hei
 const labels = process.argv.slice(2);
 const names = labels.length ? labels : DEFAULT;
 
-// Secrets are 0x-hex field elements so the v2 lib's toField()/identityFor() parse
-// them and the leaf here matches the leaf proveForSlot() proves against.
+// Secrets are 0x-hex field elements so the lib's toField()/identityFor() parse them.
+// The leaf is the RLN rateCommitment = Poseidon2(Poseidon1(identitySecret), K) — the exact
+// depth-20 tree leaf proveForSlot() proves against and the on-chain hasher stores.
 const keys = names.map((label) => {
   const secret = "0x" + randomBytes(32).toString("hex");
-  const commitment = identityFor(secret).commitment.toString();
+  const commitment = rateCommitmentOf(identityFor(secret)).toString(); // rateCommitment leaf
   return { label, secret, commitment };
 });
 
-// 1. The public reputation set: commitments only. Safe to ship anywhere.
+// 1. The public reputation set: rateCommitment leaves only. Safe to ship anywhere.
 await writeFile(
   MEMBERS_PATH,
-  JSON.stringify({ version: 1, members: keys.map((k) => k.commitment) }, null, 2) + "\n"
+  JSON.stringify({ version: 2, members: keys.map((k) => k.commitment) }, null, 2) + "\n"
 );
 
 // 2. The private keyring: machine-readable.

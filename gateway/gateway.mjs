@@ -2,16 +2,18 @@
 //
 // It listens on 127.0.0.1:8443 (Tor maps <addr>.onion:80 -> here). For each
 // incoming connection it:
-//   1. reads a single newline-terminated v2 JSON envelope
-//      { v, target, slot, proof, nullifier, scope, share },
+//   1. reads a single newline-terminated v3 JSON envelope
+//      { v:3, target, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
 //   2. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
-//        scope is a valid slot for the current/previous epoch  (cheap)
-//        proof.merkleTreeRoot ∈ recent-roots                   (cheap)
-//        membership verifyProof                                (expensive SNARK)
+//        externalNullifier is current/previous epoch's               (cheap)
+//        share.x == proof's committed public x                        (cheap)
+//        proof's public root ∈ recent-roots                           (cheap)
+//        RLN Groth16 verifyProof                                      (expensive SNARK)
 //      all bundled behind lib verifyEnvelope(),
-//   3. collects the RLN share per (scope, nullifier): the first share egresses; an
-//      identical replay is deduped (no slash); a SECOND DISTINCT signal reconstructs
-//      the secret and slashes the member's on-chain stake,
+//   3. collects the RLN share per `nullifier`: the first share egresses; an identical
+//      replay (same share.x) is deduped (no slash); a SECOND DISTINCT signal (same
+//      nullifier, different x) reconstructs the identitySecret and slashes the member's
+//      on-chain stake,
 //   4. on success opens a raw :443 TCP tunnel to `target` from THIS host's IP and
 //      pipes bytes both ways (TLS stays end-to-end client<->target),
 //   5. on any failure writes a short error envelope and drops the connection.
@@ -67,20 +69,21 @@ async function initRoots() {
 }
 
 // ---- share-collecting spent-set (RLN slashing at PoC fidelity) --------------
-// Keyed by (scope, nullifier). Stores the first share; a second DISTINCT evaluation
-// point (distinct signal) under the same key is a provable over-spend: reconstruct
-// the secret from the two shares, derive the commitment, and slash. An IDENTICAL
-// replay (same share.x) is deduped and is NEVER slashed (it reveals no new point).
+// Keyed by `nullifier` alone (there is no public slot in RLN v3 — the messageId is a
+// private circuit witness). Stores the first share; a second DISTINCT evaluation point
+// (distinct public `x`) under the same nullifier is a provable over-spend: reconstruct
+// the identitySecret from the two shares, derive the rateCommitment leaf, and slash. An
+// IDENTICAL replay (same share.x) is deduped and is NEVER slashed (no new point).
 //
 // reconstruct/derive/slash are injected so the selftest can drive this control flow
 // with mocks (the real lib + on-chain slasher land at combine).
 export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveCommitment, slash, ttlMs = 2 * EPOCH_SECONDS * 1000 } = {}) {
-  const seen = new Map(); // key -> { xs:Set, first:share, slashed:bool, at:number }
-  const keyOf = (scope, nullifier) => String(scope) + "|" + String(nullifier);
+  const seen = new Map(); // nullifier -> { xs:Set, first:share, slashed:bool, at:number }
+  const keyOf = (nullifier) => String(nullifier);
 
-  async function admit(scope, nullifier, share) {
+  async function admit(nullifier, share) {
     if (!share || share.x == null) return { ok: false, action: "bad-share", reason: "no-share" };
-    const k = keyOf(scope, nullifier);
+    const k = keyOf(nullifier);
     const e = seen.get(k);
 
     if (!e) {
@@ -90,12 +93,12 @@ export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveC
     if (e.slashed) return { ok: false, action: "slashed", reason: "rate-slashed" };
     if (e.xs.has(String(share.x))) return { ok: true, action: "replay" }; // idempotent honest retry
 
-    // Distinct signal under the same (scope, nullifier): the L+1-th point. Over-spend.
-    e.slashed = true; // slash exactly once for this key
+    // Distinct public x under the same nullifier: the L+1-th point. Over-spend.
+    e.slashed = true; // slash exactly once for this nullifier
     let commitment = null;
     try {
-      const secret = reconstruct(e.first, share);
-      commitment = derive(secret);
+      const secret = reconstruct(e.first, share); // identitySecret
+      commitment = derive(secret);                // rateCommitment leaf
       if (slash) await slash(commitment, secret);
     } catch (err) {
       console.log(`slash failed for null=${String(nullifier).slice(0, 10)}..: ${err.message}`);
@@ -230,8 +233,9 @@ function makeHandler(spentSet) {
     // Everything after the envelope parse is guarded: any throw must REPLY, never hang
     // the client (a silent throw here is exactly the bug that left clients waiting).
     try {
-      // Steps 1-3, cheap-first, inside the lib: scope-valid slot -> root ∈ recent-roots
-      // -> SNARK verifyProof. Returns the nullifier/scope/slot/share to act on.
+      // Steps 1-3, cheap-first, inside the lib: fresh externalNullifier -> share.x binding
+      // -> root ∈ recent-roots -> RLN Groth16 verify. Returns the authoritative
+      // nullifier/externalNullifier/share (read from the proof's public signals) to act on.
       const v = await verifyEnvelope(env, recentRoots);
       if (!v.ok) {
         console.log(`DROP  ${v.reason}  target=${env.target}`);
@@ -245,17 +249,17 @@ function makeHandler(spentSet) {
         return socket.destroy();
       }
 
-      // Step 4: slot-nullifier dedup + share collection; slashes on 2nd distinct signal.
-      const res = await spentSet.admit(v.scope, v.nullifier, v.share);
+      // Step 4: nullifier dedup + share collection; slashes on 2nd distinct signal.
+      const res = await spentSet.admit(v.nullifier, v.share);
       if (!res.ok) {
-        console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot}`);
+        console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}..`);
         reply(socket, { ok: false, err: res.reason });
         return socket.destroy();
       }
 
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
       const upstream = net.connect(tgt.port, tgt.host, () => {
-        console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot} scope=${String(v.scope).slice(0, 10)}..`);
+        console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. extNull=${String(v.externalNullifier).slice(0, 10)}..`);
         reply(socket, { ok: true });
         if (env.__rest && env.__rest.length) upstream.write(env.__rest);
         socket.pipe(upstream);
@@ -285,7 +289,7 @@ async function main() {
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     console.log(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}  (epoch ${currentEpoch()}, ${EPOCH_SECONDS}s)`);
     console.log(`egress policy: :443 only (metadata-only TLS tunnel)`);
-    console.log(`rate: RLN degree-1 per slot; 2nd distinct signal on a slot => reconstruct + slash`);
+    console.log(`rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash`);
   });
 }
 

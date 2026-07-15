@@ -1,30 +1,68 @@
 # Plan: close the three PoC seams by adopting RLN
 
-**Status: plan, not built.** Seams 1–3 from `network/sepolia/E2E-REPORT.md` §9
-(membership-from-chain, real RLN circuit, real verifier/hasher) are **one** change:
-replace the two-view Semaphore+JS-Shamir crypto with the real Rate-Limiting-Nullifier
-circuit. This doc scopes that; build after review.
+**Status: P0–P3 BUILT + VERIFIED (2026-07-15). P4 (fleet + live Tor) pending.**
+Seams 1–3 from `network/sepolia/E2E-REPORT.md` §9 (membership-from-chain, real RLN circuit,
+real verifier/hasher) are closed by adopting the real Rate-Limiting-Nullifier circuit in
+place of the two-view Semaphore+JS-Shamir crypto.
 
-## Why one change closes all three
+Progress:
+- **P0 artifact gate** — circom-rln v1.0.0 Groth16 artifacts built + `rlnjs@3.3.0` round-trip
+  green on Node 24. `circuits/rln/ARTIFACTS.md`. ✓
+- **P1 crypto core** — `lib/rln.mjs` real RLN; `lib/rln.selftest.mjs` 21/21. ✓
+- **P3-onchain** — rateCommitment hasher + JS↔Solidity vectors; `forge test` 24/24. ✓
+- **P2 gateway/shim/e2e** — envelope v3, nullifier-keyed spent-set; anvil `demo-e2e` 23/23. ✓
+- **P3-live** — fresh Sepolia deploy (`0xdAE242AE…20FC`) + live integration PASS: stake →
+  normal use → over-spend → on-chain slash (`0xc0f99e96…39efb`). `network/sepolia/
+  integration-report-rln.md`. ✓
+- **P4** — fleet re-provision with RLN artifacts + live Tor. **Pending** (needs the fleet SOPS
+  passphrase + an artifact-distribution decision; see below).
+
+Two live-only bugs were found + fixed during P3-live (both slipped past every offline gate):
+a shared-snarkjs reentrancy race (serialized behind a mutex in `lib/rln.mjs`) and a stale
+`lib/semaphore.mjs` `loadGroup` that built a depth-3 Semaphore-v4 tree instead of the
+depth-20 RLN tree (now delegates to the RLN loader).
+
+## Why one circuit closes all three
 
 Today: membership leaf = `Poseidon(EdDSA-pubkey(secret))` (Semaphore identity), slash
-leaf = `Poseidon(secret)` (on-chain). Different functions → the two-view seam.
+leaf = `Poseidon(secret)` (on-chain). Different functions → the two-view seam. RLN
+collapses membership + slashable identity into **one Groth16 proof** that emits the Shamir
+share, so all three seams close together — the client, the gateway, AND the on-chain hasher
+adopt the same leaf.
 
-RLN uses **`Poseidon(secret)` as the leaf for both** the membership proof and the
-slashable identity, in one Groth16 proof that also emits the Shamir share. So:
+**Correction (primary source, circom-rln v1.0.0 `rln.circom`).** The real RLN leaf is
+**NOT** `Poseidon(secret)`. It is:
 
-- **Seam 2 (real circuit):** the RLN circuit *is* the real circuit. ✓
-- **Seam 3 (real verifier/hasher):** its Groth16 verifier replaces `MockWithdrawVerifier`
-  semantics; the hasher is already `Poseidon(secret)` (`MockCommitmentHasher`), which is
-  RLN-correct. ✓
-- **Seam 1 (membership-from-chain):** the on-chain `StakedReputationSet` already stores
-  `Poseidon(secret)` leaves, and `loadGroupOnchain` already rebuilds that tree from
-  `Member*` events. Once membership proofs verify against *that* tree (they will, under
-  RLN), the gateway sources membership from chain and "stake → member" is automatic. ✓
+```
+identityCommitment = Poseidon(1)([ identitySecret ])
+rateCommitment     = Poseidon(2)([ identityCommitment, userMessageLimit ])   ← the Merkle leaf
+a1                 = Poseidon(3)([ identitySecret, externalNullifier, messageId ])
+y                  = identitySecret + a1 * x        ← the SSS share; slash reveals identitySecret
+```
 
-The key unlock: **the on-chain side is already RLN-shaped** — we adapted
-`StakedReputationSet` from RLN.sol and the hasher is already `Poseidon(secret)`. Only the
-client/gateway crypto and the gateway's root sourcing change.
+Tree DEPTH=20, LIMIT_BIT_SIZE=16 (max `userMessageLimit` = 2^16). The slashable value is
+`identitySecret` (= `Poseidon(nullifier, trapdoor)` of the RLN identity), not the raw secret.
+
+So the earlier "the on-chain side is already RLN-shaped / hasher already `Poseidon(secret)`"
+claim was **wrong** and is retracted. What's actually true:
+
+- **Seam 2 (real circuit):** the circom-rln circuit *is* the real circuit. ✓
+- **Seam 3 (real verifier/hasher):** its exported Groth16 `Verifier.sol` replaces
+  `MockWithdrawVerifier`; **`MockCommitmentHasher` must change** from `Poseidon(secret)` to
+  `rateCommitment = Poseidon(Poseidon(secret), limit)` (still real Poseidon, one more level).
+- **Seam 1 (membership-from-chain):** once `StakedReputationSet` stores **rateCommitment**
+  leaves and `loadGroupOnchain` rebuilds that tree, RLN membership proofs verify against the
+  on-chain root and "stake → member" is automatic. ✓
+
+The real unlock: **RLN's proof also carries the slashing share**, so one circuit binds
+membership and slashability to the *same* secret — which the current two-view design can't.
+The cost is a coordinated leaf change on **both** sides (hasher + client) plus adopting a real
+circuit; it is not the "on-chain is already done" freebie the first draft claimed.
+
+RLN replaces the Semaphore-v4 proof path entirely (its Groth16 proof *is* the membership
+proof), so there is no v3/v4 conflict — enrollment simply moves to RLN identities, as planned.
+`rlnjs@3.3.0` is frozen (last publish 2023-10) but coherent and complete; we own its frozen
+dep graph (`ffjavascript@0.2.55` pinned) and must build the artifacts ourselves (Phase 0).
 
 ## What changes vs. what stays
 
@@ -36,7 +74,10 @@ client/gateway crypto and the gateway's root sourcing change.
 | Envelope v2 shape (proof/nullifier/share) | Enrollment: RLN identity, register `Poseidon(secret)` on-chain |
 | On-chain hasher (`Poseidon(secret)`) | New: Groth16 verifier contract for withdraw/exit ZK-auth |
 
-## Decision points (resolve before building)
+## Decision points — background (all resolved above under "Decisions")
+
+_Kept for the reasoning; the choices are settled in the "Decisions (resolved for this build)"
+section below._
 
 1. **Library: `rlnjs` (JS) vs `zerokit` (Rust).** `rlnjs` keeps the current Node stack and
    is the fast path. `zerokit` is the Rust path (pairs with the LIGHT-CLIENT.md /
@@ -53,8 +94,29 @@ client/gateway crypto and the gateway's root sourcing change.
    identities and re-register `Poseidon(secret)` on-chain. Fresh testnet deploy; no
    in-place migration of the current 8 demo members.
 
+## Decisions (resolved for this build)
+
+1. **Library:** `rlnjs@3.3.0` (JS) now. zerokit stays with the Rust rewrite.
+2. **Artifacts:** build locally — no published bundle exists. circom-rln **v1.0.0** (commit
+   `17f0fed`), dev Groth16 setup, artifacts hash-pinned under `circuits/rln/`. **Testnet-only**
+   (untrusted ceremony). Mainnet needs a real ceremony + audit.
+3. **Rate model:** `userMessageLimit = K_SLOTS = 8`. Confirm the RLN nullifier/messageId maps
+   onto our spent-set the same way the current slot nullifier does.
+4. **Withdraw/exit:** **graft** our time-locked exit (`initiateExit`/`withdraw`, `U ≥ F+E+C`)
+   onto the new leaf, keeping the working economic layer; adopt the real Groth16 `Verifier.sol`
+   only for the membership/slash proof. Do NOT swap in RLN.sol wholesale (loses our timelock).
+5. **Migration:** fresh testnet deploy, members re-enroll with RLN identities; no in-place
+   migration of the current 8 demo members.
+
 ## Phased build (each phase independently testable)
 
+- **P0 — artifact gate (prerequisite).** Install circom, build `rln.wasm` / `rln_final.zkey` /
+  `verification_key.json` from circom-rln v1.0.0, export `Verifier.sol` from that exact zkey,
+  and prove `rlnjs` round-trips against them on this machine (register → prove → verify →
+  double-signal → BREACH → recover secret). Hash-pin artifacts in `circuits/rln/ARTIFACTS.md`.
+  *Gate: rlnjs BREACH-recovers the identity secret against our own artifacts.* **If this fails
+  on Node 24 / the ceremony, the rlnjs path stalls and zerokit is reconsidered — nothing
+  downstream is safe to build until P0 is green.**
 - **P1 — crypto swap (offline).** `lib/rln.mjs`: RLN identity, `proveForSlot` → RLN proof
   (real circuit), `verifyEnvelope` → RLN verify, keep `reconstructSecret`/share logic
   (RLN gives it natively). Unit test: prove→verify, 2-share reconstruct, K-limit. No chain,

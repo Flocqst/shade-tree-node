@@ -10,13 +10,17 @@ import {IWithdrawVerifier, ICommitmentHasher} from "./StakedReputationSet.sol";
 /// behind `commitment`, bound to `context` (so a withdraw authorization cannot be
 /// replayed against a different recipient). It reveals NOTHING about the secret.
 ///
-/// For the PoC this verifier instead accepts a REVEALED secret: `proof == abi.encode(secret)`
-/// and it authorizes iff `hasher.commitmentOf(secret) == commitment` — i.e. knowledge of
-/// the secret authorizes the action. This is NOT zero-knowledge: the secret is exposed in
-/// calldata. That is acceptable only because the demo runs against a local anvil and the
+/// For the PoC this verifier instead accepts a REVEALED `identitySecret`:
+/// `proof == abi.encode(identitySecret)` and it authorizes iff
+/// `hasher.commitmentOf(identitySecret) == commitment`. Because the hasher now returns the
+/// RLN **rate commitment** (`Poseidon(2)([ Poseidon(1)([identitySecret]), 8 ])`) and the
+/// membership leaf is that same rate commitment, revealing the `identitySecret` behind a
+/// leaf still authorizes initiateExit / withdraw for that member — the recompute stays
+/// coherent with the new leaf formula. This is NOT zero-knowledge: the secret is exposed
+/// in calldata. That is acceptable only because the demo runs against a local anvil and the
 /// point is to exercise the register / exit / time-locked withdraw / slash state machine,
 /// not the ZK circuit. A production build swaps this for the RLN/Semaphore withdraw
-/// verifier and stops revealing the secret.
+/// verifier (real Groth16 exit-auth is a later step) and stops revealing the secret.
 ///
 /// `context` is currently IGNORED (the demo's authorization is pure secret-knowledge, and
 /// anyone with the secret can already act on the leaf, so recipient-binding buys nothing

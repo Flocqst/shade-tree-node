@@ -8,7 +8,7 @@
 //   1. picks the next PRECOMPUTED slot proof for this epoch (one slot per request),
 //   2. binds a deterministic signal to the request and evaluates the RLN share,
 //   3. picks a gateway from the fleet (rotation) and dials gateway.onion:80 via Tor,
-//   4. sends the v2 envelope { v, target, slot, proof, nullifier, scope, share },
+//   4. sends the v3 envelope { v:3, target, proof, nullifier, externalNullifier, share },
 //   5. on gateway "ok", tells the local client "200 Connection established" and
 //      pipes bytes; the local client then does TLS straight to the target.
 //
@@ -122,18 +122,20 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
   return { ensureEpoch, ensureGroup, nextSlot, state: () => ({ epoch, cursor }) };
 }
 
-// Build the v2 envelope for one logical request. `signal` is deterministic per request
-// (H(target, nonce)) and the caller reuses the SAME envelope across failover, so a
-// retry reproduces the SAME share (no new evaluation point) — the deterministic-retry
-// invariant. proof + nullifier + scope + share all come from one proveForSlot call, so
-// the envelope is internally coherent (proof.message === share.x) for verifyEnvelope.
+// Build the v3 envelope for one logical request. `signal` is deterministic per request
+// (requestSignal(target, nonce)) and the caller reuses the SAME envelope across failover,
+// so a retry reproduces the SAME share (no new evaluation point) — the deterministic-retry
+// invariant. proof + nullifier + externalNullifier + share all come from one proveForSlot
+// call, so the envelope is internally coherent (proof's public x == share.x) for
+// verifyEnvelope. The `slot` (messageId) is a PRIVATE circuit witness — kept locally for
+// the TUNNEL log/bookkeeping only; it is NOT put on the wire.
 export async function buildEnvelope({ secret, target, pool, prove = proveForSlot }) {
   const nonce = randomBytes(16).toString("hex"); // stable for THIS logical request
   const signal = requestSignal(target, nonce);
   const { epoch, slot } = pool.nextSlot();
   const group = await pool.ensureGroup();
-  const { proof, nullifier, scope, share } = await prove(secret, epoch, slot, signal, { group });
-  return { envelope: { v: 2, target, slot, proof, nullifier, scope, share }, signal };
+  const { proof, nullifier, externalNullifier, share } = await prove(secret, epoch, slot, signal, { group });
+  return { envelope: { v: 3, target, proof, nullifier, externalNullifier, share }, signal, slot };
 }
 
 // Dial the gateway onion via Tor SOCKS, retrying through cold start. Right after
@@ -206,7 +208,7 @@ function startShim() {
       const onions = await candidateOnions();
       // ONE slot + ONE deterministic signal for this logical request; the same
       // envelope (same share) is reused across every gateway failover below.
-      const { envelope } = await buildEnvelope({ secret: SECRET, target, pool });
+      const { envelope, slot } = await buildEnvelope({ secret: SECRET, target, pool });
       const wire = JSON.stringify(envelope) + "\n";
 
       // Dial candidates in order, failing over to the next gateway on dial timeout.
@@ -248,7 +250,7 @@ function startShim() {
       torSocket.pipe(clientSocket);
       clientSocket.on("error", () => torSocket.destroy());
       torSocket.on("error", () => clientSocket.destroy());
-      console.log(`TUNNEL  ${target}  slot=${envelope.slot} via ${onion.slice(0, 16)}..onion`);
+      console.log(`TUNNEL  ${target}  slot=${slot} via ${onion.slice(0, 16)}..onion`);
     } catch (e) {
       try { clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\n\r\nshim error: ${e.message}\n`); } catch {}
       clientSocket.destroy();
