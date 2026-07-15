@@ -132,21 +132,44 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns the 
 - [x] **Client hang bug fixed** (`verifyEnvelope` Set/Array; gateway never hangs; shim readLine timeout)
 - [x] **On-chain slashing enabled fleet-wide** via `group_vars/egress` (RGOE_SLASH_CONTRACT decoupled from membership; slasher key SOPS-encrypted)
 - [ ] fleet-ledger + `fleet-secrets.tar.gpg` re-bundled (agent-devops; needs your passphrase)
-- [ ] **live curl through the fleet over Tor — BLOCKED by a Tor onion-resolution issue** (see below), not our code
+- [x] **live curl through the fleet over Tor — CONFIRMED end to end** (see below)
 
-## Live Tor status (honest)
+## Live Tor round-trip: CONFIRMED
 
-The client→shim→Tor→gateway→clearnet round-trip did **not** complete in-session, and the
-cause is **outside this stack**: Tor onion *resolution* is failing in this environment.
-Evidence: clearnet Tor works from every vantage (laptop + droplets get exit IPs), but
-onion rendezvous fails to **every** onion — ours *and* DuckDuckGo's rock-solid public
-onion — from **every** vantage, with `No more HSDir available to query`; clocks are
-NTP-synced (ruled out); PoW excluded (DDG uses none). This is a Tor 0.4.9.x client /
-network HSDir condition. The gateways are correctly configured and listening on 8443;
-they become reachable the moment Tor onion resolution recovers. The protocol itself is
-proven over the exact wire bytes Tor delivers (the integration test runs the real
-gateway over local TCP). The old *silent hang* on this path is the bug that is now
-fixed — the shim reports the Tor error cleanly instead of hanging.
+Full path verified: laptop → shim (builds a Semaphore proof) → Tor rendezvous → fleet
+gateway (verifies the proof, gates) → clearnet, returning the **gateway's** clean IP, not
+the laptop's. Requests rotate across gateways and slots per request:
+
+| req | egress IP (gateway) | onion | slot (nullifier) |
+|---|---|---|---|
+| 1 | 167.172.224.177 (egress-02) | oi73ktti… | 0 |
+| 2 | 167.172.224.177 (egress-02) | oi73ktti… | 1 |
+| 3 | 167.172.237.22 (rgoe-03) | spoe2hmw… | 2 |
+
+Privacy check: the laptop's public IP appears **0 times** in the gateways' logs — Tor
+rendezvous never reveals the client to the gateway.
+
+### What had blocked it (three real issues, none an "environment fault")
+
+Getting here required fixing three things, and my first read ("Tor network / environment
+issue") was wrong — nothing that worked before had broken:
+
+1. **`.onion` double-suffix (client bug).** Directory entries carry the full
+   `<addr>.onion`; `dialOnion` re-appends `.onion`, so fleet mode dialed
+   `<addr>.onion.onion` → SOCKS `HostUnreachable`. The single-onion path already stripped
+   it. This is why fleet (rotation) mode never connected. Fixed in `client/shim.mjs`.
+2. **PoW capability mismatch.** The gateways ran with `HiddenServicePoWDefensesEnabled 1`
+   (Tor Project build); the laptop's Homebrew tor reports `pow: no` and **cannot connect
+   to a PoW-enabled onion**. Proof: laptop reached DuckDuckGo's non-PoW onion (200) but
+   not ours. The original PoC "worked before" precisely because Homebrew tor can't enable
+   PoW, so it was always off. Fixed by defaulting PoW off (`rgoe_enable_pow: false`).
+3. **Onion cold-start.** Each re-provision restarts `rgoe-tor`, and a freshly restarted
+   v3 onion needs a few minutes to republish its descriptor to the HSDir hashring. My
+   repeated re-provisions kept the tests landing in that window. Not a fault — just
+   latency; the `dialOnion` retry covers the steady state.
+
+The old *silent hang* on this path (the very first client bug) is also fixed — the shim
+now reports the Tor error cleanly instead of hanging.
 
 ## Membership: does staking on-chain make you a recognized member? (not yet — RLN)
 
