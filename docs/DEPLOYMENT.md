@@ -128,5 +128,35 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns the 
 - [x] `rgoe_gateway` Ansible role (agent-devops)
 - [x] **rgoe-03 provisioned + egress-01/02 retrofitted — all 3 gateways live, onions published**
 - [x] 3 onions collected → `network/sepolia/directory.json` signed (signer `189f4511…1321`)
-- [ ] fleet-ledger + `fleet-secrets.tar.gpg` re-bundled (agent-devops commit)
-- [ ] live end-to-end curl through the fleet over Tor (warming; services confirmed active)
+- [x] **Contracts deployed to Sepolia + integration test PASS** (stake→use→over-spend→slash, all on-chain; see `network/sepolia/integration-report.md`)
+- [x] **Client hang bug fixed** (`verifyEnvelope` Set/Array; gateway never hangs; shim readLine timeout)
+- [x] **On-chain slashing enabled fleet-wide** via `group_vars/egress` (RGOE_SLASH_CONTRACT decoupled from membership; slasher key SOPS-encrypted)
+- [ ] fleet-ledger + `fleet-secrets.tar.gpg` re-bundled (agent-devops; needs your passphrase)
+- [ ] **live curl through the fleet over Tor — BLOCKED by a Tor onion-resolution issue** (see below), not our code
+
+## Live Tor status (honest)
+
+The client→shim→Tor→gateway→clearnet round-trip did **not** complete in-session, and the
+cause is **outside this stack**: Tor onion *resolution* is failing in this environment.
+Evidence: clearnet Tor works from every vantage (laptop + droplets get exit IPs), but
+onion rendezvous fails to **every** onion — ours *and* DuckDuckGo's rock-solid public
+onion — from **every** vantage, with `No more HSDir available to query`; clocks are
+NTP-synced (ruled out); PoW excluded (DDG uses none). This is a Tor 0.4.9.x client /
+network HSDir condition. The gateways are correctly configured and listening on 8443;
+they become reachable the moment Tor onion resolution recovers. The protocol itself is
+proven over the exact wire bytes Tor delivers (the integration test runs the real
+gateway over local TCP). The old *silent hang* on this path is the bug that is now
+fixed — the shim reports the Tor error cleanly instead of hanging.
+
+## Membership: does staking on-chain make you a recognized member? (not yet — RLN)
+
+No. Gateways gate membership on the committed `members.json` (Semaphore *identity* leaves,
+`Poseidon(EdDSA-pubkey(secret))`); the on-chain stake leaf is `Poseidon(secret)` (so the
+contract can recompute it from a revealed secret to authorize a slash). These are
+different leaf functions and cannot be unified by registering both, because nothing binds
+the two commitments to the *same* secret without a ZK proof — a member could stake a junk
+commitment and be un-slashable while proving membership with a real one. **RLN resolves it
+by making `Poseidon(secret)` serve as both the membership leaf and the slashable identity
+in one circuit.** So "stake → automatically a recognized member" is the RLN-circuit
+follow-up, not a config change. Today: stake + `members.json` membership are bridged
+off-chain (both derived from one secret); slashing is fully on-chain (proven).
