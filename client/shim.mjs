@@ -159,19 +159,28 @@ async function dialOnion(onion, attempts = 4) {
   throw lastErr;
 }
 
-function readLine(socket) {
+// Read one newline-terminated line, but never wait forever: a gateway that accepts the
+// stream yet never replies (a server-side bug, or a black-holing rogue) must surface as
+// an error the shim reports, not an indefinite hang. Times out after `ms`.
+function readLine(socket, ms = 30000) {
   return new Promise((resolve, reject) => {
     let buf = Buffer.alloc(0);
+    const timer = setTimeout(() => { cleanup(); reject(new Error("gateway did not respond within " + ms + "ms")); }, ms);
     const onData = (chunk) => {
       buf = Buffer.concat([buf, chunk]);
       const nl = buf.indexOf(0x0a);
       if (nl === -1) return;
-      socket.removeListener("data", onData);
-      socket.removeListener("error", reject);
+      cleanup();
       resolve({ line: buf.subarray(0, nl).toString("utf8"), rest: buf.subarray(nl + 1) });
     };
+    const onErr = (e) => { cleanup(); reject(e); };
+    function cleanup() {
+      clearTimeout(timer);
+      socket.removeListener("data", onData);
+      socket.removeListener("error", onErr);
+    }
     socket.on("data", onData);
-    socket.once("error", reject);
+    socket.once("error", onErr);
   });
 }
 
@@ -189,6 +198,7 @@ function startShim() {
 
   server.on("connect", async (req, clientSocket, head) => {
     const target = req.url; // "host:port"
+    console.log(`REQ     ${target}`); // start marker: a hang after this points at the dial/gateway
     try {
       const onions = await candidateOnions();
       // ONE slot + ONE deterministic signal for this logical request; the same

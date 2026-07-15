@@ -221,43 +221,51 @@ function makeHandler(spentSet) {
       return socket.destroy();
     }
 
-    // Steps 1-3, cheap-first, inside the lib: scope-valid slot -> root ∈ recent-roots
-    // -> SNARK verifyProof. Returns the nullifier/scope/slot/share to act on.
-    const v = await verifyEnvelope(env, recentRoots);
-    if (!v.ok) {
-      console.log(`DROP  ${v.reason}  target=${env.target}`);
-      reply(socket, { ok: false, err: "gate:" + v.reason });
+    // Everything after the envelope parse is guarded: any throw must REPLY, never hang
+    // the client (a silent throw here is exactly the bug that left clients waiting).
+    try {
+      // Steps 1-3, cheap-first, inside the lib: scope-valid slot -> root ∈ recent-roots
+      // -> SNARK verifyProof. Returns the nullifier/scope/slot/share to act on.
+      const v = await verifyEnvelope(env, recentRoots);
+      if (!v.ok) {
+        console.log(`DROP  ${v.reason}  target=${env.target}`);
+        reply(socket, { ok: false, err: "gate:" + v.reason });
+        return socket.destroy();
+      }
+
+      const tgt = validTarget(env.target);
+      if (!tgt) {
+        reply(socket, { ok: false, err: "bad-target" });
+        return socket.destroy();
+      }
+
+      // Step 4: slot-nullifier dedup + share collection; slashes on 2nd distinct signal.
+      const res = await spentSet.admit(v.scope, v.nullifier, v.share);
+      if (!res.ok) {
+        console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot}`);
+        reply(socket, { ok: false, err: res.reason });
+        return socket.destroy();
+      }
+
+      // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
+      const upstream = net.connect(tgt.port, tgt.host, () => {
+        console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot} scope=${String(v.scope).slice(0, 10)}..`);
+        reply(socket, { ok: true });
+        if (env.__rest && env.__rest.length) upstream.write(env.__rest);
+        socket.pipe(upstream);
+        upstream.pipe(socket);
+      });
+      upstream.setNoDelay(true);
+      upstream.on("error", (e) => {
+        reply(socket, { ok: false, err: "upstream:" + e.code });
+        socket.destroy();
+      });
+      socket.on("error", () => upstream.destroy());
+    } catch (e) {
+      console.log(`ERROR  ${e.message}  target=${env.target}`);
+      reply(socket, { ok: false, err: "gateway-error" });
       return socket.destroy();
     }
-
-    const tgt = validTarget(env.target);
-    if (!tgt) {
-      reply(socket, { ok: false, err: "bad-target" });
-      return socket.destroy();
-    }
-
-    // Step 4: slot-nullifier dedup + share collection; slashes on 2nd distinct signal.
-    const res = await spentSet.admit(v.scope, v.nullifier, v.share);
-    if (!res.ok) {
-      console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot}`);
-      reply(socket, { ok: false, err: res.reason });
-      return socket.destroy();
-    }
-
-    // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
-    const upstream = net.connect(tgt.port, tgt.host, () => {
-      console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. slot=${v.slot} scope=${String(v.scope).slice(0, 10)}..`);
-      reply(socket, { ok: true });
-      if (env.__rest && env.__rest.length) upstream.write(env.__rest);
-      socket.pipe(upstream);
-      upstream.pipe(socket);
-    });
-    upstream.setNoDelay(true);
-    upstream.on("error", (e) => {
-      reply(socket, { ok: false, err: "upstream:" + e.code });
-      socket.destroy();
-    });
-    socket.on("error", () => upstream.destroy());
   };
 }
 
