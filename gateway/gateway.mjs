@@ -127,7 +127,12 @@ async function readDeployed() {
 async function makeSlasher() {
   const key = process.env.RGOE_SLASH_KEY;
   const deployed = await readDeployed();
-  const address = process.env.RGOE_GROUP_CONTRACT || deployed.StakedReputationSet || deployed.address;
+  // Accept the key Deploy.s.sol actually writes (lowercase `stakedReputationSet`) as well
+  // as the older casings, so the slasher finds the contract without RGOE_GROUP_CONTRACT
+  // (which would also switch the membership root source to on-chain — not what we want
+  // under Plan-B membership-from-members.json).
+  const address = process.env.RGOE_GROUP_CONTRACT || deployed.stakedReputationSet
+    || deployed.StakedReputationSet || deployed.address;
   const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
   const receiver = process.env.RGOE_SLASH_RECEIVER || null;
 
