@@ -122,7 +122,7 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns the 
 ## Status checklist
 
 - [x] Contracts Sepolia-ready (env-parameterized deploy, public RPC wired)
-- [ ] Deployer funded → contracts deployed to Sepolia  ← **needs faucet ETH** (`0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7`)
+- [x] Deployer funded → **contracts deployed to Sepolia** (StakedReputationSet `0x35719A47…98EC`, block 11274471)
 - [x] `members.json` re-seeded (identity leaves) + proof round-trip verified
 - [x] Next-version code committed + pushed (`deploy/onchain-staked-fleet`)
 - [x] `rgoe_gateway` Ansible role (agent-devops)

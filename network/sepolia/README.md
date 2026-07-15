@@ -7,15 +7,14 @@ human-readable index; the JSON files are the source of truth the client/gateway 
 
 ## Staking contracts
 
-Status: **pending funding** — the deployer `0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7`
-has 0 Sepolia ETH. Once funded, `docs/DEPLOYMENT.md` Part A deploys and rewrites
-`contracts.json` with live addresses + block. Params: bond 0.001 ETH, unbonding 300s.
+Status: **live** — deployed at block 11274471 by
+`0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7`. Params: bond 0.001 ETH, unbonding 300s.
 
 | Contract | Address |
 |---|---|
-| StakedReputationSet | _pending_ |
-| MockCommitmentHasher | _pending_ |
-| MockWithdrawVerifier | _pending_ |
+| StakedReputationSet | [`0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC`](https://sepolia.etherscan.io/address/0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC) |
+| MockCommitmentHasher | `0xB9c051d12750395e7541Da149e216B1542b343d2` |
+| MockWithdrawVerifier | `0xac506585D70F8DA91C38CF271938Ee956f7CB862` |
 
 ## Gateway fleet
 

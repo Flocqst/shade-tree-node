@@ -1,7 +1,7 @@
 {
   "network": "sepolia",
   "chainId": 11155111,
-  "status": "pending-funding",
+  "status": "live",
   "deployer": "0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7",
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
   "params": {
@@ -10,11 +10,11 @@
     "minUnbondingSeconds": 270
   },
   "contracts": {
-    "stakedReputationSet": null,
-    "hasher": null,
-    "verifier": null
+    "stakedReputationSet": "0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC",
+    "hasher": "0xB9c051d12750395e7541Da149e216B1542b343d2",
+    "verifier": "0xac506585D70F8DA91C38CF271938Ee956f7CB862"
   },
-  "deployBlock": null,
-  "deployTx": null,
-  "note": "Deployer holds 0 Sepolia ETH. Fund it, then run the Part-A command in docs/DEPLOYMENT.md; this file is rewritten with the live addresses + block on deploy."
+  "deployBlock": 11274471,
+  "deployTx": "0x00dde42c9b45dfbc29d3cdf226bf4b81be9a09bfdcd11b3b6069ddae22276e28",
+  "note": "MockCommitmentHasher = Poseidon(secret); MockWithdrawVerifier accepts knowledge of the secret (demo fidelity, see docs/ONCHAIN.md). Enable gateway slashing by setting RGOE_GROUP_CONTRACT + RGOE_RPC_URL + a funded RGOE_SLASH_KEY on each gateway."
 }
