@@ -18,7 +18,7 @@ import { writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Identity, MEMBERS_PATH } from "../lib/semaphore.mjs";
+import { identityFor, MEMBERS_PATH } from "../lib/semaphore.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,9 +26,11 @@ const DEFAULT = ["alice", "bob", "carol", "dave", "erin", "frank", "grace", "hei
 const labels = process.argv.slice(2);
 const names = labels.length ? labels : DEFAULT;
 
+// Secrets are 0x-hex field elements so the v2 lib's toField()/identityFor() parse
+// them and the leaf here matches the leaf proveForSlot() proves against.
 const keys = names.map((label) => {
-  const secret = randomBytes(32).toString("hex");
-  const commitment = new Identity(secret).commitment.toString();
+  const secret = "0x" + randomBytes(32).toString("hex");
+  const commitment = identityFor(secret).commitment.toString();
   return { label, secret, commitment };
 });
 

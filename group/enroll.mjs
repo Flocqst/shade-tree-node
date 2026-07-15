@@ -1,46 +1,75 @@
-// Grant reputation to a member: add them to the reputation set.
+// Self-enrollment: a MEMBER admits itself to the reputation set.
 //
-// This is the trust boundary of the whole system: the zk proof gates on
-// membership in THIS set, so whatever ceremony adds a commitment here is what
-// "reputable" means. For the PoC, enrollment is a local command. In production
-// the leaf is added only after whatever the admission policy requires: a stake,
-// an invite, accrued good standing, or a proof-of-personhood check (World ID,
-// which is itself Semaphore-based). The cryptography below is identical either
-// way; only the admission policy changes.
+// This is the honesty fix for adversarial-review finding #1: the operator must
+// stop holding member secrets. So THIS TOOL IS RUN BY THE MEMBER, not the
+// operator. The member generates its own Identity locally, keeps the secret, and
+// the ONLY value that ever leaves the machine is the commitment. The operator (or
+// the on-chain StakedReputationSet) admits the commitment; it never sees, stores,
+// or generates the secret. That is what "self-enrollment" means, and it is the
+// difference between "the operator can impersonate every member" and "the operator
+// can impersonate no one."
 //
-// Usage:
-//   node group/enroll.mjs                  -> new identity, prints a client secret
-//   node group/enroll.mjs <name>           -> label the member (label is NOT stored in the set)
+// Usage (run by the member):
+//   node group/enroll.mjs                 -> new identity; print secret + commitment,
+//                                            and seed the local demo set (group/members.json)
+//   node group/enroll.mjs <label>         -> label the member (local only, never in the set)
+//   node group/enroll.mjs --commitment-only [label]
+//                                         -> print ONLY the commitment on stdout (secret +
+//                                            guidance to stderr); do NOT touch members.json.
+//                                            Pipe/hand the commitment to the operator, or:
+//                                            node group/register-onchain.mjs <commitment>
+//
+// The secret is a bearer credential. Whoever holds it can egress as this member
+// until the set is rotated. It is printed here for the MEMBER to keep and is never
+// persisted by this tool.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { Identity, MEMBERS_PATH, loadGroup } from "../lib/semaphore.mjs";
+import { identityFor, MEMBERS_PATH, loadGroup } from "../lib/semaphore.mjs";
 
-const label = process.argv[2] || "member-" + randomBytes(2).toString("hex");
+const args = process.argv.slice(2);
+const commitmentOnly = args.includes("--commitment-only") || args.includes("--no-local");
+const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2).toString("hex");
 
-// A random high-entropy secret. The holder of this secret can prove membership.
-const secret = randomBytes(32).toString("hex");
-const identity = new Identity(secret);
-const commitment = identity.commitment.toString();
+// The identity is generated HERE, on the member's machine. The secret never leaves.
+// 0x-hex so the lib's toField() parses it as a field element; identityFor(secret) is
+// the SAME derivation proveForSlot uses, so this commitment IS the membership leaf the
+// gateway verifies proofs against (and, under RGOE_COMMITMENT_SCHEME=identity, also the
+// leaf the on-chain slash names — see the report's commitment-scheme note).
+const secret = "0x" + randomBytes(32).toString("hex");
+const commitment = identityFor(secret).commitment.toString();
 
-let doc = { version: 1, members: [] };
-if (existsSync(MEMBERS_PATH)) {
-  doc = JSON.parse(await readFile(MEMBERS_PATH, "utf8"));
+if (commitmentOnly) {
+  // Machine path: stdout is the commitment alone, so it can be piped straight to
+  // the on-chain register or handed to the operator. The secret goes to stderr so
+  // it is visible to the human running this but never captured by a pipe.
+  process.stderr.write("Self-enrollment (commitment-only). Keep this secret PRIVATE; it never leaves your machine:\n");
+  process.stderr.write("\n  export RGOE_SECRET=" + secret + "\n\n");
+  process.stderr.write("Submit the commitment below (stdout) to the operator, or stake it on chain:\n");
+  process.stderr.write("  node group/register-onchain.mjs " + commitment + "\n\n");
+  process.stdout.write(commitment + "\n");
+  process.exit(0);
 }
-doc.members.push(commitment);
+
+// Local demo path: seed the commitment into the PoC set so the whole thing stays
+// runnable without a chain. Only the COMMITMENT is written; the secret is not.
+let doc = { version: 1, members: [] };
+if (existsSync(MEMBERS_PATH)) doc = JSON.parse(await readFile(MEMBERS_PATH, "utf8"));
+if (!doc.members.includes(commitment)) doc.members.push(commitment);
 await writeFile(MEMBERS_PATH, JSON.stringify(doc, null, 2) + "\n");
 
 const { root, count } = await loadGroup();
 
-console.log("Granted reputation to a member (added to the reputation set).");
+console.log("Self-enrolled a member (you generated the identity; only the commitment left this machine).");
 console.log("  label:        " + label + "   (local only, never enters the set)");
-console.log("  commitment:   " + commitment);
+console.log("  commitment:   " + commitment + "   (public; added to the set / stake this on chain)");
 console.log("  set size:     " + count);
 console.log("  group root:   " + root);
 console.log("");
-console.log("Give this secret to the client (keep it private):");
+console.log("Keep THIS SECRET private (the operator never sees it):");
 console.log("");
 console.log("  export RGOE_SECRET=" + secret);
 console.log("");
-console.log("The client proves membership with this secret; it never sends the secret itself.");
+console.log("To stake the commitment on the on-chain StakedReputationSet instead of the local set:");
+console.log("  node group/register-onchain.mjs " + commitment);

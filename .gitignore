@@ -12,4 +12,10 @@ tor/tor-client.pid
 shim-bogus.log
 keys.local.json
 demo-keys.local.md
+group/directory-signer.key
+*.lkg
 docs/walkthrough.live.html
+out/
+cache/
+broadcast/
+contracts/deployed.local.json

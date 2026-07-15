@@ -1,0 +1,213 @@
+// Mocked control-flow self-test for Track 3 (gateway + shim).
+//
+// The real crypto lib (lib/semaphore.mjs extended + lib/rln.mjs new) lands at combine
+// time, so here we MOCK the lib API from docs/NEXT-VERSION.md and prove Track 3's
+// control flow against it:
+//
+//   Gateway spent-set (makeSpentSet):
+//     - first share for a (scope, nullifier) => egress, no slash
+//     - identical replay (same share.x) => deduped, NO slash
+//     - second DISTINCT signal on the same slot => reconstruct + slash EXACTLY once
+//     - a distinct signal on a DIFFERENT slot => no slash (independent counter)
+//
+//   Shim slot pool (makeSlotPool / buildEnvelope):
+//     - one slot per request, cursor rotates and wraps at K
+//     - the envelope carries the PRECOMPUTED membership proof and a REQUEST-BOUND share
+//     - the share is bound to requestSignal(target, nonce) (deterministic-retry seam)
+//
+// Run:  node gateway/shim.selftest.mjs
+//
+// It redirects the two lib specifiers to in-memory mocks with a module resolve hook,
+// so it needs no real lib and edits nothing under lib/.
+
+import { register } from "node:module";
+import { writeFile, mkdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import assert from "node:assert/strict";
+
+const work = join(tmpdir(), "rgoe-selftest-" + process.pid);
+await mkdir(work, { recursive: true });
+
+// ---- mock lib modules -------------------------------------------------------
+
+const MOCK_SEMAPHORE = `
+export const EPOCH_SECONDS = 120;
+export const K_SLOTS = 8;
+export const MEMBERS_PATH = "/dev/null/members.json";
+export function currentEpoch() { return 7n; }
+export function slotScope(epoch, i) { return "scope(" + epoch + "," + i + ")"; }
+export function requestSignal(target, nonce) { return "sig(" + target + "|" + nonce + ")"; }
+export async function proveForSlot(secret, epoch, i, signal, opts) {
+  // Mirror the real lib: the membership proof BINDS the signal (proof.message === signal),
+  // and the share is evaluated at the same signal. proof + share are one coherent bundle.
+  return {
+    proof: { message: signal, merkleTreeRoot: "ROOT" },
+    nullifier: "null#" + i,
+    scope: slotScope(epoch, i),
+    slot: i,
+    share: { x: signal, y: "y(" + i + "," + signal + ")" },
+  };
+}
+export async function verifyEnvelope(env, recentRoots) {
+  // Mirror the real cheap binding: the share must be evaluated at the proof's signal.
+  if (String(env.proof.message) !== String(env.share.x)) return { ok: false, reason: "signal-mismatch" };
+  return { ok: true, reason: "ok", nullifier: env.nullifier, scope: env.scope, slot: env.slot, share: env.share };
+}
+export async function loadGroup() { return { group: null, root: "ROOT", count: 1 }; }
+export async function loadGroupOnchain() { return { recentRoots: ["ROOT"] }; }
+`;
+
+const MOCK_RLN = `
+export function reconstructSecret(a, b) { return "SECRET(" + a.y + "|" + b.y + ")"; }
+export function deriveCommitment(secret) { return "COMMIT(" + secret + ")"; }
+`;
+
+const LOADER = `
+let redirects = {};
+export async function initialize(data) { redirects = data; }
+export async function resolve(specifier, context, next) {
+  if (specifier.endsWith("lib/semaphore.mjs")) return { url: redirects.semaphore, shortCircuit: true };
+  if (specifier.endsWith("lib/rln.mjs")) return { url: redirects.rln, shortCircuit: true };
+  return next(specifier, context);
+}
+`;
+
+await writeFile(join(work, "semaphore.mjs"), MOCK_SEMAPHORE);
+await writeFile(join(work, "rln.mjs"), MOCK_RLN);
+await writeFile(join(work, "loader.mjs"), LOADER);
+
+register(pathToFileURL(join(work, "loader.mjs")).href, {
+  parentURL: import.meta.url,
+  data: {
+    semaphore: pathToFileURL(join(work, "semaphore.mjs")).href,
+    rln: pathToFileURL(join(work, "rln.mjs")).href,
+  },
+});
+
+// ---- import Track 3 modules against the mocked lib --------------------------
+
+const { makeSpentSet } = await import("../gateway/gateway.mjs");
+const { makeSlotPool, buildEnvelope } = await import("../client/shim.mjs");
+
+let failures = 0;
+function ok(name) { console.log("  PASS  " + name); }
+function bad(name, e) { failures++; console.log("  FAIL  " + name + "  ::  " + (e && e.message || e)); }
+async function test(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e); } }
+
+// ---- gateway: share-collecting spent-set + slashing -------------------------
+
+console.log("gateway spent-set:");
+
+await test("first share egresses, no slash", async () => {
+  const slashes = [];
+  const s = makeSpentSet({ reconstruct: (a, b) => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
+  const r = await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });
+  assert.equal(r.ok, true);
+  assert.equal(r.action, "first");
+  assert.equal(slashes.length, 0);
+});
+
+await test("identical replay is deduped, NO slash", async () => {
+  const slashes = [];
+  const s = makeSpentSet({ reconstruct: (a, b) => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
+  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });
+  const r = await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" }); // same evaluation point
+  assert.equal(r.action, "replay");
+  assert.equal(r.ok, true);
+  assert.equal(slashes.length, 0, "replay must not slash");
+});
+
+await test("second DISTINCT signal on one slot reconstructs + slashes EXACTLY once", async () => {
+  const slashes = [];
+  const s = makeSpentSet({
+    reconstruct: (a, b) => "SECRET(" + a.y + "|" + b.y + ")",
+    derive: (secret) => "COMMIT(" + secret + ")",
+    slash: async (commitment, secret) => slashes.push({ commitment, secret }),
+  });
+  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });                 // first
+  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" });                 // replay (no slash)
+  const r = await s.admit("scope#3", "null#3", { x: "sigB", y: "yB" });       // distinct => slash
+  assert.equal(r.action, "slash");
+  assert.equal(r.ok, false, "the over-spending request itself is refused");
+  assert.equal(slashes.length, 1, "slash exactly once");
+  assert.equal(slashes[0].commitment, "COMMIT(SECRET(yA|yB))");
+  assert.equal(slashes[0].secret, "SECRET(yA|yB)");
+  // a further distinct signal must NOT slash again
+  const r2 = await s.admit("scope#3", "null#3", { x: "sigC", y: "yC" });
+  assert.equal(r2.ok, false);
+  assert.equal(slashes.length, 1, "no double slash");
+});
+
+await test("distinct signal on a DIFFERENT slot does not slash (independent counter)", async () => {
+  const slashes = [];
+  const s = makeSpentSet({ reconstruct: () => "S", derive: () => "C", slash: async (...a) => slashes.push(a) });
+  await s.admit("scope#3", "null#3", { x: "sigA", y: "yA" }); // slot 3
+  const r = await s.admit("scope#4", "null#4", { x: "sigB", y: "yB" }); // slot 4, first for its key
+  assert.equal(r.action, "first");
+  assert.equal(slashes.length, 0);
+});
+
+// ---- shim: slot pool rotation + request-bound share -------------------------
+
+console.log("shim slot pool:");
+
+const noGroup = async () => ({ group: null });
+function mockProve(calls) {
+  // Mirror the real lib: proof binds the signal (proof.message === signal); the share is
+  // evaluated at the same signal, so proof + share are one coherent bundle.
+  return async (secret, epoch, i, signal, opts) => {
+    calls.push({ epoch, i, signal, group: opts && opts.group });
+    return {
+      proof: { message: signal, merkleTreeRoot: "ROOT" },
+      nullifier: "null#" + i,
+      scope: "scope#" + i,
+      slot: i,
+      share: { x: signal, y: "y(" + i + "," + signal + ")" },
+    };
+  };
+}
+
+await test("one slot per request; cursor rotates and wraps at K", async () => {
+  const calls = [];
+  const pool = makeSlotPool({ secret: "sek", prove: mockProve(calls), epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const got = [];
+  for (let n = 0; n < 6; n++) got.push(pool.nextSlot().slot);
+  assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per request and wrap at K");
+});
+
+await test("envelope is a coherent v2 bundle; share bound to requestSignal(target,nonce)", async () => {
+  const calls = [];
+  const prove = mockProve(calls);
+  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const { envelope, signal } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
+
+  assert.equal(envelope.v, 2);
+  assert.equal(envelope.target, "example.com:443");
+  assert.equal(typeof envelope.slot, "number");
+  for (const k of ["proof", "nullifier", "scope", "share"]) assert.ok(k in envelope, "missing " + k);
+
+  // request-bound: share is evaluated at H(target, nonce) ...
+  assert.ok(signal.startsWith("sig(example.com:443|"), "signal is H(target, nonce)");
+  assert.equal(envelope.share.x, signal, "share.x must equal the request signal");
+  // ... and the proof commits to the SAME signal, so verifyEnvelope's binding holds:
+  assert.equal(envelope.proof.message, envelope.share.x, "proof.message === share.x (coherent bundle)");
+});
+
+await test("each request gets a fresh nonce (distinct signals across requests)", async () => {
+  const calls = [];
+  const prove = mockProve(calls);
+  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const a = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
+  const b = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
+  assert.notEqual(a.signal, b.signal, "fresh per-request nonce => distinct signals");
+  assert.notEqual(a.envelope.slot, b.envelope.slot, "slot also rotates between requests");
+});
+
+console.log("");
+if (failures) {
+  console.log(`SELFTEST FAILED: ${failures} failing case(s)`);
+  process.exit(1);
+}
+console.log("SELFTEST PASSED: all cases green");
