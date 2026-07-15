@@ -80,10 +80,34 @@ Leaves (rateCommitments): ALICE `835981380137162055943001…`, BOB `221825739623
   and the on-chain contract re-derives the rateCommitment leaf from it and burns the bond
   (`slash` tx `0xc0f99e96…39efb`, block 11279845). Honest ALICE is untouched.
 
+## P4 — live fleet over Tor (2026-07-15)
+
+All three DO gateways were re-provisioned onto the RLN branch (`git HEAD 8bd7b62`, `rlnjs`
+installed, wired to the new contract `0xdAE242AE…20FC`, PoW off). A local shim built **real
+RLN proofs** and routed over Tor to the fleet; every request returned a **gateway** IP, never
+the laptop's (`67.245.238.193`), rotating across all three:
+
+| req | egress IP | gateway | onion |
+|---|---|---|---|
+| 1,2 | 167.172.237.22 | rgoe-03 | spoe2hmw… |
+| 3,4,5,7 | 165.227.118.154 | egress-01 | kjeyt2gt… |
+| 6 | 167.172.224.177 | egress-02 | oi73ktti… |
+
+Gateway logs: RLN `PASS egress` on all three (egress-01 ×4, rgoe-03 ×2, egress-02 ×1);
+the laptop's public IP appears **0 times** across every gateway — Tor rendezvous never
+reveals the client. The signed directory (`directory.json`, signer `189f4511…1321`) already
+carried the three current onions, so no re-sign was needed.
+
+One operator note (not a fault): a freshly started **client** tor has marginal onion-connect
+success for the first several minutes (measured ~1/10 at one point); the shim's directory
+mode requires `RGOE_DIR_SIGNER` set or it silently falls back to a stale local
+`tor/hs/hostname`. With the signer set and tor warm, round-trips are reliable.
+
 ## Honesty / scope
 
-- Transport here is local TCP (the exact bytes Tor delivers to a fleet gateway), isolating
-  the stake/use/over-spend/slash protocol from onion-descriptor propagation. Live Tor is P4.
+- The on-chain integration above uses local TCP (the exact bytes Tor delivers to a fleet
+  gateway), isolating the stake/use/over-spend/slash protocol from onion-descriptor
+  propagation; the P4 section proves the same code over live Tor.
 - Circuit artifacts are from a **local untrusted phase-2 ceremony** — testnet-only. Mainnet
   needs a real ceremony + audit and a real Groth16 exit-auth verifier (exit is still mock).
 - Two client-side bugs were found and fixed *during* this live run (they had slipped past

@@ -14,8 +14,9 @@ Progress:
 - **P3-live** — fresh Sepolia deploy (`0xdAE242AE…20FC`) + live integration PASS: stake →
   normal use → over-spend → on-chain slash (`0xc0f99e96…39efb`). `network/sepolia/
   integration-report-rln.md`. ✓
-- **P4** — fleet re-provision with RLN artifacts + live Tor. **Pending** (needs the fleet SOPS
-  passphrase + an artifact-distribution decision; see below).
+- **P4 fleet + live Tor** — all 3 DO gateways (egress-01, egress-02, rgoe-03) re-provisioned
+  onto the RLN branch (rlnjs installed, wired to `0xdAE242AE…20FC`); live round-trip over Tor
+  confirmed, rotating across all three, laptop IP absent from every gateway log. ✓
 
 Two live-only bugs were found + fixed during P3-live (both slipped past every offline gate):
 a shared-snarkjs reentrancy race (serialized behind a mutex in `lib/rln.mjs`) and a stale
