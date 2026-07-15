@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "issued": 1784076819,
+  "gateways": [
+    {
+      "onion": "kjeyt2gtzcvnbshedns5wvtahtqbqwlmw4e56ku3iuqiykf5mwwdqdad.onion",
+      "pubkey": "524989e8d3c8aad0c8e41b65db56603ce018596cb709df2a9b45208c28bd65ac",
+      "weight": 100,
+      "health": "up",
+      "note": "gateway-1 / egress-01 / DO nyc3 165.227.118.154"
+    },
+    {
+      "onion": "oi73kttiriqhfmoxo42pstfobrhbjxko3gzzs54bovwhs2ayuw64imad.onion",
+      "pubkey": "723fb54e688a2072b1d77734f94cae0c4e14dd4ed9b3997781756c796818a5bd",
+      "weight": 100,
+      "health": "up",
+      "note": "gateway-2 / egress-02 / DO nyc3 167.172.224.177"
+    },
+    {
+      "onion": "spoe2hmwp62w5bg74by7plx54rn4rzjro4bq6qzv5q6ewi4lqlovlbqd.onion",
+      "pubkey": "93dc4d1d967fb56e84dfe071f7aefde45bc8e53177030f4335ec3c4b238b82dd",
+      "weight": 100,
+      "health": "up",
+      "note": "gateway-3 / rgoe-03 / DO nyc3 167.172.237.22"
+    }
+  ],
+  "signer": "189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321",
+  "signature": "0a64fcfb8a7226a9c3978f44422b682fd736456f4c699c4a1ee54f4351bc7c5b61f8c1a1231b9d30e5a55f9bd21c335ab79ca205da4abd532666a40e5481ee05"
+}

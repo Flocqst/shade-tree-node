@@ -1,0 +1,20 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "status": "pending-funding",
+  "deployer": "0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7",
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "params": {
+    "bondWei": "1000000000000000",
+    "unbondingSeconds": 300,
+    "minUnbondingSeconds": 270
+  },
+  "contracts": {
+    "stakedReputationSet": null,
+    "hasher": null,
+    "verifier": null
+  },
+  "deployBlock": null,
+  "deployTx": null,
+  "note": "Deployer holds 0 Sepolia ETH. Fund it, then run the Part-A command in docs/DEPLOYMENT.md; this file is rewritten with the live addresses + block on deploy."
+}
