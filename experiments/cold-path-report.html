@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>reputation-gated egress · cold-path soak (1 hour, fresh circuit per request)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f1e9; --panel:#fbf9f3; --ink:#17150f; --accent:#d6481f;
+    --slate:#2f5562; --green:#3f6b4f; --muted:#8c867a; --line:#ded7c7;
+    --line-strong:#c9c0ab; --shadow:0 1px 0 #fff, 0 18px 40px -28px rgba(23,21,15,.5);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Hanken Grotesk",system-ui,sans-serif;font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:32px 32px;background-position:-1px -1px}
+  .wrap{max-width:1040px;margin:0 auto;padding:30px 28px 80px}
+  header.top{border-bottom:1.5px solid var(--ink);padding-bottom:16px;margin-bottom:24px}
+  .brand{font-family:"Fraunces",serif;font-weight:600;font-size:29px;letter-spacing:-.015em;line-height:1.06}
+  .brand i{font-style:italic;color:var(--accent)}
+  .sub{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);margin-top:8px}
+  .tally{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px}
+  @media(max-width:680px){.tally{grid-template-columns:1fr 1fr}}
+  .stat{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;padding:15px;box-shadow:var(--shadow)}
+  .stat .n{font-family:"Fraunces",serif;font-size:31px;font-weight:600;line-height:1}
+  .stat .l{font-family:"JetBrains Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:6px}
+  .stat.good .n{color:var(--green)} .stat.acc .n{color:var(--accent)}
+  .card{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow);margin-bottom:22px;overflow:hidden}
+  .card h3{font-family:"Fraunces",serif;font-weight:600;font-size:20px;margin:0;padding:13px 18px;border-bottom:1px solid var(--line);background:#f1eee4;letter-spacing:-.01em}
+  .card .body{padding:16px 18px}
+  table{width:100%;border-collapse:collapse;font-family:"JetBrains Mono",monospace;font-size:13px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+  th{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  td.v{color:var(--accent);font-weight:700}
+  .hist{font-family:"JetBrains Mono",monospace;font-size:12px;display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .hrow{display:flex;align-items:center;gap:10px}
+  .hrow .rng{width:92px;color:var(--muted);text-align:right}
+  .hrow .barwrap{flex:1;display:flex;align-items:center;gap:8px}
+  .hrow .bar{height:16px;background:var(--accent);border-radius:2px;opacity:.85;min-width:1px}
+  .hrow .cnt{color:var(--ink);font-weight:700;width:46px}
+  .tl{display:flex;gap:5px;margin-top:6px}
+  .tl .seg{flex:1;text-align:center;font-family:"JetBrains Mono",monospace;font-size:11px}
+  .tl .seg .box{height:30px;border:1.5px solid var(--ink);border-radius:3px;display:flex;align-items:center;justify-content:center;font-weight:700;background:#eef3ee;color:var(--green)}
+  .tl .seg .box.d{background:#fdeee9;color:var(--accent)}
+  .tl .seg .lab{color:var(--muted);margin-top:3px}
+  .txt{font-size:14.5px;max-width:66ch} .txt code,.mono{font-family:"JetBrains Mono",monospace;font-size:12.5px} .txt b{color:var(--accent)}
+  dl{margin:0;font-size:13.5px} dt{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:10px} dd{margin:2px 0 0}
+  .note{background:var(--paper);border:1.5px solid var(--ink);border-radius:4px;padding:16px 18px;box-shadow:var(--shadow)}
+  .note p{margin:0 0 10px;max-width:66ch;font-size:14px} .note p:last-child{margin:0} .note b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">cold-path soak: <i>one hour, a fresh Tor circuit on every request</i></div>
+    <div class="sub">2026-06-07 · the pessimistic profile · stream isolation forces a new rendezvous per request, so nothing is warm</div>
+  </header>
+
+  <div class="tally">
+    <div class="stat"><div class="n">3903</div><div class="l">requests over 1 hour</div></div>
+    <div class="stat good"><div class="n">99.90%</div><div class="l">succeeded (3899)</div></div>
+    <div class="stat acc"><div class="n">0.10%</div><div class="l">dropped (4)</div></div>
+    <div class="stat"><div class="n">1.08</div><div class="l">req / sec</div></div>
+    <div class="stat acc"><div class="n">4.95s</div><div class="l">median latency (cold)</div></div>
+    <div class="stat acc"><div class="n">9.40s</div><div class="l">p95 latency (cold)</div></div>
+  </div>
+
+  <div class="card">
+    <h3>Does Tor drop? Yes, rarely, and never at the gate.</h3>
+    <div class="body">
+      <div class="txt">Forcing a brand-new rendezvous circuit on every one of 3903 requests, <b>4 dropped: 0.10%</b>. All four were <span class="mono">socks-fail</span>, a Tor rendezvous circuit-build failure. None were the gate, and the proof of that is on the server: the gateway's DROP count did not move (it stayed at 35 from the earlier security run). A circuit that fails to build never delivers the request to the gateway, so these four never reached it. They are a Tor transport fact, not a gate rejection.</div>
+      <div class="txt" style="margin-top:10px">The four drops landed at 3m, 6m, 25m, and 27m. After minute 27, the run went the final <b>33 minutes and ~2000 requests with zero drops</b>. So reliability did not degrade as circuits churned; if anything it settled.</div>
+      <div class="tl">
+        <div class="seg"><div class="box d">2</div><div class="lab">0-10m<br>647 reqs</div></div>
+        <div class="seg"><div class="box">0</div><div class="lab">10-20m<br>665</div></div>
+        <div class="seg"><div class="box d">2</div><div class="lab">20-30m<br>646</div></div>
+        <div class="seg"><div class="box">0</div><div class="lab">30-40m<br>663</div></div>
+        <div class="seg"><div class="box">0</div><div class="lab">40-50m<br>647</div></div>
+        <div class="seg"><div class="box">0</div><div class="lab">50-60m<br>629</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Latency distribution (3899 successes, cold)</h3>
+    <div class="body">
+      <table>
+        <thead><tr><th>min</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>max</th><th>mean</th></tr></thead>
+        <tbody><tr><td class="v">2.60s</td><td class="v">4.95s</td><td class="v">7.71s</td><td class="v">9.40s</td><td class="v">13.02s</td><td class="v">46.45s</td><td class="v">5.50s</td></tr></tbody>
+      </table>
+      <div class="hist" style="margin-top:16px">
+        <div class="hrow"><span class="rng">2 to 3s</span><span class="barwrap"><span class="bar" style="width:12px"></span><span class="cnt">39</span></span></div>
+        <div class="hrow"><span class="rng">3 to 4s</span><span class="barwrap"><span class="bar" style="width:174px"></span><span class="cnt">561</span></span></div>
+        <div class="hrow"><span class="rng">4 to 5s</span><span class="barwrap"><span class="bar" style="width:440px"></span><span class="cnt">1422</span></span></div>
+        <div class="hrow"><span class="rng">5 to 6s</span><span class="barwrap"><span class="bar" style="width:287px"></span><span class="cnt">928</span></span></div>
+        <div class="hrow"><span class="rng">6 to 8s</span><span class="barwrap"><span class="bar" style="width:186px"></span><span class="cnt">601</span></span></div>
+        <div class="hrow"><span class="rng">8 to 10s</span><span class="barwrap"><span class="bar" style="width:63px"></span><span class="cnt">202</span></span></div>
+        <div class="hrow"><span class="rng">10 to 15s</span><span class="barwrap"><span class="bar" style="width:39px"></span><span class="cnt">126</span></span></div>
+        <div class="hrow"><span class="rng">15 to 50s</span><span class="barwrap"><span class="bar" style="width:6px"></span><span class="cnt">20</span></span></div>
+      </div>
+      <div class="txt" style="margin-top:14px">Cold median is <b>4.95s</b>, about 3x the warm path, because every request pays a full rendezvous build instead of reusing a circuit. 99% finished within 13s. There was one 46s outlier: a single circuit that struggled but completed rather than failing. This is the floor of the experience, not the typical one.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Warm vs cold: the two ends of the envelope</h3>
+    <div class="body">
+      <table>
+        <thead><tr><th></th><th>requests</th><th>drops</th><th>median</th><th>p95</th></tr></thead>
+        <tbody>
+          <tr><td>warm (reused circuit)</td><td>1000</td><td class="v">0.00%</td><td class="v">1.69s</td><td class="v">2.33s</td></tr>
+          <tr><td>cold (fresh circuit each)</td><td>3903</td><td class="v">0.10%</td><td class="v">4.95s</td><td class="v">9.40s</td></tr>
+        </tbody>
+      </table>
+      <div class="txt" style="margin-top:10px">Real usage sits near the warm end: a Tor client reuses a rendezvous circuit for its lifetime, so most requests in a session ride a warm circuit. The cold numbers are the worst case you hit only if every request rebuilds from scratch. Even there, 99.90% land.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Corroboration and setup</h3>
+    <div class="body">
+      <dl>
+        <dt>egress, every success</dt><dd>all 3899 successful requests egressed from the gateway's clean IP, recorded per request. Not one used a different address.</dd>
+        <dt>gateway side</dt><dd>the gateway log gained ~3899 PASS over the run across 8 distinct nullifiers (8 members rotated). Its DROP count was unchanged, confirming the 4 failures were transport, not the gate.</dd>
+        <dt>isolation</dt><dd>SOCKS stream isolation (a unique credential per request) so Tor builds a separate circuit each time. Verified against a warm-circuit baseline.</dd>
+        <dt>proofs / budget</dt><dd>valid Semaphore proofs throughout (8 members), budget raised for the run so the rate limiter could not mask transport reliability, restored to 100 after</dd>
+        <dt>server</dt><dd>2 vCPU / 2 GB droplet, gateway + tor as systemd services, onion PoW defense on</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="note">
+    <p><b>The headline.</b> Even in the worst case, a fresh Tor circuit built for every single request, the path delivered 99.90% of 3903 requests over a full hour, and every drop was an inherent Tor circuit-build failure that never reached the gateway, not a fault of the gate or the egress. Reliability held flat across the hour.</p>
+    <p>The honest cost is latency: cold requests run ~5s median because rebuilding a rendezvous is expensive. Normal usage reuses warm circuits and runs ~1.7s. Both numbers are real and both are in this report, so the reader can see the floor and the typical, not a cherry-picked best case.</p>
+  </div>
+</div>
+</body>
+</html>

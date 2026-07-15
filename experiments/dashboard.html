@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>reputation-gated egress : stress test results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f1e9; --panel:#fbf9f3; --ink:#17150f; --accent:#d6481f;
+    --slate:#2f5562; --green:#3f6b4f; --red:#b23a1c; --muted:#8c867a;
+    --line:#ded7c7; --line-strong:#c9c0ab; --shadow:0 1px 0 #fff, 0 18px 40px -28px rgba(23,21,15,.5);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Hanken Grotesk",system-ui,sans-serif;font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:32px 32px;background-position:-1px -1px}
+  .wrap{max-width:1100px;margin:0 auto;padding:30px 28px 80px}
+  header.top{border-bottom:1.5px solid var(--ink);padding-bottom:16px;margin-bottom:8px}
+  .brand{font-family:"Fraunces",serif;font-weight:600;font-size:30px;letter-spacing:-.015em;line-height:1.05}
+  .brand i{font-style:italic;color:var(--accent)}
+  .sub{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-top:8px}
+  .chips{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 26px}
+  .chip{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.04em;background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;padding:7px 11px;box-shadow:var(--shadow)}
+  .chip b{color:var(--accent)}
+  .chip.green b{color:var(--green)}
+
+  .tally{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:30px}
+  @media(max-width:720px){.tally{grid-template-columns:1fr 1fr}}
+  .stat{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;padding:14px;box-shadow:var(--shadow)}
+  .stat .n{font-family:"Fraunces",serif;font-size:34px;font-weight:600;line-height:1}
+  .stat .l{font-family:"JetBrains Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-top:6px}
+  .stat.pass .n{color:var(--green)} .stat.drop .n{color:var(--accent)}
+
+  .card{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow);margin-bottom:22px;overflow:hidden}
+  .card .head{display:flex;align-items:baseline;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);background:#f1eee4;flex-wrap:wrap}
+  .card .hid{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:13px;color:var(--accent)}
+  .card h3{font-family:"Fraunces",serif;font-weight:600;font-size:21px;margin:0;letter-spacing:-.01em;flex:1;min-width:240px}
+  .verdict{font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:700;letter-spacing:.1em;padding:4px 9px;border-radius:3px;background:#e7efe6;color:var(--green);border:1px solid #b9d2bc}
+  .card .body{padding:16px 18px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:14px}
+  @media(max-width:640px){.row2{grid-template-columns:1fr}}
+  .lab{font-family:"JetBrains Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:5px}
+  .txt{font-size:14.5px;max-width:52ch}
+  .txt code,.mono{font-family:"JetBrains Mono",monospace;font-size:12.5px}
+  table{width:100%;border-collapse:collapse;font-family:"JetBrains Mono",monospace;font-size:12.5px;margin-top:4px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  .ok{color:var(--green);font-weight:700} .no{color:var(--accent);font-weight:700}
+  .dim{color:var(--muted)}
+  .note{background:var(--paper);border:1.5px solid var(--ink);border-radius:4px;padding:16px 18px;box-shadow:var(--shadow);margin-top:6px}
+  .note h4{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin:0 0 10px}
+  .note p{margin:0 0 10px;max-width:64ch;font-size:14.5px}
+  .note b{color:var(--accent)}
+  .bars{display:flex;flex-direction:column;gap:6px;margin-top:4px;font-family:"JetBrains Mono",monospace;font-size:12px}
+  .bar{display:flex;align-items:center;gap:8px}
+  .bar .fill{height:14px;background:var(--accent);border-radius:2px;opacity:.85}
+  .bar .cap{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">stress test: <i>hypotheses and results</i></div>
+    <div class="sub">live gateway · onion rendezvous · epoch 20611 · target api.ipify.org:443 · every row is a real request</div>
+  </header>
+
+  <div class="chips">
+    <span class="chip green">verdict <b>4 / 4 hypotheses confirmed</b></span>
+    <span class="chip">members exercised <b>7</b></span>
+    <span class="chip">requests sent <b>48</b></span>
+    <span class="chip">egress IP <b>the gateway's, on every PASS</b></span>
+  </div>
+
+  <div class="tally">
+    <div class="stat pass"><div class="n">16</div><div class="l">admitted (PASS)</div></div>
+    <div class="stat drop"><div class="n">32</div><div class="l">dropped (DROP)</div></div>
+    <div class="stat"><div class="n">7</div><div class="l">distinct members</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">junk leaked through</div></div>
+  </div>
+
+  <!-- H1 -->
+  <div class="card">
+    <div class="head"><span class="hid">H1</span><h3>Distinct members egress independently</h3><span class="verdict">CONFIRMED</span></div>
+    <div class="body">
+      <div class="row2">
+        <div><div class="lab">hypothesis</div><div class="txt">Several different members can each use the egress at once, and the gateway counts each one separately by its nullifier without learning who they are.</div></div>
+        <div><div class="lab">method</div><div class="txt">Five keys (alice…erin) each build a fresh Semaphore proof for the epoch and send an envelope over the onion.</div></div>
+      </div>
+      <div class="lab">observed</div>
+      <table><thead><tr><th>member</th><th>verdict</th><th>nullifier (per-member, per-epoch)</th><th>rtt</th></tr></thead><tbody>
+        <tr><td>alice</td><td class="ok">PASS</td><td class="dim">1084920193…16841</td><td>832ms</td></tr>
+        <tr><td>bob</td><td class="ok">PASS</td><td class="dim">5180128306…26326</td><td>779ms</td></tr>
+        <tr><td>carol</td><td class="ok">PASS</td><td class="dim">1636672562…84122</td><td>700ms</td></tr>
+        <tr><td>dave</td><td class="ok">PASS</td><td class="dim">7084299472…03005</td><td>753ms</td></tr>
+        <tr><td>erin</td><td class="ok">PASS</td><td class="dim">5002487142…05569</td><td>695ms</td></tr>
+      </tbody></table>
+      <div class="txt" style="margin-top:10px">5 / 5 admitted, <b>5 distinct nullifiers</b>. The gateway can tell the members apart for rate-limiting, yet each nullifier is a one-way value that reveals no identity.</div>
+    </div>
+  </div>
+
+  <!-- H2 -->
+  <div class="card">
+    <div class="head"><span class="hid">H2</span><h3>Only a valid proof of membership in <i>our</i> set gets in</h3><span class="verdict">CONFIRMED</span></div>
+    <div class="body">
+      <div class="row2">
+        <div><div class="lab">hypothesis</div><div class="txt">Anything short of a real proof against the trusted set is dropped, with a precise reason, before a byte egresses.</div></div>
+        <div><div class="lab">method</div><div class="txt">Four attacks: an empty proof, a structurally bogus proof, a valid proof against a set the attacker invented, and a secret that was never enrolled.</div></div>
+      </div>
+      <div class="lab">observed</div>
+      <table><thead><tr><th>attack</th><th>verdict</th><th>reason returned</th></tr></thead><tbody>
+        <tr><td>no proof</td><td class="no">DROP</td><td class="dim">gate:no-proof</td></tr>
+        <tr><td>garbage proof</td><td class="no">DROP</td><td class="dim">gate:invalid-proof</td></tr>
+        <tr><td>forged group (valid proof, invented set)</td><td class="no">DROP</td><td class="dim">gate:wrong-group-root</td></tr>
+        <tr><td>non-member secret</td><td class="no">REJECTED</td><td class="dim">at the client: no leaf in the tree (-1)</td></tr>
+      </tbody></table>
+      <div class="txt" style="margin-top:10px">Every flavor fails. The forged-group case is the real attack (a perfectly valid proof, just against a set you made up) and the <b>root check</b> catches it. A non-member cannot even build a request.</div>
+    </div>
+  </div>
+
+  <!-- H3 -->
+  <div class="card">
+    <div class="head"><span class="hid">H3</span><h3>A member cannot exceed its per-epoch budget</h3><span class="verdict">CONFIRMED</span></div>
+    <div class="body">
+      <div class="row2">
+        <div><div class="lab">hypothesis</div><div class="txt">Once a member spends its rate budget for the epoch, further requests from the same nullifier are throttled, anonymously.</div></div>
+        <div><div class="lab">method</div><div class="txt">Budget lowered to 4 on the box. One member (heidi) sends 8 identical requests in a row.</div></div>
+      </div>
+      <div class="lab">observed (budget = 4, requests = 8)</div>
+      <table><thead><tr><th>#</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr></thead>
+        <tbody><tr><td class="dim">verdict</td><td class="ok">PASS</td><td class="ok">PASS</td><td class="ok">PASS</td><td class="ok">PASS</td><td class="no">DROP</td><td class="no">DROP</td><td class="no">DROP</td><td class="no">DROP</td></tr></tbody></table>
+      <div class="txt" style="margin-top:10px">4 admitted, then <b>4 rate-limited</b>, exactly at the cap. The throttle is keyed to the nullifier, so it limits the <i>member</i> without ever knowing the person. (Budget restored to 100 after the test.)</div>
+    </div>
+  </div>
+
+  <!-- H4 -->
+  <div class="card">
+    <div class="head"><span class="hid">H4</span><h3>Spamming junk cannot get you banned, or leak egress</h3><span class="verdict">CONFIRMED</span></div>
+    <div class="body">
+      <div class="row2">
+        <div><div class="lab">hypothesis</div><div class="txt">Flooding the node with junk gets the attacker nothing, and cannot lock out a legitimate member. There is no IP to ban because the gateway never sees one.</div></div>
+        <div><div class="lab">method</div><div class="txt">25 bogus envelopes fired concurrently (8 at a time), then one real member immediately after.</div></div>
+      </div>
+      <div class="lab">observed</div>
+      <table><tbody>
+        <tr><td>junk envelopes flooded</td><td class="mono">25 (concurrency 8) in 7.3s</td></tr>
+        <tr><td>rejected</td><td class="ok mono">25 / 25</td></tr>
+        <tr><td>leaked through</td><td class="ok mono">0</td></tr>
+        <tr><td>real member right after the flood</td><td class="ok mono">PASS in 1.08s</td></tr>
+      </tbody></table>
+      <div class="txt" style="margin-top:10px">All junk rejected, nothing egressed, and a real member sailed in immediately. <b>You cannot get banned</b>: there is no client IP at the gateway, so the only throttle is the per-member budget from H3.</div>
+    </div>
+  </div>
+
+  <!-- gateway corroboration -->
+  <div class="note">
+    <h4>gateway-side ledger (both ends agree)</h4>
+    <p>The gateway's own log, read on the box, matches the client view to the request: <b>16 PASS</b>, <b>32 DROP</b>, <b>7 distinct members</b>, all at epoch 20611. Drops by reason:</p>
+    <div class="bars">
+      <div class="bar"><span style="width:90px">invalid-proof</span><span class="fill" style="width:312px"></span><span class="cap">26</span></div>
+      <div class="bar"><span style="width:90px">rate-limited</span><span class="fill" style="width:48px"></span><span class="cap">4</span></div>
+      <div class="bar"><span style="width:90px">wrong-group</span><span class="fill" style="width:12px"></span><span class="cap">1</span></div>
+      <div class="bar"><span style="width:90px">no-proof</span><span class="fill" style="width:12px"></span><span class="cap">1</span></div>
+    </div>
+  </div>
+
+  <!-- interpretation -->
+  <div class="note" style="margin-top:18px">
+    <h4>what this means, and honest scope</h4>
+    <p>The gate holds on every axis tested. Membership is necessary and sufficient to egress; the trusted-root check defeats invented sets; the nullifier budget throttles per member without identity; and junk is cheap to reject (a failed proof costs the gateway a verify, never an egress).</p>
+    <p>On "getting banned": there is nothing to ban. The gateway is reached by Tor rendezvous, so it never learns a client IP. The only lever against a member is its per-epoch budget, and that touches only that one nullifier.</p>
+    <p>Scope kept honest: H4 is a functional flood (25 concurrent), not a saturation DoS. Against real volume the outer wall is Tor's onion proof-of-work defense (this box runs a tor with <span class="mono">pow: yes</span>), which raises the client's cost to even reach the rendezvous, before the zk gate ever runs.</p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,129 +1,116 @@
-# Payments: anonymous, cheap, ergonomic access funding
+# Payments: anonymous, cheap, ergonomic, scalable access funding
 
-**Status: design, not built.** Nothing in this document is implemented yet. It is the output of four adversarially-verified research passes (June 2026) on how to add paid access to the reputation-gated egress without breaking its anonymity. The access layer it builds on (Semaphore membership proof + epoch nullifiers) is live; everything about payment below is a plan.
+**Status: design, not built.** Nothing here is implemented yet. This supersedes the earlier four-pass design. The access layer it builds on (Semaphore membership proof + epoch nullifiers) is live. Everything about payment below is a plan.
 
 ## What we are solving
 
-Today membership is granted by a local `enroll` command. We want access to be **purchased**, under three requirements:
+Today membership is granted by a local `enroll` command. We want access to be **purchased**, under four requirements and one sharpened constraint.
 
-1. **Anonymous.** Cryptographic unlinkability between who paid and who used the service. Not "no-KYC." Actual unlinkability.
-2. **Cheap**, in dollars (fees) and in resources (per-message verify cost, server-side double-spend state).
-3. **Extremely ergonomic.** Hard constraint: no expensive operation per message. A fresh zk proof, an on-chain transaction, or a Lightning payment on every request is disqualified. We already pay this lesson: a Semaphore proof is 240ms on a laptop and 800ms on the 2 vCPU gateway (see `experiments/`), so anything per-message must be a cheap token check, not a proof.
+1. **Anonymous.** Cryptographic unlinkability between who paid and who used. Not "no-KYC." Actual unlinkability.
+2. **Cheap**, in dollars and in resources. Per-message verify cost and server-side double-spend state both stay small.
+3. **Ergonomic.** Hard constraint: no expensive operation per message. A fresh zk proof, an on-chain transaction, or a Lightning payment on every request is disqualified. A Semaphore proof is 240ms on a laptop and 800ms on the 2 vCPU gateway (see `experiments/`), so anything per-message must be a cheap token check.
+4. **Scalable.** Cost and state grow with active users on hardware we control, not with block space we rent. Throughput is bounded by gateway CPU, not by L1 throughput.
 
-## The architecture: two layers at different frequencies
+The sharpened constraint, which the earlier design missed:
 
-The whole design rests on splitting payment frequency from message frequency.
+**No facilitator party.** The protocol must not assume interaction with any specific third party. Not a relayer, not an association-set curator, not a mint. The only parties a user touches are the permissionless chain (many nodes, no single operator) and the operator they are buying access from. The operator is irreducible: you are paying them. So the operator must be cryptographically unable to link payer to user, and nobody else gets to be in the loop at all.
 
-- **Funding layer (infrequent, may be heavy, anonymity is won here).** You top up once per period. This is the only place a chain, a Lightning hop, or a mixer appears.
-- **Access layer (per message, near-free).** You redeem a pre-authorized credential. No proof generation, no network round trip to a chain.
+## Why Ethereum L1 is the no-single-party choice
 
-We already built the access layer for the reputation dimension: the shim caches one Semaphore proof per daily epoch and the gateway meters per nullifier (`N/100`). Payment is isomorphic to that. We are gating issuance, not adding a per-message cost.
+This is the reason to insist on L1, and it is an anonymity argument, not a tax we pay for one. Every L2 today runs a single sequencer operated by one company. A single sequencer is exactly a "one specific party" that can censor, reorder, and observe your transaction. L1 has no single sequencer. Insisting on L1 is not the price of anonymity. It is the anonymity move. We keep it.
 
-## Access layer (settled)
+## The architecture: three layers, three independent anonymity properties
 
-| Option | Per-message cost | Multi-show budget | Maturity (Node) | Use it when |
-|---|---|---|---|---|
-| **Cached Semaphore epoch-proof** (current) | ~10-32ms verify, cached client-side | yes, via the nullifier budget | live in this repo | default; already shipped |
-| **ARC** (Anonymous Rate-limited Credentials) | ~740µs verify, 288-byte presentation | yes, budget N baked in at issuance | IETF draft, Go ref impl only, **no Node lib** | you need a finer metered budget than membership gives |
-| Cashu ecash token | curve-mult + set lookup | no, one token one use | cashu-ts (client), CDK/Nutshell (mint) | the token also carries the payment (Bucket B) |
+Only the middle layer is new code.
 
-ARC is the architecturally ideal credential (a single purchase becomes N unlinkable presentations, with the rate budget committed at issuance and the server keeping a tag set that is the direct analog of our nullifier map). But it is a moving IETF Privacy Pass draft with only a Go reference implementation, so adopting it means a Go verifier sidecar or a from-spec build. **Recommendation: do not gate v1 on ARC.** The existing cached Semaphore proof already gives multi-show access with show-time anonymity. Add ARC later only if you need sub-membership metered budgets.
+**Layer 0: identity decorrelation. Optional. User's choice. No fixed party.**
+If you do not want your funding address publicly known as a customer of a privacy-egress service, route the money through any large shared pool into a fresh address first. The protocol does not mandate which pool. Railgun, Privacy Pools, a CEX withdrawal, a bridge: all fine. It is a replaceable commodity hop. This is how we honor "no one specific party." The protocol assumes none, and where a big anonymity set is wanted, you pick the rail. If you want a named default that best fits the constraint, it is Railgun: client-side proof-of-innocence instead of a curator, and a decentralized broadcaster set rather than one relayer. Privacy Pools works too, but its association-set provider is a curator-party, so it is the weaker fit for this exact requirement.
 
-## Funding layer: two buckets
+**Layer 1: payment and binding. New. One small immutable contract.**
 
-### Bucket A: Ethereum L1
+```
+deposit(commitment) payable
+    require msg.value == D            // one fixed denomination, so amounts never fingerprint
+    append commitment to Merkle tree  // commitment = Poseidon(secret, nullifierSecret)
+    emit Deposit(commitment, leafIndex)
 
-**Complete the RLN design rather than bolt on a second system.** RLN (the rate-limiting nullifier construction we already use the access half of) was born as an economic anti-spam primitive: stake to join, get a rate budget, exceed it and your key is recoverable and slashable. Its registration half lives on Ethereum.
+sweep() onlyOperator
+    transfer contract balance to operator   // this is how the operator gets paid
+```
 
-End to end:
+There is no on-chain user withdrawal. Funds accumulate and the operator sweeps them. The sweep is an operator-to-operator transaction that says nothing about depositors beyond a count. The commitment's preimage is never spent on chain. It is spent off chain, to the gateway.
 
-1. Deposit a fixed denomination into a **large, shared** Privacy Pools deployment (0xbow). Not your own pool. See the sizing note below for why.
-2. Withdraw via a **relayer**, over Tor, to a fresh address. The withdrawal emits a zk proof of membership in the deposit set plus a valid association-set (ASP) root, spends a single-use nullifier, and is submitted by the relayer (`processooor` field / `Entrypoint.relay`), so the registration transaction is not your funding address.
-3. That same withdrawal proof gates insertion of your Poseidon commitment into the on-chain RLN/Semaphore membership tree. Batch insertions into daily-epoch windows.
-4. Per message: unchanged. Your cached Semaphore epoch-proof is the access token. Nothing on chain per message.
+**Layer 2: access. Already shipped. Unchanged.**
+The cached epoch-proof and the per-nullifier rate budget in `gateway/gateway.mjs`.
 
-Cost is confined to the infrequent layer. Semaphore v4's LeanIMT insertion is ~213,820 gas (about $3.70 at benchmark prices, a 43% cut over the old fixed-depth tree), and a Hash-Map Merkle Tree stores ~0.097 MB for 1,000 members instead of 67 MB for a full depth-20 tree.
+## The redemption is the proof you already verify
 
-Why pick it: reuses the entire Semaphore/zk stack, ETH-native, and you finally get the auditable on-chain stake and slashing that RLN was designed around.
+This is the elegant part. The payment redemption is the exact same proof shape the gateway runs today.
 
-### Bucket B: non-Ethereum
+`lib/semaphore.mjs` `checkProof` already does Merkle-membership-in-a-group, plus an epoch nullifier, plus a trusted-root match. The payment redemption is identical, with one swap: the group is the **on-chain deposit tree** instead of the enrolled `members.json`.
 
-**Cashu over Lightning.** Pay one Lightning invoice, receive blind-signed ecash. The blind signature (BDHKE) means the mint never sees the token secret or the unblinded signature, so funding and use are cryptographically unlinkable. The tokens are the access credential. Redeem them over the existing onion. The mint's only state is a spent-secret set, prunable by keyset rotation, which lines up with our epoch sweep.
+Over the existing onion, the client sends the gateway a zk proof: "my commitment is a leaf under the current on-chain deposit root, I know its preimage, and here is the nullifier `N = Poseidon(nullifierSecret, epoch)`," revealing nothing about which leaf. The gateway reads the root from its own node, or from many RPC endpoints (no single party), checks `N` is unspent in the per-epoch `Map`, and grants the access budget. You are swapping "membership in the enrolled set" for "membership in the paid-deposit set." Same circuit, same nullifier machinery, same rate-limit map.
 
-The Node gateway uses `cashu-ts` (client only). The mint runs as a sidecar: CDK (Rust, `cdk-mintd`) or Nutshell (Python). There is no native Node mint.
+The literature name for this is zk-creds, "insertion equals issuance" (Rosenberg, White, Garman, Miers, IEEE S&P 2023). A credential is issued by becoming a leaf in a public Merkle list, gated on a zk proof, with no issuer signing key. The paper explicitly describes Sybil-resistant tokens issued by making a blockchain payment. The one twist we add: redeem the leaf **off chain**, so the user never needs a gas-funded fresh address, which is what otherwise forces a relayer into the design.
 
-Why pick it: native cryptographic anonymity out of the box, fewer moving parts, and the most mature self-hostable tooling. It abandons L1 settlement entirely and shifts trust to the mint operator and Lightning routing.
+## Why off-chain redemption, stated plainly
 
-## The binding: how a payment authorizes issuance
+We spend the proof off chain. The alternative, spending it on chain so the contract only pays the operator when a valid proof lands, would make payment-for-access trustless. It would also force the user to submit a gas-paying transaction from a fresh address, which drags a relayer or a 4337 bundler back into the loop and adds a second L1 transaction per redemption. That breaks the no-facilitator rule and breaks scalability at the same time.
 
-This was the open question across the first two passes. The answer: **it is a composition of shipping primitives, not a new construction.**
+The cost of off-chain redemption is one honest line: the operator could take a deposit and refuse to honor a valid proof. That is buyer-seller trust, the same trust Cashu places in its mint to redeem a token, and it is irreducible for any prepaid service. It is not facilitator trust. No third party is added. You decided this tradeoff is the right one, and on cheap, ergonomic, and scalable it is not close.
 
-- **Non-Ethereum: Cashu is the binding.** There is nothing to add. The ecash token is the credential, the blind signature breaks the funding-to-use link information-theoretically (the blinding factor `r` is never transmitted), and the spent-secret set is the nullifier that prevents double-issue.
-- **Ethereum L1: the Privacy Pools withdrawal proof is the proof-of-payment.** It already proves deposit-set membership plus a valid ASP root without revealing which deposit, spends a single-use nullifier, and is relayer-submittable. The withdrawal-note secret becomes the issuance-authorization token, gating the Poseidon insertion.
-- **The pattern has a name:** zk-creds, "insertion equals issuance" (Rosenberg, White, Garman, Miers, IEEE S&P 2023). A credential is issued by becoming a leaf in a public Merkle list, gated on a zk proof of a qualifying fact, with no issuer signing key. The paper explicitly describes Sybil-resistant tokens issued by making a blockchain payment. That is this design, already in the literature.
+## Leak ledger, redone for the single-party lens
 
-### The one hard part is systems, not cryptography
-
-Every credential primitive surveyed (ARC, Cashu, Taler, Coconut, zk-creds) explicitly scopes transport and timing metadata out of its guarantees. So the **singleton problem** is real: if one payment triggers one issuance session 1:1, network metadata re-links payer to user no matter how sound the blind signature is. Defeating it is an integration task, not a missing primitive:
-
-- **Batch / epoch issuance** so K payers' insertions share a time window. We already run daily epochs.
-- **Issue and register over Tor** to break IP linkage. We already operate the onion.
-- **Relayer / ERC-4337** so the registration transaction is not the payer's address. Privacy Pools gives this natively.
-
-The minimum batch size K is a deployment parameter, not a proven anonymity bound.
-
-## Leak ledger: where the who-paid to who-used link actually breaks or leaks
-
-| Rail | Where the link breaks | Residual leaks to mitigate |
+| Link | Where it breaks | Residual to mitigate |
 |---|---|---|
-| Cashu / Lightning | blind signature (native, cryptographic) | denomination/amount correlation, timing, IP to mint (run over Tor), mint can ID the token receiver not the payer, DLEQ disclosure in a dispute |
-| RLN stake on L1 (alone) | nowhere by default: the wallet signs to derive the commitment, so payer to commitment is linked at registration | the entire link, unless a decorrelation hop is added |
-| RLN stake + Privacy Pools | deposit-to-withdrawal link, bounded by anonymity-set size and the ASP set | thin sets, timing, unique amounts; legal posture of the pool |
-| ARC issuance | issuer-client unlinkable, but only within the anonymity set | a per-payer singleton issuance context defeats it via metadata; needs batching |
+| payer address to use | off-chain zk membership over the deposit set: the gateway sees a proof, not a depositor | anonymity set = deposits under the redeemed root; thin at low volume, so batch and hold a dwell time |
+| funding identity to the customer set | Layer 0 hop through any large shared pool into a fresh address | set bounded by the chosen pool; unique amounts and timing shrink it, so use the pool's fixed denomination |
+| deposit amount fingerprint | single fixed denomination `D` for everyone | none if `D` is universal; a tiered price reintroduces it |
+| client IP to anything | the redemption rides the existing Tor onion | standard Tor caveats only |
+| operator linking payment to use | it cannot: the redemption proof hides which leaf | timing correlation between a deposit and a first use, so add dwell time and batch per epoch |
 
-Mixer unlinkability is anonymity-set-bounded, not absolute. The claim that a mixer yields a "brand-new fully unlinkable address" was explicitly refuted in research. zk-nym (Nym/Coconut) issuance-to-use unlinkability was also refuted; do not rely on it.
+Two facilitator-parties from the old design are now gone by construction. There is no relayer, because nothing is submitted on the user's behalf. There is no association-set curator, because the gateway is its own verifier of its own deposit set, and it learns nothing about which depositor. There is no mint, because value settles on chain.
 
-### Anonymity-set sizing for a low-volume service
+## Scalability
 
-In an ideal mixer the chance of linking your withdrawal to your deposit is about **1/k**, where k counts indistinguishable deposits of the same denomination in the relevant window. Effective k collapses below nominal from three things: unique amounts (fix with fixed denominations), timing (fix with a minimum dwell time plus random delay), and thin low-volume sets (the death spiral that hollowed out Tornado).
-
-The trap specific to a small service: **running your own pool is the worst case**, because k is tiny and everyone in it is self-evidently your user. The guidance is therefore counterintuitive. Ride a large shared public pool so your users hide in unrelated traffic, use a fixed denomination, hold a dwell time that spans many other deposits, and batch the second hop (clean address into your RLN contract) into epoch windows over Tor. At tens of users you cannot manufacture a meaningful set yourself. Negligible linkage (k in the hundreds) only comes from a big external pool.
+- **Per message:** unchanged. A cached proof, ~10 to 32ms verify, ~27 to 31 verifies per second per core measured on the 2 vCPU box. Horizontal across cores and gateways.
+- **L1 footprint:** one deposit transaction per user per top-up period, and zero per-message on-chain cost. The operator amortizes one `sweep` across many deposits. This is the minimum possible L1 usage, so throughput is bounded by gateway CPU, not by block space.
+- **Gateway state:** the per-epoch nullifier map is O(active members) and is already swept. No growth with history.
+- **Proof generation:** scales with deposit-tree depth, which is logarithmic in total deposits. A LeanIMT keeps this cheap.
 
 ## Rejected, and why
 
-- **GNU Taler.** Income-transparent by design ("customers stay anonymous, merchants cannot hide income"), the exchange identifies the receiving operator at deposit, and running an exchange "will most likely need a bank license." Wrong for a solo Tor operator.
-- **L402 (Lightning + macaroons).** Capable, and one macaroon can carry a reusable attenuable budget. But the macaroon embeds the invoice `payment_hash` plus a persistent 32-byte `user_id`, and since the operator is both invoice issuer and verifier it can trivially link payment to use and track a stable identity. Wins only in its agent-to-agent micropayment niche.
-- **Base Privacy Pass (RFC 9578).** One token one use, no budget semantics. ARC is the extension that fixes this.
-- **Tornado Cash.** Legally fraught (delisted March 2025 but the developer was not, volumes never recovered) and a self-degrading anonymity set. Use Privacy Pools, whose association-set design gives an operator-viable compliance posture.
+- **A relayer for withdrawal.** One party that sees your withdrawal, can censor it, and can time-correlate it. Removed: off-chain redemption needs no submitter.
+- **Privacy Pools association-set provider as a mandated step.** A curator that can exclude you. Removed from the protocol: decorrelation is Layer 0, user's choice, and Railgun's client-side proof-of-innocence is the curator-free default.
+- **Cashu and any single mint.** One party that sees every payment, can refuse you, and holds your float. This is the single-party dependency the whole design exists to avoid.
+- **On-chain redemption.** Trustless, but needs a gas-funded fresh address, so it reintroduces a relayer or bundler and an L1 transaction per redemption. Loses cheap, ergonomic, and scalable at once.
+- **Payment channels, including zk channels (BOLT, zkChannels).** Rejected in an earlier pass and worth restating here because it is the cleanest statement of our core constraint. BOLT (Green and Miers, ACM CCS 2017) requires a channel to "be established with a counter-party before being used," treats the merchant as "a known identity," and its own Tor example concedes that "establishing a channel to pay for Tor bandwidth implicitly links each payment on a given channel to all of her other payments." A channel is a persistent counterparty, which is exactly the payer-to-use link we destroy. Production zk channels are also dead (libzkchannels archived February 2023) and run 7 to 9 seconds per payment, four orders of magnitude over our cached hot path.
+- **GNU Taler.** Income-transparent by design and the exchange most likely needs a bank license. Wrong for a solo Tor operator.
+- **L402.** The macaroon embeds the invoice payment hash plus a persistent user id, and the operator is both issuer and verifier, so it trivially links payment to use.
 
 ## Buildable today vs open
 
-**Buildable now from shipping primitives:** Semaphore v4, Privacy Pools (0xbow v1), Cashu (CDK / Nutshell mint + cashu-ts client), Lightning, relayers, and the Tor onion we already run.
+**Buildable now from shipping primitives:** Semaphore v4 (the circuit and nullifier machinery we already run), a minimal deposit/sweep contract, an on-chain Merkle root the gateway reads, the Tor onion we already operate, and for Layer 0 any of Railgun, Privacy Pools, a CEX, or a bridge.
 
-**Open engineering decisions (not blockers):**
+**Open engineering decisions, not blockers:**
 
-1. Whether to verify the Privacy Pools withdrawal proof inside the same circuit that authorizes the RLN insertion (one combined proof) or as a two-step verify-then-insert. Undemonstrated anywhere; an optimization.
-2. The minimum batch size K for issuance to defeat the singleton.
-3. ARC has no Node library, so adopting it needs a Go sidecar or a from-spec build. Avoidable by staying on the cached Semaphore proof.
-4. Cashu denomination fingerprinting at low volume may be the dominant practical leak; quantify before relying on it.
+1. Whether the redemption proof verifies against the live on-chain root every time, or against a periodically pinned root the gateway snapshots per epoch. Pinning is simpler and bounds reorg edge cases. Likely yes.
+2. Whether one deposit buys one access period (nullifier scoped to the deposit, single redemption ever) or an ongoing rate budget (nullifier scoped to the epoch, fresh budget each epoch). The first is pay-as-you-go, the second is a subscription. Both are a one-line scope change in the circuit.
+3. Minimum deposits per epoch before redemptions are honored, the anonymity-set floor `K`. A deployment parameter, not a proven bound. Log it, do not hide it.
+4. Proving the Layer 0 hop and the Layer 1 deposit can share one decorrelated address cleanly, so the deposit is never linkable to the user's main funds. A wiring detail.
 
 ## Recommendation
 
-- **If Ethereum L1 is a hard requirement:** Bucket A. Complete RLN on chain, decorrelate through a large shared Privacy Pools via a relayer over Tor, and keep ARC out of v1.
-- **If Ethereum is negotiable:** Bucket B. Cashu over Lightning is fewer moving parts and stronger native anonymity. Ship it first as the demo, then add the L1 stake path later for the auditable-stake story.
-
-The cryptography is all shipping primitives. The only real work left is the systems integration of the singleton defense (batch plus Tor plus relayer), and on the ETH path, the combined-circuit decision.
+Build Layer 1 as a fixed-denomination deposit/sweep contract, redeem the deposit off chain to the gateway with the existing Semaphore proof shape against the on-chain deposit root, and leave identity decorrelation as a user-chosen Layer 0 hop through any large shared pool. The result touches no facilitator, costs one L1 transaction per top-up, reuses the entire access stack unchanged, and scales with gateway CPU. The only trust is the operator-honors-a-valid-proof trust that any prepaid service carries, and the only cryptography is primitives we already ship.
 
 ## Sources
 
-Primary sources behind the claims above (all verified 3-0 or 2-1 in adversarial review unless noted):
+- zk-creds, "insertion equals issuance": Rosenberg, White, Garman, Miers, IEEE S&P 2023 (eprint 2022/878).
+- Payment-channel counterparty linkage: BOLT, Green and Miers, ACM CCS 2017.
+- Semaphore v4 and LeanIMT: Semaphore v4.0.0 release notes.
+- RLN rate-limiting nullifier: rln.waku.org, rate-limiting-nullifier docs.
+- Stealth addresses and account abstraction, for the rejected on-chain-redeem path: ERC-5564, ERC-4337.
+- Layer 0 pools: Railgun (proof-of-innocence, broadcaster network); Privacy Pools, Buterin/Soleimani et al. (SSRN 4563364).
+- Rejected rails: GNU Taler exchange manual; L402 macaroon spec; zkChannels/libzkchannels status.
 
-- Cashu protocol and BDHKE: cashubtc NUT-00, docs.cashu.space/protocol; CDK and Nutshell repos; cashu-ts.
-- ARC: IETF Privacy Pass `draft-ietf-privacypass-arc-protocol` and `-crypto`; Cloudflare "private rate limiting" benchmark.
-- Privacy Pass base: RFC 9578. Architecture caveats: RFC 9576.
-- RLN and on-chain membership: rln.waku.org, rate-limiting-nullifier docs, Logos research; Semaphore v4.0.0 release notes; Vac storage evaluation.
-- Privacy Pools: Buterin/Soleimani et al. (SSRN 4563364), docs.privacypools.com (contracts, ASP); 0xbow deployment.
-- zk-creds: Rosenberg, White, Garman, Miers, IEEE S&P 2023 (eprint 2022/878).
-- GNU Taler: docs.taler.net exchange manual and features; lsd0009.
-- L402: docs.lightning.engineering (macaroons, protocol spec), Aperture; Macaroons NDSS 2014.
-- Tornado status: Treasury press release SB0057 (March 2025 delisting); arXiv 2510.09443.
+Claims marked as costs, gas figures, and library maturity should be re-verified against current sources before this design is built. The architecture does not depend on any single number above.
