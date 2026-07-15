@@ -57,7 +57,10 @@ async function gatewayOnion() {
 async function candidateOnions() {
   if (!process.env.RGOE_ONION && directoryEnabled()) {
     const cands = await selectCandidates();
-    if (cands.length) return cands.map((c) => c.onion);
+    // Strip any ".onion" suffix: directory entries carry the full host, but dialOnion
+    // re-appends ".onion", so returning it raw would dial "<addr>.onion.onion" and fail
+    // (SOCKS HostUnreachable). The single-onion path strips it the same way.
+    if (cands.length) return cands.map((c) => c.onion.replace(/\.onion$/, ""));
   }
   return [await gatewayOnion()];
 }
