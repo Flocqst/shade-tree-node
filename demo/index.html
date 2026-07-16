@@ -14,12 +14,8 @@
   }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{
-    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
-    -webkit-font-smoothing:antialiased; min-height:100%; display:grid; place-items:center;
-    padding:38px 18px; position:relative; overflow-x:hidden;
-  }
-  /* --- living background (calm; it must not compete) --- */
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); -webkit-font-smoothing:antialiased;
+    min-height:100%; display:grid; place-items:center; padding:38px 18px; position:relative; overflow-x:hidden}
   .bgfx{position:fixed; inset:0; z-index:-2; overflow:hidden}
   .blob{position:absolute; border-radius:50%; filter:blur(80px); mix-blend-mode:screen}
   .b1{width:52vw; height:52vw; left:-8vw; top:-14vw; opacity:.34; background:radial-gradient(circle,#1f6f52,transparent 66%); animation:drift1 28s ease-in-out infinite}
@@ -32,17 +28,16 @@
     background-image:linear-gradient(rgba(255,255,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px);
     background-size:44px 44px; mask-image:radial-gradient(120% 90% at 50% 0%,#000,transparent 76%)}
 
-  .wrap{width:100%; max-width:1010px; display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; position:relative}
+  .wrap{width:100%; max-width:1180px; display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap}
   .card{background:var(--panel); border:1px solid var(--edge); border-radius:20px; padding:24px; position:relative; overflow:hidden;
     backdrop-filter:blur(26px) saturate(1.3); -webkit-backdrop-filter:blur(26px) saturate(1.3);
     box-shadow:0 1px 0 rgba(255,255,255,.07) inset, 0 40px 90px -34px rgba(0,0,0,.9)}
   .card::before{content:""; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent)}
-  .main{flex:1 1 480px} .side{flex:1 1 296px}
+  .main{flex:2 1 640px} .side{flex:1 1 290px}
   .eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:.26em; text-transform:uppercase; color:var(--sage); text-shadow:0 0 16px rgba(147,198,171,.35)}
   h1{font-size:21px; font-weight:600; margin:8px 0 0; letter-spacing:-.015em; background:linear-gradient(180deg,#fff,#c6cad2); -webkit-background-clip:text; background-clip:text; color:transparent}
   .sub{color:var(--dim); font-size:12.5px; margin-top:5px; line-height:1.55}
 
-  /* member — clearly stated up top */
   .id{margin:18px 0 4px; padding:13px 14px; border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.025); display:flex; align-items:center; gap:12px}
   .id .who{flex:1; min-width:0}
   .lbl{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim)}
@@ -53,8 +48,8 @@
   .badge .pip{width:6px; height:6px; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor; animation:beat 2.2s ease-in-out infinite}
   @keyframes beat{0%,100%{opacity:.5}50%{opacity:1}}
 
-  /* --- flow diagram (the "how", secondary to the payoff) --- */
-  .flow{margin:16px 0 0; padding:15px 8px 6px; border:1px solid var(--edge); border-radius:14px; background:radial-gradient(120% 130% at 50% 0%,rgba(255,255,255,.04),rgba(255,255,255,.008)); position:relative}
+  /* flow diagram */
+  .flow{margin:18px 0 0; padding:16px 8px 6px; border:1px solid var(--edge); border-radius:14px; background:radial-gradient(120% 130% at 50% 0%,rgba(255,255,255,.04),rgba(255,255,255,.008)); position:relative}
   .flow svg{width:100%; height:auto; display:block; overflow:visible}
   .track{stroke:rgba(255,255,255,.12); stroke-width:1.4; stroke-dasharray:2 4}
   .beam{stroke:url(#beamgrad); stroke-width:2.6; stroke-linecap:round; filter:drop-shadow(0 0 5px rgba(147,198,171,.7))}
@@ -69,24 +64,36 @@
   .node.pulse circle{animation:npulse 1.1s ease-out infinite}
   @keyframes npulse{0%{stroke-opacity:1}70%{stroke-opacity:.35}100%{stroke-opacity:1}}
   .packet{filter:drop-shadow(0 0 8px var(--pk,var(--sage)))}
-  .nlabel{position:absolute; top:100%; transform:translate(-50%,1px); font-family:var(--mono); font-size:9.5px; letter-spacing:.03em; color:var(--faint); white-space:nowrap; transition:color .3s}
-  .nlabel.on{color:var(--wire)}
 
-  /* --- caption: the single glanceable "what's happening now" --- */
-  .cap{margin:14px 2px 0; font-size:13.5px; color:var(--ink); min-height:19px; line-height:1.4; display:flex; align-items:center; gap:8px; transition:color .3s}
+  /* per-node detail row — the simplified trace, one card under each node */
+  .pnrow{display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-top:9px}
+  .pn{padding:9px 8px; border:1px solid var(--edge); border-radius:10px; background:rgba(255,255,255,.02); text-align:center; min-width:0; transition:.3s}
+  .pn.lit{background:rgba(255,255,255,.045)}
+  .pn.lit.zk{border-color:rgba(179,166,218,.45); box-shadow:0 0 18px -7px rgba(179,166,218,.9)}
+  .pn.lit.tor{border-color:rgba(147,198,171,.45); box-shadow:0 0 18px -7px rgba(147,198,171,.9)}
+  .pn.lit.gw{border-color:rgba(138,182,217,.45); box-shadow:0 0 18px -7px rgba(138,182,217,.9)}
+  .pn.lit.dest{border-color:rgba(226,201,135,.45); box-shadow:0 0 18px -7px rgba(226,201,135,.9)}
+  .pn.lit.you{border-color:rgba(255,255,255,.28)}
+  .pn-h{font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint)}
+  .pn-v{font-family:var(--mono); font-size:11px; color:var(--wire); margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums}
+  .pn.lit .pn-v{color:var(--ink)}
+  .pn.hidden-ip .pn-v{text-decoration:line-through; text-decoration-color:rgba(224,138,138,.75); color:var(--dim)}
+  .pn-s{font-family:var(--mono); font-size:9px; color:var(--faint); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-height:11px}
+  @media(max-width:560px){ .pnrow{grid-template-columns:repeat(2,1fr)} }
+
+  .cap{margin:15px 2px 0; font-size:13.5px; color:var(--ink); min-height:19px; line-height:1.4; display:flex; align-items:center; gap:8px; transition:color .3s}
   .cap .cdot{width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none; transition:.3s}
   .cap.run .cdot{background:var(--gold); box-shadow:0 0 9px var(--gold); animation:beat 1s ease-in-out infinite}
   .cap.ok .cdot{background:var(--sage); box-shadow:0 0 9px var(--sage)}
   .cap.err .cdot{background:var(--bad); box-shadow:0 0 9px var(--bad)}
-  .cap .ctx{color:var(--dim)}
 
-  /* --- PAYOFF: the headline result, visible from the start --- */
-  .payoff{margin-top:14px}
+  /* payoff */
+  .payoff{margin-top:15px}
   .row2{display:flex; gap:11px}
   .box{flex:1; padding:13px; border:1px solid var(--edge); border-radius:12px; background:rgba(255,255,255,.022); position:relative; overflow:hidden}
   .box.egress{border-color:rgba(147,198,171,.32); background:rgba(147,198,171,.05); box-shadow:0 0 30px -8px rgba(147,198,171,.4)}
   .box .k{font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--dim)}
-  .box .v{font-family:var(--mono); font-size:17px; margin-top:6px; font-weight:600; color:var(--faint)}
+  .box .v{font-family:var(--mono); font-size:17px; margin-top:6px; font-weight:600; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   .box.egress.set .v{color:var(--sage); text-shadow:0 0 18px rgba(147,198,171,.5)}
   .box.you.set .v{color:var(--dim); text-decoration:line-through; text-decoration-color:rgba(224,138,138,.75)}
   .box .note{font-size:10.5px; color:var(--dim); margin-top:5px; display:flex; align-items:center; gap:5px}
@@ -100,11 +107,10 @@
   .statline .num.done{color:var(--ink); text-shadow:0 0 20px rgba(240,239,233,.25)}
   .statline .u{font-size:13px; color:var(--dim); margin-left:2px}
 
-  /* button + slots */
   button{width:100%; margin-top:16px; padding:14px; border-radius:12px; border:1px solid rgba(147,198,171,.4); position:relative; overflow:hidden;
     background:linear-gradient(rgba(147,198,171,.16),rgba(147,198,171,.05)); color:var(--ink); font-family:var(--sans); font-size:14.5px; font-weight:600; cursor:pointer; transition:.18s;
     box-shadow:0 0 28px -8px rgba(147,198,171,.55), inset 0 1px 0 rgba(255,255,255,.1)}
-  button:hover:not(:disabled){transform:translateY(-1px); box-shadow:0 0 36px -6px rgba(147,198,171,.8), inset 0 1px 0 rgba(255,255,255,.14)}
+  button:hover:not(:disabled){transform:translateY(-1px); box-shadow:0 0 36px -6px rgba(147,198,171,.8)}
   button:active:not(:disabled){transform:translateY(0)}
   button:disabled{opacity:.42; cursor:not-allowed; border-color:var(--edge); background:linear-gradient(rgba(255,255,255,.06),rgba(255,255,255,.02)); box-shadow:none}
   button::after{content:""; position:absolute; inset:0; background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.22) 50%,transparent 70%); transform:translateX(-120%)}
@@ -117,50 +123,17 @@
   .slots .pip.on{background:var(--sage); box-shadow:0 0 7px rgba(147,198,171,.6)}
   .slots .lbl{font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:8px; letter-spacing:.05em}
 
-  /* --- trace: supplementary, collapsed by default --- */
+  /* raw proof — collapsed, scroll-safe */
   .trace{margin-top:16px; border-top:1px solid var(--edge); padding-top:4px}
-  .trace summary{list-style:none; cursor:pointer; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); padding:8px 0; display:flex; align-items:center; gap:7px; transition:color .2s}
-  .trace summary:hover{color:var(--dim)} .trace summary::-webkit-details-marker{display:none}
+  .trace summary{list-style:none; cursor:pointer; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); padding:8px 0; display:flex; align-items:center; gap:7px}
+  .trace summary::-webkit-details-marker{display:none}
   .trace summary::before{content:"›"; transition:transform .2s; display:inline-block; font-size:13px}
   .trace[open] summary::before{transform:rotate(90deg)}
-  .steps{margin:6px 2px 2px}
-  .step{display:grid; grid-template-columns:18px 1fr; gap:10px; padding:4px 0}
-  .rail{position:relative; display:flex; justify-content:center}
-  .rail::before{content:""; position:absolute; top:15px; bottom:-4px; width:1.5px; background:var(--edge)}
-  .step:last-child .rail::before{display:none}
-  .rail.filled::before{background:var(--sage); opacity:.4}
-  .dot{width:11px; height:11px; border-radius:50%; border:1.5px solid var(--edge); background:var(--bg); margin-top:3px; z-index:1; display:grid; place-items:center; transition:.3s}
-  .dot svg{width:6px; height:6px; opacity:0; transform:scale(.4); transition:.25s}
-  .step.active .dot{border-color:var(--gold); box-shadow:0 0 8px rgba(226,201,135,.5)}
-  .step.done .dot{border-color:var(--sage); background:var(--sage)} .step.done .dot svg{opacity:1; transform:scale(1)}
-  .step .t{font-size:12px; color:var(--faint); transition:color .3s}
-  .step.active .t,.step.done .t{color:var(--wire)}
-  .step .d{font-family:var(--mono); font-size:9.5px; color:var(--faint); margin-top:1px; min-height:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .step.active .d{color:var(--dim)}
-  .ell::after{content:"…"; animation:ell 1.4s steps(4) infinite}
-  @keyframes ell{0%{content:"·"}33%{content:"··"}66%{content:"···"}}
-  .bar{display:flex; height:9px; border-radius:5px; overflow:hidden; margin-top:12px; background:rgba(255,255,255,.05)}
-  .bar i{height:100%; width:0; transition:width .7s cubic-bezier(.2,.8,.2,1)}
-  .bar i.prove{background:var(--lav)} .bar i.dial{background:var(--sage)} .bar i.gate{background:var(--sky)} .bar i.roundtrip{background:var(--gold)}
-  .leg{display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:9px}
-  .leg span{font-family:var(--mono); font-size:9.5px; color:var(--faint); display:flex; align-items:center; gap:5px}
-  .leg span::before{content:""; width:7px; height:7px; border-radius:2px; background:var(--k)}
-  .meta{font-family:var(--mono); font-size:10px; color:var(--faint); margin-top:11px; line-height:1.55; word-break:break-all}
-  .meta b{color:var(--dim); font-weight:400}
-  /* cryptographic detail panel (inside the trace) */
-  .crypto{margin-top:13px}
-  .crypto:empty{display:none}
-  .cscheme{font-family:var(--mono); font-size:10.5px; color:var(--lav); letter-spacing:.03em; text-shadow:0 0 12px rgba(179,166,218,.3)}
-  .csub{font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:13px 0 5px}
-  .ckv{display:flex; align-items:baseline; gap:8px; padding:2.5px 0; font-family:var(--mono); font-size:10.5px}
-  .ckv>span{color:var(--faint); flex:none; width:120px}
-  .ckv>b{color:var(--wire); font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .ckv>i{color:var(--dim); font-style:italic; opacity:.75}
-  .ckv>em{color:var(--faint); font-style:normal; font-size:9px; margin-left:auto; flex:none; white-space:nowrap}
-  .cproof{font-family:var(--mono); font-size:10px; color:var(--sky); background:rgba(138,182,217,.05); border:1px solid rgba(138,182,217,.16); border-radius:8px; padding:9px 10px; margin:5px 0 0; white-space:pre; overflow-x:auto; line-height:1.65}
-  .cnote{font-family:var(--sans); font-size:10.5px; color:var(--dim); margin-top:12px; line-height:1.5; padding:9px 11px; border-left:2px solid rgba(179,166,218,.45); background:rgba(179,166,218,.045); border-radius:0 8px 8px 0}
+  .cscheme{font-family:var(--mono); font-size:10.5px; color:var(--lav); letter-spacing:.03em; text-shadow:0 0 12px rgba(179,166,218,.3); margin:4px 0 8px}
+  .cproof{font-family:var(--mono); font-size:10px; color:var(--wire); background:rgba(138,182,217,.05); border:1px solid rgba(138,182,217,.16); border-radius:8px; padding:11px 12px; margin:0; white-space:pre; overflow-x:auto; line-height:1.7}
+  .cproof .kk{color:var(--faint)} .cnote{font-family:var(--sans); font-size:10.5px; color:var(--dim); margin-top:11px; line-height:1.5; padding:9px 11px; border-left:2px solid rgba(179,166,218,.45); background:rgba(179,166,218,.045); border-radius:0 8px 8px 0}
 
-  /* network card — supplementary infrastructure context, quieter */
+  /* network card */
   .side{opacity:.96}
   .side h2{font-size:12px; font-weight:600; margin:0 0 2px; letter-spacing:.02em; color:var(--wire)}
   .side .hint{font-size:11px; color:var(--faint); margin-bottom:13px}
@@ -210,11 +183,15 @@
         <g class="node dest" id="n-dest"><circle cx="310" cy="30" r="12"/><text class="glyph" x="310" y="30">◎</text></g>
         <circle class="packet" id="packet" cx="30" cy="30" r="4.5" fill="#93c6ab" opacity="0"/>
       </svg>
-      <div class="nlabel" id="l-you"  style="left:8.8%">you</div>
-      <div class="nlabel" id="l-zk"   style="left:29.4%">ZK proof</div>
-      <div class="nlabel" id="l-tor"  style="left:50%">Tor</div>
-      <div class="nlabel" id="l-gw"   style="left:70.6%">gateway</div>
-      <div class="nlabel" id="l-dest" style="left:91.2%">dest</div>
+    </div>
+
+    <!-- simplified trace, one card per node -->
+    <div class="pnrow">
+      <div class="pn you"  id="pn-you"><div class="pn-h">you</div><div class="pn-v" id="pnv-you">—</div><div class="pn-s" id="pns-you">member</div></div>
+      <div class="pn zk"   id="pn-zk"><div class="pn-h">ZK proof</div><div class="pn-v" id="pnv-zk">Groth16</div><div class="pn-s" id="pns-zk">membership</div></div>
+      <div class="pn tor"  id="pn-tor"><div class="pn-h">Tor</div><div class="pn-v" id="pnv-tor">circuit</div><div class="pn-s" id="pns-tor">3-hop onion</div></div>
+      <div class="pn gw"   id="pn-gw"><div class="pn-h">gateway</div><div class="pn-v" id="pnv-gw">verify</div><div class="pn-s" id="pns-gw">root + slot</div></div>
+      <div class="pn dest" id="pn-dest"><div class="pn-h">destination</div><div class="pn-v" id="pnv-dest">egress</div><div class="pn-s" id="pns-dest">sees gateway</div></div>
     </div>
 
     <div class="cap" id="cap"><span class="cdot"></span><span id="capText">Ready — your IP stays hidden from the destination.</span></div>
@@ -231,12 +208,10 @@
     <div class="slots" id="slots"></div>
 
     <details class="trace">
-      <summary>Trace — ZK proof, circuit &amp; timings</summary>
-      <div class="steps" id="steps"></div>
-      <div class="crypto" id="crypto"></div>
-      <div class="bar" id="latBar"></div>
-      <div class="leg" id="latLeg"></div>
-      <div class="meta" id="meta"></div>
+      <summary>Raw proof — π points &amp; public signals</summary>
+      <div class="cscheme" id="cscheme"></div>
+      <pre class="cproof" id="cproof">run a request to populate…</pre>
+      <div class="cnote">Each request reveals a fresh <b>nullifier</b> + <b>one share</b> of the secret. A second share on the same epoch slot lets the gateway reconstruct the secret and slash the stake — that’s the rate limit.</div>
     </details>
   </main>
 
@@ -250,70 +225,63 @@
 </div>
 
 <script>
-const CHECK='<svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.2 4.8-5" stroke="#08090c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const STEPS=[
-  {key:'prove', t:'Generating zero-knowledge proof', d:'RLN Groth16 · membership + rate slot'},
-  {key:'select',t:'Selecting a gateway',             d:'random pick from the reachable fleet'},
-  {key:'dial',  t:'Opening a Tor circuit',           d:'rendezvous to the chosen onion'},
-  {key:'gate',  t:'Gateway verifies the proof',      d:'membership root + rate nullifier'},
-  {key:'egress',t:'Request → destination',           d:'api.ipify.org, from the gateway’s IP'},
-  {key:'return',t:'Response → back to you',          d:'relayed home; the destination saw only the gateway'},
-];
-const CAP={prove:'Generating a zero-knowledge proof…',select:'Choosing a random gateway…',dial:'Opening a Tor circuit…',gate:'The gateway is verifying the proof…',egress:'Egressing to the destination…',return:'Relaying the response back to you…'};
 const short=(s,n=8)=> s ? (String(s).length>2*n+2 ? String(s).slice(0,n)+'…'+String(s).slice(-6) : String(s)) : '';
 const q=id=>document.getElementById(id);
-// decimal field element -> truncated 0x-hex (crypto values are huge)
-const hx=(d,head=12,tail=6)=>{ try{ let h=BigInt(d).toString(16); if(h.length%2)h='0'+h; return '0x'+(h.length>head+tail?h.slice(0,head)+'…'+h.slice(-tail):h); }catch{ return short(d); } };
+const hx=(d,head=8,tail=4)=>{ try{ let h=BigInt(d).toString(16); if(h.length%2)h='0'+h; return '0x'+(h.length>head+tail?h.slice(0,head)+'…'+h.slice(-tail):h); }catch{ return short(d); } };
+const CAP={prove:'Generating a zero-knowledge proof…',select:'Choosing a random gateway…',dial:'Opening a Tor circuit…',gate:'The gateway is verifying the proof…',egress:'Egressing to the destination…',return:'Relaying the response back to you…'};
 
 /* flow diagram */
 const NX={you:30,zk:100,tor:170,gw:240,dest:310}, HEX={lav:'#b3a6da',sage:'#93c6ab',sky:'#8ab6d9',gold:'#e2c987'};
 let pk=q('packet'), beam=q('beam'), pkX=30, pkAnim=null;
-const litNode=(k,p)=>{const n=q('n-'+k); n.classList.add('lit'); n.classList.toggle('pulse',!!p); q('l-'+k).classList.add('on');};
+const litNode=(k,p)=>{const n=q('n-'+k); n.classList.add('lit'); n.classList.toggle('pulse',!!p);};
 const unpulse=k=>q('n-'+k)?.classList.remove('pulse');
-function resetFlow(){['you','zk','tor','gw','dest'].forEach(k=>{q('n-'+k).classList.remove('lit','pulse'); q('l-'+k).classList.remove('on');});
-  q('l-gw').textContent='gateway'; pkX=30; pk.setAttribute('cx',30); pk.setAttribute('opacity',0); beam.setAttribute('opacity',0); beam.setAttribute('x2',30); if(pkAnim)cancelAnimationFrame(pkAnim);}
 function movePacket(toKey,dur,hex,drawBeam){const to=NX[toKey]; pk.style.setProperty('--pk',hex); pk.style.fill=hex; pk.setAttribute('opacity',1);
   const from=pkX,t0=performance.now(); if(pkAnim)cancelAnimationFrame(pkAnim);
   (function s(now){const k=Math.min(1,(now-t0)/dur),e=1-Math.pow(1-k,3),x=from+(to-from)*e; pk.setAttribute('cx',x);
     if(drawBeam){beam.setAttribute('opacity',1); beam.setAttribute('x2',Math.max(x,from));} if(k<1)pkAnim=requestAnimationFrame(s); else pkX=to;})(t0);}
 
-const stepsEl=q('steps');
-STEPS.forEach(s=>stepsEl.insertAdjacentHTML('beforeend',
-  `<div class="step" data-k="${s.key}" id="st-${s.key}"><div class="rail"><div class="dot">${CHECK}</div></div><div><div class="t">${s.t}</div><div class="d" data-def="${s.d}">${s.d}</div></div></div>`));
-const stepEl=k=>q('st-'+k);
-const active=(k,detail)=>{const e=stepEl(k); e.classList.add('active'); const d=e.querySelector('.d'); if(detail)d.textContent=detail; d.classList.add('ell');};
-const done=(k,detail)=>{const e=stepEl(k); e.classList.remove('active'); e.classList.add('done'); e.querySelector('.rail').classList.add('filled'); const d=e.querySelector('.d'); d.classList.remove('ell'); if(detail!==undefined)d.textContent=detail;};
-function setCap(text,cls){ q('capText').textContent=text; q('cap').className='cap'+(cls?' '+cls:''); }
-function renderCrypto(e){
-  const c=e.crypto||{}, p=e.pub||{}, pi=e.pi||{};
-  const row=(k,v,em)=>`<div class="ckv"><span>${k}</span><b>${v}</b>${em?`<em>${em}</em>`:''}</div>`;
-  const hid=(k,v)=>`<div class="ckv"><span>${k}</span><i>${v}</i></div>`;
-  const pil = pi.a ? `πa  ${hx(pi.a[0])}  ${hx(pi.a[1])}\nπb  ${hx(pi.b[0][0])}  ${hx(pi.b[0][1])} …\nπc  ${hx(pi.c[0])}  ${hx(pi.c[1])}` : '';
-  q('crypto').innerHTML =
-    `<div class="cscheme">${c.system} · ${c.curve} · ${c.hash} · ${c.circuit}</div>`+
-    `<div class="csub">Public inputs — what the gateway verifies</div>`+
-    row('merkle root', hx(p.root))+
-    row('external nullifier', hx(p.externalNullifier), 'Poseidon(epoch, rlnId)')+
-    row('signal x', hx(p.x))+
-    row('nullifier', hx(p.nullifier))+
-    row('share y', hx(p.y), 'y = s + a₁·x')+
-    `<div class="csub">Groth16 proof π</div><pre class="cproof">${pil}</pre>`+
-    `<div class="csub">Private witnesses — proven in ZK, never sent</div>`+
-    hid('identity secret', 'hidden · 254-bit BN254 scalar')+
-    row('rate-commitment leaf', hx(c.leaf), c.leafFormula)+
-    hid('merkle path', `${c.treeDepth} siblings · hidden`)+
-    row('messageId', `slot ${e.slot}`, `1 of ${c.msgLimit} this epoch`)+
-    `<div class="cnote">The proof shows the member is in the set (matches the <b>root</b>) and is spending one of ${c.msgLimit} allowed slots this epoch — revealing only a nullifier and <b>one share</b> of their secret. A second share on the same slot lets the gateway reconstruct the secret and slash the stake. Ceremony: ${c.ceremony}.</div>`;
+/* per-node cards */
+const PN=['you','zk','tor','gw','dest'];
+const PN_IDLE={you:['—','member'],zk:['Groth16','membership'],tor:['circuit','3-hop onion'],gw:['verify','root + slot'],dest:['egress','sees gateway']};
+const pnLit=k=>q('pn-'+k).classList.add('lit');
+const pnV=(k,v)=>{q('pnv-'+k).textContent=v;};
+const pnS=(k,v)=>{q('pns-'+k).textContent=v;};
+function resetNodes(){
+  ['you','zk','tor','gw','dest'].forEach(k=>{ q('n-'+k).classList.remove('lit','pulse'); const c=q('pn-'+k); c.classList.remove('lit','hidden-ip'); pnV(k,PN_IDLE[k][0]); pnS(k,PN_IDLE[k][1]); });
+  pkX=30; pk.setAttribute('cx',30); pk.setAttribute('opacity',0); beam.setAttribute('opacity',0); beam.setAttribute('x2',30); if(pkAnim)cancelAnimationFrame(pkAnim);
+  if(yourIpKnown) pnV('you', yourIpKnown);
 }
+function setCap(text,cls){ q('capText').textContent=text; q('cap').className='cap'+(cls?' '+cls:''); }
 function reset(){
-  STEPS.forEach(s=>{const e=stepEl(s.key); e.classList.remove('active','done'); e.querySelector('.rail').classList.remove('filled'); const d=e.querySelector('.d'); d.textContent=d.dataset.def; d.classList.remove('ell'); d.style.color='';});
-  q('latBar').innerHTML=''; q('latLeg').innerHTML=''; q('meta').innerHTML=''; q('crypto').innerHTML=''; resetFlow();
-  q('boxEgress').classList.remove('set'); q('egressIp').textContent='—'; q('egressNote').textContent='a gateway IP, after you send';
-  q('boxYou').classList.remove('set');
+  resetNodes();
+  q('boxEgress').classList.remove('set'); q('egressIp').textContent='—'; q('egressNote').textContent='a gateway IP, after you send'; q('boxYou').classList.remove('set');
+}
+
+/* raw proof (collapsed) */
+function renderRaw(e){
+  const c=e.crypto||{},p=e.pub||{},pi=e.pi||{};
+  q('cscheme').textContent=`${c.system} · ${c.curve} · ${c.hash} · ${c.circuit} · ${c.ceremony}`;
+  const row=(k,v)=>`<span class="kk">${k.padEnd(14)}</span>${v}`;
+  const H=(d)=>hx(d,20,10);
+  q('cproof').innerHTML=[
+    row('merkle root',H(p.root)),
+    row('extNullifier',H(p.externalNullifier)+'   = Poseidon(epoch, rlnId)'),
+    row('signal x',H(p.x)),
+    row('nullifier',H(p.nullifier)),
+    row('share y',H(p.y)+'   = s + a1·x'),
+    '',
+    row('πa',hx(pi.a[0],18,8)+'  '+hx(pi.a[1],18,8)),
+    row('πb',hx(pi.b[0][0],18,8)+'  '+hx(pi.b[0][1],18,8)),
+    row('πc',hx(pi.c[0],18,8)+'  '+hx(pi.c[1],18,8)),
+    '',
+    row('leaf (private)',hx(c.leaf,20,10)+'   '+c.leafFormula),
+    row('merkle path','20 siblings · never revealed'),
+    row('identity secret','254-bit scalar · never leaves your device'),
+  ].join('\n');
 }
 
 /* status */
-let ready=false, running=false;
+let ready=false, running=false, yourIpKnown=null;
 async function status(){
   if(running) return;
   try{
@@ -322,7 +290,8 @@ async function status(){
     const b=q('badge');
     if(s.staked){b.classList.remove('off'); q('badgeText').textContent=`staked · ${s.denomEth} ETH · active`;}
     else{b.classList.add('off'); q('badgeText').textContent='not staked';}
-    if(s.yourIp && q('yourIp').textContent==='—' && !q('boxYou').classList.contains('set')) q('yourIp').textContent=s.yourIp;
+    if(s.yourIp){ yourIpKnown=s.yourIp; if(q('yourIp').textContent==='—' && !q('boxYou').classList.contains('set')) q('yourIp').textContent=s.yourIp;
+      if(q('pnv-you').textContent==='—') pnV('you', s.yourIp); }
     const per=s.perEpoch??8, rem=s.remaining??per;
     q('slots').innerHTML=Array.from({length:per},(_,i)=>`<span class="pip ${i<rem?'on':''}"></span>`).join('')+`<span class="lbl">${rem}/${per} requests left this epoch</span>`;
     const capped=s.staked&&s.torReady&&rem<=0; ready=s.staked&&s.torReady&&rem>0;
@@ -364,27 +333,27 @@ function stopTick(total){clearInterval(tick); tick=null; q('latMs').className='n
 const go=q('go'); let chosenOnion=null;
 go.addEventListener('click', ()=>{
   go.disabled=true; running=true; go.innerHTML='<span class="spin"></span>working…'; reset(); startTick(); setCap('Building your anonymous request…','run');
-  litNode('you'); pk.setAttribute('opacity',1);
+  litNode('you'); pnLit('you'); pk.setAttribute('opacity',1);
   const src=new EventSource('/api/run'); src.onmessage=m=>handle(JSON.parse(m.data),src);
   src.onerror=()=>{src.close(); if(!q('boxEgress').classList.contains('set')) onError('stream closed');};
 });
-const gwName=e=>(e.onionNote?e.onionNote.split('/')[1].trim():'onion');
+const gwNm=e=>(e.onionNote?e.onionNote.split('/')[1].trim():'onion');
 function handle(e,src){
-  if(e.status==='start' && CAP[e.phase]) setCap(CAP[e.phase],'run');
-  if(e.phase==='prove'&&e.status==='start'){active('prove'); litNode('zk',true); movePacket('zk',600,HEX.lav,true);}
-  if(e.phase==='prove'&&e.status==='done'){done('prove',`slot ${e.slot} · nullifier ${short(e.nullifier)}`); unpulse('zk'); renderCrypto(e);}
-  if(e.phase==='select'&&e.status==='start') active('select');
-  if(e.phase==='select'&&e.status==='done'){chosenOnion=e.chosen.onion; q('l-gw').textContent=e.chosen.name; setCap(`Chose ${e.chosen.name} — 1 of ${e.pool.length} reachable gateways`,'run');
-    done('select',`chose ${e.chosen.name} · random of ${e.pool.length}`); highlightPick(chosenOnion,true);}
-  if(e.phase==='dial'&&e.status==='start'){active('dial',`rendezvous to ${gwName(e)}`); litNode('tor',true); movePacket('tor',700,HEX.sage,true);}
-  if(e.phase==='dial'&&e.status==='done'){done('dial',`circuit up · ${e.latencyMs}ms`); unpulse('tor'); litNode('gw'); movePacket('gw',500,HEX.sky,true);}
-  if(e.phase==='gate'&&e.status==='start'){active('gate'); q('n-gw').classList.add('pulse');}
-  if(e.phase==='gate'&&e.status==='done'){done('gate','proof valid · rate slot claimed'); unpulse('gw');}
-  if(e.phase==='egress'&&e.status==='start'){active('egress'); litNode('dest',true); movePacket('dest',600,HEX.gold,true);}
-  if(e.phase==='egress'&&e.status==='done'){done('egress',`HTTP ${e.httpStatus} from the gateway`); unpulse('dest');}
-  if(e.phase==='return'&&e.status==='done'){done('return',`${e.bytes} bytes relayed back`); beam.setAttribute('opacity',0); movePacket('you',900,HEX.gold,false);}
-  if(e.phase==='result'){src.close(); showResult(e);}
-  if(e.phase==='error'){src.close(); onError(e.error);}
+  if(e.status==='start'&&CAP[e.phase]) setCap(CAP[e.phase],'run');
+  if(e.phase==='prove'&&e.status==='start'){ litNode('zk',true); movePacket('zk',600,HEX.lav,true); pnLit('zk'); pnV('zk','proving…'); }
+  if(e.phase==='prove'&&e.status==='done'){ unpulse('zk'); pnS('zk','null '+hx(e.pub.nullifier));
+    if(e.crypto){ pnS('you','leaf '+hx(e.crypto.leaf)); renderRaw(e); } }
+  if(e.phase==='select'&&e.status==='done'){ chosenOnion=e.chosen.onion; setCap(`Chose ${e.chosen.name} — 1 of ${e.pool.length} reachable`,'run');
+    pnLit('gw'); pnV('gw',e.chosen.name); pnS('gw',e.chosen.ip||'gateway'); highlightPick(chosenOnion,true); }
+  if(e.phase==='dial'&&e.status==='start'){ litNode('tor',true); movePacket('tor',700,HEX.sage,true); pnLit('tor'); pnV('tor','connecting…'); }
+  if(e.phase==='dial'&&e.status==='done'){ unpulse('tor'); litNode('gw'); movePacket('gw',500,HEX.sky,true); pnS('tor','onion '+short(e.onion,8)); }
+  if(e.phase==='gate'&&e.status==='start'){ q('n-gw').classList.add('pulse'); pnV('gw','verifying…'); }
+  if(e.phase==='gate'&&e.status==='done'){ unpulse('gw'); }
+  if(e.phase==='egress'&&e.status==='start'){ litNode('dest',true); movePacket('dest',600,HEX.gold,true); pnLit('dest'); pnV('dest','fetching…'); }
+  if(e.phase==='egress'&&e.status==='done'){ pnS('dest','HTTP '+e.httpStatus); }
+  if(e.phase==='return'&&e.status==='done'){ beam.setAttribute('opacity',0); movePacket('you',900,HEX.gold,false); }
+  if(e.phase==='result'){ src.close(); showResult(e); }
+  if(e.phase==='error'){ src.close(); onError(e.error); }
 }
 function showResult(e){
   const g=e.gateway||{}, T=e.timings||{}; stopTick(e.latencyMs);
@@ -392,21 +361,18 @@ function showResult(e){
   q('egressNote').textContent=(g.name?g.name+' gateway':'fleet gateway');
   q('yourIp').textContent=e.yourIp||q('yourIp').textContent; q('boxYou').classList.add('set');
   setCap(`Done — egressed anonymously in ${e.latencyMs}ms. The destination saw the gateway, not you.`,'ok');
-  // trace details
-  const segs=[['prove',T.prove],['dial',T.dial],['gate',T.gate],['roundtrip',T.roundtrip]].filter(x=>x[1]>0);
-  const sum=segs.reduce((a,x)=>a+x[1],0)||1, names={prove:'proof',dial:'circuit',gate:'verify',roundtrip:'round trip'}, col={prove:'var(--lav)',dial:'var(--sage)',gate:'var(--sky)',roundtrip:'var(--gold)'};
-  q('latBar').innerHTML=segs.map(([k])=>`<i class="${k}"></i>`).join('');
-  requestAnimationFrame(()=>{[...q('latBar').children].forEach((el,i)=>el.style.width=(100*segs[i][1]/sum)+'%');});
-  q('latLeg').innerHTML=segs.map(([k,v])=>`<span style="--k:${col[k]}">${names[k]} ${v}ms</span>`).join('');
-  q('meta').innerHTML=`routed via <b>${short(g.onion,10)}.onion</b> → egress <b>${e.egressIp}</b> · slot <b>${g.slot}</b>`;
+  // per-node timings + finals
+  if(T.prove!=null) pnV('zk',T.prove+' ms');
+  if(T.dial!=null)  pnV('tor',T.dial+' ms');
+  if(T.gate!=null)  pnV('gw',T.gate+' ms'); pnS('gw',`IP ${e.egressIp} · slot ${g.slot}`);
+  if(T.roundtrip!=null) pnV('dest',T.roundtrip+' ms'); pnS('dest',`sees ${e.egressIp}`);
+  q('pn-you').classList.add('hidden-ip'); pnS('you','never sent');
   if(chosenOnion) setTimeout(()=>highlightPick(chosenOnion,false),1600);
   go.disabled=false; go.textContent='Send another →'; running=false; status();
 }
 function onError(msg){
   if(tick){clearInterval(tick); q('latMs').className='num';}
   setCap('Failed — '+(msg||'error'),'err');
-  const cur=STEPS.map(s=>stepEl(s.key)).find(e=>e.classList.contains('active'))||stepEl('prove');
-  cur.classList.remove('active'); const d=cur.querySelector('.d'); d.classList.remove('ell'); d.textContent='✕ '+(msg||'error'); d.style.color='var(--bad)';
   if(chosenOnion) highlightPick(chosenOnion,false);
   go.disabled=false; go.textContent='Retry →'; running=false; status();
 }
