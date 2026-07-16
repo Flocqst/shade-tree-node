@@ -58,6 +58,7 @@ export async function verifyEnvelope(env, recentRoots) {
 }
 export async function loadGroup() { return { group: null, root: "ROOT", count: 1 }; }
 export async function loadGroupOnchain() { return { recentRoots: ["ROOT"] }; }
+export function cleanUp() {}
 `;
 
 const MOCK_RLN = `
