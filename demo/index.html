@@ -8,7 +8,7 @@
   :root{
     --bg:#0a0b0e; --panel:rgba(255,255,255,.045); --edge:rgba(255,255,255,.09);
     --ink:#ecebe4; --dim:#868b95; --wire:#c8ccd4;
-    --sage:#93c6ab; --lav:#b3a6da; --bad:#d98a8a;
+    --sage:#93c6ab; --lav:#b3a6da; --bad:#d98a8a; --gold:#d9c48a;
     --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
   }
@@ -16,75 +16,92 @@
   html,body{height:100%}
   body{
     margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
-    -webkit-font-smoothing:antialiased; display:grid; place-items:center; padding:32px 18px;
+    -webkit-font-smoothing:antialiased; display:grid; place-items:center; padding:34px 18px;
     background-image:
-      radial-gradient(60% 45% at 50% -8%, rgba(147,198,171,.10), transparent 70%),
-      radial-gradient(50% 40% at 82% 8%, rgba(179,166,218,.07), transparent 70%);
+      radial-gradient(58% 42% at 50% -8%, rgba(147,198,171,.10), transparent 70%),
+      radial-gradient(46% 38% at 88% 6%, rgba(179,166,218,.07), transparent 70%);
   }
+  .wrap{width:100%; max-width:1000px; display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap}
   .card{
-    width:100%; max-width:508px; background:var(--panel); border:1px solid var(--edge);
-    border-radius:18px; padding:26px 26px 20px; backdrop-filter:blur(22px) saturate(1.2);
-    -webkit-backdrop-filter:blur(22px) saturate(1.2);
+    background:var(--panel); border:1px solid var(--edge); border-radius:18px; padding:24px;
+    backdrop-filter:blur(22px) saturate(1.2); -webkit-backdrop-filter:blur(22px) saturate(1.2);
     box-shadow:0 1px 0 rgba(255,255,255,.06) inset, 0 30px 80px -30px rgba(0,0,0,.8);
   }
+  .main{flex:1 1 460px}
+  .side{flex:1 1 300px}
   .eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:.24em; text-transform:uppercase; color:var(--dim)}
   h1{font-size:19px; font-weight:560; margin:7px 0 0; letter-spacing:-.01em}
   .sub{color:var(--dim); font-size:12.5px; margin-top:3px}
 
   /* identity */
-  .id{margin:20px 0 4px; padding:13px 14px; border:1px solid var(--edge); border-radius:12px;
+  .id{margin:18px 0 4px; padding:12px 14px; border:1px solid var(--edge); border-radius:12px;
       background:rgba(255,255,255,.02); display:flex; align-items:center; gap:12px}
   .id .who{flex:1; min-width:0}
-  .id .lbl{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim)}
+  .lbl{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim)}
   .id .addr{font-family:var(--mono); font-size:13px; color:var(--wire); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .badge{font-family:var(--mono); font-size:11px; letter-spacing:.02em; padding:5px 9px; border-radius:999px;
+  .badge{font-family:var(--mono); font-size:11px; padding:5px 9px; border-radius:999px;
          border:1px solid rgba(147,198,171,.35); color:var(--sage); background:rgba(147,198,171,.08); white-space:nowrap; display:flex; align-items:center; gap:6px}
   .badge.off{border-color:rgba(217,138,138,.35); color:var(--bad); background:rgba(217,138,138,.07)}
-  .badge .pip{width:6px; height:6px; border-radius:50%; background:currentColor; box-shadow:0 0 0 0 currentColor; animation:beat 2.4s ease-in-out infinite}
+  .badge .pip{width:6px; height:6px; border-radius:50%; background:currentColor; animation:beat 2.4s ease-in-out infinite}
   @keyframes beat{0%,100%{opacity:.55; box-shadow:0 0 0 0 rgba(147,198,171,.5)}50%{opacity:1; box-shadow:0 0 0 5px rgba(147,198,171,0)}}
 
   /* steps */
-  .steps{margin:18px 2px 4px; position:relative}
-  .step{display:grid; grid-template-columns:24px 1fr; gap:12px; padding:9px 0; position:relative}
+  .steps{margin:16px 2px 2px; position:relative}
+  .step{display:grid; grid-template-columns:22px 1fr; gap:12px; padding:7px 0}
   .rail{position:relative; display:flex; justify-content:center}
-  .rail::before{content:""; position:absolute; top:22px; bottom:-9px; width:1.5px; background:var(--edge)}
+  .rail::before{content:""; position:absolute; top:20px; bottom:-7px; width:1.5px; background:var(--edge)}
   .step:last-child .rail::before{display:none}
-  .rail.filled::before{background:linear-gradient(var(--sage),rgba(147,198,171,.25))}
-  .dot{width:16px; height:16px; border-radius:50%; border:1.5px solid var(--edge); background:var(--bg); margin-top:3px; z-index:1;
+  .rail.filled::before{background:linear-gradient(var(--sage),rgba(147,198,171,.2))}
+  .dot{width:15px; height:15px; border-radius:50%; border:1.5px solid var(--edge); background:var(--bg); margin-top:3px; z-index:1;
        display:grid; place-items:center; transition:.35s ease}
-  .dot svg{width:9px; height:9px; opacity:0; transform:scale(.5); transition:.3s ease}
-  .step.active .dot{border-color:var(--sage); box-shadow:0 0 0 0 rgba(147,198,171,.55); animation:pulse 1.5s ease-out infinite}
-  .step.active:first-child .dot{border-color:var(--lav); animation-name:pulseL}
+  .dot svg{width:8px; height:8px; opacity:0; transform:scale(.5); transition:.3s ease}
+  .step.active .dot{border-color:var(--sage); animation:pulse 1.5s ease-out infinite}
+  .step.active[data-k="prove"] .dot,.step.active[data-k="select"] .dot{border-color:var(--lav); animation-name:pulseL}
   .step.done .dot{border-color:var(--sage); background:var(--sage)}
   .step.done .dot svg{opacity:1; transform:scale(1)}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(147,198,171,.5)}100%{box-shadow:0 0 0 8px rgba(147,198,171,0)}}
   @keyframes pulseL{0%{box-shadow:0 0 0 0 rgba(179,166,218,.5)}100%{box-shadow:0 0 0 8px rgba(179,166,218,0)}}
-  .body{min-width:0}
-  .step .t{font-size:13.5px; color:var(--dim); transition:color .3s}
+  .step .t{font-size:13px; color:var(--dim); transition:color .3s}
   .step.active .t,.step.done .t{color:var(--ink)}
-  .step .d{font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:2px; min-height:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .step .d{font-family:var(--mono); font-size:10.5px; color:var(--dim); margin-top:2px; min-height:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   .step.active .d{color:var(--wire)}
-  .ell::after{content:"…"; animation:ell 1.4s steps(4) infinite; display:inline-block; width:1em; text-align:left; overflow:hidden}
+  .ell::after{content:"…"; animation:ell 1.4s steps(4) infinite}
   @keyframes ell{0%{content:"·"}33%{content:"··"}66%{content:"···"}}
 
+  /* latency meter */
+  .lat{margin-top:14px; padding:15px 16px; border:1px solid var(--edge); border-radius:12px;
+       background:rgba(255,255,255,.02); opacity:0; height:0; overflow:hidden; transition:opacity .4s}
+  .lat.show{opacity:1; height:auto}
+  .lat .top{display:flex; align-items:baseline; justify-content:space-between}
+  .lat .num{font-family:var(--mono); font-weight:600; font-size:34px; letter-spacing:-.02em; line-height:1; color:var(--ink); font-variant-numeric:tabular-nums}
+  .lat .num.live{color:var(--gold)}
+  .lat .unit{font-size:15px; color:var(--dim); font-weight:500; margin-left:4px}
+  .lat .cap{font-family:var(--mono); font-size:10px; color:var(--dim); letter-spacing:.06em; text-align:right}
+  .bar{display:flex; height:9px; border-radius:5px; overflow:hidden; margin-top:12px; background:rgba(255,255,255,.04)}
+  .bar i{height:100%; width:0; transition:width .6s cubic-bezier(.2,.7,.2,1)}
+  .bar i.prove{background:var(--lav)} .bar i.dial{background:var(--sage)}
+  .bar i.gate{background:#8ab6d9} .bar i.roundtrip{background:var(--gold)}
+  .leg{display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:10px}
+  .leg span{font-family:var(--mono); font-size:10px; color:var(--dim); display:flex; align-items:center; gap:5px}
+  .leg span::before{content:""; width:8px; height:8px; border-radius:2px; background:var(--k)}
+
   /* result */
-  .result{margin-top:16px; border:1px solid var(--edge); border-radius:12px; padding:15px 15px 13px;
-    background:rgba(147,198,171,.05); opacity:0; transform:translateY(6px); transition:.5s ease; display:none}
-  .result.show{opacity:1; transform:none}
+  .result{margin-top:12px; opacity:0; height:0; overflow:hidden; transition:opacity .5s}
+  .result.show{opacity:1; height:auto}
   .row2{display:flex; gap:10px}
   .box{flex:1; padding:10px 11px; border:1px solid var(--edge); border-radius:9px; background:rgba(255,255,255,.02)}
   .box .k{font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim)}
   .box .v{font-family:var(--mono); font-size:15px; margin-top:4px}
   .box.egress .v{color:var(--sage)}
   .box.you .v{color:var(--dim); text-decoration:line-through; text-decoration-color:rgba(217,138,138,.6)}
-  .box .note{font-size:10.5px; color:var(--dim); margin-top:3px; font-family:var(--sans)}
-  .meta{font-family:var(--mono); font-size:10.5px; color:var(--dim); margin-top:11px; line-height:1.55; word-break:break-all}
+  .box .note{font-size:10.5px; color:var(--dim); margin-top:3px}
+  .meta{font-family:var(--mono); font-size:10.5px; color:var(--dim); margin-top:10px; line-height:1.55; word-break:break-all}
   .meta b{color:var(--wire); font-weight:400}
 
-  /* button + footer */
-  button{width:100%; margin-top:18px; padding:13px; border-radius:11px; border:1px solid var(--edge);
+  /* button + slots */
+  button{width:100%; margin-top:16px; padding:13px; border-radius:11px; border:1px solid var(--edge);
     background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.03)); color:var(--ink);
-    font-family:var(--sans); font-size:14px; font-weight:540; cursor:pointer; transition:.2s; letter-spacing:.01em}
+    font-family:var(--sans); font-size:14px; font-weight:540; cursor:pointer; transition:.2s}
   button:hover:not(:disabled){border-color:rgba(147,198,171,.4); background:linear-gradient(rgba(147,198,171,.12),rgba(147,198,171,.04))}
   button:disabled{opacity:.4; cursor:not-allowed}
   .spin{display:inline-block; width:12px; height:12px; border:1.5px solid rgba(255,255,255,.25); border-top-color:var(--ink); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-1px; margin-right:7px}
@@ -92,28 +109,54 @@
   .slots{margin-top:11px; display:flex; gap:5px; justify-content:center; align-items:center}
   .slots .pip{width:7px; height:7px; border-radius:2px; background:var(--edge); transition:.3s}
   .slots .pip.on{background:var(--sage); opacity:.85}
-  .slots .lbl{font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:7px; letter-spacing:.05em}
-  footer{margin-top:14px; display:flex; justify-content:space-between; align-items:center; font-family:var(--mono); font-size:10px; color:var(--dim); letter-spacing:.04em}
-  footer a{color:var(--dim); text-decoration:none; border-bottom:1px dotted rgba(255,255,255,.2)}
-  footer a:hover{color:var(--wire)}
+  .slots .lbl{font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:7px; letter-spacing:.05em; text-transform:none}
+
+  /* network card */
+  .side h2{font-size:12px; font-weight:560; margin:0 0 2px; letter-spacing:.02em}
+  .side .hint{font-size:11px; color:var(--dim); margin-bottom:14px}
+  .gw{display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid rgba(255,255,255,.05)}
+  .gw:first-of-type{border-top:none}
+  .gw.pick{background:rgba(217,196,138,.06); margin:0 -10px; padding:9px 10px; border-radius:8px; border-top-color:transparent}
+  .gw .st{width:8px; height:8px; border-radius:50%; background:var(--dim); flex:none}
+  .gw .st.up{background:var(--sage); box-shadow:0 0 8px rgba(147,198,171,.5)}
+  .gw .st.down{background:var(--bad)}
+  .gw .gm{flex:1; min-width:0}
+  .gw .gn{font-size:12.5px; color:var(--ink)}
+  .gw .gn .ip{font-family:var(--mono); font-size:11px; color:var(--dim); margin-left:6px}
+  .gw .go{font-family:var(--mono); font-size:10px; color:var(--dim); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .gw .gl{font-family:var(--mono); font-size:10.5px; color:var(--dim); flex:none}
+  .kvs{margin-top:15px; padding-top:13px; border-top:1px solid var(--edge)}
+  .kv{display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:5px 0}
+  .kv .kk{font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); flex:none}
+  .kv a,.kv .vv{font-family:var(--mono); font-size:11.5px; color:var(--wire); text-decoration:none; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .kv a{border-bottom:1px dotted rgba(255,255,255,.22)}
+  .kv a:hover{color:var(--sage)}
+  footer{margin-top:14px; display:flex; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--dim); letter-spacing:.04em}
   .tag{border:1px solid var(--edge); border-radius:5px; padding:2px 6px; text-transform:uppercase; letter-spacing:.12em}
 </style>
 </head>
 <body>
-  <main class="card">
+<div class="wrap">
+  <main class="card main">
     <div class="eyebrow">reputation-gated onion egress</div>
     <h1>Anonymous request, gated by a ZK stake</h1>
-    <div class="sub">A staked member proves membership in zero-knowledge, then egresses through a Tor gateway that never learns who they are.</div>
+    <div class="sub">A staked member proves membership in zero-knowledge, then egresses through a random Tor gateway that never learns who they are.</div>
 
     <div class="id">
-      <div class="who">
-        <div class="lbl">Member</div>
-        <div class="addr" id="addr">loading…</div>
-      </div>
+      <div class="who"><div class="lbl">Member</div><div class="addr" id="addr">loading…</div></div>
       <div class="badge off" id="badge"><span class="pip"></span><span id="badgeText">checking…</span></div>
     </div>
 
     <div class="steps" id="steps"></div>
+
+    <div class="lat" id="lat">
+      <div class="top">
+        <div><span class="num" id="latMs">0</span><span class="unit">ms</span></div>
+        <div class="cap" id="latCap">round trip</div>
+      </div>
+      <div class="bar" id="latBar"></div>
+      <div class="leg" id="latLeg"></div>
+    </div>
 
     <div class="result" id="result">
       <div class="row2">
@@ -125,112 +168,161 @@
 
     <button id="go" disabled>Send anonymous request →</button>
     <div class="slots" id="slots"></div>
-
-    <footer>
-      <a id="etherscan" href="#" target="_blank" rel="noopener">contract ↗</a>
-      <span class="tag">sepolia · testnet</span>
-    </footer>
   </main>
 
+  <aside class="card side">
+    <h2>Fleet &amp; contract</h2>
+    <div class="hint">Live onion reachability, probed over Tor.</div>
+    <div id="gws"></div>
+    <div class="kvs" id="kvs"></div>
+    <footer><span id="epoch">—</span><span class="tag">sepolia · testnet</span></footer>
+  </aside>
+</div>
+
 <script>
-const CHECK = '<svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.2 4.8-5" stroke="#0a0b0e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHECK = '<svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.2 4.8-5" stroke="#0a0b0e" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const STEPS = [
   { key:'prove',  t:'Generating zero-knowledge proof', d:'RLN Groth16 · membership + rate slot' },
-  { key:'dial',   t:'Routing over Tor',                d:'opening a circuit to a fleet gateway' },
-  { key:'gate',   t:'Gateway verifies the proof',      d:'checks membership root + rate nullifier' },
-  { key:'egress', t:'Egressing to the destination',    d:'api.ipify.org, from the gateway’s IP' },
+  { key:'select', t:'Selecting a gateway',             d:'random pick from the reachable fleet' },
+  { key:'dial',   t:'Opening a Tor circuit',           d:'rendezvous to the chosen onion' },
+  { key:'gate',   t:'Gateway verifies the proof',      d:'membership root + rate nullifier' },
+  { key:'egress', t:'Request → destination',           d:'api.ipify.org, from the gateway’s IP' },
+  { key:'return', t:'Response → back to you',          d:'relayed home; the destination saw only the gateway' },
 ];
-const short = (s,n=10)=> s ? (String(s).length>2*n ? String(s).slice(0,n)+'…'+String(s).slice(-6) : String(s)) : '';
+const short = (s,n=8)=> s ? (String(s).length>2*n+2 ? String(s).slice(0,n)+'…'+String(s).slice(-6) : String(s)) : '';
+const q = id => document.getElementById(id);
 
-const stepsEl = document.getElementById('steps');
-STEPS.forEach((s,i)=>{
-  stepsEl.insertAdjacentHTML('beforeend',
-    `<div class="step" data-k="${s.key}" id="st-${s.key}">
-       <div class="rail"><div class="dot">${CHECK}</div></div>
-       <div class="body"><div class="t">${s.t}</div><div class="d" data-def="${s.d}">${s.d}</div></div>
-     </div>`);
-});
-const stepEl = k => document.getElementById('st-'+k);
+const stepsEl = q('steps');
+STEPS.forEach(s=>stepsEl.insertAdjacentHTML('beforeend',
+  `<div class="step" data-k="${s.key}" id="st-${s.key}"><div class="rail"><div class="dot">${CHECK}</div></div>
+   <div><div class="t">${s.t}</div><div class="d" data-def="${s.d}">${s.d}</div></div></div>`));
+const stepEl = k => q('st-'+k);
 function reset(){
   STEPS.forEach(s=>{const e=stepEl(s.key); e.classList.remove('active','done'); e.querySelector('.rail').classList.remove('filled');
-    const d=e.querySelector('.d'); d.textContent=d.dataset.def; d.classList.remove('ell');});
-  document.getElementById('result').classList.remove('show');
-  setTimeout(()=>document.getElementById('result').style.display='none',10);
+    const d=e.querySelector('.d'); d.textContent=d.dataset.def; d.classList.remove('ell'); d.style.color='';});
+  q('result').classList.remove('show'); q('latBar').innerHTML=''; q('latLeg').innerHTML='';
 }
-function active(k,detail){ const e=stepEl(k); e.classList.add('active'); const d=e.querySelector('.d');
-  if(detail){d.textContent=detail;} d.classList.add('ell'); }
-function done(k,detail){ const e=stepEl(k); e.classList.remove('active'); e.classList.add('done');
-  e.querySelector('.rail').classList.add('filled'); const d=e.querySelector('.d'); d.classList.remove('ell');
-  if(detail!==undefined) d.textContent=detail; }
+const active=(k,detail)=>{const e=stepEl(k); e.classList.add('active'); const d=e.querySelector('.d'); if(detail)d.textContent=detail; d.classList.add('ell');};
+const done=(k,detail)=>{const e=stepEl(k); e.classList.remove('active'); e.classList.add('done'); e.querySelector('.rail').classList.add('filled');
+  const d=e.querySelector('.d'); d.classList.remove('ell'); if(detail!==undefined)d.textContent=detail;};
 
-// ---- status ----
+// ---- status (member + rate budget) ----
 let ready=false, running=false;
 async function status(){
   if(running) return;
   try{
     const s = await (await fetch('/api/status')).json();
-    document.getElementById('addr').textContent = s.wallet || ('commitment '+short(s.leaf,8));
-    const b=document.getElementById('badge'), bt=document.getElementById('badgeText');
-    if(s.staked){ b.classList.remove('off'); bt.textContent = `staked · ${s.denomEth} ETH · active`; }
-    else { b.classList.add('off'); bt.textContent='not staked'; }
-    document.getElementById('etherscan').href = `https://sepolia.etherscan.io/address/${s.contract}`;
-    // rate-limit readout: pips = per-epoch slots, filled = still available
+    q('addr').textContent = s.wallet || ('commitment '+short(s.leaf));
+    const b=q('badge');
+    if(s.staked){ b.classList.remove('off'); q('badgeText').textContent=`staked · ${s.denomEth} ETH · active`; }
+    else { b.classList.add('off'); q('badgeText').textContent='not staked'; }
     const per=s.perEpoch??8, rem=s.remaining??per;
-    document.getElementById('slots').innerHTML =
-      Array.from({length:per},(_,i)=>`<span class="pip ${i<rem?'on':''}"></span>`).join('')+
-      `<span class="lbl">${rem}/${per} slots · this epoch</span>`;
-    const go=document.getElementById('go');
+    q('slots').innerHTML = Array.from({length:per},(_,i)=>`<span class="pip ${i<rem?'on':''}"></span>`).join('')
+      + `<span class="lbl">${rem}/${per} slots · this epoch</span>`;
     const capped = s.staked && s.torReady && rem<=0;
     ready = s.staked && s.torReady && rem>0;
-    go.disabled = !ready;
-    go.textContent = !s.staked ? 'member not staked'
+    q('go').disabled = !ready;
+    q('go').textContent = !s.staked ? 'member not staked'
       : !s.torReady ? 'establishing Tor circuit…'
-      : capped ? `rate cap · resets in ${s.resetIn}s`
-      : 'Send anonymous request →';
+      : capped ? `rate cap · resets in ${s.resetIn}s` : 'Send anonymous request →';
     if(capped) setTimeout(status, Math.min(s.resetIn+1,6)*1000);
   }catch(e){}
 }
 status(); setInterval(()=>{ if(!ready && !running) status(); }, 4000);
 
+// ---- network card ----
+let gwEls={};
+async function network(){
+  try{
+    const n = await (await fetch('/api/network')).json();
+    const el = q('gws');
+    if(!Object.keys(gwEls).length){
+      el.innerHTML = n.gateways.map(g=>`
+        <div class="gw" id="gw-${g.onion}">
+          <span class="st"></span>
+          <div class="gm"><div class="gn">${g.name}<span class="ip">${g.ip||''}</span></div>
+            <div class="go">${short(g.onion,10)}.onion</div></div>
+          <span class="gl"></span>
+        </div>`).join('');
+      n.gateways.forEach(g=>gwEls[g.onion]=q('gw-'+g.onion));
+    }
+    n.gateways.forEach(g=>{
+      const row=gwEls[g.onion]; if(!row) return;
+      const st=row.querySelector('.st'); st.className='st '+(g.up?'up':'down');
+      row.querySelector('.gl').textContent = g.up ? (g.latencyMs?g.latencyMs+'ms':'up') : 'unreachable';
+    });
+    const es = a => `https://sepolia.etherscan.io/address/${a}`;
+    q('kvs').innerHTML =
+      `<div class="kv"><span class="kk">Staking contract</span><a href="${es(n.contract)}" target="_blank" rel="noopener">${short(n.contract,8)} ↗</a></div>`+
+      (n.staker?`<div class="kv"><span class="kk">Staker</span><a href="${es(n.staker)}" target="_blank" rel="noopener">${short(n.staker,8)} ↗</a></div>`:'')+
+      (n.deployer?`<div class="kv"><span class="kk">Deployer</span><a href="${es(n.deployer)}" target="_blank" rel="noopener">${short(n.deployer,8)} ↗</a></div>`:'')+
+      `<div class="kv"><span class="kk">Fleet</span><span class="vv">${n.gateways.length} onion gateways</span></div>`;
+    q('epoch').textContent = `${n.epochSeconds}s epoch`;
+  }catch(e){}
+}
+network(); setInterval(network, 12000);
+function highlightPick(onion, on){ const r=gwEls[onion]; if(r) r.classList.toggle('pick', on); }
+
 // ---- run ----
-const go=document.getElementById('go');
+let tick=null;
+function startTick(){ const t0=Date.now(); q('latMs').className='num live'; q('latCap').textContent='measuring round trip…';
+  q('lat').classList.add('show'); tick=setInterval(()=>{ q('latMs').textContent=(Date.now()-t0); }, 40); }
+function stopTick(total){ clearInterval(tick); tick=null; q('latMs').className='num';
+  const s=Number(q('latMs').textContent)||0, end=total; const a=Date.now();
+  (function ease(){ const k=Math.min(1,(Date.now()-a)/300); q('latMs').textContent=Math.round(s+(end-s)*k); if(k<1)requestAnimationFrame(ease); })();
+  q('latCap').textContent='end-to-end · Tor + gateway'; }
+
+const go=q('go');
+let chosenOnion=null;
 go.addEventListener('click', ()=>{
-  go.disabled=true; running=true; go.innerHTML='<span class="spin"></span>working…'; reset();
-  const es = new EventSource('/api/run');
-  es.onmessage = (m)=>{
-    const e = JSON.parse(m.data);
-    if(e.phase==='prove' && e.status==='start') active('prove');
-    if(e.phase==='prove' && e.status==='done')  done('prove', `slot ${e.slot} · nullifier ${short(e.nullifier)}`);
-    if(e.phase==='dial'  && e.status==='start') active('dial', `dialing ${(e.onionNote||e.onion||'').split('/')[0].trim()}`);
-    if(e.phase==='dial'  && e.status==='failover') active('dial', `failover…`);
-    if(e.phase==='dial'  && e.status==='done')  done('dial', `${(e.onionNote||'').split('/').slice(1,2).join('').trim()||short(e.onion,8)} · ${e.latencyMs}ms`);
-    if(e.phase==='gate'  && e.status==='start') active('gate');
-    if(e.phase==='gate'  && e.status==='done')  done('gate', 'proof valid · rate slot claimed');
-    if(e.phase==='egress'&& e.status==='start') active('egress');
-    if(e.phase==='egress'&& e.status==='done')  done('egress', `HTTP ${e.httpStatus}`);
-    if(e.phase==='result'){ es.close(); showResult(e); }
-    if(e.phase==='error'){ es.close(); onError(e.error); }
-  };
-  es.onerror = ()=>{ es.close(); if(go.disabled && !document.getElementById('result').classList.contains('show')) onError('stream closed'); };
+  go.disabled=true; running=true; go.innerHTML='<span class="spin"></span>working…'; reset(); startTick();
+  const src=new EventSource('/api/run');
+  src.onmessage=(m)=>{ const e=JSON.parse(m.data); handle(e, src); };
+  src.onerror=()=>{ src.close(); if(!q('result').classList.contains('show')) onError('stream closed'); };
 });
+function handle(e, src){
+  if(e.phase==='prove'  && e.status==='start') active('prove');
+  if(e.phase==='prove'  && e.status==='done')  done('prove', `slot ${e.slot} · nullifier ${short(e.nullifier)}`);
+  if(e.phase==='select' && e.status==='start') active('select');
+  if(e.phase==='select' && e.status==='done'){ chosenOnion=e.chosen.onion;
+    done('select', `chose ${e.chosen.name} · random of ${e.pool.length}`); highlightPick(chosenOnion, true); }
+  if(e.phase==='dial'   && e.status==='start') active('dial', `rendezvous to ${chosenOnionName(e)}`);
+  if(e.phase==='dial'   && e.status==='done')  done('dial', `circuit up · ${e.latencyMs}ms`);
+  if(e.phase==='gate'   && e.status==='start') active('gate');
+  if(e.phase==='gate'   && e.status==='done')  done('gate', 'proof valid · rate slot claimed');
+  if(e.phase==='egress' && e.status==='start') active('egress');
+  if(e.phase==='egress' && e.status==='done')  done('egress', `HTTP ${e.httpStatus} from the gateway`);
+  if(e.phase==='return' && e.status==='done')  done('return', `${e.bytes} bytes relayed back`);
+  if(e.phase==='result'){ src.close(); showResult(e); }
+  if(e.phase==='error'){ src.close(); onError(e.error); }
+}
+const chosenOnionName = e => (e.onionNote?e.onionNote.split('/')[1].trim():'onion');
 function showResult(e){
-  const g=e.gateway||{};
-  document.getElementById('egressIp').textContent = e.egressIp || '—';
-  document.getElementById('egressNote').textContent = (g.note||'').split('/')[1]?.trim() || 'fleet gateway';
-  document.getElementById('yourIp').textContent = e.yourIp || 'hidden';
-  document.getElementById('meta').innerHTML =
-    `via <b>${short(g.onion,10)}.onion</b> · slot <b>${g.slot}</b> · nullifier <b>${short(g.nullifier)}</b> · <b>${e.latencyMs}ms</b><br>`+
-    `the gateway saw a valid ZK proof — never your IP or which member you are.`;
-  const r=document.getElementById('result'); r.style.display='block'; requestAnimationFrame(()=>r.classList.add('show'));
-  go.disabled=false; go.textContent='Send another →';
-  running=false; status(); // refresh the slot readout (one slot consumed)
+  const g=e.gateway||{}, T=e.timings||{};
+  stopTick(e.latencyMs);
+  // stacked latency bar
+  const segs=[['prove',T.prove],['dial',T.dial],['gate',T.gate],['roundtrip',T.roundtrip]].filter(x=>x[1]>0);
+  const sum=segs.reduce((a,x)=>a+x[1],0)||1;
+  const names={prove:'proof',dial:'circuit',gate:'verify',roundtrip:'round trip'};
+  q('latBar').innerHTML = segs.map(([k])=>`<i class="${k}"></i>`).join('');
+  requestAnimationFrame(()=>{ [...q('latBar').children].forEach((el,i)=>el.style.width=(100*segs[i][1]/sum)+'%'); });
+  q('latLeg').innerHTML = segs.map(([k,v])=>`<span style="--k:${({prove:'var(--lav)',dial:'var(--sage)',gate:'#8ab6d9',roundtrip:'var(--gold)'})[k]}">${names[k]} ${v}ms</span>`).join('');
+  // reveal
+  q('egressIp').textContent = e.egressIp || '—';
+  q('egressNote').textContent = g.name || 'fleet gateway';
+  q('yourIp').textContent = e.yourIp || 'hidden';
+  q('meta').innerHTML = `via <b>${short(g.onion,10)}.onion</b> · slot <b>${g.slot}</b> · nullifier <b>${short(g.nullifier)}</b><br>`+
+    `the gateway saw a valid ZK proof — never your IP, nor which member you are.`;
+  q('result').classList.add('show');
+  if(chosenOnion) highlightPick(chosenOnion, false);
+  go.disabled=false; go.textContent='Send another →'; running=false; status();
 }
 function onError(msg){
-  const cur=[...STEPS].map(s=>stepEl(s.key)).find(e=>e.classList.contains('active'))||stepEl('prove');
-  cur.classList.remove('active'); const d=cur.querySelector('.d'); d.classList.remove('ell');
-  d.textContent='✕ '+ (msg||'error'); d.style.color='var(--bad)';
-  go.disabled=false; go.textContent='Retry →';
-  running=false; status();
+  if(tick){ clearInterval(tick); q('latMs').className='num'; q('latCap').textContent='failed'; }
+  const cur=STEPS.map(s=>stepEl(s.key)).find(e=>e.classList.contains('active'))||stepEl('prove');
+  cur.classList.remove('active'); const d=cur.querySelector('.d'); d.classList.remove('ell'); d.textContent='✕ '+(msg||'error'); d.style.color='var(--bad)';
+  if(chosenOnion) highlightPick(chosenOnion, false);
+  go.disabled=false; go.textContent='Retry →'; running=false; status();
 }
 </script>
 </body>

@@ -196,9 +196,10 @@ export class RgoeClient {
   // (deterministic retry). Throws if the gate refuses or no gateway is reachable. TLS stays
   // end-to-end: do your own tls.connect({ socket }) — the gateway sees only ciphertext.
   // onEvent(e) is an optional progress hook: e.phase ∈ {prove,dial,gate}, e.status.
-  async connect(target, { onEvent } = {}) {
+  async connect(target, { onEvent, onion } = {}) {
     const emit = (e) => { try { onEvent?.(e); } catch { /* progress is best-effort */ } };
-    const onions = await this._candidateOnions();
+    // opts.onion pins a specific gateway for this request (else directory/pin/local order).
+    const onions = onion ? [String(onion).replace(/\.onion$/, "")] : await this._candidateOnions();
 
     emit({ phase: "prove", status: "start" });
     const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool });
@@ -206,13 +207,13 @@ export class RgoeClient {
     const wire = JSON.stringify(envelope) + "\n";
     const sel = this.onion ? null : await this._sel();
 
-    let sock = null, onion = null, lastErr = null;
+    let sock = null, usedOnion = null, lastErr = null;
     for (const cand of onions) {
       const t0 = Date.now();
       emit({ phase: "dial", status: "start", onion: cand });
       try {
         sock = await this._dial(cand);
-        onion = cand;
+        usedOnion = cand;
         sel?.reportResult?.(cand, { ok: true, latencyMs: Date.now() - t0 });
         emit({ phase: "dial", status: "done", onion: cand, latencyMs: Date.now() - t0 });
         break;
@@ -225,16 +226,16 @@ export class RgoeClient {
     if (!sock) { emit({ phase: "dial", status: "error", error: (lastErr && lastErr.message) || "no gateway" }); throw lastErr || new Error("no gateway reachable"); }
     sock.setNoDelay(true);
 
-    emit({ phase: "gate", status: "start", onion });
+    emit({ phase: "gate", status: "start", onion: usedOnion });
     sock.write(wire);
     const { line, rest } = await readLine(sock);
     let ack;
     try { ack = JSON.parse(line); } catch { sock.destroy(); throw new Error("bad gateway ack: " + line.slice(0, 80)); }
     if (!ack.ok) { emit({ phase: "gate", status: "refused", error: ack.err }); sock.destroy(); throw new Error("gate refused: " + ack.err); }
-    emit({ phase: "gate", status: "done", onion });
+    emit({ phase: "gate", status: "done", onion: usedOnion });
 
     const tunnel = tunnelStream(sock, rest);
-    tunnel.rgoe = { onion, slot, nullifier: envelope.nullifier };
+    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier };
     return tunnel;
   }
 
@@ -245,7 +246,7 @@ export class RgoeClient {
     const u = new URL(url);
     if (u.protocol !== "https:") throw new Error("RgoeClient.fetch: https:// only (the gateway egresses :443)");
     const port = u.port || 443;
-    const socket = await this.connect(`${u.hostname}:${port}`, { onEvent: opts.onEvent });
+    const socket = await this.connect(`${u.hostname}:${port}`, { onEvent: opts.onEvent, onion: opts.onion });
     emit({ phase: "egress", status: "start", target: u.hostname });
     return new Promise((resolve, reject) => {
       const req = https.request(

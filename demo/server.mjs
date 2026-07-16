@@ -44,10 +44,27 @@ const dirSigner = process.env.RGOE_DIR_SIGNER || JSON.parse(rfs(dirPath, "utf8")
 const directory = JSON.parse(rfs(dirPath, "utf8"));
 
 const leaf = deriveCommitment(identitySecretOf(identityFor(secret)));
-const onionNote = (onion) => {
-  const g = (directory.gateways || []).find((x) => x.onion.startsWith(onion));
-  return g?.note || onion;
-};
+
+// Parse gateway metadata from the signed directory notes
+// ("gateway-2 / egress-02 / DO nyc3 167.172.224.177").
+const gateways = (directory.gateways || []).map((g) => {
+  const parts = (g.note || "").split("/").map((s) => s.trim());
+  const ip = ((g.note || "").match(/\d+\.\d+\.\d+\.\d+/) || [])[0] || null;
+  return { onion: g.onion, onionShort: g.onion.replace(/\.onion$/, ""), name: parts[1] || g.onion.slice(0, 12), ip };
+});
+const onionNote = (onion) => (directory.gateways || []).find((x) => x.onion.startsWith(onion))?.note || onion;
+const gwByOnion = (onion) => gateways.find((g) => g.onionShort === String(onion).replace(/\.onion$/, ""));
+
+let deployer = null;
+try { deployer = JSON.parse(rfs(join(ROOT, "network", "sepolia", "contracts.json"), "utf8")).deployer; } catch {}
+
+// live reachability of each gateway onion (background probe loop below)
+const health = new Map(); // onion -> { up, latencyMs, at }
+function pickGateway() {
+  const up = gateways.filter((g) => health.get(g.onion)?.up);
+  const pool = up.length ? up : gateways;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 const client = new RgoeClient({ secret, directory: dirPath, dirSigner, torPort: TOR_PORT });
 
@@ -93,7 +110,7 @@ function fetchRealIp() {
   });
 }
 
-// ---- tor readiness ----------------------------------------------------------
+// ---- tor + per-gateway health (background probe loop) -----------------------
 let torReady = false;
 function portOpen(port) {
   return new Promise((resolve) => {
@@ -102,27 +119,32 @@ function portOpen(port) {
     s.setTimeout(1500, () => { s.destroy(); resolve(false); });
   });
 }
-async function probeOnion() {
-  const g = directory.gateways?.[0];
-  if (!g) return false;
+async function probeGw(g) {
+  const t0 = Date.now();
   try {
     const { socket } = await SocksClient.createConnection({
       proxy: { host: "127.0.0.1", port: TOR_PORT, type: 5 },
-      command: "connect", destination: { host: g.onion, port: 80 }, timeout: 25000,
+      command: "connect", destination: { host: g.onion, port: 80 }, timeout: 20000,
     });
-    socket.destroy(); return true;
-  } catch { return false; }
+    socket.destroy(); return { up: true, latencyMs: Date.now() - t0 };
+  } catch { return { up: false, latencyMs: null }; }
 }
-async function ensureTor() {
+async function healthLoop() {
   if (!(await portOpen(TOR_PORT))) {
     console.log("client tor not on " + TOR_PORT + " — spawning scripts/start-tor-client.sh");
     spawn("bash", [join(ROOT, "scripts", "start-tor-client.sh")], { cwd: ROOT, stdio: "ignore", detached: true }).unref();
   }
-  let streak = 0;
   for (;;) {
-    if (await probeOnion()) { if (++streak >= 2) { torReady = true; console.log("tor ready (onions reachable)"); return; } }
-    else { streak = 0; torReady = false; }
-    await new Promise((r) => setTimeout(r, 6000));
+    let anyUp = false;
+    for (const g of gateways) {
+      const r = await probeGw(g);
+      health.set(g.onion, { ...r, at: Date.now() });
+      if (r.up) anyUp = true;
+    }
+    // latch torReady on first reachability (onion connectivity is stable once established;
+    // don't flip the button back on a transient miss).
+    if (anyUp && !torReady) { torReady = true; console.log("tor ready (onions reachable)"); }
+    await new Promise((r) => setTimeout(r, torReady ? 30000 : 6000));
   }
 }
 
@@ -146,6 +168,19 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
     return;
   }
+  if (u.pathname === "/api/network") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      network: "sepolia",
+      contract: dep.stakedReputationSet,
+      staker: wallet,
+      deployer,
+      epochSeconds: EPOCH_SECONDS,
+      torReady,
+      gateways: gateways.map((g) => { const h = health.get(g.onion) || {}; return { name: g.name, ip: g.ip, onion: g.onionShort, up: !!h.up, latencyMs: h.latencyMs ?? null }; }),
+    }));
+    return;
+  }
   if (u.pathname === "/api/run") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     const t0 = Date.now();
@@ -156,19 +191,38 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     epUsed.count++; // reserve a slot up-front (conservative: a failed run still can't reuse)
+    const marks = {};
     try {
       if (!realIp) realIp = await fetchRealIp();
       sse(res, { phase: "begin", yourIp: realIp });
+
+      // pick a gateway at random from the reachable set, and SHOW the choice
+      sse(res, { phase: "select", status: "start" });
+      const chosen = pickGateway();
+      sse(res, { phase: "select", status: "done", chosen: { name: chosen.name, ip: chosen.ip, onion: chosen.onionShort }, pool: gateways.map((g) => g.name) });
+
       const result = await client.fetch(TARGET, {
-        onEvent: (e) => sse(res, { ...e, onionNote: e.onion ? onionNote(e.onion) : undefined }),
+        onion: chosen.onionShort,
+        onEvent: (e) => { marks[e.phase + ":" + e.status] = Date.now(); sse(res, { ...e, onionNote: e.onion ? onionNote(e.onion) : undefined }); },
       });
+
+      // the response has travelled back through the gateway + Tor to us
+      sse(res, { phase: "return", status: "done", bytes: result.body.length });
+
+      const seg = (a, z) => (marks[a] != null && marks[z] != null ? marks[z] - marks[a] : null);
       sse(res, {
         phase: "result",
         egressIp: result.body.trim(),
         httpStatus: result.status,
-        gateway: result.gateway ? { onion: result.gateway.onion, note: onionNote(result.gateway.onion), slot: result.gateway.slot, nullifier: result.gateway.nullifier } : null,
+        gateway: result.gateway ? { onion: result.gateway.onion, name: gwByOnion(result.gateway.onion)?.name, slot: result.gateway.slot, nullifier: result.gateway.nullifier } : null,
         yourIp: realIp,
         latencyMs: Date.now() - t0,
+        timings: {
+          prove: seg("prove:start", "prove:done"),
+          dial: seg("dial:start", "dial:done"),
+          gate: seg("gate:start", "gate:done"),
+          roundtrip: seg("egress:start", "egress:done"),
+        },
       });
     } catch (e) {
       sse(res, { phase: "error", error: String(e.message || e) });
@@ -183,4 +237,4 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`RGOE demo: http://127.0.0.1:${PORT}  (member leaf ${leaf.toString().slice(0, 14)}.., contract ${dep.stakedReputationSet})`);
   console.log(`target ${TARGET} via ${directory.gateways?.length || 0}-gateway fleet over Tor ${TOR_PORT}`);
 });
-ensureTor();
+healthLoop();
