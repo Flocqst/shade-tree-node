@@ -147,6 +147,18 @@
   .leg span::before{content:""; width:7px; height:7px; border-radius:2px; background:var(--k)}
   .meta{font-family:var(--mono); font-size:10px; color:var(--faint); margin-top:11px; line-height:1.55; word-break:break-all}
   .meta b{color:var(--dim); font-weight:400}
+  /* cryptographic detail panel (inside the trace) */
+  .crypto{margin-top:13px}
+  .crypto:empty{display:none}
+  .cscheme{font-family:var(--mono); font-size:10.5px; color:var(--lav); letter-spacing:.03em; text-shadow:0 0 12px rgba(179,166,218,.3)}
+  .csub{font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:13px 0 5px}
+  .ckv{display:flex; align-items:baseline; gap:8px; padding:2.5px 0; font-family:var(--mono); font-size:10.5px}
+  .ckv>span{color:var(--faint); flex:none; width:120px}
+  .ckv>b{color:var(--wire); font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .ckv>i{color:var(--dim); font-style:italic; opacity:.75}
+  .ckv>em{color:var(--faint); font-style:normal; font-size:9px; margin-left:auto; flex:none; white-space:nowrap}
+  .cproof{font-family:var(--mono); font-size:10px; color:var(--sky); background:rgba(138,182,217,.05); border:1px solid rgba(138,182,217,.16); border-radius:8px; padding:9px 10px; margin:5px 0 0; white-space:pre; overflow-x:auto; line-height:1.65}
+  .cnote{font-family:var(--sans); font-size:10.5px; color:var(--dim); margin-top:12px; line-height:1.5; padding:9px 11px; border-left:2px solid rgba(179,166,218,.45); background:rgba(179,166,218,.045); border-radius:0 8px 8px 0}
 
   /* network card — supplementary infrastructure context, quieter */
   .side{opacity:.96}
@@ -219,8 +231,9 @@
     <div class="slots" id="slots"></div>
 
     <details class="trace">
-      <summary>Trace — proof, circuit &amp; timings</summary>
+      <summary>Trace — ZK proof, circuit &amp; timings</summary>
       <div class="steps" id="steps"></div>
+      <div class="crypto" id="crypto"></div>
       <div class="bar" id="latBar"></div>
       <div class="leg" id="latLeg"></div>
       <div class="meta" id="meta"></div>
@@ -249,6 +262,8 @@ const STEPS=[
 const CAP={prove:'Generating a zero-knowledge proof…',select:'Choosing a random gateway…',dial:'Opening a Tor circuit…',gate:'The gateway is verifying the proof…',egress:'Egressing to the destination…',return:'Relaying the response back to you…'};
 const short=(s,n=8)=> s ? (String(s).length>2*n+2 ? String(s).slice(0,n)+'…'+String(s).slice(-6) : String(s)) : '';
 const q=id=>document.getElementById(id);
+// decimal field element -> truncated 0x-hex (crypto values are huge)
+const hx=(d,head=12,tail=6)=>{ try{ let h=BigInt(d).toString(16); if(h.length%2)h='0'+h; return '0x'+(h.length>head+tail?h.slice(0,head)+'…'+h.slice(-tail):h); }catch{ return short(d); } };
 
 /* flow diagram */
 const NX={you:30,zk:100,tor:170,gw:240,dest:310}, HEX={lav:'#b3a6da',sage:'#93c6ab',sky:'#8ab6d9',gold:'#e2c987'};
@@ -269,9 +284,30 @@ const stepEl=k=>q('st-'+k);
 const active=(k,detail)=>{const e=stepEl(k); e.classList.add('active'); const d=e.querySelector('.d'); if(detail)d.textContent=detail; d.classList.add('ell');};
 const done=(k,detail)=>{const e=stepEl(k); e.classList.remove('active'); e.classList.add('done'); e.querySelector('.rail').classList.add('filled'); const d=e.querySelector('.d'); d.classList.remove('ell'); if(detail!==undefined)d.textContent=detail;};
 function setCap(text,cls){ q('capText').textContent=text; q('cap').className='cap'+(cls?' '+cls:''); }
+function renderCrypto(e){
+  const c=e.crypto||{}, p=e.pub||{}, pi=e.pi||{};
+  const row=(k,v,em)=>`<div class="ckv"><span>${k}</span><b>${v}</b>${em?`<em>${em}</em>`:''}</div>`;
+  const hid=(k,v)=>`<div class="ckv"><span>${k}</span><i>${v}</i></div>`;
+  const pil = pi.a ? `πa  ${hx(pi.a[0])}  ${hx(pi.a[1])}\nπb  ${hx(pi.b[0][0])}  ${hx(pi.b[0][1])} …\nπc  ${hx(pi.c[0])}  ${hx(pi.c[1])}` : '';
+  q('crypto').innerHTML =
+    `<div class="cscheme">${c.system} · ${c.curve} · ${c.hash} · ${c.circuit}</div>`+
+    `<div class="csub">Public inputs — what the gateway verifies</div>`+
+    row('merkle root', hx(p.root))+
+    row('external nullifier', hx(p.externalNullifier), 'Poseidon(epoch, rlnId)')+
+    row('signal x', hx(p.x))+
+    row('nullifier', hx(p.nullifier))+
+    row('share y', hx(p.y), 'y = s + a₁·x')+
+    `<div class="csub">Groth16 proof π</div><pre class="cproof">${pil}</pre>`+
+    `<div class="csub">Private witnesses — proven in ZK, never sent</div>`+
+    hid('identity secret', 'hidden · 254-bit BN254 scalar')+
+    row('rate-commitment leaf', hx(c.leaf), c.leafFormula)+
+    hid('merkle path', `${c.treeDepth} siblings · hidden`)+
+    row('messageId', `slot ${e.slot}`, `1 of ${c.msgLimit} this epoch`)+
+    `<div class="cnote">The proof shows the member is in the set (matches the <b>root</b>) and is spending one of ${c.msgLimit} allowed slots this epoch — revealing only a nullifier and <b>one share</b> of their secret. A second share on the same slot lets the gateway reconstruct the secret and slash the stake. Ceremony: ${c.ceremony}.</div>`;
+}
 function reset(){
   STEPS.forEach(s=>{const e=stepEl(s.key); e.classList.remove('active','done'); e.querySelector('.rail').classList.remove('filled'); const d=e.querySelector('.d'); d.textContent=d.dataset.def; d.classList.remove('ell'); d.style.color='';});
-  q('latBar').innerHTML=''; q('latLeg').innerHTML=''; q('meta').innerHTML=''; resetFlow();
+  q('latBar').innerHTML=''; q('latLeg').innerHTML=''; q('meta').innerHTML=''; q('crypto').innerHTML=''; resetFlow();
   q('boxEgress').classList.remove('set'); q('egressIp').textContent='—'; q('egressNote').textContent='a gateway IP, after you send';
   q('boxYou').classList.remove('set');
 }
@@ -336,7 +372,7 @@ const gwName=e=>(e.onionNote?e.onionNote.split('/')[1].trim():'onion');
 function handle(e,src){
   if(e.status==='start' && CAP[e.phase]) setCap(CAP[e.phase],'run');
   if(e.phase==='prove'&&e.status==='start'){active('prove'); litNode('zk',true); movePacket('zk',600,HEX.lav,true);}
-  if(e.phase==='prove'&&e.status==='done'){done('prove',`slot ${e.slot} · nullifier ${short(e.nullifier)}`); unpulse('zk');}
+  if(e.phase==='prove'&&e.status==='done'){done('prove',`slot ${e.slot} · nullifier ${short(e.nullifier)}`); unpulse('zk'); renderCrypto(e);}
   if(e.phase==='select'&&e.status==='start') active('select');
   if(e.phase==='select'&&e.status==='done'){chosenOnion=e.chosen.onion; q('l-gw').textContent=e.chosen.name; setCap(`Chose ${e.chosen.name} — 1 of ${e.pool.length} reachable gateways`,'run');
     done('select',`chose ${e.chosen.name} · random of ${e.pool.length}`); highlightPick(chosenOnion,true);}
@@ -362,7 +398,7 @@ function showResult(e){
   q('latBar').innerHTML=segs.map(([k])=>`<i class="${k}"></i>`).join('');
   requestAnimationFrame(()=>{[...q('latBar').children].forEach((el,i)=>el.style.width=(100*segs[i][1]/sum)+'%');});
   q('latLeg').innerHTML=segs.map(([k,v])=>`<span style="--k:${col[k]}">${names[k]} ${v}ms</span>`).join('');
-  q('meta').innerHTML=`via <b>${short(g.onion,10)}.onion</b> · slot <b>${g.slot}</b> · nullifier <b>${short(g.nullifier)}</b>`;
+  q('meta').innerHTML=`routed via <b>${short(g.onion,10)}.onion</b> → egress <b>${e.egressIp}</b> · slot <b>${g.slot}</b>`;
   if(chosenOnion) setTimeout(()=>highlightPick(chosenOnion,false),1600);
   go.disabled=false; go.textContent='Send another →'; running=false; status();
 }

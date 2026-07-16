@@ -70,6 +70,16 @@ function chooseGateway() {
 
 const client = new RgoeClient({ secret, directory: dirPath, dirSigner, torPort: TOR_PORT });
 
+// Static cryptographic facts, attached to the prove:done event for the UI's crypto panel.
+const CRYPTO = {
+  system: "Groth16", curve: "BN254 (alt_bn128)", hash: "Poseidon",
+  circuit: "circom-rln · RLN(20,16)", treeDepth: 20, msgLimit: K_SLOTS,
+  ceremony: "circom-rln v1.0.0 · local testnet setup (unaudited)",
+  leaf: leaf.toString(),                                   // the member's rateCommitment (Merkle leaf)
+  leafFormula: `Poseidon(Poseidon(idSecret), ${K_SLOTS})`,
+  contract: dep.stakedReputationSet,
+};
+
 // DEMO SAFETY: the member has K_SLOTS nullifiers per epoch. Sending a (K+1)-th request in
 // one epoch reuses a slot with a fresh signal — which is exactly the over-spend the gateway
 // SLASHES on. So budget requests to K per epoch (and surface it as the live rate limit).
@@ -206,7 +216,12 @@ const server = http.createServer(async (req, res) => {
 
       const result = await client.fetch(TARGET, {
         onion: chosen.onionShort,
-        onEvent: (e) => { marks[e.phase + ":" + e.status] = Date.now(); sse(res, { ...e, onionNote: e.onion ? onionNote(e.onion) : undefined }); },
+        onEvent: (e) => {
+          marks[e.phase + ":" + e.status] = Date.now();
+          const ev = { ...e, onionNote: e.onion ? onionNote(e.onion) : undefined };
+          if (e.phase === "prove" && e.status === "done") ev.crypto = CRYPTO;
+          sse(res, ev);
+        },
       });
 
       // the response has travelled back through the gateway + Tor to us

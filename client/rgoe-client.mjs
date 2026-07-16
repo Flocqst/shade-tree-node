@@ -203,7 +203,15 @@ export class RgoeClient {
 
     emit({ phase: "prove", status: "start" });
     const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool });
-    emit({ phase: "prove", status: "done", slot, nullifier: envelope.nullifier });
+    // Surface the real proof material for anyone who wants the cryptographic detail: the
+    // Groth16 public signals (what the gateway verifies) + the proof points.
+    const sp = envelope.proof.snarkProof;
+    emit({
+      phase: "prove", status: "done", slot, nullifier: envelope.nullifier,
+      pub: sp.publicSignals,                         // { y, root, nullifier, x, externalNullifier }
+      pi: { a: sp.proof.pi_a, b: sp.proof.pi_b, c: sp.proof.pi_c },
+      epoch: String(envelope.proof.epoch), rlnIdentifier: String(envelope.proof.rlnIdentifier),
+    });
     const wire = JSON.stringify(envelope) + "\n";
     const sel = this.onion ? null : await this._sel();
 
