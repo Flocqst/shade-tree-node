@@ -165,8 +165,9 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/api/status") {
     try {
       const cs = await chainStatus();
+      if (!realIp) realIp = await fetchRealIp(); // cache; lets the UI show "your IP" pre-run
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ...cs, wallet, torReady, target: TARGET, ...budget() }));
+      res.end(JSON.stringify({ ...cs, wallet, torReady, target: TARGET, yourIp: realIp, ...budget() }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
     return;
   }
