@@ -60,10 +60,12 @@ try { deployer = JSON.parse(rfs(join(ROOT, "network", "sepolia", "contracts.json
 
 // live reachability of each gateway onion (background probe loop below)
 const health = new Map(); // onion -> { up, latencyMs, at }
-function pickGateway() {
+// The candidate pool is the currently-reachable gateways (fall back to all if the probe
+// hasn't found any yet). Returns { pool, chosen } so the UI's "random of N" is truthful.
+function chooseGateway() {
   const up = gateways.filter((g) => health.get(g.onion)?.up);
   const pool = up.length ? up : gateways;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return { pool, chosen: pool[Math.floor(Math.random() * pool.length)] };
 }
 
 const client = new RgoeClient({ secret, directory: dirPath, dirSigner, torPort: TOR_PORT });
@@ -196,10 +198,10 @@ const server = http.createServer(async (req, res) => {
       if (!realIp) realIp = await fetchRealIp();
       sse(res, { phase: "begin", yourIp: realIp });
 
-      // pick a gateway at random from the reachable set, and SHOW the choice
+      // pick a gateway at random from the reachable set, and SHOW the choice + the pool
       sse(res, { phase: "select", status: "start" });
-      const chosen = pickGateway();
-      sse(res, { phase: "select", status: "done", chosen: { name: chosen.name, ip: chosen.ip, onion: chosen.onionShort }, pool: gateways.map((g) => g.name) });
+      const { pool, chosen } = chooseGateway();
+      sse(res, { phase: "select", status: "done", chosen: { name: chosen.name, ip: chosen.ip, onion: chosen.onionShort }, pool: pool.map((g) => g.name) });
 
       const result = await client.fetch(TARGET, {
         onion: chosen.onionShort,
