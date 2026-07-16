@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>reputation-gated onion egress — demo</title>
+<style>
+  :root{
+    --bg:#0a0b0e; --panel:rgba(255,255,255,.045); --edge:rgba(255,255,255,.09);
+    --ink:#ecebe4; --dim:#868b95; --wire:#c8ccd4;
+    --sage:#93c6ab; --lav:#b3a6da; --bad:#d98a8a;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; display:grid; place-items:center; padding:32px 18px;
+    background-image:
+      radial-gradient(60% 45% at 50% -8%, rgba(147,198,171,.10), transparent 70%),
+      radial-gradient(50% 40% at 82% 8%, rgba(179,166,218,.07), transparent 70%);
+  }
+  .card{
+    width:100%; max-width:508px; background:var(--panel); border:1px solid var(--edge);
+    border-radius:18px; padding:26px 26px 20px; backdrop-filter:blur(22px) saturate(1.2);
+    -webkit-backdrop-filter:blur(22px) saturate(1.2);
+    box-shadow:0 1px 0 rgba(255,255,255,.06) inset, 0 30px 80px -30px rgba(0,0,0,.8);
+  }
+  .eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:.24em; text-transform:uppercase; color:var(--dim)}
+  h1{font-size:19px; font-weight:560; margin:7px 0 0; letter-spacing:-.01em}
+  .sub{color:var(--dim); font-size:12.5px; margin-top:3px}
+
+  /* identity */
+  .id{margin:20px 0 4px; padding:13px 14px; border:1px solid var(--edge); border-radius:12px;
+      background:rgba(255,255,255,.02); display:flex; align-items:center; gap:12px}
+  .id .who{flex:1; min-width:0}
+  .id .lbl{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim)}
+  .id .addr{font-family:var(--mono); font-size:13px; color:var(--wire); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .badge{font-family:var(--mono); font-size:11px; letter-spacing:.02em; padding:5px 9px; border-radius:999px;
+         border:1px solid rgba(147,198,171,.35); color:var(--sage); background:rgba(147,198,171,.08); white-space:nowrap; display:flex; align-items:center; gap:6px}
+  .badge.off{border-color:rgba(217,138,138,.35); color:var(--bad); background:rgba(217,138,138,.07)}
+  .badge .pip{width:6px; height:6px; border-radius:50%; background:currentColor; box-shadow:0 0 0 0 currentColor; animation:beat 2.4s ease-in-out infinite}
+  @keyframes beat{0%,100%{opacity:.55; box-shadow:0 0 0 0 rgba(147,198,171,.5)}50%{opacity:1; box-shadow:0 0 0 5px rgba(147,198,171,0)}}
+
+  /* steps */
+  .steps{margin:18px 2px 4px; position:relative}
+  .step{display:grid; grid-template-columns:24px 1fr; gap:12px; padding:9px 0; position:relative}
+  .rail{position:relative; display:flex; justify-content:center}
+  .rail::before{content:""; position:absolute; top:22px; bottom:-9px; width:1.5px; background:var(--edge)}
+  .step:last-child .rail::before{display:none}
+  .rail.filled::before{background:linear-gradient(var(--sage),rgba(147,198,171,.25))}
+  .dot{width:16px; height:16px; border-radius:50%; border:1.5px solid var(--edge); background:var(--bg); margin-top:3px; z-index:1;
+       display:grid; place-items:center; transition:.35s ease}
+  .dot svg{width:9px; height:9px; opacity:0; transform:scale(.5); transition:.3s ease}
+  .step.active .dot{border-color:var(--sage); box-shadow:0 0 0 0 rgba(147,198,171,.55); animation:pulse 1.5s ease-out infinite}
+  .step.active:first-child .dot{border-color:var(--lav); animation-name:pulseL}
+  .step.done .dot{border-color:var(--sage); background:var(--sage)}
+  .step.done .dot svg{opacity:1; transform:scale(1)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(147,198,171,.5)}100%{box-shadow:0 0 0 8px rgba(147,198,171,0)}}
+  @keyframes pulseL{0%{box-shadow:0 0 0 0 rgba(179,166,218,.5)}100%{box-shadow:0 0 0 8px rgba(179,166,218,0)}}
+  .body{min-width:0}
+  .step .t{font-size:13.5px; color:var(--dim); transition:color .3s}
+  .step.active .t,.step.done .t{color:var(--ink)}
+  .step .d{font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:2px; min-height:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .step.active .d{color:var(--wire)}
+  .ell::after{content:"…"; animation:ell 1.4s steps(4) infinite; display:inline-block; width:1em; text-align:left; overflow:hidden}
+  @keyframes ell{0%{content:"·"}33%{content:"··"}66%{content:"···"}}
+
+  /* result */
+  .result{margin-top:16px; border:1px solid var(--edge); border-radius:12px; padding:15px 15px 13px;
+    background:rgba(147,198,171,.05); opacity:0; transform:translateY(6px); transition:.5s ease; display:none}
+  .result.show{opacity:1; transform:none}
+  .row2{display:flex; gap:10px}
+  .box{flex:1; padding:10px 11px; border:1px solid var(--edge); border-radius:9px; background:rgba(255,255,255,.02)}
+  .box .k{font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim)}
+  .box .v{font-family:var(--mono); font-size:15px; margin-top:4px}
+  .box.egress .v{color:var(--sage)}
+  .box.you .v{color:var(--dim); text-decoration:line-through; text-decoration-color:rgba(217,138,138,.6)}
+  .box .note{font-size:10.5px; color:var(--dim); margin-top:3px; font-family:var(--sans)}
+  .meta{font-family:var(--mono); font-size:10.5px; color:var(--dim); margin-top:11px; line-height:1.55; word-break:break-all}
+  .meta b{color:var(--wire); font-weight:400}
+
+  /* button + footer */
+  button{width:100%; margin-top:18px; padding:13px; border-radius:11px; border:1px solid var(--edge);
+    background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.03)); color:var(--ink);
+    font-family:var(--sans); font-size:14px; font-weight:540; cursor:pointer; transition:.2s; letter-spacing:.01em}
+  button:hover:not(:disabled){border-color:rgba(147,198,171,.4); background:linear-gradient(rgba(147,198,171,.12),rgba(147,198,171,.04))}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  .spin{display:inline-block; width:12px; height:12px; border:1.5px solid rgba(255,255,255,.25); border-top-color:var(--ink); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-1px; margin-right:7px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .slots{margin-top:11px; display:flex; gap:5px; justify-content:center; align-items:center}
+  .slots .pip{width:7px; height:7px; border-radius:2px; background:var(--edge); transition:.3s}
+  .slots .pip.on{background:var(--sage); opacity:.85}
+  .slots .lbl{font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:7px; letter-spacing:.05em}
+  footer{margin-top:14px; display:flex; justify-content:space-between; align-items:center; font-family:var(--mono); font-size:10px; color:var(--dim); letter-spacing:.04em}
+  footer a{color:var(--dim); text-decoration:none; border-bottom:1px dotted rgba(255,255,255,.2)}
+  footer a:hover{color:var(--wire)}
+  .tag{border:1px solid var(--edge); border-radius:5px; padding:2px 6px; text-transform:uppercase; letter-spacing:.12em}
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">reputation-gated onion egress</div>
+    <h1>Anonymous request, gated by a ZK stake</h1>
+    <div class="sub">A staked member proves membership in zero-knowledge, then egresses through a Tor gateway that never learns who they are.</div>
+
+    <div class="id">
+      <div class="who">
+        <div class="lbl">Member</div>
+        <div class="addr" id="addr">loading…</div>
+      </div>
+      <div class="badge off" id="badge"><span class="pip"></span><span id="badgeText">checking…</span></div>
+    </div>
+
+    <div class="steps" id="steps"></div>
+
+    <div class="result" id="result">
+      <div class="row2">
+        <div class="box egress"><div class="k">Egressed from</div><div class="v" id="egressIp">—</div><div class="note" id="egressNote"></div></div>
+        <div class="box you"><div class="k">Your real IP</div><div class="v" id="yourIp">—</div><div class="note">never touched the destination</div></div>
+      </div>
+      <div class="meta" id="meta"></div>
+    </div>
+
+    <button id="go" disabled>Send anonymous request →</button>
+    <div class="slots" id="slots"></div>
+
+    <footer>
+      <a id="etherscan" href="#" target="_blank" rel="noopener">contract ↗</a>
+      <span class="tag">sepolia · testnet</span>
+    </footer>
+  </main>
+
+<script>
+const CHECK = '<svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.2 2.2 4.8-5" stroke="#0a0b0e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const STEPS = [
+  { key:'prove',  t:'Generating zero-knowledge proof', d:'RLN Groth16 · membership + rate slot' },
+  { key:'dial',   t:'Routing over Tor',                d:'opening a circuit to a fleet gateway' },
+  { key:'gate',   t:'Gateway verifies the proof',      d:'checks membership root + rate nullifier' },
+  { key:'egress', t:'Egressing to the destination',    d:'api.ipify.org, from the gateway’s IP' },
+];
+const short = (s,n=10)=> s ? (String(s).length>2*n ? String(s).slice(0,n)+'…'+String(s).slice(-6) : String(s)) : '';
+
+const stepsEl = document.getElementById('steps');
+STEPS.forEach((s,i)=>{
+  stepsEl.insertAdjacentHTML('beforeend',
+    `<div class="step" data-k="${s.key}" id="st-${s.key}">
+       <div class="rail"><div class="dot">${CHECK}</div></div>
+       <div class="body"><div class="t">${s.t}</div><div class="d" data-def="${s.d}">${s.d}</div></div>
+     </div>`);
+});
+const stepEl = k => document.getElementById('st-'+k);
+function reset(){
+  STEPS.forEach(s=>{const e=stepEl(s.key); e.classList.remove('active','done'); e.querySelector('.rail').classList.remove('filled');
+    const d=e.querySelector('.d'); d.textContent=d.dataset.def; d.classList.remove('ell');});
+  document.getElementById('result').classList.remove('show');
+  setTimeout(()=>document.getElementById('result').style.display='none',10);
+}
+function active(k,detail){ const e=stepEl(k); e.classList.add('active'); const d=e.querySelector('.d');
+  if(detail){d.textContent=detail;} d.classList.add('ell'); }
+function done(k,detail){ const e=stepEl(k); e.classList.remove('active'); e.classList.add('done');
+  e.querySelector('.rail').classList.add('filled'); const d=e.querySelector('.d'); d.classList.remove('ell');
+  if(detail!==undefined) d.textContent=detail; }
+
+// ---- status ----
+let ready=false, running=false;
+async function status(){
+  if(running) return;
+  try{
+    const s = await (await fetch('/api/status')).json();
+    document.getElementById('addr').textContent = s.wallet || ('commitment '+short(s.leaf,8));
+    const b=document.getElementById('badge'), bt=document.getElementById('badgeText');
+    if(s.staked){ b.classList.remove('off'); bt.textContent = `staked · ${s.denomEth} ETH · active`; }
+    else { b.classList.add('off'); bt.textContent='not staked'; }
+    document.getElementById('etherscan').href = `https://sepolia.etherscan.io/address/${s.contract}`;
+    // rate-limit readout: pips = per-epoch slots, filled = still available
+    const per=s.perEpoch??8, rem=s.remaining??per;
+    document.getElementById('slots').innerHTML =
+      Array.from({length:per},(_,i)=>`<span class="pip ${i<rem?'on':''}"></span>`).join('')+
+      `<span class="lbl">${rem}/${per} slots · this epoch</span>`;
+    const go=document.getElementById('go');
+    const capped = s.staked && s.torReady && rem<=0;
+    ready = s.staked && s.torReady && rem>0;
+    go.disabled = !ready;
+    go.textContent = !s.staked ? 'member not staked'
+      : !s.torReady ? 'establishing Tor circuit…'
+      : capped ? `rate cap · resets in ${s.resetIn}s`
+      : 'Send anonymous request →';
+    if(capped) setTimeout(status, Math.min(s.resetIn+1,6)*1000);
+  }catch(e){}
+}
+status(); setInterval(()=>{ if(!ready && !running) status(); }, 4000);
+
+// ---- run ----
+const go=document.getElementById('go');
+go.addEventListener('click', ()=>{
+  go.disabled=true; running=true; go.innerHTML='<span class="spin"></span>working…'; reset();
+  const es = new EventSource('/api/run');
+  es.onmessage = (m)=>{
+    const e = JSON.parse(m.data);
+    if(e.phase==='prove' && e.status==='start') active('prove');
+    if(e.phase==='prove' && e.status==='done')  done('prove', `slot ${e.slot} · nullifier ${short(e.nullifier)}`);
+    if(e.phase==='dial'  && e.status==='start') active('dial', `dialing ${(e.onionNote||e.onion||'').split('/')[0].trim()}`);
+    if(e.phase==='dial'  && e.status==='failover') active('dial', `failover…`);
+    if(e.phase==='dial'  && e.status==='done')  done('dial', `${(e.onionNote||'').split('/').slice(1,2).join('').trim()||short(e.onion,8)} · ${e.latencyMs}ms`);
+    if(e.phase==='gate'  && e.status==='start') active('gate');
+    if(e.phase==='gate'  && e.status==='done')  done('gate', 'proof valid · rate slot claimed');
+    if(e.phase==='egress'&& e.status==='start') active('egress');
+    if(e.phase==='egress'&& e.status==='done')  done('egress', `HTTP ${e.httpStatus}`);
+    if(e.phase==='result'){ es.close(); showResult(e); }
+    if(e.phase==='error'){ es.close(); onError(e.error); }
+  };
+  es.onerror = ()=>{ es.close(); if(go.disabled && !document.getElementById('result').classList.contains('show')) onError('stream closed'); };
+});
+function showResult(e){
+  const g=e.gateway||{};
+  document.getElementById('egressIp').textContent = e.egressIp || '—';
+  document.getElementById('egressNote').textContent = (g.note||'').split('/')[1]?.trim() || 'fleet gateway';
+  document.getElementById('yourIp').textContent = e.yourIp || 'hidden';
+  document.getElementById('meta').innerHTML =
+    `via <b>${short(g.onion,10)}.onion</b> · slot <b>${g.slot}</b> · nullifier <b>${short(g.nullifier)}</b> · <b>${e.latencyMs}ms</b><br>`+
+    `the gateway saw a valid ZK proof — never your IP or which member you are.`;
+  const r=document.getElementById('result'); r.style.display='block'; requestAnimationFrame(()=>r.classList.add('show'));
+  go.disabled=false; go.textContent='Send another →';
+  running=false; status(); // refresh the slot readout (one slot consumed)
+}
+function onError(msg){
+  const cur=[...STEPS].map(s=>stepEl(s.key)).find(e=>e.classList.contains('active'))||stepEl('prove');
+  cur.classList.remove('active'); const d=cur.querySelector('.d'); d.classList.remove('ell');
+  d.textContent='✕ '+ (msg||'error'); d.style.color='var(--bad)';
+  go.disabled=false; go.textContent='Retry →';
+  running=false; status();
+}
+</script>
+</body>
+</html>
