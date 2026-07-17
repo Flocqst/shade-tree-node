@@ -1,0 +1,22 @@
+[profile.default]
+src = "contracts"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+cache_path = "cache"
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+# Deploy.s.sol writes contracts/deployed.local.json; allow read-write on the repo root.
+fs_permissions = [{ access = "read-write", path = "./" }]
+
+[rpc_endpoints]
+# Public Sepolia endpoint for testnet deploys (no API key). Override with RGOE_RPC_URL.
+sepolia = "${RGOE_RPC_URL}"
+sepolia_public = "https://ethereum-sepolia-rpc.publicnode.com"
+
+# NOTE: libs = ["lib"] is Foundry's Solidity-dependency dir. This repo's lib/ holds
+# Track 2's .mjs crypto files, not Solidity libraries, so there is nothing for Foundry
+# to remap there. PoseidonT2 is vendored directly into contracts/, so no external
+# forge dependency (git submodule / soldeer) is required to build or test.

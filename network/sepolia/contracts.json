@@ -1,0 +1,41 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "status": "live",
+  "release": "rln-v3",
+  "deployer": "0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7",
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "params": {
+    "bondWei": "1000000000000000",
+    "unbondingSeconds": 300,
+    "minUnbondingSeconds": 270,
+    "userMessageLimit": 8
+  },
+  "contracts": {
+    "stakedReputationSet": "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC",
+    "hasher": "0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D",
+    "withdrawVerifier": "0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2"
+  },
+  "deployTxs": {
+    "stakedReputationSet": "0xace20aff70f087d2752869bf4e63bae3105d2ddcad58179d224415b398342831",
+    "hasher": "0x0ce3dea566a4ba0b9de11f9d26a4d3db26b05ede3c85a2ca78f6bfe7400ceeb1",
+    "withdrawVerifier": "0x115ba74c97ab5651392a358c996064b3cbea114d5997400d52ffe7ca051f3cbe"
+  },
+  "deployBlock": 11279842,
+  "circuit": {
+    "family": "rate-limiting-nullifier / circom-rln v1.0.0",
+    "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
+    "params": "RLN(20,16): treeDepth=20, limitBits=16",
+    "leaf": "rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), 8 ])",
+    "artifacts": "circuits/rln/ (hash-pinned in circuits/rln/ARTIFACTS.md; testnet-only, untrusted phase-2 ceremony)"
+  },
+  "note": "RLN release. On-chain hasher is the real circom-rln rateCommitment (Poseidon(Poseidon(secret),8)), matching the deployed circuit artifacts and verified JS<->Solidity (contracts/RateCommitmentHasher.sol + test/Poseidon.t.sol). A slash reveals the identitySecret; the contract recomputes the rateCommitment leaf and burns the bond. Membership proofs are real RLN Groth16, verified off-chain by the gateway via circuits/rln/verification_key.json. MockWithdrawVerifier still gates exit-auth (real Groth16 exit-auth is a later step). Supersedes the pre-RLN deployment 0x35719A47...98EC (hasher = Poseidon(secret)); an intermediate RLN deploy 0x7c5bcfD3...8c6E was abandoned mid-test after a client depth-bug, since fixed.",
+  "liveIntegration": {
+    "result": "PASS",
+    "date": "2026-07-15",
+    "flow": "two members stake -> Alice 3 normal requests (slots 0/1/2, distinct nullifiers) -> Bob over-spends slot 0 (two distinct signals, one nullifier) -> gateway reconstructs identitySecret + slashes on-chain",
+    "slashTx": "0xc0f99e962300794c599364f17e3e333696ae1a8fc326b9702d3c4c4e09039efb",
+    "slashBlock": 11279845,
+    "report": "network/sepolia/integration-report-rln.md"
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "multi": {
+    "scope": "20611",
+    "at": 1780799662852,
+    "rows": [
+      {
+        "member": "alice",
+        "ok": true,
+        "err": null,
+        "nullifier": "10849201931488812010430450122916893001298832212593092924072720908322976316841",
+        "ms": 832
+      },
+      {
+        "member": "bob",
+        "ok": true,
+        "err": null,
+        "nullifier": "5180128306730609900511267894361035377401337700126383899367987130792242826326",
+        "ms": 779
+      },
+      {
+        "member": "carol",
+        "ok": true,
+        "err": null,
+        "nullifier": "16366725620143143967166009128181520182057830779958607627763442444648834884122",
+        "ms": 700
+      },
+      {
+        "member": "dave",
+        "ok": true,
+        "err": null,
+        "nullifier": "7084299472793626138835255592017688783823878191717452230827995538036788803005",
+        "ms": 753
+      },
+      {
+        "member": "erin",
+        "ok": true,
+        "err": null,
+        "nullifier": "5002487142276015244103373012166996443775922754168658692810931999788940005569",
+        "ms": 695
+      }
+    ],
+    "distinct_nullifiers": 5,
+    "all_pass": true
+  },
+  "bad": {
+    "scope": "20611",
+    "at": 1780871251120,
+    "rows": [
+      {
+        "case": "no-proof",
+        "ok": false,
+        "err": "gate:no-proof",
+        "ms": 542
+      },
+      {
+        "case": "garbage",
+        "ok": false,
+        "err": "gate:invalid-proof",
+        "ms": 1117
+      },
+      {
+        "case": "wrong-group",
+        "forged_root": "3171764266073611..",
+        "ok": false,
+        "err": "gate:wrong-group-root",
+        "ms": 588
+      },
+      {
+        "case": "non-member",
+        "ok": false,
+        "err": "The leaf at index '-1' does not exist in this tree",
+        "clientReject": true
+      }
+    ],
+    "all_rejected": true
+  },
+  "ratelimit": {
+    "scope": "20611",
+    "at": 1780799704638,
+    "member": "heidi",
+    "nullifier": "15331617711536160397528130750135922408886794635915308542141282053781357793544",
+    "count": 8,
+    "passed": 4,
+    "throttled": 4,
+    "rows": [
+      {
+        "i": 1,
+        "ok": true,
+        "err": null,
+        "ms": 1256
+      },
+      {
+        "i": 2,
+        "ok": true,
+        "err": null,
+        "ms": 921
+      },
+      {
+        "i": 3,
+        "ok": true,
+        "err": null,
+        "ms": 920
+      },
+      {
+        "i": 4,
+        "ok": true,
+        "err": null,
+        "ms": 925
+      },
+      {
+        "i": 5,
+        "ok": false,
+        "err": "rate-limited",
+        "ms": 890
+      },
+      {
+        "i": 6,
+        "ok": false,
+        "err": "rate-limited",
+        "ms": 743
+      },
+      {
+        "i": 7,
+        "ok": false,
+        "err": "rate-limited",
+        "ms": 820
+      },
+      {
+        "i": 8,
+        "ok": false,
+        "err": "rate-limited",
+        "ms": 1125
+      }
+    ]
+  },
+  "spam": {
+    "scope": "20611",
+    "at": 1780799724812,
+    "count": 25,
+    "concurrency": 8,
+    "elapsed_ms": 7296,
+    "rejected": 25,
+    "leaked": 0,
+    "real_member_after": {
+      "ok": true,
+      "err": null,
+      "ms": 1082
+    }
+  }
+}

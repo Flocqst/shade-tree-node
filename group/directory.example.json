@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "issued": 1784052435,
+  "gateways": [
+    {
+      "onion": "7bmgscke6pfjrvhyhk6pvp7tb4gvocpdyy7pfdwwvyqi24d3ymoyd7id.onion",
+      "pubkey": "f858690944f3ca98d4f83abcfabff30f0d5709e3c63ef28ed6ae208d707bc31d",
+      "weight": 100,
+      "health": "up",
+      "note": "primary, AS-A (e.g. datacenter provider 1)"
+    },
+    {
+      "onion": "yvva73gmuijgcwwq7iftdkehfscb7sn2jpgzneckfzvoxelucyimsqid.onion",
+      "pubkey": "c56a0feccca212615ad0fa0b31a8872c841fc9ba4bcd96904a2e6aeb91741610",
+      "weight": 100,
+      "health": "up",
+      "note": "AS-B (different provider / region)"
+    },
+    {
+      "onion": "hbktnrbn25novfsyhjly5an27mcbveex3n2nagkfnzilxxqah2xpcnid.onion",
+      "pubkey": "385536c42dd75aea96583a578e81bafb041a9097db74d019456e50bbde003eae",
+      "weight": 50,
+      "health": "up",
+      "note": "AS-C (spread the both-ends AS vantage; adversarial-review #11)"
+    }
+  ],
+  "signer": "189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321",
+  "signature": "4c6891dd690d497f499594eacb240392640b62bac95c748ac68f4574eb0a19e6e7d13ebed6377a3f123e15b0ae3504346810bebe141da934d13e07fb64a58d01"
+}

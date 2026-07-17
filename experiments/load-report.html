@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>reputation-gated egress · load test (1000 requests to Google)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f1e9; --panel:#fbf9f3; --ink:#17150f; --accent:#d6481f;
+    --slate:#2f5562; --green:#3f6b4f; --muted:#8c867a; --line:#ded7c7;
+    --line-strong:#c9c0ab; --shadow:0 1px 0 #fff, 0 18px 40px -28px rgba(23,21,15,.5);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Hanken Grotesk",system-ui,sans-serif;font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:32px 32px;background-position:-1px -1px}
+  .wrap{max-width:1040px;margin:0 auto;padding:30px 28px 80px}
+  header.top{border-bottom:1.5px solid var(--ink);padding-bottom:16px;margin-bottom:24px}
+  .brand{font-family:"Fraunces",serif;font-weight:600;font-size:30px;letter-spacing:-.015em;line-height:1.05}
+  .brand i{font-style:italic;color:var(--accent)}
+  .sub{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-top:8px}
+  .tally{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px}
+  @media(max-width:680px){.tally{grid-template-columns:1fr 1fr}}
+  .stat{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;padding:15px;box-shadow:var(--shadow)}
+  .stat .n{font-family:"Fraunces",serif;font-size:32px;font-weight:600;line-height:1}
+  .stat .l{font-family:"JetBrains Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-top:6px}
+  .stat.good .n{color:var(--green)} .stat.acc .n{color:var(--accent)}
+  .card{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;box-shadow:var(--shadow);margin-bottom:22px;overflow:hidden}
+  .card h3{font-family:"Fraunces",serif;font-weight:600;font-size:20px;margin:0;padding:13px 18px;border-bottom:1px solid var(--line);background:#f1eee4;letter-spacing:-.01em}
+  .card .body{padding:16px 18px}
+  table{width:100%;border-collapse:collapse;font-family:"JetBrains Mono",monospace;font-size:13px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+  th{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  td.v{color:var(--accent);font-weight:700}
+  .hist{font-family:"JetBrains Mono",monospace;font-size:12px;display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .hrow{display:flex;align-items:center;gap:10px}
+  .hrow .rng{width:104px;color:var(--muted);text-align:right}
+  .hrow .barwrap{flex:1;display:flex;align-items:center;gap:8px}
+  .hrow .bar{height:16px;background:var(--accent);border-radius:2px;opacity:.85;min-width:1px}
+  .hrow .bar.tail{background:var(--slate)}
+  .hrow .cnt{color:var(--ink);font-weight:700;width:42px}
+  .txt{font-size:14.5px;max-width:64ch} .txt code,.mono{font-family:"JetBrains Mono",monospace;font-size:12.5px}
+  .txt b{color:var(--accent)}
+  dl{margin:0;font-size:13.5px} dt{font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:10px} dd{margin:2px 0 0}
+  .note{background:var(--paper);border:1.5px solid var(--ink);border-radius:4px;padding:16px 18px;box-shadow:var(--shadow)}
+  .note p{margin:0 0 10px;max-width:66ch;font-size:14px} .note p:last-child{margin:0} .note b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">load test: <i>1000 requests to Google through the gated path</i></div>
+    <div class="sub">2026-06-07 · laptop → shim → Tor rendezvous → droplet gateway → google.com → back · every request is real</div>
+  </header>
+
+  <div class="tally">
+    <div class="stat"><div class="n">1000</div><div class="l">requests to google.com</div></div>
+    <div class="stat good"><div class="n">100%</div><div class="l">HTTP 200 (1000/1000)</div></div>
+    <div class="stat good"><div class="n">0</div><div class="l">dropped or blocked</div></div>
+    <div class="stat"><div class="n">5.46</div><div class="l">req / sec sustained</div></div>
+    <div class="stat acc"><div class="n">1.69s</div><div class="l">median latency</div></div>
+    <div class="stat acc"><div class="n">2.33s</div><div class="l">p95 latency</div></div>
+  </div>
+
+  <div class="card">
+    <h3>Did Google block the clean IP at volume? No.</h3>
+    <div class="body">
+      <div class="txt">All 1000 requests returned <b>HTTP 200</b>, and the response sizes were uniform: 996 at ~80.3 KB, 4 at ~80.5 KB. A captcha or "unusual traffic" page would be a different, smaller response, so this is the <b>real homepage every time</b>. Over a thousand automated hits from a single egress IP, Google never rate-limited it or served a challenge.</div>
+      <div class="txt" style="margin-top:10px">This is the encouraging real-world read: a genuinely clean egress IP serves Google at this volume without tripping bot detection. The single-IP-at-volume limit is real, but the ceiling is higher than a thousand requests.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Latency distribution (1000 requests)</h3>
+    <div class="body">
+      <table>
+        <thead><tr><th>min</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>max</th><th>mean</th></tr></thead>
+        <tbody><tr><td class="v">1.32s</td><td class="v">1.69s</td><td class="v">2.09s</td><td class="v">2.33s</td><td class="v">8.04s</td><td class="v">8.78s</td><td class="v">1.82s</td></tr></tbody>
+      </table>
+      <div class="hist" style="margin-top:16px">
+        <div class="hrow"><span class="rng">1.2 to 1.4s</span><span class="barwrap"><span class="bar" style="width:12px"></span><span class="cnt">11</span></span></div>
+        <div class="hrow"><span class="rng">1.4 to 1.6s</span><span class="barwrap"><span class="bar" style="width:294px"></span><span class="cnt">277</span></span></div>
+        <div class="hrow"><span class="rng">1.6 to 1.8s</span><span class="barwrap"><span class="bar" style="width:420px"></span><span class="cnt">395</span></span></div>
+        <div class="hrow"><span class="rng">1.8 to 2.0s</span><span class="barwrap"><span class="bar" style="width:190px"></span><span class="cnt">179</span></span></div>
+        <div class="hrow"><span class="rng">2.0 to 2.2s</span><span class="barwrap"><span class="bar" style="width:71px"></span><span class="cnt">67</span></span></div>
+        <div class="hrow"><span class="rng">2.2 to 2.6s</span><span class="barwrap"><span class="bar" style="width:46px"></span><span class="cnt">43</span></span></div>
+        <div class="hrow"><span class="rng">2.6 to 3.0s</span><span class="barwrap"><span class="bar" style="width:19px"></span><span class="cnt">18</span></span></div>
+        <div class="hrow"><span class="rng">5.0 to 10s (tail)</span><span class="barwrap"><span class="bar tail" style="width:11px"></span><span class="cnt">10</span></span></div>
+      </div>
+      <div class="txt" style="margin-top:14px"><b>About 850 of 1000</b> requests land between 1.4 and 2.0 seconds, median 1.69s. The slow end is a <b>~1% tail</b>: ten requests over 5 seconds, which is Tor circuit variance (a circuit rebuild or a congested relay), not Google. A direct fetch with no tunnel is ~0.15s.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Drops</h3>
+    <div class="body">
+      <div class="txt"><b>Zero.</b> No timeouts, no circuit failures, no gateway errors, no Google blocks. The gateway log corroborated 1000 new PASS, no new DROP.</div>
+      <div class="txt" style="margin-top:10px">The only ways a request drops in this system are a bad or missing proof (forged, garbage, and non-member were all rejected in the security run) and a member exceeding its per-epoch budget (4-of-8 throttled at a budget of 4 there). Neither applied here: one enrolled member, valid proof every time, and the budget was raised to 5000 for the run so the rate limiter would not mask transport reliability. Restored to 100 after.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Setup</h3>
+    <div class="body">
+      <dl>
+        <dt>target / requests / concurrency</dt><dd>https://www.google.com/ · 1000 requests · concurrency 10</dd>
+        <dt>wall clock</dt><dd>183s (5.46 requests/sec sustained)</dd>
+        <dt>path</dt><dd>full path per request: local shim, Semaphore proof (cached per epoch), Tor rendezvous to the onion, gateway verify, egress, TLS to Google, return</dd>
+        <dt>server</dt><dd>2 vCPU / 2 GB droplet, gateway + tor as systemd services, tor with the onion PoW defense on</dd>
+        <dt>measurement</dt><dd>full curl through the proxy (TLS + GET + response), capturing status and response size, not just the gateway ack</dd>
+        <dt>corroboration</dt><dd>an earlier 1000-request run against api.ipify gave the same shape (0 drops, ~2.0s median), so the transport is consistent across destinations</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="note">
+    <p><b>Read honestly.</b> These are warm, steady-state numbers. The first request after a client starts pays a one-time circuit and rendezvous setup of about 7 seconds; that is excluded here because it happens once per session, not per request.</p>
+    <p>Concurrency 10 on a 2-core box was comfortable: median latency stayed under 1.7s and nothing dropped, so this is steady-state throughput, not the saturation ceiling. The 1% slow tail is inherent Tor circuit variance and would shrink with circuit pinning or pre-warming. For a search egress, sub-2s median with zero loss and zero blocks over a thousand real Google requests is a strong result.</p>
+  </div>
+</div>
+</body>
+</html>

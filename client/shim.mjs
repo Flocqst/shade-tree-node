@@ -1,143 +1,72 @@
-// The client shim: a local HTTP CONNECT proxy that adds a reputation proof and
-// routes to the gateway onion over Tor.
+// The client shim: a local HTTP CONNECT proxy that adds a reputation proof and routes to
+// a gateway onion over Tor. It is now a THIN front-end over client/rgoe-client.mjs — the
+// proving, slot/gateway rotation, deterministic-retry, Tor dial and tunnel all live in
+// RgoeClient. Run the shim when you want unmodified tools to use the fleet:
 //
-// Point any tool at it:  http_proxy=http://127.0.0.1:8888  https_proxy=...
-// or  curl -x http://127.0.0.1:8888 https://example.com
+//   http_proxy=http://127.0.0.1:8888  https_proxy=... curl https://example.com
+//   curl -x http://127.0.0.1:8888 https://api.ipify.org
 //
-// For each CONNECT host:port it:
-//   1. generates (and caches per epoch) a Semaphore membership proof,
-//   2. dials gateway.onion:80 via the Tor SOCKS port (no exit node in path),
-//   3. sends the JSON envelope { v, target, proof },
-//   4. on gateway "ok", tells the local client "200 Connection established" and
-//      pipes the bytes; the local client then does TLS straight to the target.
+// If the client is your OWN code (e.g. an agent doing many queries), skip the shim and use
+// RgoeClient directly:  const rgoe = new RgoeClient({ secret, directory, dirSigner });
+//   await rgoe.fetch("https://…")   /   await rgoe.connect("host:443")
 //
-// The shim never sees plaintext either: it just bridges the local socket to the
-// Tor stream. Tor handles the anonymity and the addressing; this shim is the
-// thin app-layer protocol that carries the reputation proof, which Tor itself has no
-// place to carry.
+// Two anti-correlation rotations run together (docs/NEXT-VERSION.md B), inside RgoeClient:
+// a different gateway onion per request AND a different per-request slot nullifier, so even
+// colluding operators cannot rejoin a member's requests across a shared per-epoch key. The
+// deterministic-retry invariant (same signal reused across failover) also lives there.
 
 import http from "node:http";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { SocksClient } from "socks";
-import { proveMembership, currentEpoch } from "../lib/semaphore.mjs";
+import { RgoeClient, makeSlotPool, buildEnvelope } from "./rgoe-client.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+// Re-exported for the selftest + any caller that historically imported them from the shim.
+export { makeSlotPool, buildEnvelope };
+
 const LISTEN_PORT = Number(process.env.RGOE_SHIM_PORT || 8888);
-const TOR_SOCKS_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
-const TOR_SOCKS_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
 
-const SECRET = process.env.RGOE_SECRET;
-if (!SECRET) {
-  console.error("set RGOE_SECRET (from `npm run enroll`) before starting the shim");
-  process.exit(1);
-}
-
-async function gatewayOnion() {
-  if (process.env.RGOE_ONION) return process.env.RGOE_ONION.replace(/\.onion$/, "");
-  const host = (await readFile(join(HERE, "..", "tor", "hs", "hostname"), "utf8")).trim();
-  return host.replace(/\.onion$/, "");
-}
-
-// Cache one proof per epoch. Within an epoch a member's nullifier is constant, so
-// the same proof is valid for every request and the gateway counts each
-// redemption against the rate budget. Proving is the only slow step (~1-2s); we
-// pay it once per epoch, not per request.
-let cache = { epoch: null, proof: null, inflight: null };
-async function getProof() {
-  const epoch = currentEpoch();
-  if (cache.epoch === epoch && cache.proof) return cache.proof;
-  if (cache.inflight && cache.inflightEpoch === epoch) return cache.inflight;
-  cache.inflightEpoch = epoch;
-  cache.inflight = (async () => {
-    const proof = await proveMembership(SECRET, epoch);
-    cache = { epoch, proof, inflight: null };
-    return proof;
-  })();
-  return cache.inflight;
-}
-
-// Dial the gateway onion via Tor SOCKS, retrying through cold start. Right after
-// tor (re)starts, the onion descriptor takes a little while to propagate to the
-// hashring before the first rendezvous can complete, so the first dial can time
-// out. Retry a few times with a generous timeout before giving up.
-async function dialOnion(onion, attempts = 4) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const { socket } = await SocksClient.createConnection({
-        proxy: { host: TOR_SOCKS_HOST, port: TOR_SOCKS_PORT, type: 5 },
-        command: "connect",
-        destination: { host: onion + ".onion", port: 80 },
-        timeout: 120000,
-      });
-      return socket;
-    } catch (e) {
-      lastErr = e;
-      if (i < attempts - 1) {
-        console.log(`  onion not ready (${e.message}), retry ${i + 1}/${attempts - 1}`);
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-    }
+function startShim() {
+  if (!process.env.RGOE_SECRET) {
+    console.error("set RGOE_SECRET (from `node group/enroll.mjs`) before starting the shim");
+    process.exit(1);
   }
-  throw lastErr;
-}
 
-function readLine(socket) {
-  return new Promise((resolve, reject) => {
-    let buf = Buffer.alloc(0);
-    const onData = (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      const nl = buf.indexOf(0x0a);
-      if (nl === -1) return;
-      socket.removeListener("data", onData);
-      socket.removeListener("error", reject);
-      resolve({ line: buf.subarray(0, nl).toString("utf8"), rest: buf.subarray(nl + 1) });
-    };
-    socket.on("data", onData);
-    socket.once("error", reject);
+  // One client (one slot pool) for the whole shim; it reads the same RGOE_* env as before
+  // (RGOE_SECRET, RGOE_ONION | RGOE_DIRECTORY+RGOE_DIR_SIGNER, RGOE_TOR_HOST/PORT).
+  const client = new RgoeClient();
+
+  const server = http.createServer();
+
+  server.on("connect", async (req, clientSocket, head) => {
+    const target = req.url; // "host:port"
+    console.log(`REQ     ${target}`); // start marker: a hang after this points at the dial/gateway
+    try {
+      // RgoeClient.connect builds ONE proof, picks a gateway (rotation + failover), dials it
+      // over Tor, sends the envelope, checks the ack, and returns a raw tunnel to the target.
+      // TLS stays end-to-end client<->target.
+      const tunnel = await client.connect(target);
+
+      clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n");
+      if (head && head.length) tunnel.write(head);
+      clientSocket.pipe(tunnel);
+      tunnel.pipe(clientSocket);
+      clientSocket.on("error", () => tunnel.destroy());
+      tunnel.on("error", () => clientSocket.destroy());
+      const via = tunnel.rgoe?.onion ? `${String(tunnel.rgoe.onion).slice(0, 16)}..onion` : "gateway";
+      console.log(`TUNNEL  ${target}  slot=${tunnel.rgoe?.slot} via ${via}`);
+    } catch (e) {
+      const msg = String(e.message || e);
+      const label = msg.startsWith("gate refused") ? "REFUSED" : "ERROR  ";
+      try { clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\n\r\n${msg}\n`); } catch {}
+      clientSocket.destroy();
+      console.log(`${label} ${target}  (${msg})`);
+    }
+  });
+
+  server.listen(LISTEN_PORT, "127.0.0.1", () => {
+    console.log(`shim up: http://127.0.0.1:${LISTEN_PORT}  ->  Tor SOCKS ${client.torHost}:${client.torPort}  ->  gateway.onion`);
+    console.log(`mode: ${client.onion ? "pinned onion" : "directory fleet rotation"}; per-request slot + gateway rotation`);
+    console.log(`use:  curl -x http://127.0.0.1:${LISTEN_PORT} https://api.ipify.org?format=json`);
   });
 }
 
-const server = http.createServer();
-
-server.on("connect", async (req, clientSocket, head) => {
-  const target = req.url; // "host:port"
-  try {
-    const onion = await gatewayOnion();
-    const proof = await getProof();
-
-    const torSocket = await dialOnion(onion);
-    torSocket.setNoDelay(true);
-
-    torSocket.write(JSON.stringify({ v: 1, target, proof }) + "\n");
-    const { line, rest } = await readLine(torSocket);
-    const ack = JSON.parse(line);
-    if (!ack.ok) {
-      clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\n\r\ngate refused: ${ack.err}\n`);
-      clientSocket.destroy();
-      torSocket.destroy();
-      console.log(`REFUSED ${target}  (${ack.err})`);
-      return;
-    }
-
-    clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n");
-    if (rest && rest.length) clientSocket.write(rest); // unlikely, but be safe
-    if (head && head.length) torSocket.write(head);
-    clientSocket.pipe(torSocket);
-    torSocket.pipe(clientSocket);
-    clientSocket.on("error", () => torSocket.destroy());
-    torSocket.on("error", () => clientSocket.destroy());
-    console.log(`TUNNEL  ${target}  via ${onion.slice(0, 16)}..onion`);
-  } catch (e) {
-    try { clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\n\r\nshim error: ${e.message}\n`); } catch {}
-    clientSocket.destroy();
-    console.log(`ERROR   ${target}  ${e.message}`);
-  }
-});
-
-server.listen(LISTEN_PORT, "127.0.0.1", () => {
-  console.log(`shim up: http://127.0.0.1:${LISTEN_PORT}  ->  Tor SOCKS ${TOR_SOCKS_HOST}:${TOR_SOCKS_PORT}  ->  gateway.onion`);
-  console.log(`use:  curl -x http://127.0.0.1:${LISTEN_PORT} https://api.ipify.org?format=json`);
-});
+// Only stand up the server when run directly; importing pulls the re-exported helpers.
+if (import.meta.url === `file://${process.argv[1]}`) startShim();
