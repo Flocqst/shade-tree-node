@@ -1,0 +1,33 @@
+name: ci
+
+# Runs the whole test suite on every push and PR: the node selftests (auto-discovered)
+# and the Foundry contract suite. This is the same `npm test` an auditor runs locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run the full suite (node selftests + forge test)
+        run: npm test
