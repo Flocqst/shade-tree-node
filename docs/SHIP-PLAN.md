@@ -37,10 +37,29 @@ live gateway serving members, or merge to `main` without CI green.
 
 ---
 
+## Sequencing and release gates
+
+**We do NOT deploy live until the code is hardened by tests and the distributable client
+exists.** Order of operations:
+
+1. **Gate 1 — Test hardening (workstream 2).** Every P0 test task done: real-Tor integration,
+   fuzz/property tests on every parser, remaining unit selftests, the consolidated adversarial
+   suite, contract fuzz + invariants, coverage gates. The suite must be deep enough that an
+   auditor and the loop both trust "green" completely.
+2. **Gate 2 — Rust client (workstream 7b).** The conformance harness plus a Rust client MVP that
+   passes it and egresses byte-for-byte like the JS reference. This is the client people actually
+   run, so it exists before we invite anyone to a live fleet.
+3. **Gate 3 — Deploy (workstream 3).** Only now: first live deployment, multi-gateway, IaC,
+   systemd hardening, monitoring wired.
+
+Development-correctness P0s (workstream 1) run alongside Gate 1 (they are what the tests test).
+
 ## Current focus
 
-> Next up: **T-DEPLOY-1** (deploy bootnode + gateway to `anon-egress`, verify live) and
-> **T-TEST-1** (real-Tor local fleet integration test). Both unblock the rest.
+> **Pre-ship. Do NOT deploy.** Drive Gate 1 (test hardening) and Gate 2 (Rust client) to done first.
+> Next up: **T-TEST-3** (fill remaining unit selftests) and **T-TEST-2** (fuzz/property tests),
+> then **T-TEST-1** (real-Tor integration) and **T-RUST-1** (conformance harness).
+> `T-DEPLOY-*` is BLOCKED until Gate 1 + Gate 2 are green.
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `(Pn)` priority.
 
@@ -90,7 +109,15 @@ and at scale."
 - [ ] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
   reflect reachability in `health`, so a silently-dead gateway is demoted before a client hits it.
 
-## 2. Testing  *(go hard here)*
+## 2. Testing  *(go hard here — this is Gate 1)*
+
+**Testing philosophy for this project.** It is a privacy/crypto system, so a test is only
+worth something if it can *fail* on a real defect. Bias toward: adversarial inputs over happy
+paths; golden/differential fixtures over hand-rolled expected values (so JS and the coming Rust
+client are checked against the *same* vectors); property + fuzz over example-based where a
+surface takes untrusted bytes; and killing a mutant (does the test catch a flipped comparison?)
+over line coverage. Every parser, every signature check, and every state machine (spent-set,
+slash, stake lifecycle) gets negative and concurrent cases, not just a positive one.
 
 - [ ] **T-TEST-1 (P0) Real-Tor local fleet integration test.** `test/integration/fleet-e2e.mjs`:
   bring up an ephemeral tor + bootnode + 2 gateways + client; assert discovery, a successful
@@ -125,12 +152,38 @@ and at scale."
   + prettier checks; `npm audit --audit-level=high` gate; ZK-artifact hash check vs `ARTIFACTS.md`.
 - [ ] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
   the tests actually catch regressions. *Accept:* mutation score reported; obvious survivors killed.
+- [ ] **T-TEST-11 (P0) Golden crypto fixtures (shared with Rust).** A language-neutral `testdata/`
+  of canonical vectors: `canonicalDirectoryBytes` for a fixed dir, a signed directory + its
+  signature, announce records (onion-only + staked), an RLN envelope for a fixed (secret, epoch,
+  slot, target). The JS suite asserts it reproduces each; the Rust client (T-RUST-1) must match the
+  same bytes. This is the anti-drift contract between implementations. *Accept:* `testdata/` +
+  a JS fixture test; documented format.
+- [ ] **T-TEST-12 (P0) RLN slash-math property test.** Over many random (secret, epoch, slot)
+  triples and message pairs: one signal never slashes; two distinct signals on one nullifier ALWAYS
+  reconstruct the exact secret and derive the right rateCommitment; a distinct nullifier never
+  cross-triggers. *Accept:* thousands of randomized rounds, zero false slash / zero missed slash.
+- [ ] **T-TEST-13 (P1) Concurrency / race tests.** Hammer the gateway spent-set with concurrent
+  `admit()` on the same nullifier (honest replay vs over-spend interleavings) and the bootnode
+  registry with concurrent announces; assert exactly-once slash and no lost/duplicated entries.
+  *Accept:* deterministic outcome under N concurrent workers.
+- [ ] **T-TEST-14 (P1) Chaos / failure-injection e2e.** In the real-Tor integration harness: kill a
+  gateway mid-request (client fails over, no dropped connection to the caller), drop the bootnode
+  (client uses last-known-good), lapse an operator's stake mid-session (entry demoted). *Accept:*
+  each fault has a passing scenario.
+- [ ] **T-TEST-15 (P1) Fuzz regression corpus.** Persist any crashing/hanging input a fuzzer finds
+  into `testdata/corpus/` and replay it as a fast regression on every run. *Accept:* corpus wired
+  into the suite; a seeded known-bad input is caught.
+- [ ] **T-TEST-16 (P2) Timing/side-channel sanity.** Assert verify latency is independent of which
+  member proved (no fingerprint via timing), reusing the crypto bench. *Accept:* spread within noise
+  across members, recorded.
 
 ## 3. Deployment & infrastructure
 
-- [ ] **T-DEPLOY-1 (P0) First live deployment.** Deploy the bootnode + a gateway (to `anon-egress`
-  or a fresh droplet), announce the gateway, and verify a laptop client egresses through the fleet
-  end to end. *Accept:* `curl -x` through the client returns the gateway IP; `/directory` lists it.
+- [ ] **T-DEPLOY-1 (P0, BLOCKED by Gate 1 + Gate 2) First live deployment.** Deploy the bootnode +
+  a gateway (to `anon-egress` or a fresh droplet), announce the gateway, and verify a laptop client
+  egresses through the fleet end to end. Do NOT start until the test suite is hardened and the Rust
+  client MVP passes conformance. *Accept:* `curl -x` through the client returns the gateway IP;
+  `/directory` lists it. Take care not to disrupt the existing live gateway on `anon-egress`.
 - [ ] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** At least 2 gateways on different
   providers/regions so rotation spreads the both-ends AS vantage. *Accept:* directory shows ≥2, the
   client rotates across them.
@@ -201,9 +254,18 @@ cannot match:
    wart in the current client UX (and a security win: no separate process).
 
 Stack: `arti` (Tor), [`zerokit`](https://github.com/vacp2p/zerokit) (PSE's canonical Rust RLN),
-`alloy` (chain reads), `tokio`/`hyper`. The gateway and bootnode stay JS (operator-controlled
-env; little upside to a rewrite, real risk in duplicating the trust-critical checks).
+`alloy` (chain reads), `tokio`/`hyper`. The gateway and bootnode stay JS by default (operator-
+controlled env; little upside to a rewrite, real risk in duplicating the trust-critical checks),
+but T-RUST-0 records the full-stack option explicitly so it is a decision, not a drift.
 
+This is **Gate 2**: the Rust client MVP (T-RUST-1 + T-RUST-2) must pass conformance before any live
+deploy, because it is the client people will actually run.
+
+- [ ] **T-RUST-0 (P1) Rust workspace + language ADR.** Scaffold a `rust/` cargo workspace
+  (`rgoe-client` bin + a `rgoe-proto` lib for the shared checks) and write the ADR that pins the
+  boundary: JS reference vs Rust distributable, and whether/when the gateway+bootnode also move to
+  Rust (criteria: a second operator, an embedded/mobile target, or a security review demanding one
+  language). *Accept:* `rust/` builds an empty workspace in CI; `docs/adr/` entry.
 - [ ] **T-RUST-1 (P1) Wire-format conformance harness.** Before any rewrite: a language-neutral
   fixture set (canonical directory bytes, a signed directory, announce records, an RLN envelope for
   a fixed secret+target) with expected outputs, plus a runner both clients must pass. This is the
