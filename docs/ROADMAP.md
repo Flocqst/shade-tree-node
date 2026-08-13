@@ -1,227 +1,710 @@
-# Roadmap: scoped but not built
+# Roadmap: from reputation-gated egress PoC to a network
 
-Design for the pieces we have worked out but deliberately left out of the proof
-of concept. Each is a real protocol change, not a config tweak. The README links
-here so it can stay a README.
+**Status: active design, updated 2026-08-10.** The original roadmap was written
+against the first Semaphore PoC. Several of its headline items have since moved into
+the implementation: members self-generate identities, the client/gateway use a real
+RLN Groth16 circuit, an on-chain staked reputation set exists, and the client has a
+fleet-aware library with per-request gateway rotation. The remaining work is no
+longer “make the PoC less toy.” It is to turn the construction into a coherent
+network with explicit security properties, discovery, fleet-wide accountability,
+egress-reputation management, and payment interoperability.
 
-### 1. Unlinkable rate limiting (decouple linkability from the rate window)
+The protocol abstraction we should optimize for is broader than Tor:
 
-**Problem.** The gate rate-limits per member by scoping the nullifier to the
-current epoch (`scope = floor(now / 86400)`, a day by default). That scope is
-public and shared, so every request a member makes within the day carries the
-same nullifier. The
-gateway can count them, which is the point, but it can also link them. Shrinking
-the epoch shrinks the linkable window but also shrinks the budget, so it looks like
-rate limiting and unlinkability trade off against each other.
+> **anonymous access to a reputation-constrained shared resource.**
 
-**They don't.** The trick is to stop publishing the scope. Make the epoch long, let
-a member scope each request to a *different* epoch of their choosing, and prove in
-zero knowledge only that the chosen epoch `e` is in range, for example
-`present - W <= e <= present`, without revealing which `e`. Now:
+Tor onion egress is the first resource. The same gate could later protect API
+capacity, search, model inference, datasets, or other scarce capabilities. Keeping
+that abstraction explicit prevents the roadmap from accidentally baking properties
+of one egress implementation into the protocol definition.
 
-- each request uses a distinct, member-chosen `e`, so each carries a distinct
-  nullifier and the requests are **mutually unlinkable**, even to the gateway,
-- the number of valid `e` values in the window (`W + 1`) bounds how many distinct
-  nullifiers a member can present, so the **rate is still capped**: roughly one
-  fresh nullifier per epoch sustained, with a burst of `W + 1`.
+For detailed component designs, see [FLEET.md](FLEET.md), [ONCHAIN.md](ONCHAIN.md),
+[PAYMENTS.md](PAYMENTS.md), [LIGHT-CLIENT.md](LIGHT-CLIENT.md), and
+[adversarial-review.md](adversarial-review.md).
 
-It turns out this ships in two tiers, and the first one needs **no custom circuit
-at all.**
+---
 
-**Tier 1: public slots, stock Semaphore (buildable now).** Publish `K` scope slots
-per epoch, `scope_i = H(epoch, i)` for `i` in `[0, K)`. The client uses a different
-slot for each request and generates one ordinary Semaphore proof per slot. The
-gateway accepts a proof only if its `scope` is in the published slot set for the
-current or previous epoch, and dedups per nullifier as it does today. This already
-breaks the tension:
+## 0. Current baseline
 
-- each slot yields a distinct nullifier `H(secret, scope_i)`, and those nullifiers
-  are **mutually unlinkable** to the gateway, so a member's requests across slots
-  cannot be tied together,
-- a member has exactly `K` valid scopes per epoch, so the **rate is capped at `K`**
-  no matter how they interleave them.
+The roadmap starts from the code that exists now, not from the June PoC.
 
-The cost is that the client now generates up to `K` proofs per epoch instead of one.
-At ~0.7s per proof (see [proof overhead](#proof-overhead)) that is the difference
-between a per-request stall and a non-issue: **precompute the epoch's `K` proofs in
-the background at epoch rollover and rotate through them per request**, so the hot
-path is just "pick the next unused proof," near zero latency. `K = 30` is ~21s of
-background work per hour, fully parallel across cores. This is the bulk-generate-and-
-rotate strategy, and it is what makes per-request unlinkability usable. The only
-residual leak is that the gateway learns *which slot index* a request used (not who
-used it), so it sees the slot-usage histogram but never a member.
+| Capability | Current state |
+|---|---|
+| Anonymous ingress | Tor v3 onion-service rendezvous; gateway does not receive client IP |
+| Membership | member self-generates secret; only the rate commitment leaves the client |
+| Anonymous rate accountability | real RLN Groth16 proof, private message slot, per-epoch external nullifier |
+| Over-spend consequence | two distinct shares under one nullifier reconstruct the identity secret and can slash the rate-commitment leaf |
+| Request binding | RLN signal binds the proof to `(target, requestNonce)`; deterministic retry reuses the same signal |
+| Admission | local set fallback plus `StakedReputationSet` / on-chain registration path |
+| Fleet client | `RgoeClient`, signed directory support, weighted per-request gateway selection and failover |
+| Transport | TCP `CONNECT :443`; TLS remains end-to-end between client and destination |
+| Payments | separate design exists in [PAYMENTS.md](PAYMENTS.md), but payment is not part of the live request path |
 
-**Tier 2: hidden slots, custom circuit (hardening).** To also hide the slot index,
-and to get a sliding-window budget instead of a fixed per-epoch `K`, move the scope
-inside the proof: prove in zero knowledge that the chosen epoch `e` satisfies
-`present - W <= e <= present` (and `i < K`) without revealing `e` or `i`. Now the
-gateway learns nothing but a fresh nullifier and the fact that it is in-budget.
+Several older docs still describe the pre-RLN, single-gateway state. Documentation
+reconciliation is itself a P0 item: a security property is not useful if the code and
+the stated threat model describe different protocols.
 
-- A custom circuit replaces the stock Semaphore proof: Merkle membership, a
-  Poseidon nullifier over a *private* scope, and a comparator enforcing the range
-  bound on `e` (and `i < K`). `present` is a public input the gateway pins to its
-  clock.
-- The gateway keeps a spent-nullifier set across the last `W + 1` epochs instead of
-  just the current and previous epoch. Bounded by `K * W * activeMembers`.
-- No slashing. RLN reconstructs an over-spender's secret from Shamir shares revealed
-  in *public* messages. Our proof never leaves the Tor-encrypted tunnel to a single
-  verifier, so there is no public share to slash on and nothing to reconstruct. The
-  gateway simply refuses a nullifier once its budget is spent. This is strictly
-  simpler than RLN and a better fit for the single-verifier setting.
+---
 
-**Cost.** Tier 1 is a small change to the gateway's scope check plus a precompute
-loop in the shim, both on stock Semaphore. Tier 2 adds a circuit to write, audit,
-and ship artifacts for, in exchange for hiding the slot index and a more flexible
-budget. Tier 1 is the next thing to build; Tier 2 is the hardening after it.
+## 1. Define the protocol properties before adding more machinery
 
-### Proof overhead
+The PoC proves that the pieces can work. The next version needs properties stated in
+a way that can be evaluated independently of a particular implementation. Each new
+feature below should say which property it improves and which property it might
+weaken.
 
-Measured locally (Apple Silicon, `@semaphore-protocol` v4), so the numbers above are
-grounded:
+### 1.1 Eligibility soundness
 
-| Reputation set | Merkle depth | Proof size | Generate (warm) | Verify |
-|---|---|---|---|---|
-| 1 member | 1 | 882 B | ~470 ms | ~32 ms |
-| 100 | 7 | 882 B | ~784 ms | ~30 ms |
-| 1000 | 10 | 884 B | ~891 ms | ~30 ms |
+A party that is not in the currently accepted reputation set must not be able to
+cause a clearnet egress. This is the basic gate property. Invalid proofs, stale roots,
+wrong epochs, and malformed requests must fail before `net.connect`.
 
-Takeaways: the proof is **tiny and fixed-size** (~0.9 KB, a Groth16 proof plus
-public signals, independent of set size), verification is **cheap and constant**
-(~30 ms, so the gateway can verify thousands/sec/core), and **generation is the only
-real cost** (~0.5–0.9s warm, growing slowly with tree depth, plus a one-time ~2–4s
-cold start for artifact load). Today the shim pays one generation per epoch and
-caches it, so cost is negligible. The bulk-precompute strategy above keeps it
-negligible even when every request wants its own nullifier.
+**Why it matters.** A single bypass turns the clean IP into an open proxy and destroys
+its reputation. This is therefore both a cryptographic property and an economic
+property.
 
-### 2. On-chain reputation set (Ethereum)
+### 1.2 Member anonymity
 
-**Problem.** Today the reputation set is `group/members.json`, a file the gateway
-and every client must hold byte-identical or proofs fail the root check. The trust
-root is whoever runs `enroll.mjs`. There is no public audit trail, no shared source
-of truth, and updating the set means redistributing a file out of band.
+A valid gateway should learn that **some eligible member** made the request, but not
+which member. The operator must not know member secrets and should see only proof
+public signals, the target metadata needed to route, and traffic timing/volume.
 
-**Goal.** Source the set from an Ethereum contract so the Merkle root is canonical,
-public, and tamper-evident, admission is enforced on-chain, and the gateway and
-clients both read the same root from the same place with no file to sync.
+**Why it matters.** “The gateway does not see the client IP” is weaker than anonymity.
+If enrollment, payment, or repeated protocol identifiers name the member anyway, Tor
+has not bought the property we actually want.
 
-**Design.**
+### 1.3 Request unlinkability
 
-- Deploy Semaphore's on-chain group contract (`Semaphore.sol` maintains a group's
-  members, exposes the current Merkle root, and accepts proofs against recent roots
-  within a freshness window). Members are added by `addMember(groupId, commitment)`,
-  gated by whatever admission policy you want in front of it: `onlyOwner`, a stake
-  deposit, a token balance, a DAO vote, or a World ID proof (itself Semaphore-based,
-  so it composes cleanly).
-- The gateway stops calling `loadGroup()` on JSON and instead reads the group's
-  current root, plus the recent roots inside the freshness window, from the contract
-  over RPC, refreshing on `MemberAdded` events. `checkProof`'s single-root equality
-  test becomes membership in that recent-root set. The freshness window is the
-  on-chain analog of the current "this epoch or last epoch" skew tolerance: a proof
-  built against a root that was current a block ago still verifies.
-- Clients derive the leaves from `MemberAdded` event logs and rebuild the tree
-  locally, then check the local root against the on-chain root before trusting it.
-  No `members.json` to ship. `members.json` can stay as an offline cache whose root
-  is verified against chain.
+Two honest requests by the same member should not expose a stable identifier that lets
+one gateway, or colluding gateways, join them into a profile. The current RLN private
+message slots give distinct honest-use nullifiers; the property needs to remain true
+when we add fleet coordination and payments.
 
-**What changes.**
+**Why it matters.** Gateway rotation is only meaningful if the logs of multiple
+gateways cannot simply be joined on a common pseudonym.
 
-- `lib/semaphore.mjs`: `loadGroup()` gains an on-chain mode behind
-  `RGOE_GROUP_CONTRACT` / `RGOE_RPC_URL` / `RGOE_GROUP_ID`, with the JSON path kept
-  as the offline default.
-- `gateway/gateway.mjs`: `TRUSTED_ROOT` becomes a refreshed set of recent roots.
-- `group/enroll.mjs`: grows a sibling that submits `addMember` on-chain.
-- New `contracts/` with the group contract and a deploy script.
+### 1.4 Global rate accountability
 
-**Cost and honest scope.**
+A member gets one network-wide budget, not one independent budget per gateway. Honest
+use remains unlinkable; an actual over-spend must become detectable even when the two
+conflicting shares land at different gateways.
 
-- Adds an RPC dependency and a chain-liveness assumption to a system that is
-  otherwise fully local. Mitigate by caching the last-known root: if the RPC is
-  down, the gate keeps working against the last root it saw.
-- Enrollment now costs gas and confirmation latency. Fine for a slowly-changing set;
-  use an L2 (Base, Optimism, Arbitrum) to keep it cheap. Semaphore has deployments
-  there.
-- No new identity leakage. Only commitments go on-chain, exactly as in
-  `members.json` today, and a commitment reveals nothing about who holds the secret.
-  One new exposure: enrollment is now publicly timestamped and linkable to the
-  address that paid the gas. If admission is stake- or token-based that linkage is
-  inherent. If you need enroller privacy, relay the `addMember` call through a
-  meta-transaction or a privacy pool. Out of scope here.
+**Why it matters.** Local RLN share collection is sufficient for one gateway but is
+not sufficient for a rotating fleet. Without fleet-wide evidence exchange, rotation
+becomes an easy way to evade slashing.
 
-### 3. Egress discovery and per-request gateway selection (the fleet)
+### 1.5 Admission integrity / the unblockability boundary
 
-**Problem.** The PoC has exactly one gateway, and the client pins it ahead of time:
-the shim dials whatever single onion `RGOE_ONION` (or the local `hostname` file)
-names (`client/shim.mjs`). That carries two costs.
+The cryptography proves membership; it does not manufacture reputation. The admission
+policy has to make it expensive or difficult for the parties who want to abuse or
+blocklist the egress fleet to acquire unlimited memberships.
 
-- **No discovery.** Onion addresses are handed out of band (the bundle ships one
-  baked-in default). There is no way to add or retire a gateway without re-handing
-  addresses, and no live notion of which gateways are up. The network will not do
-  this for us: onion descriptors are stored under a *blinded* key on the HSDir
-  hashring precisely so the gateways cannot be enumerated, so the directory has to
-  be something we build at the app layer.
-- **Pinning concentrates trust.** Whichever gateway a client pins sees *all* of that
-  client's egress for the epoch — every target `host:port`, all timing and volume —
-  bucketed under one constant nullifier. The member stays anonymous (no IP, no name)
-  but becomes a complete, coherent profile to that one operator.
+**Why it matters.** An admitted adversary can send traffic to a server it controls,
+observe the source egress IP, and learn that gateway's clean IP. If every adversary can
+join cheaply, the network eventually recreates a public Tor exit list. Admission is
+therefore not just the Sybil boundary; it is the **unblockability boundary**.
 
-To be precise about the second cost: the problem is **not** that the client knows
-its own exit. A Tor client knows its own exit too; path selection runs client-side.
-Tor's property is that no single *relay* knows both ends, not that the client is
-blind to its path. The problem is the inverse — one operator knowing the whole of
-one anonymous member. The fix is therefore not to hide the exit from the client but
-to stop any one exit from seeing all of a member.
+### 1.6 Gateway authenticity and discovery integrity
 
-**Goal.** A directory of live gateways plus **per-request, client-side selection**,
-so the client never commits to a single operator and a member's traffic spreads
-across the fleet. This is the app-layer analog of Tor rotating circuits, except our
-"exits" are destinations (onion services), so the selection lives in the shim, not
-in Tor's relay path selection.
+A client must be able to discover gateways without trusting the discovery server to
+invent or substitute them. Discovery may affect availability and ordering, but it
+should not become a new authority that can forge gateway identity.
 
-**Design.**
+### 1.7 Egress non-enumerability, as a best-effort property
 
-- **Directory.** A small signed list of `{ onion, pubkey, weight, health }`,
-  refreshable. Start as a static signed JSON distributed with the member bundle and
-  served as its own onion for live updates; pin the signer key in the client. The
-  natural endgame is to source it from the same on-chain group as the reputation set
-  (#2), so the fleet and the membership share one canonical, tamper-evident root.
-  Gateways prove control of their advertised onion so a poisoned directory cannot
-  graft in a hostile address.
-- **Selection in the shim.** Per-connection weighted-random pick from the live set,
-  with health/latency feedback and failover to the next gateway on dial timeout.
-  `curl` stays dumb — the shim is the router (shim-as-router). Optionally expose a
-  pin (`RGOE_ONION` still forces one gateway) for debugging or when a caller really
-  wants a fixed egress IP.
-- **Rotation is free, cryptographically.** The membership proof is
-  gateway-independent: same trusted root + same epoch verifies at *any* gateway that
-  loads the same `members.json`. So rotating gateways needs no new proof and no new
-  circuit — the shim reuses the cached proof and just dials a different onion.
+The system should avoid publishing a complete mapping from gateway identity to clean
+clearnet IP and should limit how much of the fleet one admitted adversary can cheaply
+enumerate.
 
-**Why this is the privacy win, and how it composes with #1.** With one gateway, that
-operator sees 100% of a member's (metadata-only) targets under one nullifier. Spread
-per-request across `N` non-colluding gateways and each sees only ~`1/N`. Rotation
-alone does **not** defeat *colluding* gateways: they can still reassemble the profile
-by matching the member's constant per-epoch nullifier across their logs. Ship #1
-(a distinct nullifier per request) and even colluding gateways cannot tie the
-requests together. **Rotation + per-request unlinkable nullifiers** is the
-combination that actually delivers "no operator, even a colluding set, can profile a
-member." Neither piece is sufficient alone.
+This is not absolute cryptographic secrecy: a member that is allowed to use a gateway
+can always request a server it controls and observe the source IP. The goal is to
+avoid making enumeration free and global, and to limit the blast radius of one
+compromised membership.
 
-**Cost and honest scope.**
+### 1.8 Payment-to-use unlinkability
 
-- **The rate limit does not compose across the fleet.** Each gateway keeps its budget
-  in an in-memory per-process `Map` (`gateway/gateway.mjs`), so a member who spreads
-  requests across `N` gateways gets `N`× their intended budget. Rotation forces a
-  choice: either accept a fleet budget of `N`× per member, or share nullifier
-  accounting across gateways (a shared spent-set store, or gateways publishing
-  per-epoch nullifier counts to a common tally). Shared accounting reintroduces a
-  cross-gateway linkage point — unless it is paired with #1, whose per-request
-  nullifiers keep the shared tally from also being a profile.
-- **The directory is a new trust and availability surface.** Who signs it, how it is
-  distributed, and what stops a stale or poisoned directory from steering a member to
-  a hostile gateway. Mitigate with a pinned signer, gateway onion-control proofs, and
-  a cached last-known-good list so a dead directory degrades to the previous fleet
-  rather than to nothing.
-- **Multi-hop gateways are explicitly not the plan.** Hiding the final egress from the
-  client (gateway A forwards to a gateway B that A picks) only moves the knowledge to
-  A and doubles latency. Knowing your own exit is not the threat, so we do not pay to
-  hide it.
+If a member pays, the payment identity must not silently become the request identity.
+We should distinguish:
+
+- **network anonymity:** destination does not see the member's IP;
+- **membership anonymity:** gateway does not learn which member;
+- **payer anonymity / payer-use unlinkability:** destination and gateway cannot link a
+  request to the wallet/account that funded it.
+
+x402 or MPP can preserve the first property while losing the third. Payment support
+must state which mode it provides.
+
+### 1.9 Content confidentiality
+
+The gateway should remain a raw tunnel and must not terminate destination TLS merely
+to add payments or policy. It necessarily sees destination `host:port`, timing, and
+volume; it should not gain plaintext request/response content.
+
+### 1.10 Censorship and availability robustness
+
+A gateway can always refuse service and a discovery node can always omit records. The
+system should make these failures detectable and route around them, not pretend they
+can be cryptographically eliminated.
+
+### 1.11 Credential lifecycle and transferability
+
+An RLN secret is still a bearer credential. A member can share it; the parties then
+share one budget and one slashing risk, but the protocol does not prevent sharing.
+Revocation, exit, key loss, rotation, and optional anti-sharing economics need to be
+specified as lifecycle properties rather than left as operator procedures.
+
+### 1.12 Explicit non-goals
+
+The system does **not** by itself hide an application identity if a user logs into a
+site, defeat a global passive traffic-correlation adversary, or stop an admitted
+member from learning the source IP of a gateway it is allowed to use. Those are
+separate problems. The roadmap should improve them where practical without claiming a
+stronger anonymity model than Tor provides.
+
+---
+
+## 2. Close the fleet-level gaps the PoC does not solve
+
+### 2.1 Fleet-wide RLN evidence exchange — P0
+
+**Problem.** Today a gateway slashes when *it* sees two distinct public `x` values for
+the same RLN nullifier. With gateway rotation, an over-spender can send one conflicting
+share to gateway A and the other to gateway B. Each gateway sees a valid first share;
+neither reconstructs the secret.
+
+**Design.** Gateways exchange only cryptographically self-verifying abuse evidence,
+not normal browsing metadata. A candidate evidence record should contain the RLN proof
+(or enough proof material to independently verify it), root, external nullifier,
+nullifier, `x`, `y`, protocol version, expiry, and a gateway signature. It should **not**
+contain the target hostname. Any peer can verify that the share came from a valid proof
+before admitting it to the short-lived evidence set.
+
+- First valid share for a nullifier: cache it until the relevant epoch expires.
+- Same `x` again: idempotent retry; ignore it.
+- Second valid, distinct `x`: reconstruct the identity secret, derive the commitment,
+  and submit the slash.
+- Invalid/unverifiable evidence: discard before it can poison the collector.
+
+The first transport can be a small replicated evidence service reachable over onion.
+Later it can be gossiped among gateways or folded into the bootstrap network. The
+important invariant is that **honest requests never need a global join key**; only reuse
+of the same nullifier creates a cross-gateway record.
+
+**Why this is better than a global request counter.** RLN already gives exactly `K`
+private message IDs. We do not need to send every honest request to a central counter.
+We only need conflicting shares for the *same* nullifier to meet. That keeps normal
+traffic unlinkable while making cross-gateway over-spend slashable.
+
+**Acceptance test.** Generate two valid proofs that reuse one private slot with two
+different request signals, send them to two different gateways, and show that neither
+gateway alone can slash but the evidence layer reconstructs and slashes exactly once.
+
+### 2.2 Preserve the reputation of the scarce resource — P0/P1
+
+**Problem.** ZK membership prevents outsiders from using the IP, but a valid member can
+still dirty it within budget. The clean IP is only as good as the worst authorized
+traffic that reaches it.
+
+**Work.** Add controls that operate on metadata the gateway already has rather than
+breaking TLS:
+
+- per-destination connection and concurrency budgets in addition to the global RLN
+  budget;
+- byte/time ceilings so one allowed request cannot become an unbounded tunnel;
+- separate egress pools for new/unproven members versus high-standing members;
+- multi-provider / multi-ASN / multi-region fleet diversity so one provider or range is
+  not the whole reputation surface;
+- canary probes and external block/reputation checks for gateway IP health;
+- quarantine/retire tooling for an IP whose reputation is deteriorating;
+- gateway capacity and reputation weights in client selection;
+- operator-visible aggregate abuse metrics that do not require storing member request
+  histories.
+
+**Why it matters.** This is the operational half of the protocol. Strong ZK around a
+single abused IP produces a beautifully authenticated blocklisted proxy.
+
+### 2.3 Limit fleet enumeration by admitted adversaries — P1 research
+
+**Problem.** A member that can use every gateway can enumerate every egress IP by
+requesting a server it controls through each gateway.
+
+**Direction.** Do not make every membership valid at every gateway forever. Explore
+member-to-gateway assignment where each member can prove, in zero knowledge, that it is
+eligible for a rotating subset of the fleet without revealing which member it is.
+A simpler intermediate version can use multiple admission groups / gateway shards; a
+later version can derive an epoch-specific assignment from the member secret and
+`gatewayId` inside the circuit.
+
+**Property.** Compromising one membership should reveal only its assigned slice of the
+fleet, while honest clients still get enough gateways for failover and geographic
+choice.
+
+### 2.4 Client leak resistance and protocol surface — P1
+
+The shim only protects traffic that actually uses it. Production clients need a
+fail-closed mode and a test suite for bypasses: DNS, IPv6, direct sockets, redirects,
+proxy environment differences, and applications that silently ignore proxy settings.
+
+The current egress is TCP `:443` only. Keep that as the safe default. If QUIC/UDP is
+ever added, treat it as a separate protocol extension with the same gate semantics;
+do not silently fall back to direct UDP from the client.
+
+### 2.5 Reduce operator trust without overstating what is possible — research
+
+A gateway still sees destination metadata and can selectively censor. It can also lie
+about what it logs. Possible hardening includes reproducible gateway builds, signed
+software/version receipts, transparency around gateway policy, and optionally an
+attested execution environment for a no-log / constrained-egress implementation.
+
+A TEE would reduce operator discretion but would add hardware/vendor trust and should
+be an optional stronger deployment mode, not a prerequisite for the base network.
+
+---
+
+## 3. Gateway bootstrap / discovery service
+
+The existing signed directory is the right **record format** but not yet a network
+bootstrap mechanism. Add boot nodes whose job is to help a fresh client find current
+gateway records.
+
+### 3.1 Important correction: discover gateway endpoints, not public egress IPs
+
+A gateway is reached through its `.onion`; the client does not need its clearnet egress
+IP to route. Therefore a public bootstrap response should contain the **onion endpoint
+and authenticated gateway metadata**, not the clean IP.
+
+Publishing `{ onion -> egress IP }` would hand blocklisters the list that membership is
+supposed to protect. If there is ever a use case that genuinely needs the exact egress
+IP before use, make that a separately authenticated/member-gated feature and document
+that it weakens non-enumerability. The normal client should learn an egress IP only as a
+consequence of using the gateway, if it needs to learn it at all.
+
+### 3.2 Boot node is a liveness layer, not a trust root
+
+A boot node can return, omit, reorder, or cache gateway records. It must not be able to
+forge a valid gateway. Records should self-authenticate through the gateway's onion
+identity and, once available, an on-chain `GatewayRegistry` stake/registration.
+
+A gateway record can look roughly like:
+
+```json
+{
+  "protocol": "rgoe/1",
+  "onion": "...onion",
+  "gatewayKey": "...",
+  "sequence": 42,
+  "expires": 1780000000,
+  "region": "us-east",
+  "capabilities": ["rln-v3", "connect-443"],
+  "payment": ["none", "x402-v2", "mpp-charge"],
+  "weight": 100,
+  "stakeRef": "eip155:.../0x...",
+  "signature": "..."
+}
+```
+
+The public record deliberately omits `egressIp`. Fast-changing observed health should
+be returned as boot-node observation metadata, separate from the gateway-signed record,
+so a gateway is not signing the monitor's opinion of its own uptime.
+
+### 3.3 Gateway join flow
+
+1. Gateway creates / loads its onion identity.
+2. Gateway constructs a signed, expiring service record.
+3. Optional but preferred: gateway registers its identity + metadata hash + stake in a
+   dedicated `GatewayRegistry` contract. Do not overload the member reputation set;
+   gateways and members are different actors with different slash conditions.
+4. Gateway submits the record to any boot node, or boot nodes learn it from registry
+   events and fetch the signed metadata.
+5. Boot nodes probe the onion for liveness and publish their observation separately.
+
+Stake is primarily a Sybil cost at first. Only add slashing conditions when the
+misbehavior is objectively provable; “the destination timed out” is not enough evidence
+to slash a gateway.
+
+### 3.4 Client bootstrap flow
+
+1. Ship the client with several seed boot-node onion addresses and/or an on-chain
+   registry address.
+2. Query multiple seeds over Tor in parallel.
+3. Union the returned records.
+4. Verify record signature, onion-key binding, expiry, protocol version, and optional
+   registry inclusion/stake locally.
+5. Merge health observations as advisory data; never let one boot node redefine gateway
+   identity.
+6. Cache the last-known-good set.
+7. Feed verified candidates into the existing weighted selection/failover code.
+
+A dead boot service should therefore degrade to cached gateways; a malicious one should
+be able to censor its own answer but not insert a forged gateway.
+
+### 3.5 Deployment stages
+
+**Bootstrap v0 — centralized service, self-authenticating records.** One small onion
+service serves the signed records. This removes GitHub-commit discovery while keeping
+the existing pinned/signed semantics.
+
+**Bootstrap v1 — multiple mirrors.** Run several independent boot nodes; client queries
+2–3 and unions verified records. Because records self-authenticate, mirrors can be
+permissionless caches.
+
+**Bootstrap v2 — on-chain gateway registry + mirrors.** Chain is the canonical membership
+of the gateway set; boot nodes become low-latency indexes and health observers. A client
+can recover from a fully malicious boot layer by rebuilding the registered gateway set
+from chain, analogous to the member root provider.
+
+**Bootstrap v3 — optional gossip/DHT.** Only pursue this if fleet size makes seed mirrors
+a real bottleneck. A DHT adds eclipse/Sybil complexity; it is not automatically more
+decentralized than several self-verifying mirrors.
+
+### 3.6 Relationship to API discovery
+
+Do not conflate gateway discovery with paid-API discovery. x402 and MPP both have service
+metadata/discovery mechanisms. Those tell an agent **what API exists and how it wants to
+be paid**. RGOE boot nodes tell the client **which anonymous egress gateways exist**.
+The client can consume both, but they are different trust domains.
+
+---
+
+## 4. Payments: separate the two problems first
+
+There are two payment questions and they should not be mixed:
+
+1. **Pay for RGOE itself.** How does a member buy/stake/renew access without making its
+   later requests linkable to the payer? The strongest current design is still
+   [PAYMENTS.md](PAYMENTS.md): anonymous on-chain deposit / commitment plus off-chain ZK
+   redemption, with no required facilitator.
+2. **Use RGOE to access a paid downstream API.** How does an anonymous client satisfy an
+   x402, MPP, or future zkAPI payment challenge while preserving the desired privacy
+   properties?
+
+x402 and MPP are valuable interoperability targets, but neither should silently replace
+the native privacy-preserving access-funding design. Depending on the chosen payment
+method they may introduce a facilitator, payment processor, wallet identifier, or
+persistent merchant session. Those can be acceptable modes; they just need explicit
+privacy labels.
+
+The general payment API should therefore expose a policy such as:
+
+- `direct`: member pays the destination itself;
+- `delegated`: gateway/payment agent pays the destination on the member's behalf;
+- `anonymous-credit`: member spends an unlinkable prepaid credit (future zkAPI-like
+  mode).
+
+---
+
+## 5. x402 interoperability
+
+x402 V2 is an HTTP `402 Payment Required` payment standard with pluggable payment
+schemes, facilitators, discovery, and current schemes including exact, usage-bounded
+(`upto`), and batch-settlement patterns. Treat x402 as a protocol adapter, not as the
+identity model of RGOE.
+
+### 5.1 x402-A: transport compatibility — P1, very small
+
+First prove that an ordinary x402 buyer can use the existing local RGOE proxy unchanged:
+TLS and the HTTP 402/payment headers remain end-to-end between client and API; RGOE is
+only the transport. Add an interoperability test and example before adding custom code.
+
+**Privacy.** This hides the client's network IP from the API, but the API still sees
+whatever wallet/payment identifier x402 exposes. It is **network-private, not
+payer-anonymous**.
+
+### 5.2 x402-B: native `RgoeClient` buyer adapter — P1
+
+Add an x402-aware request loop to the library for agents that use `RgoeClient.fetch`
+directly rather than a generic HTTP proxy:
+
+1. make request through RGOE;
+2. receive the destination's 402 challenge end-to-end;
+3. invoke the configured x402 payment method;
+4. retry through RGOE with the payment credential;
+5. return the x402 receipt alongside the RGOE gateway receipt.
+
+Start with `exact`; add `upto` / batch settlement only when there is a real workload that
+needs them.
+
+### 5.3 x402-C: delegated payer / privacy adapter — P2
+
+This is the interesting mode. Do **not** terminate destination TLS at the gateway.
+Instead:
+
+1. client receives the destination's x402 challenge over its end-to-end TLS connection;
+2. client sends the challenge over a separate authenticated onion control request to its
+   selected RGOE gateway/payment service;
+3. the gateway pays/signs with a gateway-owned x402 wallet and returns the payment
+   credential to the client;
+4. client retries the destination request end-to-end using that credential;
+5. member is charged separately through its RGOE anonymous balance/credit mechanism.
+
+The destination can now link the payment to the **gateway**, which is already the public
+egress identity, rather than to the hidden member. This turns RGOE into a privacy adapter
+for machine payments without giving the gateway plaintext API content.
+
+**Open issue.** Pricing and fraud risk move to the gateway: it must not spend a $10
+payment for a member whose anonymous balance covers $0.10. The authorization from member
+to gateway therefore has to bind `maxAmount`, destination/challenge hash, expiry, and
+idempotency before the gateway signs or settles anything.
+
+### 5.4 x402 seller mode for RGOE access — optional
+
+RGOE itself could respond with x402 to sell access. That is useful for adoption, but a
+plain x402 purchase can reveal a payer wallet to the RGOE operator. If seller mode is
+added, label it a convenience/privacy-weaker mode unless issuance is blinded or the
+payment buys an anonymously redeemable commitment as in `PAYMENTS.md`.
+
+Do not call direct x402 membership purchase “anonymous payment” merely because the later
+network request uses Tor.
+
+Official reference: <https://docs.x402.org/introduction>.
+
+---
+
+## 6. MPP interoperability
+
+MPP (Machine Payments Protocol) is an HTTP machine-payment protocol co-authored by
+Tempo and Stripe. Its current model supports one-shot `charge`, high-frequency
+usage-based `session`, subscriptions, multiple payment methods, and discovery metadata;
+its TypeScript stack also supports compatible x402 exact flows.
+
+### 6.1 MPP-A: direct charge compatibility — P1
+
+As with x402, first make the simple path work through the RGOE transport. A client gets
+an MPP 402 Challenge, signs an authorization Credential, and receives a Receipt. This
+should remain end-to-end through the tunnel.
+
+**Privacy.** The destination sees the MPP payment identity/credential semantics. RGOE
+hides the client IP but does not magically make that payment unlinkable.
+
+### 6.2 MPP-B: native client adapter — P1/P2
+
+Expose MPP from `RgoeClient` so an agent can select `charge` as a payment method without
+running a separate proxy stack. Reuse one internal `PaymentAdapter` interface for both
+MPP and x402 so we do not fork the request lifecycle.
+
+MPP already supports x402 exact through the `mppx` SDK, so an implementation should
+investigate whether `mppx` can be the compatibility layer while RGOE remains the custom
+transport.
+
+### 6.3 MPP-C: gateway-owned sessions — P2
+
+MPP `session` is attractive for LLM tokens, streamed bytes, and other high-frequency
+usage because the client authorizes a funded session once and then incrementally raises
+the cumulative authorization off the hot on-chain path.
+
+A member-owned session, however, is intentionally persistent state with a merchant and
+can become a stable payment pseudonym. For the strongest RGOE privacy mode, make the
+**gateway/payment service own the MPP session** to the API while anonymous members debit
+against the gateway internally. The destination sees one or more gateway payment
+sessions, not a member session.
+
+This pairs naturally with per-request gateway selection only if session routing is
+explicit: either pin paid traffic to a gateway for the lifetime of that gateway-owned
+session, or let several gateways maintain independent provider sessions and select among
+them. Do not accidentally move a member-specific session identifier across gateways.
+
+### 6.4 MPP seller mode for RGOE access — optional
+
+MPP can also sell the egress service itself via charge/session/subscription. As with
+x402 seller mode, this is an interoperability/convenience path and must not overwrite
+the stronger payer-use unlinkability goal in `PAYMENTS.md`.
+
+Official references: <https://mpp.dev/> and the MPP session/discovery specifications.
+
+---
+
+## 7. zkAPI / anonymous API usage credits — research track
+
+**Status: theoretical. There is no implementation to integrate today.** Treat zkAPI
+as a protocol research project that can later become a payment method for RGOE, x402,
+or MPP rather than pretending an SDK exists.
+
+The intended primitive is an **anonymous prepaid API credit**:
+
+1. user funds or acquires a credit commitment;
+2. per request, the client proves in zero knowledge that it owns a valid credit and
+   presents a request-specific nullifier;
+3. the service verifies the proof and checks that nullifier against a spent set before
+   serving;
+4. the payment/funding event is unlinkable to the eventual API use;
+5. repeated/double use is rejected and, where RLN-style construction is used, can be
+   made punishable.
+
+This is closely aligned with RGOE because both systems are already asking the same
+question: **how do I authorize a scarce action without naming the authorized actor?**
+
+### 7.1 The central design fork: online check vs channel
+
+**Online spent-nullifier check (“the seer”).** The server checks a live spent set before
+serving. This preserves a large shared anonymity set and gives pre-service double-spend
+prevention without pinning the user to a persistent payment channel.
+
+The cost is an online coordination point. A single seer can censor, fail, or become a
+metadata aggregation point even if it cannot identify the payer.
+
+**Payment/channel approach.** A channel or session makes repeated payments cheap and can
+avoid a global online spent set, but the payer establishes persistent state with a
+specific counterparty/funding output. That is excellent for throughput and worse for
+the strong payer-use unlinkability target.
+
+This is why MPP sessions and zkAPI are complementary rather than substitutes: MPP
+sessions optimize repeated bilateral payment; zkAPI is trying to preserve anonymous
+fungible usage across a larger set.
+
+### 7.2 “Distribute the seer”
+
+The research direction is to replace one online spent-set authority with a committee or
+replicated service:
+
+- nullifier state replicated across independent operators;
+- threshold/quorum response before a spend is accepted, or a BFT/consensus layer with a
+  clearly specified finality window;
+- clients/gateways query over anonymity-preserving transport;
+- committee sees only the minimum proof/nullifier material, not payer identity or API
+  plaintext;
+- equivocation / stale-state behavior is detectable;
+- service remains available under some subset of failed/censoring seers.
+
+The hard question is not “can we put a database behind a SNARK?” It is whether the
+online check can prevent double service **before** the API response while keeping
+latency, metadata leakage, and operator trust low enough to beat a channel for the use
+case.
+
+### 7.3 zkAPI research deliverables
+
+Before implementation, write a standalone spec with:
+
+1. actors: payer, credit issuer/funding contract, API, seer/committee, optional gateway;
+2. exact properties: funding-to-use unlinkability, double-spend safety, liveness,
+   censorship resistance, request unlinkability, and settlement correctness;
+3. credit commitment and nullifier construction;
+4. what state the online checker stores and for how long;
+5. race semantics for two simultaneous spends;
+6. refund/expiry/denomination behavior;
+7. committee fault model and latency budget;
+8. proof/circuit choice and benchmark target;
+9. a simulator/mock-credit prototype before real value is involved.
+
+Only after those exist should we build a real circuit or contract.
+
+### 7.4 Make zkAPI an adapter, not another HTTP universe
+
+The best end state may be to expose zkAPI credits through existing machine-payment
+standards:
+
+- **x402:** a custom V2 payment scheme/extension whose payment payload is a zkAPI proof +
+  nullifier and whose verifier is the spent-set/committee;
+- **MPP:** a custom payment method (initially `charge`-like) whose Credential carries the
+  zkAPI proof and whose Receipt names the accepted credit spend.
+
+That would let APIs keep one 402 negotiation surface while choosing among transparent
+stablecoin/card payments, bilateral sessions, or anonymous ZK credits.
+
+---
+
+## 8. One payment adapter layer inside RGOE
+
+Do not implement x402, MPP, and zkAPI as three unrelated branches in the networking
+code. Add a small internal interface that separates payment negotiation from transport.
+Conceptually:
+
+```text
+PaymentAdapter
+  canHandle(challenge) -> bool
+  authorize(challenge, policy) -> credential
+  describePrivacyMode() -> direct | delegated | anonymous-credit
+  consumeReceipt(response) -> receipt
+```
+
+`RgoeClient` owns transport and gateway selection; payment adapters own payment
+negotiation. The gateway directory/bootstrap record may advertise supported delegated
+payment modes, but payment support must not be confused with gateway authenticity.
+
+This also gives agents an explicit policy knob: “prefer anonymous-credit; otherwise use
+delegated MPP; never expose my wallet directly,” rather than making privacy an accidental
+consequence of whichever SDK handled the 402 first.
+
+---
+
+## 9. Suggested sequencing
+
+### Phase A — make the protocol truthful and fleet-safe (P0)
+
+- reconcile README / STATUS / ROADMAP / adversarial review with the current RLN v3 code;
+- publish the protocol-property definitions above;
+- build cross-gateway RLN evidence exchange and the two-gateway over-spend test;
+- add egress connection/byte/destination budgets and IP health/quarantine tooling;
+- make credential lifecycle and revocation procedures explicit.
+
+**Exit condition:** rotating gateways cannot be used to evade the network budget, and
+the documented guarantees match the implementation.
+
+### Phase B — bootstrap the gateway network (P0/P1)
+
+- boot-node v0 onion service serving self-authenticating gateway records;
+- multi-seed client fetch/verify/union/cache;
+- separate observed health from signed identity metadata;
+- design/deploy `GatewayRegistry` if the staked gateway set is ready;
+- do **not** publish clean egress IPs in the public bootstrap record;
+- begin gateway-sharding / anti-enumeration research.
+
+**Exit condition:** a fresh client can discover and authenticate the live fleet without a
+GitHub directory update, and compromise of one boot node cannot insert a fake gateway.
+
+### Phase C — payment interoperability (P1/P2)
+
+- x402 transport test, then `RgoeClient` x402 exact adapter;
+- MPP direct `charge` test and adapter;
+- unified `PaymentAdapter` interface and privacy-mode policy;
+- prototype delegated-payer control flow while preserving end-to-end destination TLS;
+- evaluate gateway-owned MPP sessions for high-frequency paid APIs;
+- keep native RGOE access funding in `PAYMENTS.md` as the strongest payer-use-unlinkable
+  mode.
+
+**Exit condition:** an agent can reach paid x402/MPP APIs through RGOE with an explicit,
+tested choice between direct payment identity and gateway-delegated payment identity.
+
+### Phase D — zkAPI research and prototype (research/P2+)
+
+- standalone zkAPI spec;
+- formalize online-seer vs channel tradeoff;
+- design distributed-seer fault model;
+- mock-credit prototype with simultaneous-spend tests;
+- benchmark proof + online check latency;
+- only then build an x402 scheme and/or MPP payment-method adapter.
+
+**Exit condition:** zkAPI has a threat model, a reproducible prototype, and a measured
+reason to exist relative to MPP sessions and ordinary x402 payments.
+
+### Phase E — harder privacy / decentralization (later)
+
+- member-specific gateway subsets to limit fleet enumeration;
+- multiple independent bootstrap mirrors / optional gossip;
+- gateway staking and only objectively provable slash conditions;
+- optional attested gateway profile;
+- traffic-analysis mitigations where they have measurable benefit;
+- broader transport support only when it can fail closed.
+
+---
+
+## 10. Roadmap acceptance matrix
+
+A feature is not “done” because its happy-path demo works. The milestone tests should
+include at least:
+
+| Property | Required test |
+|---|---|
+| Eligibility soundness | non-member / wrong-root / stale / malformed proof never creates upstream socket |
+| Member anonymity | operator enrollment path never receives the member secret |
+| Request unlinkability | honest requests across slots/gateways expose no stable member identifier |
+| Global rate accountability | conflicting slot use split across two gateways reconstructs + slashes once |
+| Bootstrap integrity | malicious boot node cannot forge a gateway record or onion identity |
+| Bootstrap availability | all boot nodes down -> cached last-known-good fleet still works |
+| Egress non-enumerability | public bootstrap output contains no clearnet egress IP mapping |
+| Payment privacy labeling | direct x402/MPP mode explicitly exposes payer identity semantics; delegated mode does not expose member wallet to destination |
+| TLS confidentiality | payment support does not require gateway TLS termination |
+| zkAPI safety | simultaneous duplicate credit spend cannot both receive service under the declared fault model |
+
+The standard for the next version should be: every architectural claim maps to one of
+these properties, and every property has an adversarial test or an explicitly stated
+assumption.
