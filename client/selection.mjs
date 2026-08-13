@@ -15,10 +15,27 @@
 // then dial candidates in order, and on success/failure call:
 //   reportResult(onion, { ok, latencyMs });
 
-import { loadDirectory, selectionOrder, reportHealth } from "../lib/directory.mjs";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadDirectory, selectionOrder, reportHealth, verifyDirectory } from "../lib/directory.mjs";
+import { fetchOverTor } from "../bootnode/fetch.mjs";
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+// Two directory SOURCES, same signed shape and same pinned-signer verification:
+//   - RGOE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor
+//                           (bootnode/server.mjs). The pinned signer (RGOE_DIR_SIGNER) is the
+//                           bootnode's signer key. This is the dynamic fleet.
+//   - RGOE_DIRECTORY      : static signed JSON file (group/sign-directory.mjs). The offline path.
+// Bootnode wins if both are set. Either way, verifyDirectory + last-known-good caching apply.
+const BOOTNODE_ONION = process.env.RGOE_BOOTNODE_ONION || null;
 const DIRECTORY_PATH = process.env.RGOE_DIRECTORY || null;
-const CACHE_PATH = process.env.RGOE_DIRECTORY_CACHE || (DIRECTORY_PATH ? DIRECTORY_PATH + ".lkg" : null);
+const CACHE_PATH =
+  process.env.RGOE_DIRECTORY_CACHE ||
+  (BOOTNODE_ONION ? join(HERE, "..", "cache", "bootnode-directory.lkg") : DIRECTORY_PATH ? DIRECTORY_PATH + ".lkg" : null);
+const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
+const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
 
 // The pinned directory signer. In a real bundle this is a hardcoded constant set
 // at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
@@ -27,7 +44,30 @@ const CACHE_PATH = process.env.RGOE_DIRECTORY_CACHE || (DIRECTORY_PATH ? DIRECTO
 const PINNED_SIGNER = process.env.RGOE_DIR_SIGNER || null;
 
 export function directoryEnabled() {
-  return Boolean(DIRECTORY_PATH && PINNED_SIGNER);
+  return Boolean((BOOTNODE_ONION || DIRECTORY_PATH) && PINNED_SIGNER);
+}
+
+// Fetch + verify the bootnode's live directory over Tor, with the same last-known-good
+// discipline loadDirectory() gives the file path: a dead or poisoned bootnode degrades to
+// the previously-cached good fleet, never to nothing and never to an unverified list.
+async function loadFromBootnode() {
+  try {
+    const fresh = await fetchOverTor(BOOTNODE_ONION, "/directory", { torHost: TOR_HOST, torPort: TOR_PORT });
+    const v = verifyDirectory(fresh, PINNED_SIGNER);
+    if (!v.ok) throw new Error(v.reason);
+    if (CACHE_PATH) {
+      try { await mkdir(dirname(CACHE_PATH), { recursive: true }); await writeFile(CACHE_PATH, JSON.stringify(fresh, null, 2) + "\n"); } catch {}
+    }
+    return { dir: fresh, source: "bootnode" };
+  } catch (freshErr) {
+    if (CACHE_PATH) {
+      try {
+        const cached = JSON.parse(await readFile(CACHE_PATH, "utf8"));
+        if (verifyDirectory(cached, PINNED_SIGNER).ok) return { dir: cached, source: "cache", freshError: freshErr.message };
+      } catch {}
+    }
+    throw new Error(`no verifiable bootnode directory (fresh: ${freshErr.message}, no valid cache)`);
+  }
 }
 
 // Loaded once and refreshed lazily; health is mutated in place across requests.
@@ -39,11 +79,9 @@ async function ensureLoaded() {
   const now = Date.now();
   if (loaded && now - loadedAt < REFRESH_MS) return loaded;
   try {
-    const next = await loadDirectory({
-      path: DIRECTORY_PATH,
-      pinnedSigner: PINNED_SIGNER,
-      cachePath: CACHE_PATH,
-    });
+    const next = BOOTNODE_ONION
+      ? await loadFromBootnode()
+      : await loadDirectory({ path: DIRECTORY_PATH, pinnedSigner: PINNED_SIGNER, cachePath: CACHE_PATH });
     // Carry forward live health across a refresh so a reload doesn't forget which
     // gateways just failed.
     if (loaded) {

@@ -95,6 +95,26 @@ is in [`docs/walkthrough.html`](docs/walkthrough.html).
 
 Watch the gate drop non-members: `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
 
+### A fleet, one CLI, live discovery
+
+Beyond the single-gateway PoC, the system now runs as a **fleet with live discovery**, driven
+by one CLI:
+
+```bash
+rgoe keygen tor/hs-bootnode      # mint an onion identity
+rgoe bootnode --admission open   # run the discovery bootnode (its own onion service)
+rgoe gateway                     # run a gateway
+rgoe heartbeat --bootnode <onion>          # keep it announced
+rgoe client --secret <hex> --bootnode <onion> --dir-signer <pubkey>   # rotate across the fleet
+```
+
+- **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — stand it all up from scratch (local, or one command on a droplet).
+- **[`docs/BOOTNODE.md`](docs/BOOTNODE.md)** — the discovery design: gateways announce over Tor, the onion is never on chain, the bootnode is a cache not a trust root, staking is optional.
+- **[`docs/CLI.md`](docs/CLI.md)** / **[`docs/CONFIG.md`](docs/CONFIG.md)** — every command, flag, and `RGOE_*` variable.
+- **[`bootnode/deploy/`](bootnode/deploy/)** — one-command bring-up on a fresh droplet.
+- **[`smithers/`](smithers/)** — the whole roadmap as a runnable [Smithers](https://smithers.sh) workflow, so others can build on it.
+- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — milestone status (on-chain set, RLN, fleet, bootnode all built).
+
 ## Scope: what it is and is not
 
 Gets right:

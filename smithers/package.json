@@ -1,0 +1,15 @@
+{
+  "name": "rgoe-smithers",
+  "private": true,
+  "type": "module",
+  "description": "Smithers workflow that builds/verifies the reputation-gated onion egress roadmap.",
+  "scripts": {
+    "up": "smithers up ship.tsx --backend sqlite --max-concurrency 2 --log true",
+    "ps": "smithers ps --backend sqlite",
+    "resume": "smithers up ship.tsx --resume true --backend sqlite"
+  },
+  "dependencies": {
+    "smithers-orchestrator": "^0.25.0",
+    "zod": "^4"
+  }
+}

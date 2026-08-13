@@ -1,14 +1,23 @@
 {
   "name": "reputation-gated-onion-egress",
-  "version": "0.1.0",
-  "description": "A Tor onion-service egress proxy gated by a zero-knowledge proof of membership in a reputation set (Semaphore + epoch-scoped nullifiers = RLN-style anonymous rate limiting).",
+  "version": "0.2.0",
+  "description": "A Tor onion-service egress proxy gated by a zero-knowledge proof of membership in a reputation set (Semaphore/RLN), with live gateway discovery via a bootnode.",
   "type": "module",
   "private": true,
+  "bin": {
+    "rgoe": "bin/rgoe.mjs"
+  },
   "scripts": {
     "enroll": "node group/enroll.mjs",
     "gateway": "node gateway/gateway.mjs",
     "shim": "node client/shim.mjs",
-    "demo": "node demo/server.mjs"
+    "bootnode": "node bootnode/server.mjs",
+    "keygen": "node bootnode/keygen.mjs",
+    "heartbeat": "node bootnode/heartbeat.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "demo": "node demo/server.mjs",
+    "test": "node bootnode/selftest.mjs && node gateway/shim.selftest.mjs && node lib/rln.selftest.mjs",
+    "test:contracts": "forge test"
   },
   "dependencies": {
     "@semaphore-protocol/group": "^4.0.0",

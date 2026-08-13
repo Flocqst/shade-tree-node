@@ -1,8 +1,21 @@
-# Roadmap: scoped but not built
+# Roadmap
 
-Design for the pieces we have worked out but deliberately left out of the proof
-of concept. Each is a real protocol change, not a config tweak. The README links
-here so it can stay a README.
+Design for the pieces beyond the original proof of concept. Each is a real protocol
+change, not a config tweak. The README links here so it can stay a README.
+
+**Status (2026-08).** Most of this doc is now built on the `deploy/onchain-staked-fleet`
+line and extended by `feat/bootnode-and-productionize`:
+
+| # | milestone | status |
+|---|---|---|
+| 1 | Unlinkable rate limiting | **built** as real RLN (fresh per-request share, over-spend reconstructs + slashes) — `lib/rln.mjs`, `contracts/rln/`. Supersedes the slot scheme sketched below. |
+| 2 | On-chain reputation set | **built** — `contracts/StakedReputationSet.sol` (live on Sepolia), `lib/root-provider.mjs`. |
+| 3 | Egress discovery + fleet rotation | **built (static)** — signed directory + client rotation (`lib/directory.mjs`). Made **live** by milestone 4. |
+| 4 | Live discovery: the bootnode | **built** — `bootnode/`, `contracts/GatewayRegistry.sol`, `docs/BOOTNODE.md`. |
+| 5 | Productionization + deploy | **in progress** — `rgoe` CLI, Docker, `docs/QUICKSTART.md`; live droplet deploy prepped in `bootnode/deploy/`. |
+
+Sections 1-3 below are the original design notes (kept for the reasoning, including the
+tiers not taken); 4-5 are the newer milestones.
 
 ### 1. Unlinkable rate limiting (decouple linkability from the rate window)
 
@@ -225,3 +238,61 @@ member." Neither piece is sufficient alone.
   client (gateway A forwards to a gateway B that A picks) only moves the knowledge to
   A and doubles latency. Knowing your own exit is not the threat, so we do not pay to
   hide it.
+
+### 4. Live discovery: the bootnode (realizes #3)
+
+**Problem.** Milestone 3 shipped discovery as a *signed static file* (`group/sign-directory.mjs`
+→ `lib/directory.mjs`). Complete, but hand-maintained: adding or retiring a gateway means
+re-signing and re-shipping a file, and there is no live notion of which gateways are up.
+
+**Design (built).** A **bootnode**: the dynamic version of that exact signed shape, published
+as its own v3 onion service (`bootnode/server.mjs`). Gateways announce themselves; the bootnode
+holds live ones for a TTL and serves the union as a signed directory `lib/directory.mjs`
+already knows how to verify. Two things kept it honest:
+
+- **The onion is never on chain.** A v3 `.onion` *is* an ed25519 public key, so putting it on
+  chain would make the whole fleet enumerable and bind each onion to its paying address forever
+  — the property Tor's blinded HSDir descriptors exist to destroy. Instead the on-chain
+  `GatewayRegistry` (`contracts/GatewayRegistry.sol`) stakes only an **operator address**, and
+  the onion↔operator link lives only in the signed announce (`bootnode/announce.mjs`). One stake
+  can rotate across many onions; the fleet stays un-enumerable on chain.
+- **The bootnode is a cache, not a trust root.** Every announce carries two proofs: onion
+  control (ed25519 by the onion's own key — cryptographic, re-checkable by any client from
+  `GET /gateway/<onion>`) and, optionally, an operator-stake authorization (an ECDSA signature
+  the bootnode/clients verify against `GatewayRegistry.isStaked`). Clients re-derive each onion's
+  key and can re-check the stake on chain, so a hostile bootnode can at worst omit a gateway,
+  never inject one it does not control.
+
+**Stake is optional.** Bootnode admission defaults to `open` (onion control is the only hard
+requirement); `admission=stake` requires a live bond. Staking is the opt-in hardening tier and a
+natural home for the on-chain funds a gateway needs anyway (it is the party that pays gas to
+slash member over-spenders). Gateway slashing is governed, not permissionless — the one honest
+asymmetry vs the member slash, because gateway misbehavior is a subjective off-chain judgment
+where a member over-spend is a cryptographic proof.
+
+**How it composes with #1.** Rotation across the fleet plus RLN's per-request unlinkable
+nullifiers is still the combination that stops even a colluding set of operators from profiling a
+member. The bootnode changes *how the fleet is discovered*, not that argument.
+
+### 5. Productionization and deployment
+
+**Problem.** The system worked but was operated by hand: env-var-only config, shell scripts, no
+one command, no image, no quickstart. Hard for a new operator or a new gateway to join.
+
+**Design (in progress).**
+
+- **One CLI.** `rgoe <command> [--flags]` (`bin/rgoe.mjs`) fronts every role — `keygen`,
+  `bootnode`, `heartbeat`, `gateway`, `client`, `enroll`, `register-member`, `register-gateway`,
+  `doctor`. Each `--flag` maps one-to-one onto the existing `RGOE_*` env var, so flags and env
+  stay in sync and either works. `rgoe doctor` checks the local setup before you run anything.
+- **Containers.** A single image with the CLI entrypoint (`docker run … bootnode --port …`) plus
+  a compose that wires Tor + bootnode + gateway + client for a local fleet.
+- **Docs.** `docs/QUICKSTART.md` (stand up a bootnode + a gateway + a client from scratch),
+  `docs/CLI.md`, `docs/CONFIG.md` (every `RGOE_*` var), `docs/BOOTNODE.md` (the discovery design).
+- **Live fleet.** `bootnode/deploy/` prepares a fresh droplet: install Tor (from the official
+  repo for `pow: yes`), mint the onion identity, run the bootnode + a gateway as systemd units,
+  and print the bootnode onion + pinned signer for clients. One command on a rented box.
+
+**Honest scope.** Reproducible standalone binaries (Node SEA) are documented as a best-effort
+path; Docker + a globally-installable CLI are the supported distribution. Onion-key backup and
+fleet monitoring remain operator responsibilities.

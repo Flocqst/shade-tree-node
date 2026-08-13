@@ -27,6 +27,7 @@ interface Vm {
     function toString(uint256) external pure returns (string memory);
     function envOr(string calldata, string calldata) external view returns (string memory);
     function envOr(string calldata, uint256) external view returns (uint256);
+    function envOr(string calldata, address) external view returns (address);
 }
 
 /// Base with the cheatcode handle + just-enough assertions.

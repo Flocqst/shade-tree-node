@@ -1,0 +1,22 @@
+# Minimal Tor node for the demo fleet, built from the stock Debian tor package
+# (no external/unofficial images). It publishes the fleet's two onion services
+# and a SOCKS port, and mirrors the generated onion hostnames into a world-
+# readable dir so sibling containers (running as other UIDs) can read them.
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tor \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/torrc.services /etc/tor/torrc.services
+COPY docker/tor-entrypoint.sh /usr/local/bin/tor-entrypoint.sh
+RUN chmod +x /usr/local/bin/tor-entrypoint.sh
+
+# SOCKS (published to host for manual testing). The onion services are reached
+# over Tor, not via published ports.
+EXPOSE 9050
+
+# The entrypoint chowns the state volume, starts the hostname mirror, then drops
+# to the unprivileged debian-tor user to run tor itself.
+ENTRYPOINT ["/usr/local/bin/tor-entrypoint.sh"]

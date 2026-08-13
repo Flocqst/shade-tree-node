@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Cheats} from "../test/Cheats.sol";
 import {StakedReputationSet, IWithdrawVerifier, ICommitmentHasher} from "../contracts/StakedReputationSet.sol";
+import {GatewayRegistry} from "../contracts/GatewayRegistry.sol";
 import {MockCommitmentHasher} from "../contracts/MockCommitmentHasher.sol";
 import {MockWithdrawVerifier} from "../contracts/MockWithdrawVerifier.sol";
 
@@ -38,17 +39,23 @@ contract Deploy is Cheats {
             ICommitmentHasher(address(hasher))
         );
 
+        // Gateway operator stake (optional at the bootnode; deployed so the on-chain path exists).
+        // Same bond/unbonding params; owner (slasher) defaults to the deployer/broadcaster.
+        address gwOwner = vm.envOr("RGOE_GATEWAY_OWNER", address(0));
+        GatewayRegistry gwReg = new GatewayRegistry(bond, unbonding, minUnbonding, gwOwner);
+
         vm.stopBroadcast();
 
-        _writeDeployment(address(set), address(hasher), address(verifier));
+        _writeDeployment(address(set), address(hasher), address(verifier), address(gwReg));
     }
 
-    function _writeDeployment(address set, address hasher, address verifier) internal {
+    function _writeDeployment(address set, address hasher, address verifier, address gwReg) internal {
         // rpcUrl defaults to local anvil; override with RGOE_RPC_URL for a fork/testnet.
         string memory rpcUrl = vm.envOr("RGOE_RPC_URL", string("http://127.0.0.1:8545"));
         string memory json = string.concat(
             "{\n",
             '  "stakedReputationSet": "', vm.toString(set), '",\n',
+            '  "gatewayRegistry": "', vm.toString(gwReg), '",\n',
             '  "hasher": "', vm.toString(hasher), '",\n',
             '  "verifier": "', vm.toString(verifier), '",\n',
             '  "rpcUrl": "', rpcUrl, '"\n',

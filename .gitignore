@@ -19,3 +19,9 @@ out/
 cache/
 broadcast/
 contracts/deployed.local.json
+
+# bootnode + gateway onion identities and signer keys (secret)
+identity.local.json
+**/identity.local.json
+bootnode/bootnode-signer.key
+hs_ed25519_secret_key

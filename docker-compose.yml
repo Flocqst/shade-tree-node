@@ -1,0 +1,92 @@
+# Local demo fleet for reputation-gated onion egress.
+#
+# Topology: one `tor` service fronts two v3 onion services and LENDS its network
+# namespace to the backend containers. The rgoe processes (bootnode, gateway,
+# client shim) all bind loopback only — 127.0.0.1 — with no host-override in the
+# source, so a plain bridge network can't reach them from a separate tor box.
+# `network_mode: "service:tor"` puts them on tor's loopback instead, which is
+# also exactly how the real single-host deploy works (tor + app share 127.0.0.1).
+# Consequence: those services can't declare their own ports/networks; all port
+# publishing happens on `tor`, and they reach each other + SOCKS at 127.0.0.1.
+#
+# Onion addresses are generated on tor's FIRST boot (~10-30s to also publish
+# their descriptors to the network). tor mirrors the hostnames to the `onions`
+# volume as bootnode.onion / gateway.onion; the client reads bootnode.onion from
+# there automatically. See docker/README.md for the run + gotchas.
+
+services:
+  # --- Tor: SOCKS + two hidden services; owns the shared network namespace ----
+  tor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tor
+    volumes:
+      - torstate:/var/lib/tor        # private tor state + HS keys (0700)
+      - onions:/shared               # world-readable onion-hostname mirror
+    ports:
+      - "9050:9050"                  # SOCKS, for host-side manual testing
+    restart: unless-stopped
+
+  # --- Bootnode: gateway-discovery service, onion:80 -> 127.0.0.1:8877 --------
+  bootnode:
+    build: .
+    depends_on: [tor]
+    network_mode: "service:tor"      # share tor's loopback (see header)
+    volumes:
+      - bootnodedata:/data           # writable home for the minted signer key
+    environment:
+      RGOE_BOOTNODE_PORT: "8877"
+      RGOE_BOOTNODE_ADMISSION: "open"        # demo: accept any announce
+      RGOE_BOOTNODE_TTL: "900"
+      RGOE_STAKE_MODE: "mock"                # demo: no on-chain stake checks
+      RGOE_BOOTNODE_SIGNER_KEY: "/data/bootnode-signer.key"
+    command: ["bootnode"]
+    restart: unless-stopped
+
+  # --- Gateway: reputation-gated egress, onion:80 -> 127.0.0.1:8443 -----------
+  gateway:
+    build: .
+    depends_on: [tor, bootnode]
+    network_mode: "service:tor"
+    environment:
+      # No RGOE_GROUP_CONTRACT in the demo -> gateway falls back to its local
+      # members.json root source (see gateway/gateway.mjs). Egress is direct
+      # clearnet from the gateway; it does not use Tor SOCKS itself.
+      RGOE_STAKE_MODE: "mock"
+    command: ["gateway"]
+    restart: unless-stopped
+
+  # --- Client: local HTTP-CONNECT shim -> Tor SOCKS -> gateway.onion ----------
+  client:
+    build: .
+    depends_on: [tor, bootnode, gateway]
+    network_mode: "service:tor"
+    volumes:
+      - onions:/shared:ro            # read the generated bootnode.onion
+    environment:
+      RGOE_TOR_HOST: "127.0.0.1"     # SOCKS is on tor's loopback (shared ns)
+      RGOE_TOR_PORT: "9050"
+      RGOE_SHIM_PORT: "8888"
+      # Provide these before `up` (see docker/README.md):
+      #   RGOE_SECRET     — a member secret from `rgoe enroll`
+      #   RGOE_DIR_SIGNER — the bootnode's pinned signer pubkey (printed at boot)
+      RGOE_SECRET: "${RGOE_SECRET:-}"
+      RGOE_DIR_SIGNER: "${RGOE_DIR_SIGNER:-}"
+    # Wait for the onion to exist, export it, then start the shim. The shim binds
+    # 127.0.0.1:8888 inside tor's namespace, so drive it with:
+    #   docker compose exec client curl -x http://127.0.0.1:8888 https://api.ipify.org
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until [ -s /shared/bootnode.onion ]; do
+          echo "client: waiting for bootnode onion..."; sleep 2;
+        done
+        export RGOE_BOOTNODE_ONION="$(cat /shared/bootnode.onion)"
+        echo "client: bootnode onion = $RGOE_BOOTNODE_ONION"
+        exec node /app/bin/rgoe.mjs client
+    restart: unless-stopped
+
+volumes:
+  torstate:      # tor DataDirectory: HS private keys + descriptors (persist onions)
+  onions:        # world-readable mirror of the generated onion hostnames
+  bootnodedata:  # bootnode signer key
