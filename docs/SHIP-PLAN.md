@@ -332,6 +332,13 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** Today membership is binary
+  and every member gets the same per-epoch slot budget `K`. Let standing scale the budget: a member
+  with higher on-chain stake (or accrued good behavior) proves, in zero knowledge, a budget tier and
+  gets a larger `K`, without revealing which member. Makes "reputation" a spectrum, not a bit, while
+  keeping unlinkability. *Accept:* two tiers with different K, each proven in ZK; the gateway enforces
+  the proven tier; a member cannot claim a tier they lack. *Depends on:* the RLN circuit taking a
+  tier as a range-checked public input (T-DEV adjacent).
 - [ ] **T-FEAT-7 (P3) Payment layer.** Wire the anonymous-payment design (`docs/PAYMENTS.md`:
   Cashu or an on-chain Privacy-Pools-funded stake) as an optional admission path, so egress can be
   paid-for without rebuilding the identity graph. *Accept:* a paid credential admits a member with
