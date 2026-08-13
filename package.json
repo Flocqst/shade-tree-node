@@ -16,7 +16,8 @@
     "heartbeat": "node bootnode/heartbeat.mjs",
     "doctor": "node scripts/doctor.mjs",
     "demo": "node demo/server.mjs",
-    "test": "node bootnode/selftest.mjs && node gateway/shim.selftest.mjs && node lib/rln.selftest.mjs",
+    "test": "node scripts/test-all.mjs",
+    "test:node": "node scripts/test-all.mjs --no-contracts",
     "test:contracts": "forge test"
   },
   "dependencies": {

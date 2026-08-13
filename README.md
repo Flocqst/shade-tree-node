@@ -5,14 +5,15 @@ zero knowledge, that they belong to a curated set. Everyone else is dropped befo
 a byte leaves. The point is a clean-IP egress that stays clean without ever
 learning who its users are.
 
-This is a working proof of concept, deployed and verified live. It is not
-production, and it has no payments and no dynamic membership (see
-[Scope](#scope-what-it-is-and-is-not)).
+It runs as a **fleet**: many gateways, discovered live through a **bootnode**, with
+membership and stake rooted on chain and a client that rotates across gateways per
+request. It is a reference implementation, deployed and verified live end to end, and
+**unaudited** (see [Security and audit](#security-and-audit)).
 
-The full write-up, with the exit-blocking benchmark, the gate protocol,
-deployment numbers, and the design space for a production version, is at
+The write-up, with the exit-blocking benchmark and the gate protocol, is at
 [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app)
-(source: [`docs/post/`](docs/post/)).
+(source: [`docs/post/`](docs/post/)). The design of each milestone is in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## The problem
 
@@ -26,159 +27,172 @@ vendors; method and classifier in
 [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md).
 The usual escape, a [residential proxy](docs/residential-proxies.md), trades
 IP-reputation evasion for a fully trusted third party who links every request to
-your billing identity. Underneath
-both: an open clean-IP egress is blocklisted within hours, so clean IPs stay clean
-only by being gated and scarce. We gate on a proof of membership instead of an
-identity, which keeps sybil and rate resistance while decoupling them from the IP
-and from who you are.
+your billing identity. Underneath both: an open clean-IP egress is blocklisted
+within hours, so clean IPs stay clean only by being gated and scarce. We gate on a
+proof of membership instead of an identity, which keeps sybil and rate resistance
+while decoupling them from the IP and from who you are.
 
 ## Design
 
 The gate is an application-layer protocol on top of Tor, not a Tor modification.
 Tor cannot carry a reputation proof natively (cells are opaque, v3 client-auth is a
-static linkable allowlist), but onion services give us the part that matters: the
+static linkable allowlist), but onion services give us the part that matters: each
 gateway is published as a `.onion` and reached by rendezvous, so there is no exit
 node and the gateway never learns the client IP.
 
 ```
-  curl / SearXNG  (http_proxy=127.0.0.1:8888)
+  curl / SearXNG / your agent
         |
         v
-  client shim ── builds a Semaphore membership proof, caches it per epoch
+  client ──── 1. pull the live gateway set from the bootnode (over Tor), verify it
+        |     2. build ONE RLN membership proof for this request (fresh per-request nullifier)
+        |     3. pick a gateway (weighted rotation + failover)
         |  SOCKS to Tor, no exit node
         v
   Tor rendezvous  (3 + 3 hops; client IP never revealed to the gateway)
         |
         v
-  gateway.onion ── 1. verify proof   2. against OUR root?   3. this epoch?
-        |          4. nullifier within budget?    drop on any failure
+  gateway.onion ── verify RLN proof · root in the on-chain freshness window? · nullifier fresh?
+        |          a 2nd distinct signal on one nullifier reconstructs the secret and SLASHES
         v
-  clean egress IP ──> destination
+  clean egress IP ──> destination   (TCP CONNECT :443 only; TLS stays end to end)
 ```
 
-The set is a [Semaphore](https://semaphore.pse.dev/) group. The client proves it
-owns the secret behind some leaf without revealing which, and the proof carries a
-nullifier over `(secret, epoch)`: one nullifier per member per epoch, so the gateway
-rate-limits per member without knowing who, and the nullifier rotates across epochs.
-[RLN](https://rate-limiting-nullifier.github.io/rln-docs/) at PoC fidelity. Proofs
-are ~0.9 KB and verify in ~30 ms regardless of set size; generation (~0.5 to 0.9 s
-warm) is paid once per epoch and cached. The tunnel is TCP `CONNECT :443` only, so
-TLS stays end to end and the gateway sees host:port, never content.
+Three things make it a system rather than one proxy:
 
-## Status
-
-Live and verified, both ends. A laptop request egresses from the gateway's clean IP
-and the gateway logs the matching `PASS`; the path crosses six real Tor relays with
-no exit node, and the client IP appears in zero logs on the box. A four-hypothesis
-stress test (multiple members, forged and garbage and non-member proofs, rate-limit,
-spam) all passed. Numbers, including end-to-end latency, are in
-[`docs/STATUS.md`](docs/STATUS.md).
+- **Membership is a real RLN circuit.** The set is a [Semaphore](https://semaphore.pse.dev/)
+  / [RLN](https://rate-limiting-nullifier.github.io/rln-docs/) group. Each request carries a
+  *fresh* nullifier and a Shamir share, all proven inside one circom-rln Groth16 proof
+  (`lib/rln.mjs`, `circuits/rln/`). One share per slot egresses; a second distinct signal on
+  the same nullifier is a provable over-spend, so the gateway reconstructs the identity secret
+  and slashes the member's on-chain stake. Requests are mutually unlinkable, even to the gateway.
+  Proofs are ~0.9 KB and verify in ~30 ms regardless of set size.
+- **The root is on chain.** Members self-enroll (they generate their own identity and only a
+  commitment ever leaves the machine) and stake into `StakedReputationSet` (`contracts/`, live on
+  Sepolia). The gateway reads the admission root from the chain through a `RootProvider`
+  (`lib/root-provider.mjs`), so there is no `members.json` to keep in sync and the operator never
+  holds a member secret.
+- **The fleet is discovered live.** Gateways announce to a **bootnode** (`bootnode/`), which
+  serves a signed directory of live onions; the client pulls it over Tor and rotates per request.
+  The onion is never on chain, and the bootnode is a cache, not a trust root. See
+  [`docs/BOOTNODE.md`](docs/BOOTNODE.md).
 
 ## Run it
 
-Requires `tor` and Node 18+. Local, all on one machine:
+One CLI fronts every role. Each `--flag` maps to an `RGOE_*` env var (either works).
 
 ```bash
 npm install
-node group/enroll.mjs alice      # adds a member, prints a secret
-export RGOE_SECRET=...            # the printed secret
-bash scripts/run-all.sh          # tor + gateway + shim
-curl -x http://127.0.0.1:8888 https://api.ipify.org
+npm link                 # puts `rgoe` on PATH (or use `node bin/rgoe.mjs`)
+rgoe doctor              # check node, tor, deps, keys
 ```
 
-For a genuinely separate clean egress, split the roles across two machines:
-`scripts/run-gateway.sh` on a server (prints the `.onion`, holds no secret),
-`scripts/run-client.sh` on your laptop with `RGOE_ONION=<onion>`. Procedure,
-invariants, and a verification matrix are in [`docs/DEPLOY.md`](docs/DEPLOY.md); the
-friend handout is [`docs/JOIN.md`](docs/JOIN.md); the request lifecycle, hop by hop,
-is in [`docs/walkthrough.html`](docs/walkthrough.html).
+Fastest path to a running fleet, on a fresh Ubuntu droplet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+```
+
+It installs Tor and Node, mints the onions, starts the bootnode + gateway + heartbeat as
+systemd units, and prints the bootnode onion, its pinned signer, and the client command.
+
+Local, understand-the-pieces version (each a terminal):
+
+```bash
+rgoe keygen tor/hs-bootnode           # mint an onion identity
+rgoe bootnode --admission open        # discovery bootnode (its own onion service)
+rgoe gateway                          # a reputation-gated gateway
+rgoe heartbeat --bootnode <onion>     # keep the gateway announced
+rgoe enroll                           # a member identity (prints RGOE_SECRET)
+rgoe client --secret <hex> --bootnode <onion> --dir-signer <signer-pubkey>
+curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
+```
+
+The returned IP is a gateway's, not yours; the gateway never learned your IP; the request
+carried a fresh RLN proof of membership. Full walkthrough (local and droplet) in
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md); every command and variable in
+[`docs/CLI.md`](docs/CLI.md) and [`docs/CONFIG.md`](docs/CONFIG.md).
 
 Watch the gate drop non-members: `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
 
-### A fleet, one CLI, live discovery
+## Security and audit
 
-Beyond the single-gateway PoC, the system now runs as a **fleet with live discovery**, driven
-by one CLI:
+This is a reference implementation, unaudited, and the ZK artifacts came from an untrusted
+testnet ceremony. It is ready to be reviewed end to end: the trust boundaries, the threat
+model per party, the test inventory, and what to read in what order are in
+[`docs/AUDIT.md`](docs/AUDIT.md).
+
+The whole repo is tested. One command runs every node selftest plus the Foundry contract suite:
 
 ```bash
-rgoe keygen tor/hs-bootnode      # mint an onion identity
-rgoe bootnode --admission open   # run the discovery bootnode (its own onion service)
-rgoe gateway                     # run a gateway
-rgoe heartbeat --bootnode <onion>          # keep it announced
-rgoe client --secret <hex> --bootnode <onion> --dir-signer <pubkey>   # rotate across the fleet
+npm test                 # auto-discovers all *selftest.mjs, then `forge test`
+npm run test:node        # node selftests only (no foundry)
 ```
 
-- **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — stand it all up from scratch (local, or one command on a droplet).
-- **[`docs/BOOTNODE.md`](docs/BOOTNODE.md)** — the discovery design: gateways announce over Tor, the onion is never on chain, the bootnode is a cache not a trust root, staking is optional.
-- **[`docs/CLI.md`](docs/CLI.md)** / **[`docs/CONFIG.md`](docs/CONFIG.md)** — every command, flag, and `RGOE_*` variable.
-- **[`bootnode/deploy/`](bootnode/deploy/)** — one-command bring-up on a fresh droplet.
-- **[`smithers/`](smithers/)** — the whole roadmap as a runnable [Smithers](https://smithers.sh) workflow, so others can build on it.
-- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — milestone status (on-chain set, RLN, fleet, bootnode all built).
+Coverage today: the security-critical directory module (onion↔key binding, signature
+verification, poison resistance, rotation), the bootnode discovery loop end to end (every
+adversarial announce rejected), the RLN spent-set and slashing control flow, the on-chain
+`StakedReputationSet` and `GatewayRegistry` (Foundry), the stake verifier, the Tor key-format
+correctness, the CLI, and the client selection path. See [`docs/AUDIT.md`](docs/AUDIT.md) for
+the per-suite breakdown.
 
 ## Scope: what it is and is not
 
-Gets right:
+Built and verified:
 
-- Client anonymous to the gateway: onion rendezvous, no exit node, no IP.
-- Membership proven, never named. The gateway logs a per-epoch nullifier, unlinkable
-  across epochs.
-- Forged sets rejected by the trusted-root check; bad proofs rejected with reasons.
-- Anonymous per-member rate limiting; metadata-only tunnel.
+- **Client anonymous to the gateway.** Onion rendezvous, no exit node, no IP.
+- **Membership proven, never named**, with *per-request* unlinkable nullifiers (real RLN), so
+  even a colluding set of gateways cannot rejoin a member's requests.
+- **Operator never holds a secret.** Self-enrollment: only the commitment leaves the member.
+- **On-chain admission with stake and slashing.** `StakedReputationSet` (members) and an optional
+  `GatewayRegistry` (operators); over-spenders are slashed by cryptographic reconstruction.
+- **A live fleet.** Bootnode discovery, per-request gateway rotation, failover, last-known-good
+  caching. The onion is never on chain; the bootnode is a cache, not a trust root.
+- **Metadata-only tunnel.** TCP `CONNECT :443` only; TLS stays end to end.
 
-Does not do, on purpose:
+Deliberately out of scope, or still an operator responsibility:
 
-- **No payments.** There is no payment, fee, or staking anywhere in the system. The
-  gate is pure membership. Pay-to-enroll, if you ever want it, belongs in the
-  admission policy in front of `enroll.mjs`, not in this code.
-- **No dynamic membership.** The set is fixed at gateway startup. Adding or removing
-  a member means editing `members.json` and restarting, and there is no per-member
-  revocation: removing a leaf changes the root, so the whole set re-keys. Live
-  on-chain membership is in the [roadmap](docs/ROADMAP.md).
-- **Anonymity against the operator is not real yet.** The PoC `enroll.mjs` generates
-  each member's secret and hands it over, so the operator sees it. Until members
-  self-generate their identity and submit only a commitment, you trust the operator.
-  This is the first thing to fix.
-- **The set is the trust root.** The proof gates membership; it does not create
-  reputation. Whatever ceremony adds a leaf (stake, invite, accrued standing,
-  proof-of-personhood) is what "reputable" means. This moves the sybil problem to
-  admission, it does not dissolve it.
-- **Within-epoch linkability.** A member's requests in one epoch share a nullifier.
-  This is separable from the rate window, not inherent; the fix is in the
-  [roadmap](docs/ROADMAP.md).
-- **Replay within an epoch is allowed by design.** The cached proof is re-sent and
-  the gateway counts redemptions. It only ever travels inside the Tor tunnel.
-- **One clean IP at volume still looks botlike.** Scaling is a fleet-of-clean-IPs
-  problem; the fleet, its discovery, and per-request gateway rotation are in the
-  [roadmap](docs/ROADMAP.md).
-- **Rendezvous DoS.** Anyone with the `.onion` can force ~30 ms of verify work each.
-  Tor's onion proof-of-work defense is the outer gate: stock tor with the GPL `pow`
-  module, which `scripts/start-tor.sh` enables automatically when the build has it.
+- **No payments.** The gate is membership plus stake, not a fee. Anonymous payments are designed
+  in [`docs/PAYMENTS.md`](docs/PAYMENTS.md), not built.
+- **Admission is where sybil resistance lives.** The proof gates membership; it does not create
+  reputation. Whatever adds a leaf (stake, invite, standing, proof-of-personhood) is what
+  "reputable" means. This moves the sybil problem to admission; it does not dissolve it.
+- **Gateway slashing is governed, not permissionless.** A member over-spend is a cryptographic
+  proof; gateway misbehavior is a subjective judgment, so `GatewayRegistry.slash` is owner-gated.
+- **Scale past one clean IP is the fleet's job**, and the fleet is only as clean as its gateways'
+  IPs. Sourcing and rotating clean egress IPs is an operational problem, not a protocol one.
+- **Rendezvous DoS.** Anyone with a `.onion` can force verify work; Tor's onion proof-of-work
+  defense is the outer gate, enabled where the tor build has the `pow` module.
+- **Unaudited, testnet ZK artifacts.** Do not put real funds or real anonymity needs on this yet.
 
-Per-party worst case and the fixes in priority order:
-[`docs/adversarial-review.md`](docs/adversarial-review.md). Scoped-but-unbuilt design
-(unlinkable rate limiting, on-chain set): [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-review.md).
+Milestone design and status: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Layout
 
 | Path | What it is |
 |------|------------|
-| `lib/semaphore.mjs` | Shared: load the group, prove, verify, epoch math |
-| `group/enroll.mjs` | Add a member to the set (the trust boundary) |
-| `group/seed-demo-members.mjs` | Mint a labeled demo set + a private keyring to hand out |
-| `group/members.json` | The published set (identity commitments only) |
-| `gateway/gateway.mjs` | Onion-side egress proxy: verify, rate-limit, tunnel, drop |
-| `client/shim.mjs` | Local CONNECT proxy: prove, dial onion over Tor, tunnel |
-| `scripts/probe.mjs` | Adversary probe (no-proof / garbage / forged-group) |
-| `scripts/run-all.sh` | Start tor + gateway + shim on one machine (local PoC) |
-| `scripts/run-gateway.sh` | Server role: tor + gateway, no shim, no secret |
-| `scripts/run-client.sh` | Laptop role: client-only tor + shim, via `RGOE_ONION` |
-| `scripts/join.sh` | Friend one-command: bring up the client and verify |
-| `scripts/verify.sh` / `gateway-status.sh` | Client and server receipts |
-| `scripts/build-tor-pow.sh` | Compile a pow-capable tor (`--enable-gpl`) into `tor/tor-pow/` |
-| `tor/torrc`, `tor/torrc.client` | Dedicated tor (onion + PoW) and client-only tor (SOCKS) |
-| `docs/DEPLOY.md`, `docs/JOIN.md` | Two-machine deploy; friend handout |
-| `docs/STATUS.md`, `docs/ROADMAP.md` | Current status and results; scoped-but-unbuilt design |
-| `docs/walkthrough.html` | Visual request-lifecycle walkthrough |
-| `docs/exit-blocking-benchmark.md` | Exit-blocking benchmark: method and the 6-outcome classifier |
-| `docs/post/` | The published write-up (HTML + figures), live at [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app) |
-| `docs/adversarial-review.md` | Worst case per party, and the fixes |
+| `bin/rgoe.mjs` | The unified CLI (every role, `--flag` → `RGOE_*` env) |
+| `lib/rln.mjs`, `circuits/rln/` | Real circom-rln Groth16: prove, verify, reconstruct, slash |
+| `lib/semaphore.mjs` | Load the group, prove, verify, epoch/slot math |
+| `lib/directory.mjs` | Signed fleet directory: onion↔key binding, verify, rotation |
+| `lib/root-provider.mjs` | Read the on-chain admission root (node or light client) |
+| `lib/gateway-registry.mjs` | The pluggable gateway-stake verifier (on-chain or mock) |
+| `contracts/StakedReputationSet.sol` | Member stake + ZK exit/withdraw + permissionless slash |
+| `contracts/GatewayRegistry.sol` | Optional gateway operator stake (onion never on chain) |
+| `gateway/gateway.mjs` | Onion-side egress: verify, dedup/slash, tunnel, drop |
+| `client/rgoe-client.mjs`, `client/shim.mjs` | The fleet client (library) and its HTTP-CONNECT proxy |
+| `client/selection.mjs` | Per-request gateway selection over the directory / bootnode |
+| `bootnode/server.mjs` | Live discovery service (its own onion); serves the signed directory |
+| `bootnode/announce.mjs`, `keygen.mjs`, `heartbeat.mjs`, `fetch.mjs` | Announce protocol, onion identity, gateway heartbeat, client fetch |
+| `bootnode/deploy/` | One-command droplet bring-up |
+| `group/enroll.mjs` | Self-enrollment (member generates its own identity) |
+| `group/register-onchain.mjs`, `register-gateway.mjs` | Stake a member commitment / a gateway operator |
+| `smithers/` | The whole roadmap as a runnable [Smithers](https://smithers.sh) workflow |
+| `docker/`, `Dockerfile`, `docker-compose.yml` | Container image + a local tor/bootnode/gateway/client fleet |
+| `scripts/test-all.mjs` | The audit entrypoint: every selftest + the contract suite |
+| `docs/AUDIT.md` | Threat model, trust boundaries, test inventory, review order |
+| `docs/QUICKSTART.md`, `CLI.md`, `CONFIG.md`, `BOOTNODE.md` | Getting started, commands, config, discovery design |
+| `docs/ROADMAP.md`, `ONCHAIN.md`, `PAYMENTS.md` | Milestone design; on-chain admission; anonymous-payment design |
+| `docs/STATUS.md`, `adversarial-review.md`, `exit-blocking-benchmark.md` | Live results; per-party worst case; the benchmark |
+| `docs/post/` | The published write-up (HTML + figures) |

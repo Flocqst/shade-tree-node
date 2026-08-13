@@ -62,7 +62,7 @@ function once(host, method, path, body, { torHost, torPort, timeoutMs }) {
 
 // Minimal HTTP/1.1 response parse. The bootnode always sends a Content-Length body (never
 // chunked), and we close the connection per request, so header/body split is enough.
-function parseHttp(buf) {
+export function parseHttp(buf) {
   const sep = buf.indexOf("\r\n\r\n");
   if (sep === -1) throw new Error("no HTTP header terminator");
   const head = buf.subarray(0, sep).toString("utf8");
