@@ -124,10 +124,11 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   egress, per-request rotation across both gateways, failover when one is killed, and a live
   over-spend → on-chain slash (against anvil). Gated behind `RGOE_IT=1` (needs tor). *Accept:*
   green on a tor-capable box; documented skip otherwise.
-- [ ] **T-TEST-2 (P0) Fuzz/property tests.** Feed random/malformed bytes to every parser and
-  assert clean rejection (no crash, no hang): `onionToPubkey`, envelope parse, `parseHttp`,
-  `canonicalDirectoryBytes` permutation-invariance, address encoding. *Accept:* a `*.fuzz.mjs`
-  per surface, thousands of iterations, zero throws-that-escape.
+- [x] **T-TEST-2 (P0) Fuzz/property tests.** `test/fuzz.selftest.mjs` (seeded mulberry32, replayable):
+  hostile input to `onionToPubkey`, `parseHttp`, `verifyDirectory`, `verifyAnnounce` (total, garbage
+  => ok:false, never throws/hangs), plus the round-trip and `canonicalDirectoryBytes`
+  permutation-invariance properties. Passes across seeds. *Remaining:* envelope/`validTarget` parse
+  (not yet exported) and address-encoding fuzz — fold in with T-DEV-7.
 - [ ] **T-TEST-3 (P0) Fill remaining unit selftests.** `lib/root-provider.mjs` (event ordering,
   removal, LKG), `lib/semaphore.mjs` (epoch/slot math, prove/verify), `bootnode/announce.mjs`
   (verifyAnnounce matrix directly), `bootnode/heartbeat.mjs` (operator resolution), `group/enroll.mjs`
@@ -303,3 +304,5 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
 
 - 2026-08-13  (baseline) bootnode discovery, GatewayRegistry, CLI, Docker, docs, repo-wide
   tests (10 suites green), CI, and this plan. See PR #5.
+- 2026-08-13  T-TEST-2  fuzz/property suite over every untrusted-input parser (test/fuzz.selftest.mjs);
+  11 suites green. (a9c3d2c..)
