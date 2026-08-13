@@ -1,0 +1,243 @@
+# Ship plan: from working reference to robustly shipped
+
+This is the execution roadmap to take reputation-gated onion egress from a working,
+tested reference implementation to something robustly deployed, monitored, documented,
+and safe for others to run. It is the source of truth for the autonomous build loop.
+
+For the *protocol design* milestones (what each feature is and why) see
+[`ROADMAP.md`](ROADMAP.md). This doc is the *shipping* backlog: concrete, checkable
+tasks across every workstream, prioritized, with acceptance criteria.
+
+---
+
+## Loop protocol (how an iteration works)
+
+Each loop iteration:
+
+1. Read this file. Pick the **highest-priority unchecked task** whose dependencies are
+   met (P0 before P1 before P2; within a tier, top-down). Prefer finishing an in-progress
+   item over starting a new one.
+2. Implement ONE vertical slice completely: code + tests + docs for that task.
+3. **Gate before commit:** `npm test` green (node selftests + `forge test`), plus the
+   task's own acceptance criteria demonstrated. Never commit red.
+4. Check the box here, add a one-line entry to the [Changelog](#changelog) with the date,
+   commit (conventional-commit message, `Co-Authored-By` trailer), and push.
+5. Stop. The next iteration picks up the next task.
+
+**Definitions of done (apply to every task):**
+- Every new module ships with a `*selftest.mjs`; every wire/parse surface gets an
+  adversarial test; every contract change gets a Foundry test.
+- Docs updated in the same slice (never a separate "docs later" task).
+- No secret ever committed or logged. No new dependency without a note on why.
+- Honest scope: if a task is partially done, split it and mark what remains.
+
+**Never do autonomously (flag for the human instead):** rotate/replace production onion or
+operator keys, spend real funds, run a trusted-setup ceremony, deploy a breaking change to a
+live gateway serving members, or merge to `main` without CI green.
+
+---
+
+## Current focus
+
+> Next up: **T-DEPLOY-1** (deploy bootnode + gateway to `anon-egress`, verify live) and
+> **T-TEST-1** (real-Tor local fleet integration test). Both unblock the rest.
+
+Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `(Pn)` priority.
+
+---
+
+## 1. Development & correctness  *(go hard here)*
+
+Protocol and code gaps between "works in the happy path" and "correct under an adversary
+and at scale."
+
+- [ ] **T-DEV-1 (P0) Real exit-auth verifier.** Replace `MockWithdrawVerifier` with the real
+  Groth16 verifier so `StakedReputationSet.initiateExit`/`withdraw` are genuinely ZK-authorized
+  (prove knowledge of the identity secret) on chain. *Accept:* a withdrawal with a bogus proof
+  reverts `BadProof`; a valid one succeeds; Foundry test with the real verifier.
+- [ ] **T-DEV-2 (P0) RLN leaf removal parity.** `reconstructRoot` rebuilds a fresh tree of
+  survivors (renumbering indices); an on-chain slash that zeroes a leaf in place would diverge
+  (`lib/root-provider.mjs` COORDINATION note). Make JS and contract agree on removal semantics.
+  *Accept:* register 3, slash the middle, both sides compute the identical root; test.
+- [ ] **T-DEV-3 (P0) Message-to-target binding.** Bind the RLN signal to the request target so a
+  captured envelope cannot be redirected to a different destination within the tunnel. *Accept:*
+  an envelope built for `a.com:443` is rejected if replayed against `b.com:443`; test.
+- [ ] **T-DEV-4 (P1) Bootnode persistence.** The registry is in-memory, so a restart drops the
+  whole fleet until every gateway re-announces. Write-through to a small store (JSON/sqlite) and
+  reload verified entries on boot (re-checking freshness). *Accept:* announce, restart the
+  bootnode, `/directory` still lists live entries; test with an injected clock.
+- [ ] **T-DEV-5 (P1) Client zero-trust operator re-verification.** In stake mode, the client
+  should fetch `GET /gateway/<onion>` and re-verify `operatorSig` + `isStaked(operator)` itself,
+  not trust the bootnode's `staked` label. *Accept:* a bootnode that pairs a staked operator with
+  an onion that operator never signed is rejected client-side; test.
+- [ ] **T-DEV-6 (P1) Announce rate-limiting + per-onion caps.** Bound announces per onion and
+  globally per window so a flood cannot exhaust bootnode memory/CPU. *Accept:* N+1th announce in a
+  window is rejected `rate-limited`; test.
+- [ ] **T-DEV-7 (P1) Config validation + fail-fast.** Every entrypoint validates required config
+  and prints a precise error + nonzero exit on bad/missing values (bad onion, missing signer, bad
+  address, unreachable RPC). *Accept:* a table-driven selftest of bad configs per command.
+- [ ] **T-DEV-8 (P1) Graceful shutdown / connection draining.** Gateway and bootnode handle
+  SIGTERM: stop accepting, drain in-flight, exit clean. *Accept:* a request in flight during
+  SIGTERM completes; test.
+- [ ] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
+  works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
+  the light provider returns a root validated against a header; test.
+- [ ] **T-DEV-10 (P2) Configurable egress policy.** Beyond `:443`-only: an allow/deny list of
+  target host:port ranges, default-deny. *Accept:* policy enforced + logged; test.
+- [ ] **T-DEV-11 (P2) Directory scale.** Compress/paginate `/directory`; bound entry count; a
+  stable ETag so clients can skip unchanged fetches. *Accept:* 10k-entry directory served + fetched
+  under a size/latency budget; load test.
+- [ ] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
+  reflect reachability in `health`, so a silently-dead gateway is demoted before a client hits it.
+
+## 2. Testing  *(go hard here)*
+
+- [ ] **T-TEST-1 (P0) Real-Tor local fleet integration test.** `test/integration/fleet-e2e.mjs`:
+  bring up an ephemeral tor + bootnode + 2 gateways + client; assert discovery, a successful
+  egress, per-request rotation across both gateways, failover when one is killed, and a live
+  over-spend → on-chain slash (against anvil). Gated behind `RGOE_IT=1` (needs tor). *Accept:*
+  green on a tor-capable box; documented skip otherwise.
+- [ ] **T-TEST-2 (P0) Fuzz/property tests.** Feed random/malformed bytes to every parser and
+  assert clean rejection (no crash, no hang): `onionToPubkey`, envelope parse, `parseHttp`,
+  `canonicalDirectoryBytes` permutation-invariance, address encoding. *Accept:* a `*.fuzz.mjs`
+  per surface, thousands of iterations, zero throws-that-escape.
+- [ ] **T-TEST-3 (P0) Fill remaining unit selftests.** `lib/root-provider.mjs` (event ordering,
+  removal, LKG), `lib/semaphore.mjs` (epoch/slot math, prove/verify), `bootnode/announce.mjs`
+  (verifyAnnounce matrix directly), `bootnode/heartbeat.mjs` (operator resolution), `group/enroll.mjs`
+  (commitment-only, secret stays local), `group/sign-directory.mjs`. *Accept:* each has a selftest
+  the runner discovers.
+- [ ] **T-TEST-4 (P0) Consolidated adversarial/security suite.** `test/security/`: poisoned
+  directory, MITM bootnode, replay, stake lapse mid-session, grafted onion, over-budget slash,
+  signer swap. Some exist in module selftests; consolidate + expand into one auditable place.
+- [ ] **T-TEST-5 (P1) Foundry fuzz + invariants + gas.** Fuzz `register/exit/withdraw/slash`
+  (random bonds, addresses, timings); invariants (`activeCount` == live stakes; contract balance
+  == sum of live bonds); `forge snapshot` gas baseline in CI; `forge coverage` with a floor. *Accept:*
+  fuzz + invariant runs green in CI; coverage gate set.
+- [ ] **T-TEST-6 (P1) Node coverage gate.** Wire `c8` over the selftests; fail CI below a set
+  threshold; publish the report. *Accept:* `npm run coverage` + CI gate.
+- [ ] **T-TEST-7 (P1) Load/soak tests.** Bootnode announce storm (K onions × M heartbeats),
+  gateway request throughput, concurrent directory fetch; assert bounded memory (no leak over a
+  soak) and stable latency. *Accept:* a `test/load/` harness + a recorded baseline.
+- [ ] **T-TEST-8 (P1) Deploy bootstrap e2e in a container.** Run `bootnode/deploy/bootstrap.sh`
+  inside an Ubuntu container in CI (or a documented local job); assert services start and onions
+  publish. *Accept:* the bootstrap is tested, not just hand-run once.
+- [ ] **T-TEST-9 (P1) CI matrix + lint + audit.** Node 20/22/24; with/without foundry; add eslint
+  + prettier checks; `npm audit --audit-level=high` gate; ZK-artifact hash check vs `ARTIFACTS.md`.
+- [ ] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
+  the tests actually catch regressions. *Accept:* mutation score reported; obvious survivors killed.
+
+## 3. Deployment & infrastructure
+
+- [ ] **T-DEPLOY-1 (P0) First live deployment.** Deploy the bootnode + a gateway (to `anon-egress`
+  or a fresh droplet), announce the gateway, and verify a laptop client egresses through the fleet
+  end to end. *Accept:* `curl -x` through the client returns the gateway IP; `/directory` lists it.
+- [ ] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** At least 2 gateways on different
+  providers/regions so rotation spreads the both-ends AS vantage. *Accept:* directory shows ≥2, the
+  client rotates across them.
+- [ ] **T-DEPLOY-3 (P1) Infra-as-code.** Provision + configure the fleet via OpenTofu + Ansible
+  (in `agent-devops`), not hand-ssh. *Accept:* `tofu apply` + a playbook stand up a gateway
+  reproducibly.
+- [ ] **T-DEPLOY-4 (P1) Systemd hardening.** `NoNewPrivileges`, `ProtectSystem=strict`,
+  `PrivateTmp`, `ProtectHome`, `MemoryMax`, `TasksMax`, minimal `CapabilityBoundingSet` on all
+  units. *Accept:* `systemd-analyze security` score improved; services still work.
+- [ ] **T-DEPLOY-5 (P1) Onion key backup/restore.** Documented, encrypted, off-box backup of HS
+  keys + a tested restore. *Accept:* restore a gateway's onion on a new box from backup.
+- [ ] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
+- [ ] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
+  wired to the live fleet (reuse Sepolia or a chosen L2).
+
+## 4. Website & status
+
+- [ ] **T-WEB-1 (P1) Live fleet status page.** Pull bootnode `/health` + `/directory` (via a
+  tor-capable fetch or a small server-side proxy) and show fleet size, per-gateway health, last
+  announce, bootnode reachability. No operator identities. *Accept:* a deployed page that updates.
+- [ ] **T-WEB-2 (P2) Landing refresh.** Extend the existing write-up site with "run a gateway" and
+  "join the set" sections and the CLI quickstart.
+- [ ] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
+- [ ] **T-WEB-4 (P3) Fleet map** (regions/ASNs, privacy-preserving).
+
+## 5. Documentation
+
+- [ ] **T-DOC-1 (P1) Operator runbook.** Deploy, monitor, rotate keys, respond to a slash, retire a
+  gateway, join the fleet. *Accept:* `docs/OPERATOR.md`.
+- [ ] **T-DOC-2 (P1) Incident response playbook.** Bootnode down, gateway compromised, key leak,
+  chain/RPC outage, mass-DROP spike. *Accept:* `docs/INCIDENT.md`.
+- [ ] **T-DOC-3 (P1) Wire-protocol + API spec.** The bootnode HTTP API and the envelope/announce
+  wire formats, versioned. *Accept:* `docs/PROTOCOL-API.md`.
+- [ ] **T-DOC-4 (P2) SECURITY.md** (disclosure policy) + **CONTRIBUTING.md** + ADRs for the load-
+  bearing decisions (onion-off-chain, bootnode-as-cache, RLN-over-slot).
+
+## 6. Hardening
+
+- [ ] **T-HARD-1 (P0) Real trusted setup / artifact provenance.** Replace the untrusted testnet ZK
+  artifacts; document the ceremony or pin audited artifacts; CI verifies hashes. *(Flag the ceremony
+  itself for the human.)*
+- [ ] **T-HARD-2 (P1) Supply chain.** Pin deps, commit the lockfile, `npm audit` gate,
+  `npm ci --ignore-scripts` where possible, Dependabot. *Accept:* audit gate green in CI.
+- [ ] **T-HARD-3 (P1) Log hygiene.** Assert no secret (member secret, operator key, onion seed) is
+  ever logged; add a scrubbing test. *Accept:* a selftest greps captured logs for secret material.
+- [ ] **T-HARD-4 (P1) Endpoint hardening.** Body-size caps (partly present), request timeouts, slow-
+  loris protection, per-connection limits on gateway + bootnode. *Accept:* tests for each limit.
+- [ ] **T-HARD-5 (P2) Directory signer rotation.** Versioned signer with an overlap window so the
+  pinned key can rotate without a flag day. *Accept:* clients accept old+new during overlap; test.
+- [ ] **T-HARD-6 (P2) Contract audit prep.** Reentrancy/overflow re-review, consider an owner-slash
+  timelock, static analysis (slither), a written invariants doc for auditors.
+- [ ] **T-HARD-7 (P2) Tor hardening.** Vanguards-lite, PoW tuning, optional client-auth for a
+  private fleet.
+
+## 7b. Client implementation language (decision + Rust client)
+
+**Decision (ADR).** Keep the **JavaScript client as the reference** implementation: it defines
+the wire protocol and shares the security-critical checks (`lib/directory.mjs` onion↔key binding,
+`verifyDirectory`, envelope format) with the gateway and bootnode, so there is exactly one source
+of truth for those checks. Build a **Rust client as the distributable** for going live. The Rust
+client is not chosen for raw speed (RLN proving already runs in wasm/native) but for two things JS
+cannot match:
+
+1. **Single static binary** distribution — no "install Node + npm install" for the people who run
+   the client.
+2. **Embedded Tor via [`arti`](https://gitlab.torproject.org/tpo/core/arti)** — the client is its
+   own Tor client, removing the system-`tor`-daemon + SOCKS + `torrc` friction that is the biggest
+   wart in the current client UX (and a security win: no separate process).
+
+Stack: `arti` (Tor), [`zerokit`](https://github.com/vacp2p/zerokit) (PSE's canonical Rust RLN),
+`alloy` (chain reads), `tokio`/`hyper`. The gateway and bootnode stay JS (operator-controlled
+env; little upside to a rewrite, real risk in duplicating the trust-critical checks).
+
+- [ ] **T-RUST-1 (P1) Wire-format conformance harness.** Before any rewrite: a language-neutral
+  fixture set (canonical directory bytes, a signed directory, announce records, an RLN envelope for
+  a fixed secret+target) with expected outputs, plus a runner both clients must pass. This is the
+  contract that stops the two implementations from drifting. *Accept:* the JS client reproduces
+  every fixture; the harness is ready for a second implementation. Depends on **T-DOC-3**.
+- [ ] **T-RUST-2 (P1) Rust client MVP.** `arti`-dialed onion connect + envelope send + tunnel, with
+  the directory fetched and verified (onion↔key binding + pinned-signer signature) in Rust. RLN
+  proving via `zerokit`. *Accept:* passes T-RUST-1 conformance; egresses through a live gateway
+  byte-for-byte like the JS client.
+- [ ] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
+  last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. *Accept:*
+  the real-Tor integration test (T-TEST-1) passes with the Rust client swapped in.
+- [ ] **T-RUST-4 (P2) Release binaries.** Cross-compiled static binaries (linux x86_64/arm64,
+  macOS, windows) in CI releases; `rgoe` install without a runtime. *Accept:* a downloadable binary
+  runs on a clean box with no Node/Tor installed.
+
+## 7. Monitoring & observability
+
+- [ ] **T-MON-1 (P1) Structured logging.** JSON logs with levels across gateway + bootnode; no
+  secrets. *Accept:* logs parse; level configurable.
+- [ ] **T-MON-2 (P1) Prometheus metrics.** Gateway: pass/drop/slash counters, verify-latency
+  histogram, active tunnels. Bootnode: announces accepted/rejected by reason, directory size, fetch
+  count. *Accept:* a `/metrics` endpoint (loopback) per role + tests.
+- [ ] **T-MON-3 (P1) Dashboards + alerts.** Grafana dashboards (reuse the local OTel→Grafana stack)
+  and alerts: gateway/bootnode down, slash event, stake lapse, announce-rejection spike. *Accept:*
+  a dashboard JSON + alert rules in-repo.
+- [ ] **T-MON-4 (P2) External uptime checks** against onion `/health` via a tor-capable prober.
+- [ ] **T-MON-5 (P2) SLOs + error budget** for fleet availability and egress success rate.
+
+---
+
+## Changelog
+
+Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<commit>)`.
+
+- 2026-08-13  (baseline) bootnode discovery, GatewayRegistry, CLI, Docker, docs, repo-wide
+  tests (10 suites green), CI, and this plan. See PR #5.

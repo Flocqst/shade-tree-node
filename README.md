@@ -194,5 +194,6 @@ Milestone design and status: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | `docs/AUDIT.md` | Threat model, trust boundaries, test inventory, review order |
 | `docs/QUICKSTART.md`, `CLI.md`, `CONFIG.md`, `BOOTNODE.md` | Getting started, commands, config, discovery design |
 | `docs/ROADMAP.md`, `ONCHAIN.md`, `PAYMENTS.md` | Milestone design; on-chain admission; anonymous-payment design |
+| `docs/SHIP-PLAN.md` | The shipping backlog: dev, testing, deploy, hardening, monitoring, Rust client |
 | `docs/STATUS.md`, `adversarial-review.md`, `exit-blocking-benchmark.md` | Live results; per-party worst case; the benchmark |
 | `docs/post/` | The published write-up (HTML + figures) |
