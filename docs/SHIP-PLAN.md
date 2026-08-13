@@ -156,12 +156,13 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   + prettier checks; `npm audit --audit-level=high` gate; ZK-artifact hash check vs `ARTIFACTS.md`.
 - [ ] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
   the tests actually catch regressions. *Accept:* mutation score reported; obvious survivors killed.
-- [ ] **T-TEST-11 (P0) Golden crypto fixtures (shared with Rust).** A language-neutral `testdata/`
-  of canonical vectors: `canonicalDirectoryBytes` for a fixed dir, a signed directory + its
-  signature, announce records (onion-only + staked), an RLN envelope for a fixed (secret, epoch,
-  slot, target). The JS suite asserts it reproduces each; the Rust client (T-RUST-1) must match the
-  same bytes. This is the anti-drift contract between implementations. *Accept:* `testdata/` +
-  a JS fixture test; documented format.
+- [x] **T-TEST-11 (P0) Golden crypto fixtures (shared with Rust).** DONE (loop-4):
+  `testdata/vectors.json` (fixed test seeds) + `test/vectors.selftest.mjs` re-derive and byte-pin
+  the deterministic surfaces: key→onion derivation, `canonicalDirectoryBytes`, the ed25519 directory
+  signature, `canonicalAnnounceBytes`, the announce onion signature, and the operator-auth message.
+  This is both a regression guard for the JS wire formats and the anti-drift contract T-RUST-1 will
+  check the Rust client against. *Note:* RLN Groth16 proofs are non-deterministic, so they are
+  verified for equivalence (`lib/rln.selftest.mjs`), not byte-pinned here.
 - [ ] **T-TEST-12 (P0) RLN slash-math property test.** Over many random (secret, epoch, slot)
   triples and message pairs: one signal never slashes; two distinct signals on one nullifier ALWAYS
   reconstruct the exact secret and derive the right rateCommitment; a distinct nullifier never
@@ -275,11 +276,11 @@ deploy, because it is the client people will actually run.
   boundary: JS reference vs Rust distributable, and whether/when the gateway+bootnode also move to
   Rust (criteria: a second operator, an embedded/mobile target, or a security review demanding one
   language). *Accept:* `rust/` builds an empty workspace in CI; `docs/adr/` entry.
-- [ ] **T-RUST-1 (P1) Wire-format conformance harness.** Before any rewrite: a language-neutral
-  fixture set (canonical directory bytes, a signed directory, announce records, an RLN envelope for
-  a fixed secret+target) with expected outputs, plus a runner both clients must pass. This is the
-  contract that stops the two implementations from drifting. *Accept:* the JS client reproduces
-  every fixture; the harness is ready for a second implementation. Depends on **T-DOC-3**.
+- [~] **T-RUST-1 (P1) Wire-format conformance harness.** SEEDED by T-TEST-11: `testdata/vectors.json`
+  is the language-neutral fixture set and the JS side already reproduces every value
+  (`test/vectors.selftest.mjs`). REMAINING: document the vector format in the wire spec (T-DOC-3) and
+  add a Rust-side runner that asserts the same bytes, so the harness gates both implementations.
+  *Accept:* the JS client reproduces every fixture (done); a Rust runner reproduces them too.
 - [ ] **T-RUST-2 (P1) Rust client MVP.** `arti`-dialed onion connect + envelope send + tunnel, with
   the directory fetched and verified (onion↔key binding + pinned-signer signature) in Rust. RLN
   proving via `zerokit`. *Accept:* passes T-RUST-1 conformance; egresses through a live gateway
@@ -335,6 +336,13 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-10 (P2, added loop-4) Gateway capability advertisement + capability-aware selection.**
+  Gateways advertise capabilities in their signed announce (allowed egress ports/policy, a region/AS
+  hint, protocol versions); clients select gateways matching the request's needs, so the fleet goes
+  from "any gateway" to "the right gateway" as egress policy grows (T-DEV-10). Capabilities must be
+  coarse enough not to fingerprint a member's request. *Accept:* an announce carries signed
+  capabilities; a client needing port X only selects gateways advertising X; capability set is
+  bucketed, not free-form.
 - [ ] **T-FEAT-9 (P2, added loop-3) Threshold-signed directory.** Today the directory trusts one
   bootnode signer key; compromising it poisons every client's fleet view (they still can't be sent a
   forged onion — onion-control is re-checked — but entries could be omitted/reordered). Sign the
@@ -372,3 +380,6 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
 - 2026-08-13  loop-3  T-TEST-3 (semaphore/rln epoch + requestSignal primitives, 17 assertions);
   focused self-review of loop-2 hardening (sound; logged one global-rate-limit refinement under
   T-HARD-4); added T-FEAT-9 (threshold-signed directory). 13 suites green.
+- 2026-08-13  loop-4  T-TEST-11 (golden cross-impl vectors: testdata/vectors.json +
+  test/vectors.selftest.mjs, 11 assertions; seeds T-RUST-1); audit self-review of loop-3 test (sound);
+  added T-FEAT-10 (gateway capability advertisement). 14 suites green.
