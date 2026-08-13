@@ -129,11 +129,12 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   => ok:false, never throws/hangs), plus the round-trip and `canonicalDirectoryBytes`
   permutation-invariance properties. Passes across seeds. *Remaining:* envelope/`validTarget` parse
   (not yet exported) and address-encoding fuzz — fold in with T-DEV-7.
-- [ ] **T-TEST-3 (P0) Fill remaining unit selftests.** `lib/root-provider.mjs` (event ordering,
-  removal, LKG), `lib/semaphore.mjs` (epoch/slot math, prove/verify), `bootnode/announce.mjs`
-  (verifyAnnounce matrix directly), `bootnode/heartbeat.mjs` (operator resolution), `group/enroll.mjs`
-  (commitment-only, secret stays local), `group/sign-directory.mjs`. *Accept:* each has a selftest
-  the runner discovers.
+- [~] **T-TEST-3 (P0) Fill remaining unit selftests.** DONE: `lib/root-provider.mjs`
+  (`lib/root-provider.selftest.mjs` — ordering, dedup, removal, stays-removed, empty→null,
+  determinism, 12 assertions with a `newGroup` oracle). REMAINING: `lib/semaphore.mjs` (epoch/slot
+  math, prove/verify), `group/enroll.mjs` (commitment-only, secret stays local),
+  `group/sign-directory.mjs`, `bootnode/heartbeat.mjs` (operator resolution). *Accept:* each has a
+  selftest the runner discovers.
 - [ ] **T-TEST-4 (P0) Consolidated adversarial/security suite.** `test/security/`: poisoned
   directory, MITM bootnode, replay, stake lapse mid-session, grafted onion, over-budget slash,
   signer swap. Some exist in module selftests; consolidate + expand into one auditable place.
@@ -298,6 +299,40 @@ deploy, because it is the client people will actually run.
 
 ---
 
+## 8. Feature backlog (extensions)
+
+New capabilities beyond hardening the current design. Post-Gate features unless noted; the loop
+adds to this as it goes and pulls from it once Gates 1-2 are green.
+
+- [ ] **T-FEAT-1 (P1) Bootnode federation / gossip.** More than one bootnode, gossiping announces
+  so discovery is not a single availability point. A client can pin multiple bootnode signers and
+  union their (independently-verified) directories. *Accept:* two bootnodes converge on the same
+  live set; a client survives one going dark. *Why now-ish:* the bootnode is the one new
+  single-point-of-availability the fleet added; this closes it.
+- [ ] **T-FEAT-2 (P1) `rgoe join` guided onboarding.** One interactive command that does keygen +
+  self-enroll + (optional) on-chain register + prints the exact client invocation, so a new member
+  or gateway operator has a single front door. *Accept:* a fresh user joins the local fleet with one
+  command.
+- [ ] **T-FEAT-3 (P1) Client SDK packaging.** Publish `client/rgoe-client.mjs` as an npm package and
+  the coming Rust client as a crate, both behind the conformance harness, so agents/apps embed the
+  client instead of shelling the proxy. *Accept:* `import { RgoeClient }` from the published package
+  works against a live fleet.
+- [ ] **T-FEAT-4 (P2) Quality-aware rotation.** Clients report anonymized latency/success back; the
+  bootnode aggregates it into the advertised `weight`/`health` (never per-member), so rotation
+  favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
+  a slow gateway loses weight fleet-wide; a privacy note proving no member is fingerprinted.
+- [ ] **T-FEAT-5 (P2) Deterministic member subkeys.** Derive per-epoch or per-context commitments
+  from one master secret (HD-style) so a member can rotate its on-chain commitment without a new
+  enrollment ceremony, and hold several unlinkable personas from one backup. *Accept:* subkeys
+  derive deterministically; each is independently enrollable + provable.
+- [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
+  changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
+  returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-7 (P3) Payment layer.** Wire the anonymous-payment design (`docs/PAYMENTS.md`:
+  Cashu or an on-chain Privacy-Pools-funded stake) as an optional admission path, so egress can be
+  paid-for without rebuilding the identity graph. *Accept:* a paid credential admits a member with
+  no link to the funding source; scoped as its own sub-plan.
+
 ## Changelog
 
 Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<commit>)`.
@@ -306,3 +341,5 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   tests (10 suites green), CI, and this plan. See PR #5.
 - 2026-08-13  T-TEST-2  fuzz/property suite over every untrusted-input parser (test/fuzz.selftest.mjs);
   11 suites green. (a9c3d2c..)
+- 2026-08-13  loop-1  T-TEST-3 (partial: root-provider reconstructRoot, 12 assertions w/ newGroup
+  oracle); added feature backlog (T-FEAT-1..7); audit of recent work in progress. 12 suites green.
