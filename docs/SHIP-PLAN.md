@@ -132,11 +132,11 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   permutation-invariance properties. Passes across seeds. *Remaining:* envelope/`validTarget` parse
   (not yet exported) and address-encoding fuzz — fold in with T-DEV-7.
 - [~] **T-TEST-3 (P0) Fill remaining unit selftests.** DONE: `lib/root-provider.mjs`
-  (`lib/root-provider.selftest.mjs` — ordering, dedup, removal, stays-removed, empty→null,
-  determinism, 12 assertions with a `newGroup` oracle). REMAINING: `lib/semaphore.mjs` (epoch/slot
-  math, prove/verify), `group/enroll.mjs` (commitment-only, secret stays local),
-  `group/sign-directory.mjs`, `bootnode/heartbeat.mjs` (operator resolution). *Accept:* each has a
-  selftest the runner discovers.
+  (`lib/root-provider.selftest.mjs`, 12 assertions w/ a `newGroup` oracle); `lib/semaphore.mjs` /
+  `lib/rln.mjs` epoch + signal primitives (`lib/semaphore.selftest.mjs`, 17 assertions — currentEpoch
+  boundary/monotonicity, requestSignal determinism = the deterministic-retry invariant). REMAINING:
+  `group/enroll.mjs` (commitment-only, secret stays local), `group/sign-directory.mjs`,
+  `bootnode/heartbeat.mjs` (operator resolution). *Accept:* each has a selftest the runner discovers.
 - [ ] **T-TEST-4 (P0) Consolidated adversarial/security suite.** `test/security/`: poisoned
   directory, MITM bootnode, replay, stake lapse mid-session, grafted onion, over-budget slash,
   signer swap. Some exist in module selftests; consolidate + expand into one auditable place.
@@ -236,7 +236,10 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [~] **T-HARD-4 (P1) Endpoint hardening.** DONE (loop-2): the client's response read from the
   semi-trusted bootnode is now capped (`RGOE_BOOTNODE_MAX_RESP`, was unbounded => OOM lever), and
   the server's oversized-body rejection is tested. REMAINING: slow-loris/idle-timeout on the
-  gateway tunnel, per-connection limits, request timeouts on the bootnode server.
+  gateway tunnel, per-connection limits, request timeouts on the bootnode server, and a GLOBAL
+  announce token-bucket (loop-3 self-review: the per-onion throttle does not slow an attacker
+  minting fresh onions until the size cap fills, so up to `maxEntries` ed25519 verifies are
+  reachable in a burst; a global rate cap throttles that pre-full).
 - [ ] **T-HARD-5 (P2) Directory signer rotation.** Versioned signer with an overlap window so the
   pinned key can rotate without a flag day. *Accept:* clients accept old+new during overlap; test.
 - [ ] **T-HARD-6 (P2) Contract audit prep.** Reentrancy/overflow re-review, consider an owner-slash
@@ -332,6 +335,13 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-9 (P2, added loop-3) Threshold-signed directory.** Today the directory trusts one
+  bootnode signer key; compromising it poisons every client's fleet view (they still can't be sent a
+  forged onion — onion-control is re-checked — but entries could be omitted/reordered). Sign the
+  directory with a k-of-n set of independent bootnode signers so no single key compromise steers the
+  fleet. Composes with T-FEAT-1 (federation): each federated bootnode is one signer. *Accept:*
+  clients accept a directory only with >= k valid signatures from the pinned signer set; a single
+  rogue signer cannot produce an accepted directory. *Depends on:* T-FEAT-1.
 - [ ] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** Today membership is binary
   and every member gets the same per-epoch slot budget `K`. Let standing scale the budget: a member
   with higher on-chain stake (or accrued good behavior) proves, in zero knowledge, a budget tier and
@@ -359,3 +369,6 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   cap + server body-cap test), nonce/crypto import + ttlSec nits. Closed test-oracle gaps: weight
   proportionality, fail-closed stake reads (RPC error throws / empty 0x => false), body caps. 12
   suites green.
+- 2026-08-13  loop-3  T-TEST-3 (semaphore/rln epoch + requestSignal primitives, 17 assertions);
+  focused self-review of loop-2 hardening (sound; logged one global-rate-limit refinement under
+  T-HARD-4); added T-FEAT-9 (threshold-signed directory). 13 suites green.
