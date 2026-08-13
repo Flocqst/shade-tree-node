@@ -89,9 +89,11 @@ and at scale."
   should fetch `GET /gateway/<onion>` and re-verify `operatorSig` + `isStaked(operator)` itself,
   not trust the bootnode's `staked` label. *Accept:* a bootnode that pairs a staked operator with
   an onion that operator never signed is rejected client-side; test.
-- [ ] **T-DEV-6 (P1) Announce rate-limiting + per-onion caps.** Bound announces per onion and
-  globally per window so a flood cannot exhaust bootnode memory/CPU. *Accept:* N+1th announce in a
-  window is rejected `rate-limited`; test.
+- [x] **T-DEV-6 (P1) Announce rate-limiting + per-onion caps.** DONE (loop-2, from the audit):
+  per-onion re-announce throttle (`RGOE_BOOTNODE_MIN_REANNOUNCE`, cheap pre-verify reject),
+  registry size cap (`RGOE_BOOTNODE_MAX_ENTRIES`; a new onion is refused when full, existing ones
+  still refresh), and self-attested `weight` clamped to `MAX_WEIGHT=1000` so one gateway cannot
+  capture ~all client traffic. Tested in `bootnode/selftest.mjs` (registry hardening).
 - [ ] **T-DEV-7 (P1) Config validation + fail-fast.** Every entrypoint validates required config
   and prints a precise error + nonzero exit on bad/missing values (bad onion, missing signer, bad
   address, unreachable RPC). *Accept:* a table-driven selftest of bad configs per command.
@@ -231,8 +233,10 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   `npm ci --ignore-scripts` where possible, Dependabot. *Accept:* audit gate green in CI.
 - [ ] **T-HARD-3 (P1) Log hygiene.** Assert no secret (member secret, operator key, onion seed) is
   ever logged; add a scrubbing test. *Accept:* a selftest greps captured logs for secret material.
-- [ ] **T-HARD-4 (P1) Endpoint hardening.** Body-size caps (partly present), request timeouts, slow-
-  loris protection, per-connection limits on gateway + bootnode. *Accept:* tests for each limit.
+- [~] **T-HARD-4 (P1) Endpoint hardening.** DONE (loop-2): the client's response read from the
+  semi-trusted bootnode is now capped (`RGOE_BOOTNODE_MAX_RESP`, was unbounded => OOM lever), and
+  the server's oversized-body rejection is tested. REMAINING: slow-loris/idle-timeout on the
+  gateway tunnel, per-connection limits, request timeouts on the bootnode server.
 - [ ] **T-HARD-5 (P2) Directory signer rotation.** Versioned signer with an overlap window so the
   pinned key can rotate without a flag day. *Accept:* clients accept old+new during overlap; test.
 - [ ] **T-HARD-6 (P2) Contract audit prep.** Reentrancy/overflow re-review, consider an owner-slash
@@ -343,3 +347,8 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   11 suites green. (a9c3d2c..)
 - 2026-08-13  loop-1  T-TEST-3 (partial: root-provider reconstructRoot, 12 assertions w/ newGroup
   oracle); added feature backlog (T-FEAT-1..7); audit of recent work in progress. 12 suites green.
+- 2026-08-13  loop-2  audit of loop-1 work (no HIGH defects; core model holds). Fixed all MED
+  findings: T-DEV-6 (announce throttle + registry cap + weight clamp), T-HARD-4 (client response
+  cap + server body-cap test), nonce/crypto import + ttlSec nits. Closed test-oracle gaps: weight
+  proportionality, fail-closed stake reads (RPC error throws / empty 0x => false), body caps. 12
+  suites green.

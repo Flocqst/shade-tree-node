@@ -28,6 +28,7 @@
 // and the onion<->operator link lives only here, in the signed announce the bootnode serves.
 // So the fleet is not enumerable on chain and one stake can rotate across many onions.
 
+import { randomBytes } from "node:crypto";
 import { onionToPubkey, ed25519Sign, verifyOnionControl } from "../lib/directory.mjs";
 
 export const ANNOUNCE_VERSION = 1;
@@ -64,8 +65,8 @@ export function buildAnnounce({ onion, weight = 100, onionSeedHex, operator = nu
 }
 
 function cryptoNonce() {
-  // 16 random bytes hex; avoids a Math.random import and is unique enough for replay defense.
-  return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
+  // 16 random bytes hex; unique enough for replay defense across the announce window.
+  return randomBytes(16).toString("hex");
 }
 
 // Verify one announce. Returns { ok, reason, onion, pubkey, operator, staked }.

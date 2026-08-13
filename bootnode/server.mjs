@@ -66,12 +66,27 @@ function makeNonceGuard(ttlMs) {
 }
 
 // ---- the registry (transport-independent; the selftest drives it directly) --
-export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, now = () => Math.floor(Date.now() / 1000) }) {
-  const live = new Map(); // onion -> { pubkey, weight, operator, staked, rec, expiresAt }
+// DoS controls for the default `admission=open` mode, where anyone can mint onions and announce:
+//   maxEntries      caps resident memory (a new onion is refused when full; existing ones still
+//                   refresh, so a live fleet is never evicted by a flood).
+//   minReannounceSec throttles per-onion re-announce so a single onion cannot spin the verify path.
+//   MAX_WEIGHT      clamps the gateway-attested selection weight so one gateway cannot self-assign
+//                   a huge weight and capture ~all client traffic (a concentration/deanon lever).
+const MAX_WEIGHT = 1000;
+export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, now = () => Math.floor(Date.now() / 1000),
+    maxEntries = Number(process.env.RGOE_BOOTNODE_MAX_ENTRIES || 10000),
+    minReannounceSec = Number(process.env.RGOE_BOOTNODE_MIN_REANNOUNCE || 5) }) {
+  const live = new Map(); // onion -> { pubkey, weight, operator, staked, rec, expiresAt, lastAt }
   const nonces = makeNonceGuard(ttlSec * 1000);
   const requireStake = admission === "stake";
 
   async function announce(rec) {
+    // Cheap pre-checks BEFORE the expensive signature verify, so a flood is rejected early.
+    const onionKey = typeof rec?.onion === "string" ? rec.onion : null;
+    const existing = onionKey ? live.get(onionKey) : null;
+    if (existing && now() - existing.lastAt < minReannounceSec) return { ok: false, reason: "rate-limited" };
+    if (!existing && live.size >= maxEntries) { sweep(); if (live.size >= maxEntries) return { ok: false, reason: "registry-full" }; }
+
     const v = await verifyAnnounce(rec, {
       now: now(),
       isStaked: stake?.isStaked,
@@ -79,13 +94,15 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       seenNonce: nonces,
     });
     if (!v.ok) return { ok: false, reason: v.reason };
+    const rawWeight = Number.isFinite(rec.weight) ? rec.weight : 100;
     live.set(v.onion, {
       pubkey: v.pubkey,
-      weight: Number.isFinite(rec.weight) ? rec.weight : 100,
+      weight: Math.max(0, Math.min(MAX_WEIGHT, rawWeight)), // clamp self-attested weight
       operator: v.operator,
       staked: v.staked,
       rec,
       expiresAt: now() + ttlSec,
+      lastAt: now(),
     });
     return { ok: true, onion: v.onion, staked: v.staked };
   }
@@ -113,7 +130,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
-  return { announce, directory, sweep, record, size: () => live.size, admission };
+  return { announce, directory, sweep, record, size: () => live.size, admission, ttlSec };
 }
 
 // ---- HTTP transport ---------------------------------------------------------

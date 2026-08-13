@@ -42,7 +42,9 @@ async function main() {
     // === admission = open ====================================================
     console.log("\nadmission=open:");
     const signer = await loadOrMintSigner(join(work, "signer.key"));
-    const registry = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", ttlSec: 900 });
+    // minReannounceSec: 0 here isolates the nonce-guard / verification tests from the per-onion
+    // re-announce throttle (which is exercised separately below in "registry hardening").
+    const registry = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", ttlSec: 900, minReannounceSec: 0 });
     const server = makeServer(registry, { signerPub: signer.pub });
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -128,6 +130,53 @@ async function main() {
     ok(reg3.directory().gateways.length === 1, "gateway present within TTL");
     clock += 101;
     ok(reg3.directory().gateways.length === 0, "gateway expires after TTL without a re-announce");
+
+    // === registry hardening (DoS controls) ===================================
+    console.log("\nregistry hardening:");
+    // weight clamp: a gateway self-attesting an enormous weight is clamped to MAX_WEIGHT (1000),
+    // so it cannot capture ~all client traffic; a negative weight floors at 0.
+    let hc = 2_000_000;
+    const regW = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", now: () => hc });
+    await regW.announce(buildAnnounce({ onion: g1.onion, weight: 1e12, onionSeedHex: g1.seed, ts: hc }));
+    ok(regW.directory().gateways[0].weight === 1000, "self-attested weight clamped to MAX_WEIGHT");
+    hc += 10;
+    await regW.announce(buildAnnounce({ onion: g2.onion, weight: -5, onionSeedHex: g2.seed, ts: hc }));
+    ok(regW.directory().gateways.find((g) => g.onion === g2.onion).weight === 0, "negative weight floored at 0");
+
+    // per-onion re-announce throttle: a second announce for the same onion inside the window is
+    // rejected BEFORE the expensive verify.
+    let tc = 3_000_000;
+    const regR = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", minReannounceSec: 5, now: () => tc });
+    ok((await regR.announce(buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed, ts: tc }))).ok === true, "first announce accepted");
+    ok((await regR.announce(buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed, ts: tc }))).reason === "rate-limited", "re-announce within window rate-limited");
+    tc += 6;
+    ok((await regR.announce(buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed, ts: tc }))).ok === true, "re-announce after the window accepted");
+
+    // registry size cap: a NEW onion is refused when full; an existing one may still refresh.
+    let fc = 4_000_000;
+    const regF = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", maxEntries: 1, minReannounceSec: 0, now: () => fc });
+    ok((await regF.announce(buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed, ts: fc }))).ok === true, "first onion fills the (size-1) registry");
+    ok((await regF.announce(buildAnnounce({ onion: g2.onion, weight: 100, onionSeedHex: g2.seed, ts: fc }))).reason === "registry-full", "a new onion is refused when the registry is full");
+    ok((await regF.announce(buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed, ts: fc }))).ok === true, "an already-listed onion still refreshes when full");
+
+    // fail-closed stake: if the on-chain read THROWS while stake is required, reject (never admit).
+    console.log("\nfail-closed stake:");
+    const throwingStake = { isStaked: async () => { throw new Error("rpc down"); }, mode: "throwing" };
+    const w = ethers.Wallet.createRandom(); // ethers already imported in the stake section above
+    const opSig = await w.signMessage(operatorAuthMessage(g3.onion, w.address));
+    const regS = makeRegistry({ signer, stake: throwingStake, admission: "stake", now: () => 5_000_000 });
+    const aS = buildAnnounce({ onion: g3.onion, weight: 100, onionSeedHex: g3.seed, operator: w.address, operatorSig: opSig, ts: 5_000_000 });
+    ok((await regS.announce(aS)).reason?.startsWith("stake-check-failed"), "a throwing on-chain stake read rejects (fail-closed), never admits");
+
+    // oversized POST body is rejected by the server ingress cap.
+    console.log("\nserver ingress cap:");
+    const regB = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open" });
+    const serverB = makeServer(regB, { signerPub: signer.pub });
+    await new Promise((r) => serverB.listen(0, "127.0.0.1", r));
+    const baseB = `http://127.0.0.1:${serverB.address().port}`;
+    const big = await fetch(baseB + "/announce", { method: "POST", headers: { "content-type": "application/json" }, body: "x".repeat(200 * 1024) }).then((r) => ({ status: r.status })).catch(() => ({ status: "conn-reset" }));
+    ok(big.status === 400 || big.status === "conn-reset", "oversized announce body is rejected (not buffered unbounded)");
+    await new Promise((r) => serverB.close(r));
   } finally {
     await rm(work, { recursive: true, force: true });
   }

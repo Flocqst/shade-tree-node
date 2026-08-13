@@ -20,12 +20,18 @@ export async function postOverTor(onion, path, body, opts = {}) {
   return requestOverTor(onion, { method: "POST", path, body, ...opts });
 }
 
-export async function requestOverTor(onion, { method = "GET", path = "/", body = null, torHost = "127.0.0.1", torPort = 9250, timeoutMs = 20000, attempts = 4 } = {}) {
+// The client's ingress from the bootnode is only SEMI-trusted: a lying or MITM'd bootnode
+// cannot forge a verified entry, but it CAN try to exhaust the long-running client/heartbeat by
+// streaming an unbounded body. Cap the response so a hostile bootnode gets a bounded read, not an
+// OOM. A signed directory is tiny (~a few hundred bytes/entry); 2 MB is generous headroom.
+const MAX_RESP = Number(process.env.RGOE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
+
+export async function requestOverTor(onion, { method = "GET", path = "/", body = null, torHost = "127.0.0.1", torPort = 9250, timeoutMs = 20000, attempts = 4, maxBytes = MAX_RESP } = {}) {
   const host = onion.replace(/\.onion$/, "") + ".onion";
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await once(host, method, path, body, { torHost, torPort, timeoutMs });
+      return await once(host, method, path, body, { torHost, torPort, timeoutMs, maxBytes });
     } catch (e) {
       lastErr = e;
       await sleep(Math.min(1000 * (i + 1), 4000)); // back off through onion cold-start
@@ -34,7 +40,7 @@ export async function requestOverTor(onion, { method = "GET", path = "/", body =
   throw new Error(`bootnode ${method} failed after ${attempts} attempts: ${lastErr?.message || lastErr}`);
 }
 
-function once(host, method, path, body, { torHost, torPort, timeoutMs }) {
+function once(host, method, path, body, { torHost, torPort, timeoutMs, maxBytes = MAX_RESP }) {
   return new Promise((resolve, reject) => {
     let socket;
     const payload = body == null ? null : Buffer.from(JSON.stringify(body), "utf8");
@@ -47,7 +53,10 @@ function once(host, method, path, body, { torHost, torPort, timeoutMs }) {
       .then(({ socket: s }) => {
         socket = s;
         let buf = Buffer.alloc(0);
-        s.on("data", (c) => { buf = Buffer.concat([buf, c]); });
+        s.on("data", (c) => {
+          buf = Buffer.concat([buf, c]);
+          if (buf.length > maxBytes) { clearTimeout(timer); try { s.destroy(); } catch {} reject(new Error(`bootnode response exceeded ${maxBytes} bytes`)); }
+        });
         s.on("end", () => { clearTimeout(timer); try { resolve(parseHttp(buf)); } catch (e) { reject(e); } });
         s.on("error", (e) => { clearTimeout(timer); reject(e); });
         let req = `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\nAccept: application/json\r\n`;
