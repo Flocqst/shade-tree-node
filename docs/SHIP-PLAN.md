@@ -12,17 +12,23 @@ tasks across every workstream, prioritized, with acceptance criteria.
 
 ## Loop protocol (how an iteration works)
 
+**Mode: AGGRESSIVE FAN-OUT** (set 2026-08-13). Each iteration parallelizes across independent tasks
+instead of doing one at a time. Interval: 10 min.
+
 Each loop iteration:
 
-1. Read this file. Pick the **highest-priority unchecked task** whose dependencies are
-   met (P0 before P1 before P2; within a tier, top-down). Prefer finishing an in-progress
-   item over starting a new one.
-2. Implement ONE vertical slice completely: code + tests + docs for that task.
-3. **Gate before commit:** `npm test` green (node selftests + `forge test`), plus the
-   task's own acceptance criteria demonstrated. Never commit red.
-4. Check the box here, add a one-line entry to the [Changelog](#changelog) with the date,
-   commit (conventional-commit message, `Co-Authored-By` trailer), and push.
-5. Stop. The next iteration picks up the next task.
+1. Read this file. Select **~6 independent, unchecked tasks** whose dependencies are met, prioritized
+   P0 > P1 > P2. Prefer tasks that create NEW files (test suites, docs) or touch disjoint files, so
+   parallel agents never conflict. Reserve the big coherent chunks (Rust client, real-Tor integration,
+   the on-chain P0s T-DEV-1/2) for FOCUSED single runs, not the fan-out batch.
+2. **Fan out one subagent per task**, each with a tight spec: implement the slice, match house style,
+   run its own tests to green, do not touch other files, report the files it created.
+3. When the batch returns, **integrate**: run the FULL suite (`node scripts/test-all.mjs`) green, fix
+   any interaction, then check the boxes, add Changelog lines, and commit + push (one commit per task
+   or one batched commit). Never commit red.
+4. Also each iteration: **audit** the previous batch's work (self-review or a review agent on the
+   riskiest change) and **add ≥1 new feature** to the backlog.
+5. The next iteration picks the next ~6. Pipeline where useful: launch batch N while committing N-1.
 
 **Definitions of done (apply to every task):**
 - Every new module ships with a `*selftest.mjs`; every wire/parse surface gets an
@@ -233,6 +239,9 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   wire formats, versioned. *Accept:* `docs/PROTOCOL-API.md`.
 - [ ] **T-DOC-4 (P2) SECURITY.md** (disclosure policy) + **CONTRIBUTING.md** + ADRs for the load-
   bearing decisions (onion-off-chain, bootnode-as-cache, RLN-over-slot).
+- [ ] **T-DOC-5 (P2) README polish pass.** Revisit the README once the fleet/CLI/tests have settled:
+  tighten the lede, make the 30-second "what/why/run" skimmable, prune stale claims, keep it honest
+  about unaudited status. (Queued 2026-08-13.)
 
 ## 6. Hardening
 
