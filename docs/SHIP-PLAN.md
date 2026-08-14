@@ -241,10 +241,26 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-HARD-7 (P2) Tor hardening.** DONE (loop-11): `docs/TOR-HARDENING.md` (PoW tuning, vanguards, v3 client-auth -- corrected from the deprecated v2 mechanism, process/OS, SOCKS circuit isolation) + `bootnode/deploy/torrc.hardened` reference fragment (server/client tagged, version-dependent options flagged).
 - [x] **T-RUST-0 (P1) Rust workspace + language ADR.** DONE (loop-8): `rust/` cargo workspace (`rgoe-proto` lib + `rgoe-client` bin) builds; `cargo test` passes 3 (request_signal, operator_auth_message, signal_field_safe -- already matching testdata/vectors.json). Stubs cite JS file:symbol + PROTOCOL-API.md. ADR `docs/adr/0001-client-language.md`. Gate 2 started.
 - [x] **T-RUST-1 (P1) Wire-format conformance harness.** DONE (loop-9): `rust/rgoe-proto` implements onion<->key, canonical directory/announce bytes, ed25519 verify, and `verify_directory` (full ordered reasons); `rust/rgoe-proto/tests/conformance.rs` (13 tests) asserts byte-match vs `testdata/vectors.json` -- Rust proven to match the JS reference. Deferred for lack of a pinned vector: `calculate_signal_hash` + operator-ECDSA `verify_announce` (see T-RUST-1b).
-- [ ] **T-RUST-2 (P1) Rust client MVP.** `arti`-dialed onion connect + envelope send + tunnel, with
-  the directory fetched and verified (onion↔key binding + pinned-signer signature) in Rust. RLN
-  proving via `zerokit`. *Accept:* passes T-RUST-1 conformance; egresses through a live gateway
-  byte-for-byte like the JS client.
+- [~] **T-RUST-2 (P1) Rust client MVP — DETERMINISTIC CORE DONE (loop-19); live egress = T-RUST-2b.**
+  Done (focused single run): the conformance-backed deterministic client pipeline in Rust. `rgoe-proto`
+  gained receipt verify (`canonical_receipt_bytes`/`verify_receipt`/`RECEIPT_DOMAIN`, hand-built bytes),
+  version negotiation (`select_proto_version`/`accept_envelope_version` + pinned reason labels), and gateway
+  selection (`clamp_weight`/`pick_gateway`/`selection_order`, injectable rng). `rgoe-client` is now a real CLI
+  (`verify-directory`, `select`, `verify-receipt`) that parses untrusted JSON (serde in the client only; proto
+  canonical path stays serde-free) and runs the trust-critical proto checks. 20 conformance + 9 unit tests green
+  (byte-match the new `receipt` + `protoReasons` vectors from T-TEST-22); clippy/fmt clean. INTEGRATION AUDIT:
+  JS↔Rust receipt-verify differential 48/48 over valid/wrong-onion/tamper cases, and an end-to-end verify→select
+  smoke against a JS-signed directory (accepts pinned signer, rejects wrong = `signer-not-pinned`). *Remaining
+  (T-RUST-2b):* the LIVE egress — `arti`-dialed onion connect + `zerokit` RLN Groth16 proving + real proxy —
+  stubbed behind `live_egress()` (returns an honest not-implemented error). Gate 2 is not closed until 2b lands.
+- [ ] **T-RUST-2b (P1, added loop-19) Rust client live egress.** Wire the two heavy deferred pieces into the
+  T-RUST-2 deterministic core: `zerokit` (PSE canonical Rust RLN) to generate the per-request Groth16 envelope
+  proof (nullifier + Shamir share + target-bound signal), and `arti-client` (embedded Tor, no system daemon) to
+  dial the selected gateway onion and proxy the CONNECT. Add `tokio` (async), and `serde` for the envelope. The
+  RLN proof is non-deterministic so it can't be byte-pinned; instead prove equivalence by having a JS gateway
+  ACCEPT the Rust-built envelope (and vice-versa) in an integration test. *Accept:* the Rust client egresses
+  through a live gateway byte-for-byte-compatibly with the JS client (a JS gateway accepts its envelope + target
+  binding); pairs with T-TEST-1 real-Tor. *Depends on:* the container/real-Tor harness (T-TEST-8/T-TEST-1).
 - [ ] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
   last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. *Accept:*
   the real-Tor integration test (T-TEST-1) passes with the Rust client swapped in.
@@ -520,3 +536,13 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   deficit key not in the current live fleet on each spread call, and the map is never written when the flag is
   off, so there is no unbounded-growth bug. Corrected T-FEAT-24 to its real residual: add an explicit regression
   test for the (already-present) bounding. Recording the correction rather than silently editing history.
+- 2026-08-14  loop-19  FOCUSED single run (not fan-out): Rust client MVP deterministic core (T-RUST-2, Gate 2).
+  `rgoe-proto` gained receipt verify + version negotiation + gateway selection, each ported from the cited JS
+  and byte-pinned against testdata/vectors.json (the new receipt + protoReasons vectors); `rgoe-client` is now a
+  real CLI (verify-directory / select / verify-receipt) parsing untrusted JSON (serde client-side only, proto
+  canonical path stays serde-free). 20 conformance + 9 unit tests green; clippy + fmt clean. The live egress
+  (arti Tor dial + zerokit RLN proving + real proxy) is honestly stubbed and split out as T-RUST-2b — Gate 2
+  stays open until it lands. INTEGRATION AUDIT: ran a JS↔Rust receipt-verify differential (48/48 agree over
+  valid/wrong-onion/tampered-flag/tampered-sig across 12 fresh identities) and an end-to-end verify→select smoke
+  against a JS-signed directory (pinned signer accepted, wrong signer rejected `signer-not-pinned`). Only rust/
+  files touched. Added T-RUST-2b (live egress) to the backlog.

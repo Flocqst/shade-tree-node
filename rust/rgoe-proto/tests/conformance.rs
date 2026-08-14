@@ -13,17 +13,19 @@
 //! called, even though the `operatorAnnounce` vector now exists for a future task.
 
 use rgoe_proto::{
-    calculate_signal_hash, canonical_announce_bytes, canonical_directory_bytes, ed25519_public_key,
-    ed25519_sign, ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion,
-    request_signal, verify_directory, Announce, Directory, GatewayEntry,
+    accept_envelope_version, calculate_signal_hash, canonical_announce_bytes,
+    canonical_directory_bytes, canonical_receipt_bytes, ed25519_public_key, ed25519_sign,
+    ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
+    select_proto_version, sign_receipt, verify_directory, verify_receipt, Announce, Directory,
+    EnvelopeVersion, GatewayEntry, Receipt, REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION,
+    REASON_UNSUPPORTED_VERSION,
 };
 use serde_json::Value;
 
 /// Load `testdata/vectors.json` relative to this crate's manifest dir.
 fn vectors() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/vectors.json");
-    let raw = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     serde_json::from_str(&raw).expect("vectors.json is valid JSON")
 }
 
@@ -103,7 +105,10 @@ fn onion_roundtrip_and_checksum_rejects_tamper() {
     let mut chars: Vec<char> = onion.strip_suffix(".onion").unwrap().chars().collect();
     chars[0] = if chars[0] == 'a' { 'b' } else { 'a' };
     let tampered: String = chars.into_iter().collect::<String>() + ".onion";
-    assert!(onion_to_pubkey(&tampered).is_err(), "tampered onion must fail");
+    assert!(
+        onion_to_pubkey(&tampered).is_err(),
+        "tampered onion must fail"
+    );
     // wrong length.
     assert!(onion_to_pubkey("abc.onion").is_err());
 }
@@ -164,7 +169,11 @@ fn ed25519_verify_accepts_pinned_and_rejects_flipped_bit() {
         .unwrap()
         .try_into()
         .unwrap();
-    assert!(ed25519_verify(&dir_bytes, &dir_sig, &pub32(s(&v, "signerPub"))));
+    assert!(ed25519_verify(
+        &dir_bytes,
+        &dir_sig,
+        &pub32(s(&v, "signerPub"))
+    ));
 
     // announce onion signature verifies under onionPub
     let ann_bytes = canonical_announce_bytes(&vector_announce(&v));
@@ -172,17 +181,29 @@ fn ed25519_verify_accepts_pinned_and_rejects_flipped_bit() {
         .unwrap()
         .try_into()
         .unwrap();
-    assert!(ed25519_verify(&ann_bytes, &ann_sig, &pub32(s(&v, "onionPub"))));
+    assert!(ed25519_verify(
+        &ann_bytes,
+        &ann_sig,
+        &pub32(s(&v, "onionPub"))
+    ));
 
     // a flipped signature bit must be rejected
     let mut bad_sig = dir_sig;
     bad_sig[0] ^= 0x01;
-    assert!(!ed25519_verify(&dir_bytes, &bad_sig, &pub32(s(&v, "signerPub"))));
+    assert!(!ed25519_verify(
+        &dir_bytes,
+        &bad_sig,
+        &pub32(s(&v, "signerPub"))
+    ));
 
     // a flipped message bit must be rejected
     let mut bad_msg = dir_bytes.clone();
     bad_msg[0] ^= 0x01;
-    assert!(!ed25519_verify(&bad_msg, &dir_sig, &pub32(s(&v, "signerPub"))));
+    assert!(!ed25519_verify(
+        &bad_msg,
+        &dir_sig,
+        &pub32(s(&v, "signerPub"))
+    ));
 }
 
 // -- 4. verify_directory (spec 4.3) ----------------------------------------
@@ -263,8 +284,191 @@ fn calculate_signal_hash_matches_vector() {
     let want = sh["signalHashDecimal"].as_str().unwrap();
     // request_signal(target, nonce) -> calculate_signal_hash must equal the pinned decimal.
     let got = calculate_signal_hash(&request_signal(target, nonce));
-    assert_eq!(got, want, "signal hash decimal must match the pinned vector");
+    assert_eq!(
+        got, want,
+        "signal hash decimal must match the pinned vector"
+    );
     // The fixture also pins the exact message the hash is taken over; hashing it directly
     // must give the same value (guards request_signal + the hash jointly).
     assert_eq!(calculate_signal_hash(sh["message"].as_str().unwrap()), want);
+}
+
+// -- 7. receipt (spec T-FEAT-13, lib/receipt.mjs) --------------------------
+
+/// Build the `Receipt` pinned in the fixture's `receipt` block.
+fn vector_receipt(v: &Value) -> Receipt {
+    let r = &v["receipt"];
+    Receipt {
+        v: r["v"].as_u64().unwrap(),
+        onion: r["onion"].as_str().unwrap().to_string(),
+        epoch: r["epoch"].as_str().unwrap().to_string(),
+        ok: r["ok"].as_bool().unwrap(),
+        sig: Some(r["receiptOnionSig"].as_str().unwrap().to_string()),
+    }
+}
+
+#[test]
+fn receipt_domain_matches_vector() {
+    let v = vectors();
+    assert_eq!(
+        rgoe_proto::RECEIPT_DOMAIN,
+        s(&v["receipt"], "receiptDomain")
+    );
+}
+
+#[test]
+fn canonical_receipt_bytes_matches_vector() {
+    let v = vectors();
+    let r = &v["receipt"];
+    let bytes = canonical_receipt_bytes(
+        r["v"].as_u64().unwrap(),
+        r["onion"].as_str().unwrap(),
+        r["epoch"].as_str().unwrap(),
+        r["ok"].as_bool().unwrap(),
+    );
+    assert_eq!(hex::encode(&bytes), s(r, "canonicalReceiptBytesHex"));
+}
+
+#[test]
+fn receipt_signature_matches_pinned() {
+    let v = vectors();
+    let r = &v["receipt"];
+    // Re-sign the canonical bytes with the SAME onion seed the fixture used (onionSeed);
+    // ed25519 is RFC 8032 deterministic, so the signature must byte-match receiptOnionSig.
+    let onion_seed = seed32(s(&v, "onionSeed"));
+    let sig = sign_receipt(
+        r["v"].as_u64().unwrap(),
+        r["onion"].as_str().unwrap(),
+        r["epoch"].as_str().unwrap(),
+        r["ok"].as_bool().unwrap(),
+        &onion_seed,
+    );
+    assert_eq!(hex::encode(sig), s(r, "receiptOnionSig"));
+}
+
+#[test]
+fn verify_receipt_accepts_pinned() {
+    let v = vectors();
+    let rec = vector_receipt(&v);
+    // Signature-only + onion binding (epoch skew skipped: the pinned epoch is a fixed old
+    // bucket, deliberately not "now"). Binds to the receipt's own onion.
+    let ok = verify_receipt(&rec, Some(rec.onion.as_str()), None, 1)
+        .expect("pinned receipt must verify under its own onion");
+    assert_eq!(ok.onion, rec.onion);
+    assert_eq!(ok.epoch, rec.epoch);
+    // The recovered pubkey is exactly onionPub.
+    assert_eq!(hex::encode(ok.pubkey), s(&v, "onionPub"));
+    // And it also verifies with no onion binding at all.
+    verify_receipt(&rec, None, None, 1).expect("verifies with no onion binding");
+    // Freshness: within skew of the pinned epoch is accepted.
+    verify_receipt(&rec, None, Some(&rec.epoch), 1).expect("same-epoch is fresh");
+}
+
+#[test]
+fn verify_receipt_rejects_tamper_and_wrong_onion() {
+    let v = vectors();
+    let rec = vector_receipt(&v);
+
+    // wrong onion binding -> onion-mismatch (a DIFFERENT valid onion, the signer key's).
+    let other = pubkey_to_onion(&pub32(s(&v, "signerPub")));
+    assert_eq!(
+        verify_receipt(&rec, Some(&other), None, 1)
+            .unwrap_err()
+            .to_string(),
+        "onion-mismatch"
+    );
+
+    // flipped signature bit -> bad-sig.
+    let mut bad = rec.clone();
+    let mut sig = hex::decode(rec.sig.as_ref().unwrap()).unwrap();
+    sig[0] ^= 0x01;
+    bad.sig = Some(hex::encode(sig));
+    assert_eq!(
+        verify_receipt(&bad, None, None, 1).unwrap_err().to_string(),
+        "bad-sig"
+    );
+
+    // ok=false -> not-success.
+    let mut notok = rec.clone();
+    notok.ok = false;
+    assert_eq!(
+        verify_receipt(&notok, None, None, 1)
+            .unwrap_err()
+            .to_string(),
+        "not-success"
+    );
+
+    // wrong version -> bad-version:<v>.
+    let mut badv = rec.clone();
+    badv.v = 2;
+    assert_eq!(
+        verify_receipt(&badv, None, None, 1)
+            .unwrap_err()
+            .to_string(),
+        "bad-version:2"
+    );
+
+    // non-canonical epoch -> bad-epoch (signed bytes would differ; guard fires first).
+    let mut bade = rec.clone();
+    bade.epoch = "08333".to_string(); // leading zero
+    assert_eq!(
+        verify_receipt(&bade, None, None, 1)
+            .unwrap_err()
+            .to_string(),
+        "bad-epoch"
+    );
+
+    // stale epoch (skew exceeded) -> stale-epoch:<epoch>.
+    let far: u64 = rec.epoch.parse::<u64>().unwrap() + 100;
+    assert_eq!(
+        verify_receipt(&rec, None, Some(&far.to_string()), 1)
+            .unwrap_err()
+            .to_string(),
+        format!("stale-epoch:{}", rec.epoch)
+    );
+
+    // missing signature -> bad-sig.
+    let mut unsigned = rec.clone();
+    unsigned.sig = None;
+    assert_eq!(
+        verify_receipt(&unsigned, None, None, 1)
+            .unwrap_err()
+            .to_string(),
+        "bad-sig"
+    );
+}
+
+// -- 8. version-negotiation reason labels (protoReasons vector) ------------
+
+#[test]
+fn proto_reason_labels_match_vector() {
+    let v = vectors();
+    let p = &v["protoReasons"];
+    // The bounded reason LABELS/prefixes the Rust client emits must match the pinned literals.
+    assert_eq!(REASON_BAD_VERSION, s(p, "badVersion"));
+    assert_eq!(REASON_UNSUPPORTED_VERSION, s(p, "unsupportedVersion"));
+    assert_eq!(REASON_NO_MUTUAL_VERSION, s(p, "noMutualVersion"));
+
+    // And the runtime reasons carry those exact prefixes.
+    let range = (rgoe_proto::PROTO_MIN, rgoe_proto::PROTO_MAX);
+    let bad = accept_envelope_version(&EnvelopeVersion::Garbage("\"x\"".into()), range)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        bad.starts_with(&format!("{}:", s(p, "badVersion"))),
+        "got {bad}"
+    );
+
+    let unsup = accept_envelope_version(&EnvelopeVersion::Int(9), range)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(unsup, format!("{}:9", s(p, "unsupportedVersion")));
+
+    let nomut = select_proto_version(Some((5, 6)), (1, 2))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        nomut.starts_with(&format!("{}:", s(p, "noMutualVersion"))),
+        "got {nomut}"
+    );
 }

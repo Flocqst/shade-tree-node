@@ -12,13 +12,22 @@ path = "src/main.rs"
 
 [dependencies]
 rgoe-proto = { path = "../rgoe-proto" }
+# T-RUST-2 deterministic client: parse UNTRUSTED directory/announce/receipt JSON into
+# local DTOs, then hand the mapped rgoe-proto structs to the trust-critical checks.
+# serde/serde_json live ONLY here — rgoe-proto's canonical byte path stays serde-free.
+serde = { version = "1", features = ["derive"] } # derive Deserialize on the untrusted-JSON DTOs
+serde_json = "1"                                 # parse the directory/receipt files
+# hex: render pubkeys recovered from a verified receipt for display.
+hex = "0.4"
+# arg parsing is hand-rolled (no clap) to keep the dep tree tiny; a small seeded PRNG
+# (mulberry32, in-crate) drives `select` so no `rand` runtime dep is needed either.
 
-# NOTE (T-RUST-2/3): heavy runtime deps intentionally deferred so the scaffold
-# builds fast in CI. When implementing the client, add:
+# NOTE (T-RUST-2b, DEFERRED): the heavy native deps for a LIVE egress are intentionally
+# NOT added in this run so the workspace stays fast to build. When implementing live
+# egress (see `live_egress` in src/main.rs), add:
 #   arti-client / tor-rtcompat -- embedded Tor, dial gateway/bootnode onions (no
 #                                 system tor daemon, no SOCKS, no torrc)
-#   zerokit (rln)              -- PSE canonical Rust RLN prover (envelope proofs)
+#   zerokit (rln)              -- PSE canonical Rust RLN prover (envelope Groth16 proofs)
 #   alloy                      -- chain reads (GatewayRegistry.isStaked, operator sig)
 #   tokio                      -- async runtime
 #   hyper                      -- bootnode HTTP (/directory, /announce)
-#   serde / serde_json         -- parse untrusted directory/announce/envelope JSON
