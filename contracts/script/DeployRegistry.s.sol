@@ -6,6 +6,8 @@ import {StakedReputationSet, IWithdrawVerifier, ICommitmentHasher} from "../Stak
 import {GatewayRegistry} from "../GatewayRegistry.sol";
 import {MockCommitmentHasher} from "../MockCommitmentHasher.sol";
 import {MockWithdrawVerifier} from "../MockWithdrawVerifier.sol";
+import {WithdrawGroth16Verifier} from "../WithdrawGroth16Verifier.sol";
+import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 
 /// DeployRegistry — the persistent on-chain deployer for T-DEPLOY-7.
 ///
@@ -38,7 +40,9 @@ import {MockWithdrawVerifier} from "../MockWithdrawVerifier.sol";
 ///   RGOE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270)
 ///   RGOE_GATEWAY_OWNER     GatewayRegistry slashing/gov address  (0 => deployer)
 ///   RGOE_DEPLOY_STAKED     1 = also deploy StakedReputationSet   (1)
-///   RGOE_WITHDRAW_VERIFIER pre-deployed IWithdrawVerifier addr   (0 => deploy Mock)
+///   RGOE_WITHDRAW_VERIFIER pre-deployed IWithdrawVerifier addr   (0 => deploy per below)
+///   RGOE_DEPLOY_REAL_VERIFIER 1 = deploy REAL Groth16 verifier   (0 => deploy Mock)
+///                          (only when RGOE_WITHDRAW_VERIFIER unset; testnet-only VK)
 ///   RGOE_COMMITMENT_HASHER pre-deployed ICommitmentHasher addr   (0 => deploy Mock)
 ///   RGOE_RPC_URL           endpoint, recorded into the JSON      ("http://127.0.0.1:8545")
 ///   RGOE_DEPLOY_OUT        JSON output path                      ("contracts/deployed.local.json")
@@ -60,6 +64,11 @@ contract DeployRegistry is Cheats {
         bool deployStaked = vm.envOr("RGOE_DEPLOY_STAKED", uint256(1)) != 0;
         address verifierAddr = vm.envOr("RGOE_WITHDRAW_VERIFIER", address(0));
         address hasherAddr = vm.envOr("RGOE_COMMITMENT_HASHER", address(0));
+        // Opt-in: when no pre-deployed verifier address is given, deploy the REAL Groth16
+        // exit-auth verifier (T-DEV-1) instead of the revealed-secret Mock. Default 0 keeps
+        // the Mock so the local demo (scripts/demo-e2e.mjs, which authorizes by revealing the
+        // secret) still works. The REAL verifier is TESTNET-ONLY until T-HARD-1 (untrusted VK).
+        bool realVerifier = vm.envOr("RGOE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
 
         console.log("== DeployRegistry ==");
         console.log("chainid    ", block.chainid);
@@ -84,10 +93,20 @@ contract DeployRegistry is Cheats {
                 console.log("WARNING: deployed MockCommitmentHasher (testnet-only, not ZK)");
             }
             if (verifierAddr == address(0)) {
-                MockWithdrawVerifier mockVerifier =
-                    new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
-                verifierAddr = address(mockVerifier);
-                console.log("WARNING: deployed MockWithdrawVerifier (testnet-only, secret revealed in calldata)");
+                if (realVerifier) {
+                    // REAL Groth16 exit-auth verifier (T-DEV-1). Genuine ZK proof of knowledge
+                    // of the identity secret; nothing revealed in calldata.
+                    WithdrawGroth16Verifier groth16 = new WithdrawGroth16Verifier();
+                    WithdrawVerifier realV = new WithdrawVerifier(groth16);
+                    verifierAddr = address(realV);
+                    console.log("deployed WithdrawVerifier (REAL Groth16 exit-auth)");
+                    console.log("  WARNING: testnet-only VK (untrusted dev setup, T-HARD-1 pending)");
+                } else {
+                    MockWithdrawVerifier mockVerifier =
+                        new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
+                    verifierAddr = address(mockVerifier);
+                    console.log("WARNING: deployed MockWithdrawVerifier (testnet-only, secret revealed in calldata)");
+                }
             }
 
             StakedReputationSet set = new StakedReputationSet(

@@ -28,6 +28,8 @@ interface Vm {
     function envOr(string calldata, string calldata) external view returns (string memory);
     function envOr(string calldata, uint256) external view returns (uint256);
     function envOr(string calldata, address) external view returns (address);
+    function readFile(string calldata) external view returns (string memory);
+    function parseJsonBytes(string calldata, string calldata) external pure returns (bytes memory);
 }
 
 /// Base with the cheatcode handle + just-enough assertions.

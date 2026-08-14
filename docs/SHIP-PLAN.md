@@ -76,7 +76,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `(Pn)` priority.
 Protocol and code gaps between "works in the happy path" and "correct under an adversary
 and at scale."
 
-- [ ] **T-DEV-1 (P0) Real exit-auth verifier.** Replace `MockWithdrawVerifier` with the real
+- [x] **T-DEV-1 (P0) Real exit-auth verifier.** Replace `MockWithdrawVerifier` with the real
   Groth16 verifier so `StakedReputationSet.initiateExit`/`withdraw` are genuinely ZK-authorized
   (prove knowledge of the identity secret) on chain. *Accept:* a withdrawal with a bogus proof
   reverts `BadProof`; a valid one succeeds; Foundry test with the real verifier.
@@ -721,3 +721,23 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   valid. NOTE: the over-Tor step stays gated/soft-skip in CI + locally because HS descriptor propagation is
   network-dependent (the agent's own run soft-skipped when Tor stalled — honestly reported). GATE 1 tractable
   items DONE (T-DEV-2 + T-TEST-1); only T-DEV-1 remains, BLOCKED on the human trusted setup T-HARD-1.
+- 2026-08-14  loop-28  FOCUSED single run: T-DEV-1 real Groth16 exit-auth verifier (Gate-1 P0). Discovery: this
+  was only PRODUCTION-trust-blocked, not code-blocked — the withdraw circuit dev artifacts already ship, so wiring
+  the real verifier USES the existing (testnet) ceremony output rather than running one (T-HARD-1 stays the human
+  production item). Replaced MockWithdrawVerifier with a real verifier: `contracts/WithdrawGroth16Verifier.sol`
+  (snarkjs zkey export solidityverifier from the committed withdraw_final.zkey, renamed to avoid the RLN
+  Groth16Verifier clash) + `contracts/WithdrawVerifier.sol` (IWithdrawVerifier adapter). LOAD-BEARING mapping
+  (confirmed empirically by generating a real proof + inspecting publicSignals): withdraw circuit public signals =
+  [identityCommitment, address] (identityCommitment = Poseidon1([identitySecret])); the member LEAF is the RLN rate
+  commitment Poseidon2([identityCommitment, K=8]). verify() checks Groth16 over [identityCommitment, addr] AND
+  Poseidon2([identityCommitment,K])==commitment (ties proof to THIS member's leaf) AND addr = context%FIELD (binds
+  the action/recipient) — returns false (clean BadProof) on any bad proof. Real-proof golden fixture
+  (testdata/withdraw-proof.json, NO witness/secret) + generator. DeployRegistry.s.sol: opt-in
+  RGOE_DEPLOY_REAL_VERIFIER=1 (default stays Mock so the reveal-secret demo path is preserved). Cheats.sol +
+  readFile/parseJsonBytes (additive). INTEGRATION AUDIT (mine): reran the 11 WithdrawVerifier.t.sol tests — valid
+  exit/withdraw authorize (withdraw pays the recipient); tampered / wrong-context / wrong-commitment /
+  wrong-recipient / malformed all revert BadProof; fixture verified secret-free; Mock intact. Full suite 56/56
+  node + 65 Foundry (8 suites) green. Testnet-only caveat placed in both contracts' NatSpec + deploy warning +
+  fixture + generator (all -> circuits/rln/ARTIFACTS.md). GATE 1 CODE PATH COMPLETE (T-DEV-1/2 + T-TEST-1). The
+  only thing between here and a real deploy is the HUMAN-run production trusted-setup ceremony (T-HARD-1) — I
+  cannot and must not run it. Gate 3 (deploy) is unblocked on code, gated on that ceremony + a human deploy go.
