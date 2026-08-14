@@ -241,7 +241,13 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-HARD-7 (P2) Tor hardening.** DONE (loop-11): `docs/TOR-HARDENING.md` (PoW tuning, vanguards, v3 client-auth -- corrected from the deprecated v2 mechanism, process/OS, SOCKS circuit isolation) + `bootnode/deploy/torrc.hardened` reference fragment (server/client tagged, version-dependent options flagged).
 - [x] **T-RUST-0 (P1) Rust workspace + language ADR.** DONE (loop-8): `rust/` cargo workspace (`rgoe-proto` lib + `rgoe-client` bin) builds; `cargo test` passes 3 (request_signal, operator_auth_message, signal_field_safe -- already matching testdata/vectors.json). Stubs cite JS file:symbol + PROTOCOL-API.md. ADR `docs/adr/0001-client-language.md`. Gate 2 started.
 - [x] **T-RUST-1 (P1) Wire-format conformance harness.** DONE (loop-9): `rust/rgoe-proto` implements onion<->key, canonical directory/announce bytes, ed25519 verify, and `verify_directory` (full ordered reasons); `rust/rgoe-proto/tests/conformance.rs` (13 tests) asserts byte-match vs `testdata/vectors.json` -- Rust proven to match the JS reference. Deferred for lack of a pinned vector: `calculate_signal_hash` + operator-ECDSA `verify_announce` (see T-RUST-1b).
-- [~] **T-RUST-2 (P1) Rust client MVP — DETERMINISTIC CORE DONE (loop-19); live egress = T-RUST-2b.**
+- [x] **T-RUST-2 (P1) Rust client MVP — DONE (loop-22/23): egresses over Tor, JS gateway accepts.** Gate-2's
+  gating definition is met: the Rust client passes conformance (loop-19) AND egresses byte-for-byte-compatibly
+  with the JS reference — a real over-Tor `rgoe egress` was ACCEPTED by the live gateway (loop-23, reproduced by
+  me). Full-DISTRIBUTABLE polish remains as its own items: T-RUST-3 (rotation/failover/LKG/bootnode-discovery
+  parity), T-RUST-4 (release binaries). PRODUCTION-trust (orthogonal to the client): real exit verifier T-DEV-1,
+  trusted setup T-HARD-1, CI real-Tor T-TEST-1. Details of the deterministic core below.
+- [~] **T-RUST-2-core (P1) Rust client MVP deterministic core — DONE (loop-19).**
   Done (focused single run): the conformance-backed deterministic client pipeline in Rust. `rgoe-proto`
   gained receipt verify (`canonical_receipt_bytes`/`verify_receipt`/`RECEIPT_DOMAIN`, hand-built bytes),
   version negotiation (`select_proto_version`/`accept_envelope_version` + pinned reason labels), and gateway
@@ -253,7 +259,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   smoke against a JS-signed directory (accepts pinned signer, rejects wrong = `signer-not-pinned`). *Remaining
   (T-RUST-2b):* the LIVE egress — `arti`-dialed onion connect + `zerokit` RLN Groth16 proving + real proxy —
   stubbed behind `live_egress()` (returns an honest not-implemented error). Gate 2 is not closed until 2b lands.
-- [~] **T-RUST-2b (P1, added loop-19) Rust client live egress — RLN-INTEROP SLICE DONE (loop-20).**
+- [x] **T-RUST-2b (P1, added loop-19) Rust client live egress — RLN-INTEROP SLICE DONE (loop-20).**
   Done (focused single run): the Gate-2 CRUX — a Rust-generated RLN Groth16 envelope proof is ACCEPTED by the
   JS reference `lib/rln.mjs` verifyEnvelope (ok:true), against the repo's OWN `circuits/rln/*` artifacts. New
   crate `rust/rgoe-rln` (excluded from `default-members` so the everyday build stays 0.29s; build with
@@ -278,11 +284,24 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   cargo feature on `rgoe-client` so `rgoe egress` can build a real envelope (still no Tor yet — send over a local
   socket to a JS gateway in an integration test). *Accept:* `rgoe egress` produces an envelope a JS gateway accepts,
   without the standalone harness.
-- [ ] **T-RUST-2e (P1, added loop-20) arti Tor dial + real proxy.** Add `arti-client` (default-features=false,
+- [x] **T-RUST-2e (P1, added loop-20) arti Tor dial + real proxy.** Add `arti-client` (default-features=false,
   features=["tokio","rustls"] — the compression feature MUST stay off: it links native zstd and collides with
   rln's sled; confirmed) + tokio to dial the selected gateway onion and proxy the CONNECT. *Accept:* the Rust
   client egresses through a LIVE gateway over Tor byte-for-byte-compatibly with the JS client; pairs with T-TEST-1
-  real-Tor / T-TEST-8 container e2e. Closes Gate 2.
+  real-Tor / T-TEST-8 container e2e. Closes Gate 2. DONE (loop-23): `arti-client` behind the `live` feature
+  (default-features=false, features=["tokio","rustls","onion-service-client"]) + tor-rtcompat + tokio, all optional
+  so the default build stays ~0.14s (cargo tree: no arti/tokio/ark in the default graph). The predicted zstd
+  collision did NOT arise (prover is ark-circom, no sled; arti's async-compression resolves to pure-Rust zlib with
+  default-features off). `rgoe egress` is transport-selectable (`--onion`/directory-select over arti by default,
+  `--plain-tcp` escape hatch preserving loop-22). REAL OVER-TOR ACCEPT CAPTURED + reproduced by me
+  (interop/egress-tor-run.sh, gated RGOE_TOR_E2E=1): Rust bootstraps embedded Tor, dials a published v3 HS for the
+  gateway, gateway logs its egress-accept line. The over-Tor step stays gated (HS propagation slow/flaky, pairs
+  with T-TEST-1); the plain-TCP Layer-3 accept remains the always-green authoritative check.
+- [ ] **T-RUST-2f (P3, added loop-23) Harden the over-Tor harness cleanup.** interop/egress-tor-run.sh leaked its
+  gateway + tor children when its stdout was piped (SIGPIPE cut the EXIT trap before it killed the backgrounded
+  procs). Make cleanup robust to a truncated pipe (trap on more signals / kill a process group / write a pidfile
+  and reap unconditionally) so a piped run never leaves a gateway/tor listening. *Accept:* piping the harness to
+  `head`/`tail` still leaves zero leftover tor/gateway processes.
 - [ ] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
   last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. *Accept:*
   the real-Tor integration test (T-TEST-1) passes with the Rust client swapped in.
@@ -605,3 +624,18 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   group/members.json (confirmed clean via git status after). Guardrails: rgoe-proto 9+20 green, rgoe-rln 5 tree +
   1 externalNullifier green, default build 0.19s, clippy/fmt clean (default AND --features live), only rust/
   touched. T-RUST-2d done. ONLY T-RUST-2e (arti Tor dial) remains to close Gate 2.
+- 2026-08-14  loop-23  FOCUSED single run: T-RUST-2e arti Tor dial — GATE 2 CODE PATH CLOSED. The Rust client
+  now egresses over EMBEDDED TOR: `rgoe egress --onion` bootstraps arti, dials the gateway's v3 onion, and the
+  live JS gateway ACCEPTS the RLN envelope end-to-end over Tor. `arti-client` (default-features=false,
+  features=tokio/rustls/onion-service-client) + tor-rtcompat + tokio, all behind the `live` feature and optional,
+  so the DEFAULT build stays ~0.14s (cargo tree: no arti/tokio/ark in the default graph). The loop-19 zstd `links`
+  worry did NOT materialize — the prover is ark-circom (no sled), and arti's async-compression with
+  default-features off resolves to pure-Rust zlib (no native zstd). Transport is selectable (`--onion`/directory
+  over Tor by default, `--plain-tcp` preserves loop-22). INTEGRATION AUDIT (mine): reran the plain-TCP
+  egress-run.sh (Layer 3 gateway accept, authoritative always-green) AND the gated over-Tor egress-tor-run.sh
+  (RGOE_TOR_E2E=1, system tor present) — independently reproduced a REAL over-Tor gateway accept on the first
+  attempt. Guardrails: rgoe-proto 9+20 green, default build 0.14s, clippy/fmt clean (default AND --features live).
+  Marked T-RUST-2 [x] (MVP: conformance + byte-for-byte over-Tor egress = Gate-2 definition met). Filed T-RUST-2f
+  (harden the over-Tor harness's cleanup — it leaked gateway/tor children when its stdout was piped). Remaining
+  for a full distributable: T-RUST-3 (rotation/failover/LKG/discovery parity), T-RUST-4 (binaries); production
+  trust is orthogonal (T-DEV-1 real verifier, T-HARD-1 trusted setup, T-TEST-1 CI real-Tor). Only rust/ touched.

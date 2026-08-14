@@ -10,7 +10,9 @@
 #   Layer 3 (full gateway proxy): the REAL gateway/gateway.mjs, with the derived member set
 #     as its PoC root source and a local :port egress sink, ACCEPTS the Rust envelope end to
 #     end (version gate -> verifyEnvelope Groth16 -> target policy -> spent-set -> upstream
-#     connect -> `{ ok: true }`). No Tor (that is T-RUST-2e); the client dials plain TCP.
+#     connect -> `{ ok: true }`). No Tor here: the client uses the `--plain-tcp` escape hatch
+#     (the embedded-Tor onion dial is T-RUST-2e; its best-effort harness is egress-tor-run.sh).
+#     This plain-TCP layer stays the AUTHORITATIVE always-green accept check.
 #
 # Prereqs: `npm install` at the repo root (rlnjs) + a Rust toolchain.
 # Run from anywhere: bash rust/rgoe-rln/interop/egress-run.sh
@@ -58,7 +60,7 @@ VS_PID=$!
 disown "$VS_PID" 2>/dev/null || true
 node "$HERE/wait-log.mjs" "$WORK/vs.log" "listening on" 15000
 set +e
-"$RGOE" egress "127.0.0.1:${VS_PORT}" \
+"$RGOE" egress --plain-tcp "127.0.0.1:${VS_PORT}" \
   --identity "$IDENTITY" --members "$MEMBERS" --target "$TARGET" \
   --circuits "$CIRCUITS"
 L2_RGOE_RC=$?
@@ -94,7 +96,7 @@ disown "$GW_PID" 2>/dev/null || true
 node "$HERE/wait-log.mjs" "$WORK/gw.log" "gateway up on" 20000
 
 set +e
-"$RGOE" egress "127.0.0.1:${GW_PORT}" \
+"$RGOE" egress --plain-tcp "127.0.0.1:${GW_PORT}" \
   --identity "$IDENTITY" --members "$MEMBERS" --target "$TARGET" \
   --circuits "$CIRCUITS"
 L3_RGOE_RC=$?

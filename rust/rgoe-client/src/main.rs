@@ -1,12 +1,11 @@
-//! `rgoe` — the RGOE distributable client (single static binary; embedded Tor is
-//! T-RUST-2b, see [`live_egress`]).
+//! `rgoe` — the RGOE distributable client (single static binary with embedded Tor).
 //!
 //! This is the **deterministic client MVP** (T-RUST-2): it parses UNTRUSTED
 //! directory / receipt JSON, then runs the trust-critical checks from `rgoe-proto`
 //! (the Rust port of the JS reference, gated by `testdata/vectors.json`). The two
-//! non-deterministic LIVE pieces — the RLN Groth16 proof and the Tor dial for an
-//! actual egress — are cleanly stubbed behind [`live_egress`] with an honest
-//! "not yet implemented" path (their heavy native deps land in T-RUST-2b).
+//! non-deterministic LIVE pieces — the RLN Groth16 proof (T-RUST-2b/2c/2d) and the
+//! embedded-Tor onion dial (T-RUST-2e, `arti-client`) — compile only under the
+//! `live` cargo feature (see the [`live`] module); the default build stays sub-second.
 //!
 //! serde/serde_json are used HERE (to parse untrusted JSON into local DTOs) and are
 //! deliberately kept out of `rgoe-proto`, whose canonical byte path is serde-free.
@@ -108,22 +107,23 @@ impl ReceiptDto {
 // --------------------------------------------------------------------------
 //
 // T-RUST-2d wired the RLN prover + native tree into `rgoe egress` behind the `live`
-// cargo feature. WITH the feature (`--features live`), `egress` builds a REAL envelope in
-// Rust and sends it to a gateway over a PLAIN TCP socket (see the `live` module below).
-// The `arti` Tor dial that replaces the plain-TCP hop is the remaining T-RUST-2e slice.
+// cargo feature; T-RUST-2e adds the embedded-Tor transport. WITH the feature
+// (`--features live`), `egress` builds a REAL envelope in Rust and sends it to the gateway
+// over EMBEDDED TOR (arti dials the selected `.onion`) by default, with a `--plain-tcp`
+// escape hatch that preserves the loop-22 plain-socket path (see the `live` module below).
 //
 // WITHOUT the feature (the default fast build), `egress` returns this honest error — the
-// heavy native deps (ark-circom -> wasmer) are only compiled under the feature so the
-// deterministic client stays sub-second to build.
+// heavy native deps (ark-circom -> wasmer, arti-client) are only compiled under the feature
+// so the deterministic client stays sub-second to build.
 
-/// The `egress` path when the `live` feature is OFF (default): the RLN prover is not
-/// compiled in. Kept as an honest, non-hanging error.
+/// The `egress` path when the `live` feature is OFF (default): the RLN prover + embedded
+/// Tor transport are not compiled in. Kept as an honest, non-hanging error.
 #[cfg(not(feature = "live"))]
-fn live_egress(_target: &str) -> Result<(), String> {
+fn live_egress() -> Result<(), String> {
     Err(
-        "live egress needs the `live` cargo feature (RLN prover + native tree). \
-         Rebuild with `cargo build -p rgoe-client --features live`. \
-         The arti Tor dial is T-RUST-2e; see docs/adr/0001-client-language.md"
+        "live egress needs the `live` cargo feature (RLN prover + native tree + arti Tor \
+         transport). Rebuild with `cargo build -p rgoe-client --features live`. \
+         See docs/adr/0001-client-language.md"
             .to_string(),
     )
 }
@@ -177,23 +177,30 @@ SUBCOMMANDS:
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
-    egress <gw-host:port> --identity <f> --members <f> --target <host:port>
+    egress <TRANSPORT> --identity <f> --members <f> --target <host:port>
            --circuits <dir> [--epoch <n>] [--slot <i>] [--rln-identifier <n>]
-           [--k <n>] [--directory <f> --signer <hex>]
+           [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
         in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
-        circuits) binding <target>, opens a PLAIN TCP socket to <gw-host:port>, sends
-        the envelope exactly as client/rgoe-client.mjs does, and reports the gateway's
-        accept/reject. With --directory/--signer it also runs the deterministic select
-        path and prints the chosen gateway (the plain-TCP dial still uses <gw-host:port>;
-        the Tor dial is T-RUST-2e). Without the feature: prints an honest not-built error.
+        circuits) binding <target>, opens a connection to the gateway, sends the
+        envelope exactly as client/rgoe-client.mjs does, and reports accept/reject.
+        Choose exactly one TRANSPORT:
+          --directory <f> --signer <hex>  Verify the signed directory, pick a gateway,
+                                          and dial its .onion over EMBEDDED TOR (arti;
+                                          no system tor daemon, no SOCKS). [default path]
+          --onion <addr[:port]>           Dial this specific .onion over embedded Tor
+                                          (default port 80, the gateway HS virtual port).
+          --plain-tcp <host:port>         Escape hatch: dial plain TCP, no Tor (the
+                                          loop-22 socket path; used by the CI harness).
+        Envelope options:
           --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf)
           --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
           --target    host:port bound into the proof (the egress destination)
           --circuits  dir with rln.wasm + rln_final.zkey + verification_key.json
           --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
           --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
-          --rln-identifier  group id (default 1)
+          --rln-identifier  group id (default 1)     --nonce  32-hex per-request nonce
+        Without the feature: prints an honest not-built error.
 
     help, --help, -h        Show this help.
     version, --version, -V  Show the version.
@@ -201,7 +208,8 @@ SUBCOMMANDS:
 NOTES:
     The trust-critical checks come from the rgoe-proto crate (a Rust port of the
     JS reference, gated byte-for-byte by testdata/vectors.json). This binary parses
-    untrusted JSON and calls those checks; it performs no live network I/O yet.
+    untrusted JSON and calls those checks. Live network I/O (the RLN prover and the
+    embedded-Tor onion dial) is compiled only under `--features live`.
     See docs/adr/0001-client-language.md.";
 
 /// Extract `--flag <value>` from args, returning the value and the remaining args.
@@ -344,17 +352,14 @@ fn cmd_verify_receipt(args: &[String]) -> ExitCode {
 }
 
 fn cmd_egress(args: &[String]) -> ExitCode {
-    let Some(dial) = args.first() else {
-        eprintln!("egress: missing <gw-host:port>\n\n{HELP}");
-        return ExitCode::from(2);
-    };
     #[cfg(feature = "live")]
     {
-        live::run_egress(dial, &args[1..])
+        live::run_egress(args)
     }
     #[cfg(not(feature = "live"))]
     {
-        match live_egress(dial) {
+        let _ = args;
+        match live_egress() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("not-implemented: {e}");
@@ -366,11 +371,11 @@ fn cmd_egress(args: &[String]) -> ExitCode {
 
 // --------------------------------------------------------------------------
 // LIVE egress implementation (feature = "live"): RLN prover + native tree +
-// plain-TCP socket to a JS gateway. T-RUST-2d.
+// transport (embedded Tor via arti, or plain-TCP escape hatch). T-RUST-2d/2e.
 // --------------------------------------------------------------------------
 //
 // The wire framing here is byte-matched to the JS reference so the real JS gateway
-// (gateway/gateway.mjs) accepts the Rust envelope:
+// (gateway/gateway.mjs) accepts the Rust envelope, IDENTICALLY over both transports:
 //   - SEND: `JSON.stringify(envelope) + "\n"` — client/rgoe-client.mjs:313,341.
 //     envelope = { v, target, nonce, proof, nullifier, externalNullifier, share }
 //     (buildEnvelope, client/rgoe-client.mjs:123); the nested `proof` is the wire-safe
@@ -380,6 +385,14 @@ fn cmd_egress(args: &[String]) -> ExitCode {
 //     :333-335; successAck `{ ok: true }` at :594) once verifyEnvelope passes, the target
 //     policy admits, the spent-set admits, and the upstream :target connects. So `ok:true`
 //     is a full end-to-end ACCEPT (version gate + Groth16 verify + proxy established).
+//
+// TRANSPORT (T-RUST-2e): `--directory/--signer` (or `--onion`) dials the gateway's `.onion`
+// over EMBEDDED TOR — arti bootstraps its own Tor client (no system tor daemon, no SOCKS)
+// and `TorClient::connect((onion, 80))` opens an anonymous stream to the gateway HS virtual
+// port 80 (bootstrap.sh: `HiddenServicePort 80 127.0.0.1:8443`), matching the JS client's
+// `destination: { host: onion+".onion", port: 80 }` (client/rgoe-client.mjs:271). The
+// `--plain-tcp <host:port>` escape hatch keeps the loop-22 plain-socket path (the CI
+// harness egress-run.sh uses it) so the always-green Layer-3 accept is unaffected.
 #[cfg(feature = "live")]
 mod live {
     use std::collections::HashSet;
@@ -391,6 +404,15 @@ mod live {
     use serde::Deserialize;
 
     use super::{default_seed, mulberry32, read_file, take_flag, DirectoryDto};
+
+    /// The resolved transport for one egress: exactly one of these is selected from the
+    /// CLI flags. Plain-TCP is the loop-22 escape hatch; Onion is the default T-RUST-2e path.
+    enum Transport {
+        /// `--plain-tcp <host:port>` — dial plain TCP, no Tor (the CI-harness / socket path).
+        PlainTcp(String),
+        /// `--onion <addr>` or a directory selection — dial `<onion>.onion:<port>` over Tor.
+        Onion { onion: String, port: u16 },
+    }
 
     #[derive(Deserialize)]
     struct IdentityFile {
@@ -450,29 +472,115 @@ mod live {
         serde_json::from_str(&raw).map_err(|e| format!("parse {path}: {e}"))
     }
 
-    // Optional: reuse the deterministic select path so `egress` also exercises directory
-    // verify + weighted pick, printing the gateway it WOULD dial over Tor. The plain-TCP
-    // dial still goes to <gw-host:port> (the arti onion dial is T-RUST-2e).
-    fn select_and_report(dir_file: &str, signer: &str) {
+    // Reuse the deterministic select path: verify the signed directory against the pinned
+    // signer, then weighted-pick a gateway and return its `.onion` (the SAME select code the
+    // deterministic `select` subcommand runs). The returned onion is what arti then dials
+    // over Tor — so the transport target comes from a signature-verified directory, never a
+    // raw host the caller typed.
+    fn select_onion(dir_file: &str, signer: &str) -> Result<String, String> {
         use rgoe_proto::{pick_gateway, verify_directory};
-        let dto: DirectoryDto = match load_json(dir_file) {
-            Ok(d) => d,
-            Err(e) => {
-                println!("select: {e}");
-                return;
-            }
-        };
+        let dto: DirectoryDto = load_json(dir_file)?;
         let dir = dto.into_proto();
-        if let Err(e) = verify_directory(&dir, signer) {
-            println!("select: directory rejected: {e}");
-            return;
-        }
+        verify_directory(&dir, signer).map_err(|e| format!("directory rejected: {e}"))?;
         let mut rng = mulberry32(default_seed());
         let empty: HashSet<String> = HashSet::new();
         match pick_gateway(&dir, &empty, &mut rng) {
-            Some(g) => println!("selected-gateway: {}", g.onion),
-            None => println!("select: no gateways in directory"),
+            Some(g) => Ok(g.onion.clone()),
+            None => Err("no gateways in directory".into()),
         }
+    }
+
+    // Parse `<addr[:port]>` into (onion-without-suffix, port). Default port 80 = the gateway
+    // HS virtual port. The `.onion` suffix is normalized off here and re-added at dial time,
+    // exactly like the JS client (client/rgoe-client.mjs:221,271).
+    fn parse_onion_addr(addr: &str, default_port: u16) -> Result<(String, u16), String> {
+        let (host, port) = match addr.rsplit_once(':') {
+            // Only treat a trailing `:NNN` as a port if it parses as one; otherwise the whole
+            // string is the host (an .onion never contains a colon).
+            Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse::<u16>().unwrap()),
+            _ => (addr, default_port),
+        };
+        let onion = host.trim_end_matches(".onion").to_string();
+        if onion.is_empty() {
+            return Err(format!("empty onion address in {addr:?}"));
+        }
+        Ok((onion, port))
+    }
+
+    // Dial the gateway `.onion` over EMBEDDED TOR (arti) and send the framed envelope,
+    // reading one newline-terminated ack — the read/frame contract is IDENTICAL to the
+    // plain-TCP `send_envelope`, so the gateway cannot tell the transports apart.
+    //
+    // The RLN envelope is built BEFORE this runs (build_envelope spins up and drops its own
+    // Tokio runtime for the wasm witness), so creating the arti runtime here never nests one
+    // runtime inside another. Bootstrap + connect are each bounded by RGOE_TOR_TIMEOUT_SECS.
+    fn tor_dial_and_send(onion: &str, port: u16, wire: &str) -> Result<serde_json::Value, String> {
+        use arti_client::{TorClient, TorClientConfig};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let timeout_secs: u64 = std::env::var("RGOE_TOR_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n: &u64| n > 0)
+            .unwrap_or(180);
+        let timeout = Duration::from_secs(timeout_secs);
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime: {e}"))?;
+
+        rt.block_on(async move {
+            eprintln!("egress: bootstrapping embedded Tor (arti) ...");
+            let config = TorClientConfig::default();
+            let tor = tokio::time::timeout(timeout, TorClient::create_bootstrapped(config))
+                .await
+                .map_err(|_| format!("arti bootstrap timed out after {timeout_secs}s"))?
+                .map_err(|e| format!("arti bootstrap: {e}"))?;
+
+            let host = format!("{onion}.onion");
+            eprintln!("egress: dialing {host}:{port} over Tor ...");
+            let mut stream = tokio::time::timeout(timeout, tor.connect((host.as_str(), port)))
+                .await
+                .map_err(|_| format!("onion connect timed out after {timeout_secs}s"))?
+                .map_err(|e| format!("connect onion {host}:{port}: {e}"))?;
+
+            stream
+                .write_all(wire.as_bytes())
+                .await
+                .map_err(|e| format!("write envelope: {e}"))?;
+            stream
+                .flush()
+                .await
+                .map_err(|e| format!("flush envelope: {e}"))?;
+
+            let mut buf: Vec<u8> = Vec::with_capacity(256);
+            let mut chunk = [0u8; 512];
+            loop {
+                let n = stream
+                    .read(&mut chunk)
+                    .await
+                    .map_err(|e| format!("read ack: {e}"))?;
+                if n == 0 {
+                    return Err("gateway closed the connection before an ack".to_string());
+                }
+                if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
+                    buf.extend_from_slice(&chunk[..nl]);
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > 64 * 1024 {
+                    return Err("ack exceeded 64KiB without a newline".to_string());
+                }
+            }
+            let line = String::from_utf8_lossy(&buf);
+            serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
+                format!(
+                    "bad ack json ({e}): {}",
+                    line.chars().take(160).collect::<String>()
+                )
+            })
+        })
     }
 
     // Dial plain TCP, send the framed envelope, read one newline-terminated ack, parse it.
@@ -510,7 +618,34 @@ mod live {
         })
     }
 
-    pub fn run_egress(dial: &str, rest: &[String]) -> ExitCode {
+    // Resolve exactly one transport from the CLI flags. Order of precedence:
+    //   --plain-tcp  (explicit escape hatch, no Tor)  >  --onion  >  --directory/--signer.
+    // A directory selection is the default T-RUST-2e path (verified directory -> onion).
+    fn resolve_transport(rest: &[String]) -> Result<Transport, String> {
+        if let Some(hp) = take_flag(rest, "--plain-tcp") {
+            return Ok(Transport::PlainTcp(hp));
+        }
+        if let Some(addr) = take_flag(rest, "--onion") {
+            let (onion, port) = parse_onion_addr(&addr, 80)?;
+            return Ok(Transport::Onion { onion, port });
+        }
+        if let (Some(dirf), Some(signer)) =
+            (take_flag(rest, "--directory"), take_flag(rest, "--signer"))
+        {
+            let onion = select_onion(&dirf, &signer)?;
+            let (onion, _) = parse_onion_addr(&onion, 80)?;
+            eprintln!("egress: selected gateway {onion}.onion from verified directory");
+            return Ok(Transport::Onion { onion, port: 80 });
+        }
+        Err(
+            "no transport: pass --directory <f> --signer <hex> (dial the selected onion over \
+             Tor), --onion <addr> (dial a specific onion over Tor), or --plain-tcp <host:port> \
+             (no Tor)"
+                .to_string(),
+        )
+    }
+
+    pub fn run_egress(rest: &[String]) -> ExitCode {
         let (identity_path, members_path, target, circuits) = match (
             take_flag(rest, "--identity"),
             take_flag(rest, "--members"),
@@ -520,6 +655,16 @@ mod live {
             (Some(i), Some(m), Some(t), Some(c)) => (i, m, t, c),
             _ => {
                 eprintln!("egress (live): need --identity <f> --members <f> --target <host:port> --circuits <dir>\n\n{}", super::HELP);
+                return ExitCode::from(2);
+            }
+        };
+
+        // Resolve the transport up front so a missing/ambiguous transport fails BEFORE the
+        // (expensive) proof build.
+        let transport = match resolve_transport(rest) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("egress (live): {e}");
                 return ExitCode::from(2);
             }
         };
@@ -549,13 +694,6 @@ mod live {
                 return ExitCode::from(2);
             }
         };
-
-        // Optional deterministic select path reuse.
-        if let (Some(dirf), Some(signer)) =
-            (take_flag(rest, "--directory"), take_flag(rest, "--signer"))
-        {
-            select_and_report(&dirf, &signer);
-        }
 
         // Build the REAL envelope in Rust (native tree + Groth16 prover).
         eprintln!(
@@ -597,8 +735,20 @@ mod live {
         });
         let wire = serde_json::to_string(&envelope).expect("serialize envelope") + "\n";
 
-        eprintln!("egress: dialing gateway {dial} (plain TCP) ...");
-        match send_envelope(dial, &wire) {
+        // Dispatch to the resolved transport. Both send the SAME `wire` and read one
+        // newline-terminated ack; `gateway` in the success print is the human-readable dial.
+        let (gateway_label, sent) = match &transport {
+            Transport::PlainTcp(hp) => {
+                eprintln!("egress: dialing gateway {hp} (plain TCP, no Tor) ...");
+                (hp.clone(), send_envelope(hp, &wire))
+            }
+            Transport::Onion { onion, port } => {
+                let label = format!("{onion}.onion:{port}");
+                (label, tor_dial_and_send(onion, *port, &wire))
+            }
+        };
+
+        match sent {
             Ok(ack) => {
                 let ok = ack
                     .get("ok")
@@ -606,7 +756,7 @@ mod live {
                     .unwrap_or(false);
                 if ok {
                     println!("ok");
-                    println!("gateway: {dial}");
+                    println!("gateway: {gateway_label}");
                     println!("target: {}", built.target);
                     println!("nullifier: {}", built.nullifier);
                     if let Some(r) = ack.get("receipt") {

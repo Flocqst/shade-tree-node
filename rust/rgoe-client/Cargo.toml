@@ -12,10 +12,12 @@ path = "src/main.rs"
 
 [features]
 # `live` pulls the RLN prover (rgoe-rln -> ark-circom/wasmer) so `rgoe egress` can mint a
-# REAL envelope (T-RUST-2d). It is OFF by default: the everyday `cargo build`
-# (default-members) never compiles the heavy native tree, keeping the deterministic client
-# sub-second. Build the live path with `cargo build -p rgoe-client --features live`.
-live = ["dep:rgoe-rln"]
+# REAL envelope (T-RUST-2d) AND the embedded-Tor transport (arti-client + tokio, T-RUST-2e)
+# so `rgoe egress` dials the selected gateway `.onion` over Tor with no system tor daemon
+# and no SOCKS. It is OFF by default: the everyday `cargo build` (default-members) never
+# compiles the heavy native tree or arti, keeping the deterministic client sub-second. Build
+# the live path with `cargo build -p rgoe-client --features live`.
+live = ["dep:rgoe-rln", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio"]
 
 [dependencies]
 rgoe-proto = { path = "../rgoe-proto" }
@@ -30,15 +32,23 @@ serde = { version = "1", features = ["derive"] } # derive Deserialize on the unt
 serde_json = "1"                                 # parse the directory/receipt files
 # hex: render pubkeys recovered from a verified receipt for display.
 hex = "0.4"
+
+# OPTIONAL, feature-gated (`live`): embedded Tor transport for the onion egress dial
+# (T-RUST-2e). CRITICAL dep note: `default-features = false` with an explicit feature list
+# turns OFF arti's `compression` feature, which links native zstd (`async-compression`) and
+# was the loop-19 feasibility worry of a `links` collision with rln's sled. That collision
+# does not actually arise here (the prover uses `ark-circom`, not zerokit/sled — verified
+# with `cargo tree`), but compression stays OFF regardless: the client dials a single onion
+# and frames one JSON line, so directory compression buys nothing. `onion-service-client`
+# is what lets arti CONNECT to a `.onion` (v3 HS client). tokio drives arti's async runtime.
+arti-client = { version = "0.45", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
+tor-rtcompat = { version = "0.45", default-features = false, features = ["tokio", "rustls"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util", "net", "time"], optional = true }
 # arg parsing is hand-rolled (no clap) to keep the dep tree tiny; a small seeded PRNG
 # (mulberry32, in-crate) drives `select` so no `rand` runtime dep is needed either.
 
-# NOTE (T-RUST-2b, DEFERRED): the heavy native deps for a LIVE egress are intentionally
-# NOT added in this run so the workspace stays fast to build. When implementing live
-# egress (see `live_egress` in src/main.rs), add:
-#   arti-client / tor-rtcompat -- embedded Tor, dial gateway/bootnode onions (no
-#                                 system tor daemon, no SOCKS, no torrc)
-#   zerokit (rln)              -- PSE canonical Rust RLN prover (envelope Groth16 proofs)
-#   alloy                      -- chain reads (GatewayRegistry.isStaked, operator sig)
-#   tokio                      -- async runtime
-#   hyper                      -- bootnode HTTP (/directory, /announce)
+# DONE under `live`: arti-client / tor-rtcompat + tokio (embedded Tor onion dial, T-RUST-2e)
+# and rgoe-rln (RLN Groth16 prover + native tree, T-RUST-2b/2c/2d).
+# STILL DEFERRED (future parity work, not needed to close Gate 2):
+#   alloy  -- on-chain reads (GatewayRegistry.isStaked, operator sig) for zero-trust reselect
+#   hyper  -- bootnode HTTP (/directory, /announce) discovery over the same arti client
