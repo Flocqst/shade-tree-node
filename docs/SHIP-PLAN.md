@@ -270,14 +270,15 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   bootnode aggregates it into the advertised `weight`/`health` (never per-member), so rotation
   favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
   a slow gateway loses weight fleet-wide; a privacy note proving no member is fingerprinted.
-- [ ] **T-FEAT-24 (P3, added loop-18) Bound the SWRR rotation state map.** T-FEAT-4's smooth-weighted-round-robin
-  keeps per-gateway deficits in a module-level `_swrr` Map in `client/selection.mjs`, keyed by onion, that is
-  never pruned — a gateway that leaves the fleet leaves a stale entry behind. It is effectively bounded (the
-  directory is size-capped and gateways are fairly stable) so this is not a leak in practice, but over a very
-  long-lived client with heavy directory churn the map grows with distinct onions ever seen. Prune `_swrr`
-  entries for onions no longer in the current fleet on each `selectCandidates` (mirror how the health cache is
-  bounded via `boundHealthCache`). *Accept:* after a fleet fully rotates its onions, `_swrr` retains only
-  current-fleet keys; rotation behavior/distribution unchanged.
+- [ ] **T-FEAT-24 (P3, added loop-18; CORRECTED) Regression test for SWRR `_swrr` map bounding.** Correction to
+  the loop-18 audit note: `_swrr` is ALREADY bounded — `spreadSelectionOrder` (`client/selection.mjs:384-387`)
+  deletes every deficit key not in the current live fleet on each call, and when `RGOE_ROTATION_SPREAD` is off
+  the map is never written at all, so there is no unbounded-growth bug (my original claim that it "is never
+  pruned" was wrong — I hadn't read `spreadSelectionOrder` closely). The pruning is verified structurally but
+  NOT yet covered by an explicit regression test (`_swrr` is module-private). Residual, minor: add a test seam
+  (e.g. export `_swrrSize()`) and a `client/rotation.selftest.mjs` case that drives a spread, fully swaps the
+  fleet's onions, drives another spread, and asserts the map retains only current-fleet keys — so a future edit
+  can't silently reintroduce the leak. *Accept:* the test proves post-rotation `_swrr` holds only live-fleet keys.
 - [x] **T-FEAT-5 (P2) Deterministic member subkeys.** DONE (loop-11): `lib/subkeys.mjs` -- HMAC-SHA512(master, `rgoe-subkey:v1\n{context}\n{index}`) mod FIELD -> a valid RLN secret; `deriveIdentity` composes it to a registerable rateCommitment. Determinism, unlinkability across 80 context/index pairs, field-range, RLN composition, master isolation, + a pinned golden vector. `lib/subkeys.selftest.mjs`.
 - [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
@@ -514,3 +515,8 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   and the T-FEAT-23×T-FEAT-4 interaction on selection.mjs is covered by receipt-integration passing green.
   55 node selftests + 53 Foundry tests green; lint clean. Added T-FEAT-24 (bound the SWRR `_swrr` state map)
   + T-DEV-9 flagged for a focused on-chain run (not fan-out).
+- 2026-08-14  loop-18b (correction)  The loop-18 audit note above claimed T-FEAT-4's `_swrr` map "is never
+  pruned" — that was WRONG. Re-reading `spreadSelectionOrder` (`client/selection.mjs:384-387`): it deletes every
+  deficit key not in the current live fleet on each spread call, and the map is never written when the flag is
+  off, so there is no unbounded-growth bug. Corrected T-FEAT-24 to its real residual: add an explicit regression
+  test for the (already-present) bounding. Recording the correction rather than silently editing history.
