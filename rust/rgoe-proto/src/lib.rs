@@ -143,6 +143,16 @@ pub struct GatewayEntry {
     pub operator: Option<String>,
     /// stake label (NOT signed). Present only when the entry had an operator.
     pub staked: Option<bool>,
+    /// T-FEAT-10 self-declared coarse capabilities. OPTIONAL and additive: `None`
+    /// (or a value that canonicalizes empty) OMITS the `caps`/`capsSig` fields from
+    /// [`canonical_directory_bytes`], so a no-caps entry is byte-identical to before.
+    /// Mirrors `g.caps` on a JS directory entry (`lib/directory.mjs`).
+    pub caps: Option<Caps>,
+    /// T-FEAT-10 onion-bound signature over exactly these caps ([`canonical_caps_bytes`]),
+    /// signed by the gateway's OWN onion key. When `caps` is present this MUST verify
+    /// (`check_gateway_bindings` -> `bad-caps-sig`), so a bootnode/directory signer that
+    /// lacks the onion key cannot forge or alter caps. Mirrors `g.capsSig`.
+    pub caps_sig: Option<String>,
 }
 
 /// A signed directory (spec 4.1). `signer`/`signature` are top-level and excluded
@@ -200,6 +210,11 @@ pub struct Announce {
     pub operator: Option<String>,
     /// EIP-191 `personal_sign` over `operator_auth_message` (optional).
     pub operator_sig: Option<String>,
+    /// T-FEAT-10 self-declared caps that ride INSIDE the main onion-signed announce bytes
+    /// (appended after `nonce`), OPTIONAL/additive: `None`/empty omits the field so a
+    /// no-caps announce is byte-identical to before. Unlike the directory entry there is
+    /// NO separate `capsSig` on the announce — the caps are covered by `onion_sig`.
+    pub caps: Option<Caps>,
 }
 
 // --------------------------------------------------------------------------
@@ -259,6 +274,199 @@ pub fn pubkey_to_onion(pubkey: &[u8; 32]) -> String {
 }
 
 // --------------------------------------------------------------------------
+// T-FEAT-10 gateway capability advertisement (caps)
+// --------------------------------------------------------------------------
+//
+// Reference: `lib/directory.mjs` (`CAPS_DOMAIN`, `REGION_BUCKETS`, `canonicalCaps`,
+// `hasCaps`, `canonicalCapsBytes`, `verifyCapsSig`). A gateway self-declares COARSE,
+// BUCKETED capabilities (allowed egress ports, a coarse region bucket, the supported
+// proto envelope range) so a client can route to a CAPABLE gateway. Three rules mirror
+// the JS exactly:
+//   1. ADDITIVE / OMIT-WHEN-ABSENT: caps are optional; a no-caps entry serializes
+//      byte-IDENTICALLY (the canonical-bytes builders append caps ONLY when `has_caps`).
+//   2. SIGNED UNDER THE ONION KEY: a directory entry carries a durable, onion-bound
+//      `capsSig` ([`canonical_caps_bytes`]) so the caps are unforgeable by a bootnode /
+//      directory signer that lacks the gateway's onion key.
+//   3. BUCKETED, NOT FINGERPRINTABLE + TOTAL: [`canonical_caps`] dedups/sorts ports,
+//      range-checks the proto range, and drops any junk/unknown field — it never fails.
+
+/// Domain tag the onion key signs its caps under (`lib/directory.mjs:143 CAPS_DOMAIN`).
+/// The trailing `\n` is a literal newline byte.
+pub const CAPS_DOMAIN: &str = "RGOE gateway capabilities v1\n";
+/// A gateway advertising NO caps is assumed to allow only this egress port
+/// (`lib/directory.mjs:150 DEFAULT_EGRESS_PORT`), the conservative floor used by the
+/// capability-aware selection filter.
+pub const DEFAULT_EGRESS_PORT: u64 = 443;
+/// A gateway advertising NO caps is assumed to speak only this proto version
+/// (`lib/directory.mjs:151 DEFAULT_PROTO_VERSION`).
+pub const DEFAULT_PROTO_VERSION: u64 = 3;
+
+/// True iff `r` is one of the coarse continent/AS region buckets
+/// (`lib/directory.mjs:146 REGION_BUCKETS`). Anything else is dropped by
+/// [`canonical_caps`] — deliberately too coarse to fingerprint a member.
+pub fn is_region_bucket(r: &str) -> bool {
+    matches!(
+        r,
+        "na" | "sa" | "eu" | "af" | "as" | "oc" | "aq" | "unknown"
+    )
+}
+
+/// The proto version range a gateway supports (`caps.proto = { min, max }`). Typed `i64`
+/// so an out-of-range/garbage range parses and is dropped by [`canonical_caps`] rather
+/// than aborting (mirrors the JS `Number.isInteger` guard being total over junk).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtoCaps {
+    pub min: i64,
+    pub max: i64,
+}
+
+/// RAW, untrusted gateway capabilities as carried on a directory entry / announce, before
+/// [`canonical_caps`] normalization. `ports` are `i64` (out-of-range/dupe values are
+/// dropped/deduped at canonicalization, not here); `region`/`proto` are validated there
+/// too. Mirrors the shape `g.caps` takes on the JS wire (`lib/directory.mjs`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Caps {
+    pub ports: Option<Vec<i64>>,
+    pub region: Option<String>,
+    pub proto: Option<ProtoCaps>,
+}
+
+/// Canonicalized caps: fixed field order (ports, region, proto), ports deduped + sorted
+/// ascending, only valid fields retained. The value [`canonical_caps_json`] serializes and
+/// [`has_caps`] tests. Mirrors the object `canonicalCaps` returns (`lib/directory.mjs:156`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CanonicalCaps {
+    pub ports: Option<Vec<u64>>,
+    pub region: Option<String>,
+    pub proto: Option<(u64, u64)>,
+}
+
+/// Normalize raw caps into canonical bucketed form (`lib/directory.mjs:156 canonicalCaps`).
+/// TOTAL: never fails; unknown/invalid fields are dropped; a fully-empty result is returned
+/// when nothing valid remains (which every canonical-bytes builder treats as absent).
+///   - ports: keep integers in `[1, 65535]`, dedup, sort ascending; drop when empty.
+///   - region: keep iff a known coarse bucket ([`is_region_bucket`]).
+///   - proto: keep `{min,max}` iff `min >= 1 && max >= min`.
+pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
+    let mut out = CanonicalCaps::default();
+    if let Some(ports) = &caps.ports {
+        let mut v: Vec<u64> = ports
+            .iter()
+            .copied()
+            .filter(|p| (1..=65535).contains(p))
+            .map(|p| p as u64)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        if !v.is_empty() {
+            out.ports = Some(v);
+        }
+    }
+    if let Some(r) = &caps.region {
+        if is_region_bucket(r) {
+            out.region = Some(r.clone());
+        }
+    }
+    if let Some(p) = &caps.proto {
+        if p.min >= 1 && p.max >= p.min {
+            out.proto = Some((p.min as u64, p.max as u64));
+        }
+    }
+    out
+}
+
+/// True iff caps carry at least one valid bucketed field after canonicalization
+/// (`lib/directory.mjs:173 hasCaps`). Used to OMIT the `caps` field from canonical bytes
+/// when empty, keeping absent/empty-caps records byte-identical to before.
+pub fn has_caps(caps: &Caps) -> bool {
+    let c = canonical_caps(caps);
+    c.ports.is_some() || c.region.is_some() || c.proto.is_some()
+}
+
+/// Serialize canonical caps as the exact `JSON.stringify(canonicalCaps(caps))` bytes:
+/// `{"ports":[..],"region":"..","proto":{"min":..,"max":..}}` in that fixed order, each
+/// field present only when set. Hand-built (no serializer) to match byte-for-byte.
+fn canonical_caps_json(cc: &CanonicalCaps) -> String {
+    let mut s = String::from("{");
+    let mut first = true;
+    if let Some(ports) = &cc.ports {
+        s.push_str("\"ports\":[");
+        for (i, p) in ports.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push_str(&p.to_string());
+        }
+        s.push(']');
+        first = false;
+    }
+    if let Some(r) = &cc.region {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"region\":");
+        push_json_string(&mut s, r);
+        first = false;
+    }
+    if let Some((min, max)) = &cc.proto {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"proto\":{\"min\":");
+        s.push_str(&min.to_string());
+        s.push_str(",\"max\":");
+        s.push_str(&max.to_string());
+        s.push('}');
+    }
+    s.push('}');
+    s
+}
+
+/// Domain-separated, onion-bound canonical bytes the ONION key signs to attest its caps
+/// (`lib/directory.mjs:183 canonicalCapsBytes`):
+/// `utf8(CAPS_DOMAIN) || utf8(JSON.stringify({ onion, caps: canonicalCaps(caps) }))`.
+/// DURABLE (no timestamp) so it is reusable across heartbeats and re-verifiable from a
+/// directory entry. Runs caps through [`canonical_caps`] so key order/junk can't shift bytes.
+/// Conformance target: `testdata/vectors.json` `capabilities.canonicalCapsBytesHex`.
+pub fn canonical_caps_bytes(onion: &str, caps: &Caps) -> Vec<u8> {
+    let cc = canonical_caps(caps);
+    let mut s = String::from(CAPS_DOMAIN);
+    s.push_str("{\"onion\":");
+    push_json_string(&mut s, onion);
+    s.push_str(",\"caps\":");
+    s.push_str(&canonical_caps_json(&cc));
+    s.push('}');
+    s.into_bytes()
+}
+
+/// Verify a caps attestation against the ed25519 key encoded in the onion address
+/// (`lib/directory.mjs:194 verifyCapsSig` -> `verifyOnionControl`). TOTAL: an
+/// absent/empty/garbage signature or a malformed onion returns `false`, never panics.
+/// This is the check that makes caps unforgeable by a bootnode/directory signer that
+/// lacks the gateway's onion key.
+pub fn verify_caps_sig(onion: &str, caps: &Caps, caps_sig: Option<&str>) -> bool {
+    let Some(sig_hex) = caps_sig else {
+        return false;
+    };
+    if sig_hex.is_empty() {
+        return false;
+    }
+    let pubkey = match onion_to_pubkey(onion) {
+        Ok(pk) => pk,
+        Err(_) => return false,
+    };
+    (|| -> Option<bool> {
+        let sig: [u8; 64] = hex::decode(sig_hex).ok()?.try_into().ok()?;
+        Some(ed25519_verify(
+            &canonical_caps_bytes(onion, caps),
+            &sig,
+            &pubkey,
+        ))
+    })()
+    .unwrap_or(false)
+}
+
+// --------------------------------------------------------------------------
 // 1. Canonical byte encodings
 // --------------------------------------------------------------------------
 
@@ -287,6 +495,15 @@ pub fn canonical_announce_bytes(ann: &Announce) -> Vec<u8> {
     s.push_str(&ann.ts.to_string());
     s.push_str(",\"nonce\":");
     push_json_string(&mut s, &ann.nonce);
+    // T-FEAT-10: caps ride inside the onion-signed announce bytes ONLY when present,
+    // appended AFTER `nonce` (mirrors bootnode/announce.mjs appending caps when hasCaps).
+    // A no-caps announce is byte-identical to before. Conformance: `announceWithCaps`.
+    if let Some(caps) = &ann.caps {
+        if has_caps(caps) {
+            s.push_str(",\"caps\":");
+            s.push_str(&canonical_caps_json(&canonical_caps(caps)));
+        }
+    }
     s.push('}');
     s.into_bytes()
 }
@@ -321,6 +538,22 @@ pub fn canonical_directory_bytes(dir: &Directory) -> Vec<u8> {
         s.push_str(&g.weight.to_string());
         s.push_str(",\"health\":");
         push_json_string(&mut s, &g.health);
+        // T-FEAT-10: caps + their onion-control signature ride in the signed bytes ONLY
+        // when present, appended AFTER the four legacy fields (mirrors
+        // lib/directory.mjs:218: `if (hasCaps(g.caps)) { e.caps = ...; if capsSig ... }`).
+        // An entry WITHOUT caps serializes byte-identically to before. capsSig is appended
+        // only when it is a string (`Some`), exactly like the JS `typeof g.capsSig ===
+        // "string"` guard. Conformance: `directoryWithCaps.canonicalBytesHex`.
+        if let Some(caps) = &g.caps {
+            if has_caps(caps) {
+                s.push_str(",\"caps\":");
+                s.push_str(&canonical_caps_json(&canonical_caps(caps)));
+                if let Some(sig) = &g.caps_sig {
+                    s.push_str(",\"capsSig\":");
+                    push_json_string(&mut s, sig);
+                }
+            }
+        }
         s.push('}');
     }
     s.push_str("]}");
@@ -389,6 +622,17 @@ fn check_gateway_bindings(dir: &Directory) -> Result<()> {
         };
         if hex::encode(derived) != g.pubkey.to_lowercase() {
             return Err(Error::Reason(format!("pubkey-onion-mismatch:{onion12}..")));
+        }
+        // T-FEAT-10 (lib/directory.mjs:325): an entry that advertises caps MUST carry a
+        // valid onion-control signature over exactly those caps. This is what makes the
+        // capabilities unforgeable by the bootnode / directory signer (they lack the
+        // gateway's onion key): altering a cap, or grafting caps onto an entry, breaks
+        // capsSig -> the whole directory is rejected. Absent caps => nothing to check
+        // (additive; legacy entries are unaffected).
+        if let Some(caps) = &g.caps {
+            if has_caps(caps) && !verify_caps_sig(&g.onion, caps, g.caps_sig.as_deref()) {
+                return Err(Error::Reason(format!("bad-caps-sig:{onion12}..")));
+            }
         }
     }
     Ok(())
@@ -1086,6 +1330,8 @@ mod tests {
             health: health.to_string(),
             operator: None,
             staked: None,
+            caps: None,
+            caps_sig: None,
         }
     }
 

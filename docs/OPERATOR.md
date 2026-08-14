@@ -388,6 +388,25 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
 | `RGOE_FLEET_TALLY_TIMEOUT_MS` | (none) | Per-peer push timeout (default 4000). A slow/down peer is swallowed (fail-open), never blocks admission. |
 | `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
+| `RGOE_EGRESS_ALLOW` / `RGOE_EGRESS_DENY` | (none) | Egress policy (see §2). When `RGOE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
+| `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
+
+### Capability advertisement (T-FEAT-10b)
+
+By default a gateway advertises **no** capabilities and its announce is byte-identical to a
+legacy gateway — an unconfigured gateway is indistinguishable on the wire. When you set an
+egress policy (`RGOE_EGRESS_ALLOW`) and/or a region (`RGOE_GATEWAY_REGION`), the heartbeat
+attaches a **signed** capability set to every announce:
+
+- `ports` — the coarse allowed egress port set derived from `RGOE_EGRESS_ALLOW`
+  (`*:443` → `[443]`; `*:443,*:8443` → `[443,8443]`; a wildcard `*` port is dropped).
+- `region` — your `RGOE_GATEWAY_REGION` bucket, if valid.
+- `proto` — the envelope version range this build speaks (from the gateway's negotiated range).
+
+The caps are signed by the gateway's onion key (not the bootnode), so a bootnode or directory
+signer cannot forge or alter them. Clients that opt into capability-aware selection then route a
+port-`X` request only to gateways advertising `X`. The heartbeat logs the exact caps it advertises
+on startup (`capabilities advertised (signed): …`), or `capabilities: none` when unconfigured.
 
 On the systemd deploy, set these as `Environment=` lines in the relevant unit
 (`/etc/systemd/system/rgoe-*.service`), then `systemctl daemon-reload && systemctl

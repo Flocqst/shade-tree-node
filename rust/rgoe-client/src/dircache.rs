@@ -24,7 +24,7 @@
 
 use std::path::Path;
 
-use rgoe_proto::{verify_directory, Directory, GatewayEntry};
+use rgoe_proto::{verify_directory, Caps, Directory, GatewayEntry, ProtoCaps};
 use serde::Deserialize;
 
 // --------------------------------------------------------------------------
@@ -45,6 +45,32 @@ pub struct DirEntryDto {
     pub operator: Option<String>,
     #[serde(default)]
     pub staked: Option<bool>,
+    // T-FEAT-10c: carry the self-declared caps + their onion-bound signature through so
+    // verify_directory can enforce capsSig (bad-caps-sig) and the client can filter on
+    // capability. OPTIONAL/additive: absent on a legacy entry (verify + selection unchanged).
+    #[serde(default)]
+    pub caps: Option<CapsDto>,
+    #[serde(rename = "capsSig", default)]
+    pub caps_sig: Option<String>,
+}
+
+/// Untrusted caps object on a directory entry (`g.caps`). Deserialized leniently, then
+/// mapped to rgoe_proto's `Caps` and CANONICALIZED (dedup/sort/range-check) by the proto
+/// crate — this DTO does no validation itself.
+#[derive(Deserialize)]
+pub struct CapsDto {
+    #[serde(default)]
+    pub ports: Option<Vec<i64>>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub proto: Option<ProtoCapsDto>,
+}
+
+#[derive(Deserialize)]
+pub struct ProtoCapsDto {
+    pub min: i64,
+    pub max: i64,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +108,15 @@ impl DirectoryDto {
                     health: g.health,
                     operator: g.operator,
                     staked: g.staked,
+                    caps: g.caps.map(|c| Caps {
+                        ports: c.ports,
+                        region: c.region,
+                        proto: c.proto.map(|p| ProtoCaps {
+                            min: p.min,
+                            max: p.max,
+                        }),
+                    }),
+                    caps_sig: g.caps_sig,
                 })
                 .collect(),
             signer: self.signer,

@@ -435,13 +435,13 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   bucketed, not free-form. DONE (loop-31, JS): additive omit-when-absent caps (byte-identical when absent),
   onion-bound capsSig (a directory signer can't forge them), opt-in fail-closed selection. Producer wiring =
   T-FEAT-10b; Rust parity = T-FEAT-10c.
-- [ ] **T-FEAT-10b (P3, added loop-31) Wire the gateway to advertise its REAL capabilities.** T-FEAT-10 added
+- [x] **T-FEAT-10b (P3, added loop-31) Wire the gateway to advertise its REAL capabilities.** T-FEAT-10 added
   build/verify/select support for signed caps, but the gateway heartbeat (bootnode/heartbeat.mjs) doesn't yet
   POPULATE them — a real gateway should advertise its actual egress policy's allowed ports (from T-DEV-10
   makeEgressPolicy), a self-declared coarse region (env, e.g. RGOE_GATEWAY_REGION from REGION_BUCKETS), and its
   proto range. *Accept:* a gateway started with a region + non-default egress policy announces matching signed
   caps; a client `selectCandidates({port})` routes to it; still byte-identical when no caps are configured.
-- [ ] **T-FEAT-10c (P3, added loop-31) Rust capability-aware selection parity.** The Rust client (rgoe-proto
+- [x] **T-FEAT-10c (P3, added loop-31) Rust capability-aware selection parity.** The Rust client (rgoe-proto
   Directory/GatewayEntry + rgoe-client selection) doesn't carry or filter on capabilities. Add the caps field +
   capsSig verify to the Rust directory/announce structs and an opt-in capability filter mirroring JS
   gatewayMeetsRequirement, conformance-checked against the new `capabilities` vector. *Accept:* Rust rejects a
@@ -829,3 +829,14 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   rgoe-rln 6+1; clippy/fmt/lint clean. Filed T-FEAT-10b (wire the gateway heartbeat to populate its real caps from
   the egress policy + a region env, so gateways actually advertise — build/verify support it, the producer side
   is a follow-up).
+- 2026-08-14  loop-32  Completed the capability feature (2 disjoint agents): T-FEAT-10b (gateway heartbeat now
+  POPULATES real signed caps — ports coarsened from the RGOE_EGRESS_ALLOW policy, region from RGOE_GATEWAY_REGION
+  validated against REGION_BUCKETS, proto from the imported PROTO_RANGE; byte-identical when unconfigured, proven
+  3 ways [full-record equality, canonical bytes, identical onionSig]; bootnode/heartbeat-caps.selftest.mjs, 26
+  checks) + T-FEAT-10c (Rust capability parity — rgoe-proto caps carriage + onion-bound verify_caps_sig rejecting
+  forged caps [bad-caps-sig] in BOTH single-sig and threshold paths, canonical bytes append caps only when present
+  [absent byte-identical], + rgoe-client opt-in --port/--proto/--region filter that fails closed; 6 conformance +
+  5 capability tests; updated every GatewayEntry/Announce struct literal the field-add touched). INTEGRATION AUDIT
+  (mine): cargo build --workspace + test --workspace green (rgoe-proto 9+32 / rgoe-client 26 / rgoe-rln 6+1),
+  clippy/fmt clean; full JS suite 62/62 green; lint clean. The capability feature is now COMPLETE end-to-end
+  (JS produce/verify/select + Rust proto/client). No new backlog filed (feature closed).

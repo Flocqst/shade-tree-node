@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use rgoe_proto::{pick_gateway, selection_order, verify_directory, verify_receipt, Receipt};
 use serde::Deserialize;
 
+mod capability;
 mod dircache;
 mod health;
 // The persisted K-slot cursor is used only by the `live` egress path (see the `live`
@@ -216,10 +217,15 @@ SUBCOMMANDS:
         `egress --bootnode-onion` in a --features live build.
 
     select <dir-file> --signer <hex> [--seed <n>] [--health-cache <f>]
+                      [--port <n>] [--proto <n>] [--region <bucket>]
         Verify the directory, then print the weighted-random chosen gateway onion
         and the full failover order. --seed makes the choice reproducible.
         --health-cache seeds each gateway's health from persisted egress failover
         feedback, so a gateway that failed last session starts deprioritized.
+        --port/--proto/--region (T-FEAT-10) form an OPT-IN capability requirement:
+        only gateways whose SIGNED caps meet it are selected (a no-caps gateway meets
+        only the conservative 443/v3 floor; region is never implicit). If no gateway
+        qualifies, select fails closed (not-ok) rather than dialing an incapable one.
 
     verify-receipt <receipt-file> --onion <onion>
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
@@ -367,6 +373,27 @@ fn cmd_select(args: &[String]) -> ExitCode {
         let path = std::path::PathBuf::from(hc);
         let mut cache = health::load(Some(&path));
         health::seed(&mut dir, &mut cache, now_ms());
+    }
+
+    // Opt-in capability-aware filter (T-FEAT-10c). --port/--proto/--region form a
+    // capability requirement; only gateways whose SIGNED caps meet it survive (a no-caps
+    // gateway meets only the conservative 443/v3 floor). Absent all three => INACTIVE =>
+    // byte-identical selection. Active but no gateway qualifies => FAIL CLOSED (never
+    // dial an incapable gateway). Mirrors selectCandidates(req) in client/selection.mjs.
+    let req = capability::Requirement {
+        port: take_flag(args, "--port").and_then(|s| s.parse::<u64>().ok()),
+        proto: take_flag(args, "--proto").and_then(|s| s.parse::<u64>().ok()),
+        region: take_flag(args, "--region"),
+    };
+    if req.is_active() {
+        capability::filter_by_capability(&mut dir.gateways, &req);
+        if dir.gateways.is_empty() {
+            println!(
+                "not-ok: no gateway meets capability requirement: {}",
+                req.describe()
+            );
+            return ExitCode::from(1);
+        }
     }
 
     let mut rng = mulberry32(seed);

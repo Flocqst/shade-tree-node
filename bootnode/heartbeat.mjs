@@ -13,6 +13,10 @@
 //   RGOE_GW_WEIGHT          selection weight advertised                    (default 100)
 //   RGOE_BOOTNODE_HEARTBEAT re-announce interval in seconds                (default 300)
 //   RGOE_TOR_HOST/PORT      local Tor SOCKS                                (default 127.0.0.1:9250)
+//   capability advertisement (optional, T-FEAT-10b — OFF/byte-identical when both unset):
+//   RGOE_EGRESS_ALLOW       the gateway's egress policy (also read by gateway/gateway.mjs);
+//                           when SET, its concrete allowed ports are advertised as signed caps
+//   RGOE_GATEWAY_REGION     a coarse self-declared region bucket (REGION_BUCKETS; e.g. `eu`)
 //   stake (optional, admission=stake bootnodes):
 //   RGOE_GW_OPERATOR_KEY    operator EOA private key; signs the durable onion<->operator auth, OR
 //   RGOE_GW_OPERATOR +      a pre-computed operator address and
@@ -23,7 +27,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildAnnounce, operatorAuthMessage } from "./announce.mjs";
 import { postOverTor } from "./fetch.mjs";
-import { checkEgress, EGRESS_CHECK_TARGET } from "../gateway/gateway.mjs";
+import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
+import { REGION_BUCKETS } from "../lib/directory.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -47,8 +52,67 @@ async function resolveOperator(onion) {
   return { operator: null, operatorSig: null };
 }
 
-export async function announceOnce({ id, bootnode, op, weight, torHost, torPort }) {
-  const rec = buildAnnounce({ onion: id.onion, weight, onionSeedHex: id.seed, operator: op.operator, operatorSig: op.operatorSig });
+// ---- capability advertisement (T-FEAT-10b) ----------------------------------
+// T-FEAT-10 added build/verify/select SUPPORT for signed caps; this WIRES the producer so a
+// gateway advertises its REAL config instead of "any gateway". Caps are derived from what the
+// gateway actually runs:
+//   - ports : the coarse ALLOWED egress port set, taken from the gateway's egress policy
+//             (RGOE_EGRESS_ALLOW / gateway.mjs makeEgressPolicy). `*:443` -> [443]; a wildcard
+//             `*` port is NOT enumerable coarsely, so it is dropped (never advertise "any port").
+//   - region: a coarse, self-declared continent bucket (RGOE_GATEWAY_REGION, validated against
+//             REGION_BUCKETS). Omitted when unset/invalid. Deliberately too coarse to fingerprint.
+//   - proto : the envelope version range the gateway actually speaks (gateway.mjs PROTO_RANGE,
+//             the version-negotiation source of truth) — carried through, never hardcoded here.
+//
+// OPT-IN + OMIT-WHEN-UNCONFIGURED: with NEITHER a configured egress policy NOR a region,
+// buildGatewayCaps returns null, buildAnnounce attaches nothing, and the announce is
+// BYTE-IDENTICAL to a pre-T-FEAT-10 announce. proto rides along ONLY when caps are otherwise
+// non-empty, so it can never on its own force a non-identical announce.
+
+// Coarse allowed-port set from an RGOE_EGRESS_ALLOW spec (comma-separated `host:port` patterns,
+// same grammar as gateway.mjs makeEgressPolicy). Keeps only CONCRETE numeric ports — a wildcard
+// `*` port or garbage is dropped — then dedupes + sorts. Returns [] when nothing concrete remains.
+export function advertisedPorts(allowSpec) {
+  const out = new Set();
+  for (const raw of String(allowSpec ?? "").split(",")) {
+    const spec = raw.trim();
+    if (!spec) continue;
+    const i = spec.lastIndexOf(":"); // split on LAST colon, mirroring parseEgressPattern
+    if (i <= 0 || i === spec.length - 1) continue;
+    const portStr = spec.slice(i + 1);
+    if (!/^\d{1,5}$/.test(portStr)) continue; // "*" or junk -> not a concrete port
+    const port = Number(portStr);
+    if (port >= 1 && port <= 65535) out.add(port);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+// Build the raw caps object from env (injectable for tests; defaults to process.env). Returns
+// null when the gateway is UNCONFIGURED (no explicit egress policy, no valid region) so the
+// announce stays byte-identical to today. buildAnnounce canonicalizes + signs whatever we return.
+export function buildGatewayCaps(env = process.env) {
+  const caps = {};
+  // ports: advertised ONLY when the operator explicitly set an egress policy (env present). An
+  // UNSET policy is the implicit :443 floor every gateway already meets (DEFAULT_EGRESS_PORT), so
+  // advertising it would attach caps to an otherwise-default gateway — keep the default cap-free.
+  if (env.RGOE_EGRESS_ALLOW !== undefined) {
+    const ports = advertisedPorts(env.RGOE_EGRESS_ALLOW);
+    if (ports.length) caps.ports = ports;
+  }
+  // region: opt-in coarse bucket, validated against the shared allowlist.
+  if (typeof env.RGOE_GATEWAY_REGION === "string" && REGION_BUCKETS.has(env.RGOE_GATEWAY_REGION)) {
+    caps.region = env.RGOE_GATEWAY_REGION;
+  }
+  // Nothing configured -> no caps -> byte-identical announce (proven in the selftest).
+  if (caps.ports === undefined && caps.region === undefined) return null;
+  // At least one real cap: advertise the proto range too (complete, and safe — it only ever
+  // rides alongside already-present caps, never triggers caps on its own).
+  caps.proto = { min: PROTO_RANGE.min, max: PROTO_RANGE.max };
+  return caps;
+}
+
+export async function announceOnce({ id, bootnode, op, weight, torHost, torPort, caps = buildGatewayCaps() }) {
+  const rec = buildAnnounce({ onion: id.onion, weight, onionSeedHex: id.seed, operator: op.operator, operatorSig: op.operatorSig, caps });
   return postOverTor(bootnode, "/announce", rec, { torHost, torPort });
 }
 
@@ -93,6 +157,10 @@ async function main() {
   console.log(egressCheckEnabled()
     ? `egress self-check: ON (metadata-only TCP connect to ${EGRESS_CHECK_TARGET} before each announce; SKIP announce if DOWN). Disable with RGOE_EGRESS_CHECK=0`
     : "egress self-check: OFF (RGOE_EGRESS_CHECK=0) — announcing unconditionally");
+  const caps = buildGatewayCaps();
+  console.log(caps
+    ? `capabilities advertised (signed): ${JSON.stringify(caps)}`
+    : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW and/or RGOE_GATEWAY_REGION to advertise)");
 
   const beat = async () => {
     try {

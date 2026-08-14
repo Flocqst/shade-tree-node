@@ -13,12 +13,13 @@
 //! called, even though the `operatorAnnounce` vector now exists for a future task.
 
 use rgoe_proto::{
-    accept_envelope_version, calculate_signal_hash, canonical_announce_bytes,
+    accept_envelope_version, calculate_signal_hash, canonical_announce_bytes, canonical_caps_bytes,
     canonical_directory_bytes, canonical_receipt_bytes, ed25519_public_key, ed25519_sign,
     ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
-    select_proto_version, sign_receipt, verify_directory, verify_directory_threshold,
-    verify_receipt, Announce, Directory, EnvelopeVersion, GatewayEntry, Receipt,
-    REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION, REASON_UNSUPPORTED_VERSION,
+    select_proto_version, sign_receipt, verify_caps_sig, verify_directory,
+    verify_directory_threshold, verify_receipt, Announce, Caps, Directory, EnvelopeVersion,
+    GatewayEntry, ProtoCaps, Receipt, REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION,
+    REASON_UNSUPPORTED_VERSION,
 };
 use serde_json::Value;
 
@@ -57,6 +58,8 @@ fn vector_directory(v: &Value) -> Directory {
             health: "up".to_string(),
             operator: None,
             staked: None,
+            caps: None,
+            caps_sig: None,
         }],
         signer: Some(s(v, "signerPub").to_string()),
         signature: Some(s(v, "directorySignature").to_string()),
@@ -78,6 +81,7 @@ fn vector_announce(v: &Value) -> Announce {
         onion_sig: Some(s(v, "announceOnionSig").to_string()),
         operator: None,
         operator_sig: None,
+        caps: None,
     }
 }
 
@@ -507,6 +511,8 @@ fn threshold_directory(v: &Value) -> Directory {
             health: "up".to_string(),
             operator: None,
             staked: None,
+            caps: None,
+            caps_sig: None,
         }],
         signer: None,
         signature: None,
@@ -697,4 +703,210 @@ fn threshold_directory_rejects_grafted_onion() {
         err.starts_with("pubkey-onion-mismatch:"),
         "expected pubkey-onion-mismatch, got {err}"
     );
+}
+
+// -- 10. gateway capability advertisement (T-FEAT-10c, lib/directory.mjs) ----
+//
+// Consumes the `capabilities` vector: caps normalized to fixed {ports,region,proto},
+// an onion-bound `capsSig`, and both caps-carrying canonical byte hexes (announce +
+// directory). Every value here is byte-pinned (RFC 8032 deterministic capsSig).
+
+/// The caps object pinned in the fixture's `capabilities.caps` block.
+fn vector_caps(v: &Value) -> Caps {
+    let c = &v["capabilities"]["caps"];
+    Caps {
+        ports: Some(
+            c["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_i64().unwrap())
+                .collect(),
+        ),
+        region: Some(c["region"].as_str().unwrap().to_string()),
+        proto: Some(ProtoCaps {
+            min: c["proto"]["min"].as_i64().unwrap(),
+            max: c["proto"]["max"].as_i64().unwrap(),
+        }),
+    }
+}
+
+/// The caps-carrying directory pinned in `capabilities.directoryWithCaps`: the single-sig
+/// gateway plus `caps` + the onion-bound `capsSig`, signed by the bootnode signer key.
+fn directory_with_caps(v: &Value) -> Directory {
+    Directory {
+        version: 1,
+        issued: 1_000_000,
+        gateways: vec![GatewayEntry {
+            onion: s(v, "onion").to_string(),
+            pubkey: s(v, "onionPub").to_string(),
+            weight: 100,
+            health: "up".to_string(),
+            operator: None,
+            staked: None,
+            caps: Some(vector_caps(v)),
+            caps_sig: Some(s(&v["capabilities"], "capsSig").to_string()),
+        }],
+        signer: Some(s(v, "signerPub").to_string()),
+        signature: Some(
+            v["capabilities"]["directoryWithCaps"]["signature"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
+        signers: None,
+        signatures: None,
+        threshold: None,
+    }
+}
+
+#[test]
+fn caps_domain_matches_vector() {
+    let v = vectors();
+    assert_eq!(rgoe_proto::CAPS_DOMAIN, s(&v["capabilities"], "capsDomain"));
+}
+
+#[test]
+fn canonical_caps_bytes_matches_vector() {
+    let v = vectors();
+    let bytes = canonical_caps_bytes(s(&v, "onion"), &vector_caps(&v));
+    assert_eq!(
+        hex::encode(&bytes),
+        s(&v["capabilities"], "canonicalCapsBytesHex")
+    );
+}
+
+#[test]
+fn caps_sig_signs_and_verifies() {
+    let v = vectors();
+    let onion = s(&v, "onion");
+    let caps = vector_caps(&v);
+    // RFC 8032 deterministic: signing the canonical caps bytes with onionSeed byte-matches
+    // the pinned capsSig.
+    let sig = ed25519_sign(
+        &canonical_caps_bytes(onion, &caps),
+        &seed32(s(&v, "onionSeed")),
+    );
+    assert_eq!(hex::encode(sig), s(&v["capabilities"], "capsSig"));
+    // verify_caps_sig accepts the pinned capsSig under the key the onion address commits to.
+    assert!(verify_caps_sig(
+        onion,
+        &caps,
+        Some(s(&v["capabilities"], "capsSig"))
+    ));
+    // TOTAL: absent / empty / garbage signature -> false, never panics.
+    assert!(!verify_caps_sig(onion, &caps, None));
+    assert!(!verify_caps_sig(onion, &caps, Some("")));
+    assert!(!verify_caps_sig(onion, &caps, Some("nothex")));
+    // A tampered cap (drop a port) breaks the onion-bound signature.
+    let tampered = Caps {
+        ports: Some(vec![443]),
+        ..caps.clone()
+    };
+    assert!(!verify_caps_sig(
+        onion,
+        &tampered,
+        Some(s(&v["capabilities"], "capsSig"))
+    ));
+}
+
+#[test]
+fn announce_with_caps_matches_vector() {
+    let v = vectors();
+    let a = &v["announce"];
+    let aw = &v["capabilities"]["announceWithCaps"];
+    let ann = Announce {
+        v: a["v"].as_u64().unwrap(),
+        onion: a["onion"].as_str().unwrap().to_string(),
+        weight: a["weight"].as_u64().unwrap(),
+        ts: a["ts"].as_u64().unwrap(),
+        nonce: a["nonce"].as_str().unwrap().to_string(),
+        onion_sig: None,
+        operator: None,
+        operator_sig: None,
+        caps: Some(vector_caps(&v)),
+    };
+    let bytes = canonical_announce_bytes(&ann);
+    // caps appended after nonce; byte-identical to the pinned caps-carrying announce.
+    assert_eq!(
+        hex::encode(&bytes),
+        aw["canonicalBytesHex"].as_str().unwrap()
+    );
+    // the pinned onionSig verifies over those bytes, and re-signing is deterministic.
+    let sig: [u8; 64] = hex::decode(aw["onionSig"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert!(ed25519_verify(&bytes, &sig, &pub32(s(&v, "onionPub"))));
+    assert_eq!(
+        hex::encode(ed25519_sign(&bytes, &seed32(s(&v, "onionSeed")))),
+        aw["onionSig"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn directory_with_caps_matches_and_verifies() {
+    let v = vectors();
+    let dir = directory_with_caps(&v);
+    // canonical bytes carry caps + capsSig after health, byte-identical to the pinned hex.
+    assert_eq!(
+        hex::encode(canonical_directory_bytes(&dir)),
+        s(&v["capabilities"]["directoryWithCaps"], "canonicalBytesHex")
+    );
+    // Full verify: pinned bootnode signature + onion<->pubkey binding + capsSig all pass.
+    verify_directory(&dir, s(&v, "signerPub")).expect("caps-carrying directory must verify");
+}
+
+#[test]
+fn directory_with_tampered_caps_is_rejected_bad_caps_sig() {
+    let v = vectors();
+    let mut dir = directory_with_caps(&v);
+    // Alter a cap (drop port 80) WITHOUT re-signing capsSig: the onion-bound signature no
+    // longer covers these caps. The directory bytes change too, so re-sign the DIRECTORY
+    // (bootnode key) to get PAST bad-signature down to the per-entry caps check.
+    dir.gateways[0].caps = Some(Caps {
+        ports: Some(vec![443]),
+        region: Some("eu".to_string()),
+        proto: Some(ProtoCaps { min: 3, max: 3 }),
+    });
+    let resig = ed25519_sign(
+        &canonical_directory_bytes(&dir),
+        &seed32(s(&v, "signerSeed")),
+    );
+    dir.signature = Some(hex::encode(resig));
+    let err = verify_directory(&dir, s(&v, "signerPub"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.starts_with("bad-caps-sig:"),
+        "expected bad-caps-sig, got {err}"
+    );
+}
+
+#[test]
+fn absent_caps_is_byte_identical_to_no_caps_vector() {
+    let v = vectors();
+    // The single-sig gateway with caps:None / caps_sig:None serializes to the pinned
+    // NO-caps directory bytes — the additive omit-when-absent guarantee.
+    let dir = vector_directory(&v);
+    assert_eq!(
+        hex::encode(canonical_directory_bytes(&dir)),
+        s(&v, "canonicalDirectoryBytesHex")
+    );
+    // Caps that canonicalize EMPTY (all junk: no valid ports, unknown region, max<min) are
+    // ALSO omitted (has_caps=false), so the bytes are still byte-identical even with a
+    // capsSig present — nothing to sign over, nothing to append.
+    let mut dir2 = vector_directory(&v);
+    dir2.gateways[0].caps = Some(Caps {
+        ports: Some(vec![]),
+        region: Some("zzz".to_string()),
+        proto: Some(ProtoCaps { min: 9, max: 1 }),
+    });
+    dir2.gateways[0].caps_sig = Some("deadbeef".to_string());
+    assert_eq!(
+        hex::encode(canonical_directory_bytes(&dir2)),
+        s(&v, "canonicalDirectoryBytesHex")
+    );
+    // And such an entry still verifies (no caps to check -> capsSig ignored).
+    verify_directory(&dir2, s(&v, "signerPub")).expect("empty-canonicalizing caps are ignored");
 }

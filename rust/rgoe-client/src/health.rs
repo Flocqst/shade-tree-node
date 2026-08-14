@@ -212,6 +212,8 @@ mod tests {
             health: health.to_string(),
             operator: None,
             staked: None,
+            caps: None,
+            caps_sig: None,
         }
     }
 
