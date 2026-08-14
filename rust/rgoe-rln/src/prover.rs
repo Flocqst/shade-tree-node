@@ -31,9 +31,32 @@ use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::{prepare_verifying_key, Groth16, Proof, VerifyingKey};
 use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign};
-use wasmer::Store;
+use wasmer::{Module, Store};
 
 use crate::tree::{dec_to_fr, external_nullifier, fr_to_dec, MerkleTree, TREE_DEPTH};
+
+// T-RUST-4: the repo's circom-rln artifacts, `include_bytes!`'d into the binary so a
+// released `live` client is fully self-contained (no external circuit files). Gated by
+// the `embedded-artifacts` feature (OFF by default; `rgoe-client`'s `live` feature turns
+// it on) so the standalone probe/tree bins and the everyday rgoe-rln build stay lean.
+// Paths are anchored at CARGO_MANIFEST_DIR (rust/rgoe-rln) -> repo root -> circuits/rln.
+// TESTNET-ONLY artifacts (untrusted ceremony, docs/SHIP-PLAN.md T-HARD-1): embedding does
+// not change their provenance — a production build must re-embed audited artifacts.
+#[cfg(feature = "embedded-artifacts")]
+mod embedded {
+    pub const WASM: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../circuits/rln/rln.wasm"
+    ));
+    pub const ZKEY: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../circuits/rln/rln_final.zkey"
+    ));
+    pub const VKEY: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../circuits/rln/verification_key.json"
+    ));
+}
 
 /// Inputs to build one RLN egress envelope (T-RUST-2d).
 pub struct EnvelopeInput {
@@ -55,8 +78,12 @@ pub struct EnvelopeInput {
     pub user_message_limit: u64,
     /// `messageId` = slot i (range-checked `0 <= i < K` inside the circuit).
     pub message_id: u64,
-    /// Directory holding `rln.wasm`, `rln_final.zkey`, `verification_key.json`.
-    pub circuits_dir: String,
+    /// Where to load `rln.wasm`, `rln_final.zkey`, `verification_key.json` from:
+    /// `Some(dir)` reads them from that directory; `None` uses the artifacts EMBEDDED
+    /// into the binary (`include_bytes!`, T-RUST-4) — needs the `embedded-artifacts`
+    /// feature (which `rgoe-client`'s `live` feature enables). `None` on a build without
+    /// that feature is an honest error rather than a silent fallback.
+    pub circuits_dir: Option<String>,
 }
 
 /// The proof pieces the caller assembles into the wire envelope. `proof` and
@@ -141,9 +168,10 @@ fn g2_json(p: &G2Affine) -> serde_json::Value {
 /// that does not verify against the repo VK, or public signals that disagree with the
 /// natively-computed root/x/externalNullifier) fail loud rather than shipping a bad envelope.
 pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
-    let wasm_path = format!("{}/rln.wasm", input.circuits_dir);
-    let zkey_path = format!("{}/rln_final.zkey", input.circuits_dir);
-    let vkey_path = format!("{}/verification_key.json", input.circuits_dir);
+    // Artifact source: `Some(dir)` = external files under that dir; `None` = the artifacts
+    // EMBEDDED into this binary via `include_bytes!` (T-RUST-4, `embedded-artifacts` feature),
+    // so a released `live` client proves with no external circuit files.
+    let circuits = input.circuits_dir.as_deref();
 
     // (1) NATIVE membership tree (T-RUST-2c): root + path from the member set.
     let rid_big = BigUint::parse_bytes(input.rln_identifier.as_bytes(), 10)
@@ -194,8 +222,31 @@ pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
     let full_assignment: Vec<Fr> = {
         let _guard = rt.enter();
         let mut store = Store::default();
-        let mut wtns = WitnessCalculator::from_file(&mut store, &wasm_path)
-            .map_err(|e| format!("load {wasm_path}: {e}"))?;
+        // Compile the circuit wasm from the external file, or from the EMBEDDED bytes.
+        let module = match circuits {
+            Some(dir) => {
+                let wasm_path = format!("{dir}/rln.wasm");
+                Module::from_file(&store, &wasm_path)
+                    .map_err(|e| format!("load {wasm_path}: {e}"))?
+            }
+            None => {
+                #[cfg(feature = "embedded-artifacts")]
+                {
+                    Module::from_binary(&store, embedded::WASM)
+                        .map_err(|e| format!("compile embedded rln.wasm: {e}"))?
+                }
+                #[cfg(not(feature = "embedded-artifacts"))]
+                {
+                    return Err(
+                        "no --circuits dir and this build has no embedded artifacts \
+                                (build rgoe-client with --features live)"
+                            .into(),
+                    );
+                }
+            }
+        };
+        let mut wtns = WitnessCalculator::from_module(&mut store, module)
+            .map_err(|e| format!("witness calculator: {e}"))?;
         wtns.calculate_witness_element::<Fr, _>(&mut store, inputs, false)
             .map_err(|e| format!("calculate witness: {e}"))?
     };
@@ -225,10 +276,27 @@ pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
         ));
     }
 
-    // (6) prove with the repo's rln_final.zkey.
-    let mut zkey_reader =
-        BufReader::new(File::open(&zkey_path).map_err(|e| format!("open {zkey_path}: {e}"))?);
-    let (pk, matrices) = read_zkey(&mut zkey_reader).map_err(|e| format!("read zkey: {e}"))?;
+    // (6) prove with the repo's rln_final.zkey (external file, or the embedded bytes).
+    let (pk, matrices) = match circuits {
+        Some(dir) => {
+            let zkey_path = format!("{dir}/rln_final.zkey");
+            let mut zkey_reader = BufReader::new(
+                File::open(&zkey_path).map_err(|e| format!("open {zkey_path}: {e}"))?,
+            );
+            read_zkey(&mut zkey_reader).map_err(|e| format!("read zkey: {e}"))?
+        }
+        None => {
+            #[cfg(feature = "embedded-artifacts")]
+            {
+                let mut zkey_reader = std::io::Cursor::new(embedded::ZKEY);
+                read_zkey(&mut zkey_reader).map_err(|e| format!("read embedded zkey: {e}"))?
+            }
+            #[cfg(not(feature = "embedded-artifacts"))]
+            {
+                return Err("no embedded rln_final.zkey (build --features live)".into());
+            }
+        }
+    };
     let mut rng = ark_std::rand::thread_rng();
     let r = Fr::rand(&mut rng);
     let s = Fr::rand(&mut rng);
@@ -244,11 +312,28 @@ pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
         )
         .map_err(|e| format!("create proof: {e}"))?;
 
-    // (7) DECISIVE self-check: verify the Rust proof against the repo verification_key.json.
-    let vk_json: serde_json::Value = serde_json::from_reader(BufReader::new(
-        File::open(&vkey_path).map_err(|e| format!("open {vkey_path}: {e}"))?,
-    ))
-    .map_err(|e| format!("parse vkey: {e}"))?;
+    // (7) DECISIVE self-check: verify the Rust proof against the repo verification_key.json
+    // (external file, or the embedded bytes).
+    let vk_json: serde_json::Value = match circuits {
+        Some(dir) => {
+            let vkey_path = format!("{dir}/verification_key.json");
+            serde_json::from_reader(BufReader::new(
+                File::open(&vkey_path).map_err(|e| format!("open {vkey_path}: {e}"))?,
+            ))
+            .map_err(|e| format!("parse vkey: {e}"))?
+        }
+        None => {
+            #[cfg(feature = "embedded-artifacts")]
+            {
+                serde_json::from_slice(embedded::VKEY)
+                    .map_err(|e| format!("parse embedded vkey: {e}"))?
+            }
+            #[cfg(not(feature = "embedded-artifacts"))]
+            {
+                return Err("no embedded verification_key.json (build --features live)".into());
+            }
+        }
+    };
     let vk = parse_vk(&vk_json);
     let pvk = prepare_verifying_key(&vk);
     let ok = Groth16::<Bn254, CircomReduction>::verify_proof(&pvk, &proof, public_inputs)

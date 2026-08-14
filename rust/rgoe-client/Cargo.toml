@@ -17,7 +17,12 @@ path = "src/main.rs"
 # and no SOCKS. It is OFF by default: the everyday `cargo build` (default-members) never
 # compiles the heavy native tree or arti, keeping the deterministic client sub-second. Build
 # the live path with `cargo build -p rgoe-client --features live`.
-live = ["dep:rgoe-rln", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio"]
+# `rgoe-rln/embedded-artifacts` (T-RUST-4): the RLN circuit artifacts are `include_bytes!`'d
+# into the `live` binary, so a released `rgoe` egresses with NO external circuit files
+# (`--circuits` becomes optional; omit it to use the embedded artifacts). The ~8MB of
+# artifacts land only in the `live` build — the default deterministic binary never pulls
+# rgoe-rln at all, so it stays small.
+live = ["dep:rgoe-rln", "rgoe-rln/embedded-artifacts", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio"]
 
 [dependencies]
 rgoe-proto = { path = "../rgoe-proto" }

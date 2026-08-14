@@ -12,6 +12,14 @@ publish = false
 # rgoe-proto + rgoe-client stay fast and never compile wasmer. Build this crate
 # explicitly with `cargo build -p rgoe-rln`.
 
+[features]
+# `embedded-artifacts` (T-RUST-4): `include_bytes!` the repo's circom-rln artifacts
+# (rln.wasm + rln_final.zkey + verification_key.json) straight into the binary, so a
+# released `live` client proves WITHOUT any external circuit files (call `build_envelope`
+# with `circuits_dir: None`). OFF by default so the standalone probe / tree bins and the
+# everyday rgoe-rln build do NOT bloat by ~8MB; `rgoe-client`'s `live` feature turns it on.
+embedded-artifacts = []
+
 [lib]
 name = "rgoe_rln"
 path = "src/lib.rs"

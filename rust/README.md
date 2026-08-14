@@ -133,5 +133,8 @@ cargo run -p rgoe-client -- verify-directory <dir.json> --signer <hex>
 ```
 
 Release profile (`opt-level=z`, `lto`, `strip`, `panic=abort`) targets the small
-static binary that is the point of the Rust client; cross-compiled release
-binaries are T-RUST-4.
+static binary that is the point of the Rust client. Cross-compiled release
+binaries (T-RUST-4) are attached to each GitHub Release by
+[`../.github/workflows/release.yml`](../.github/workflows/release.yml); to
+download, verify, and run one on a clean box (no Node/Tor), see
+[`INSTALL.md`](INSTALL.md).

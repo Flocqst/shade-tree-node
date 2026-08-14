@@ -315,7 +315,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   failover currently re-bootstraps arti per candidate — reuse one bootstrapped `TorClient` across the candidate
   loop (functionally correct today, just wasteful). *Accept:* consecutive `rgoe egress` runs in one epoch use
   distinct slots/nullifiers; a multi-candidate over-Tor failover bootstraps Tor once.
-- [ ] **T-RUST-4 (P2) Release binaries.** Cross-compiled static binaries (linux x86_64/arm64,
+- [x] **T-RUST-4 (P2) Release binaries.** Cross-compiled static binaries (linux x86_64/arm64,
   macOS, windows) in CI releases; `rgoe` install without a runtime. *Accept:* a downloadable binary
   runs on a clean box with no Node/Tor installed.
 
@@ -666,3 +666,18 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   members.json restored. Guardrails: proto 9+20 green, rgoe-client 12 tests green (default AND --features live),
   default build 0.44s, clippy/fmt clean, egress-run.sh still passes, no new deps, only rust/ touched. T-RUST-3 +
   T-RUST-2f done. Filed T-RUST-3b (persisted K-slot cursor + reuse one bootstrapped TorClient across failover).
+- 2026-08-14  loop-25  FOCUSED single run: T-RUST-4 release binaries — the Rust client is now a DOWNLOADABLE
+  distributable. `.github/workflows/release.yml` (new, tag v* / workflow_dispatch; ci.yml untouched): a `default`
+  matrix cross-compiles the pure-Rust core `rgoe` (linux gnu+musl x86_64/aarch64 via cargo-zigbuild, macOS
+  native, windows-msvc) + a `live` matrix builds the egress binary NATIVELY per runner (no wasmer/arti
+  cross-compile rabbit hole), strips via the existing release profile, uploads assets with .sha256. Self-contained
+  live binary: new `embedded-artifacts` feature on rgoe-rln include_bytes!s rln.wasm + rln_final.zkey +
+  verification_key.json (behind rgoe-client's `live` feature); prover.rs `circuits_dir: Option` (None = embedded),
+  `--circuits` now optional. rust/INSTALL.md added (download/checksum/run + default-vs-live platform tables +
+  testnet-only-artifacts caveat). INTEGRATION AUDIT (mine): default release binary 453KB with a clean graph (no
+  ark/arti/wasmer — cargo tree); live binary 16.25MB (embeds 7.6MB artifacts); ran `rgoe egress` with NO
+  --circuits (log `circuits=embedded`) → the real verifyEnvelope ACCEPTED the proof; loop-22 egress-run.sh
+  (external path) still passes; release.yml is valid YAML (jobs set-version/default/live). Guardrails: proto 9+20
+  green, clippy/fmt clean (default AND --features live), only rust/ + .github/workflows/release.yml touched, no git
+  tag/release created (operator triggers). T-RUST-4 done. THE "MAKE IT A REAL DISTRIBUTABLE" GOAL IS COMPLETE
+  (T-RUST-2/2b/2c/2d/2e/3/4 all done); T-RUST-3b (slot cursor) is the only minor client follow-up left.

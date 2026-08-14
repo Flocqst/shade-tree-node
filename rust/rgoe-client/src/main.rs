@@ -221,7 +221,7 @@ SUBCOMMANDS:
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
     egress <TRANSPORT> --identity <f> --members <f> --target <host:port>
-           --circuits <dir> [--epoch <n>] [--slot <i>] [--rln-identifier <n>]
+           [--circuits <dir>] [--epoch <n>] [--slot <i>] [--rln-identifier <n>]
            [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
         in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
@@ -252,7 +252,9 @@ SUBCOMMANDS:
           --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf)
           --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
           --target    host:port bound into the proof (the egress destination)
-          --circuits  dir with rln.wasm + rln_final.zkey + verification_key.json
+          --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;
+                      omit it to use the artifacts EMBEDDED in this binary (self-contained,
+                      no external circuit files — T-RUST-4)
           --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
           --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
           --rln-identifier  group id (default 1)     --nonce  32-hex per-request nonce
@@ -923,18 +925,23 @@ mod live {
     }
 
     pub fn run_egress(rest: &[String]) -> ExitCode {
-        let (identity_path, members_path, target, circuits) = match (
+        let (identity_path, members_path, target) = match (
             take_flag(rest, "--identity"),
             take_flag(rest, "--members"),
             take_flag(rest, "--target"),
-            take_flag(rest, "--circuits"),
         ) {
-            (Some(i), Some(m), Some(t), Some(c)) => (i, m, t, c),
+            (Some(i), Some(m), Some(t)) => (i, m, t),
             _ => {
-                eprintln!("egress (live): need --identity <f> --members <f> --target <host:port> --circuits <dir>\n\n{}", super::HELP);
+                eprintln!(
+                    "egress (live): need --identity <f> --members <f> --target <host:port>\n\n{}",
+                    super::HELP
+                );
                 return ExitCode::from(2);
             }
         };
+        // --circuits is OPTIONAL (T-RUST-4): omit it to use the RLN artifacts EMBEDDED in
+        // this `live` binary (no external circuit files), or pass a dir to load them from disk.
+        let circuits = take_flag(rest, "--circuits");
 
         // Resolve the ordered failover plan up front so a missing/ambiguous transport (or an
         // unusable directory with no LKG fallback) fails BEFORE the expensive proof build.
@@ -974,7 +981,11 @@ mod live {
 
         // Build the REAL envelope in Rust (native tree + Groth16 prover).
         eprintln!(
-            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}) ..."
+            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}, {}) ...",
+            match circuits.as_deref() {
+                Some(d) => format!("circuits={d}"),
+                None => "circuits=embedded".to_string(),
+            }
         );
         let input = rgoe_rln::prover::EnvelopeInput {
             identity_secret: identity.identity_secret,
