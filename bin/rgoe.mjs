@@ -62,6 +62,7 @@ const COMMANDS = {
   keygen:            { script: "bootnode/keygen.mjs",       help: "mint an onion identity (Tor HS key + announce-signing seed): rgoe keygen <hsDir> [--label name]" },
   bootnode:          { script: "bootnode/server.mjs",       help: "run the discovery bootnode (an onion service)", long: true },
   heartbeat:         { script: "bootnode/heartbeat.mjs",    help: "keep this gateway announced on the bootnode", long: true },
+  join:              { script: "group/join.mjs",            help: "guided front door: `rgoe join [member]` or `rgoe join gateway` — make an identity + print the next commands" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
   "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: rgoe register-member <commitment>" },
   "register-gateway":{ script: "group/register-gateway.mjs", help: "stake a gateway operator bond into GatewayRegistry" },
@@ -90,7 +91,7 @@ function parse(argv) {
 function topHelp() {
   console.log(`rgoe ${pkg.version} — reputation-gated onion egress\n`);
   console.log("usage: rgoe <command> [--flags] [args]\n");
-  const order = ["keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor"];
+  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);

@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { createPublicKey } from "node:crypto";
 import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, verifyDirectory } from "../lib/directory.mjs";
 import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "../bootnode/announce.mjs";
+import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(HERE, "..", "testdata", "vectors.json"), "utf8"));
@@ -50,6 +51,28 @@ async function main() {
   const w = new ethers.Wallet("0x" + "34".repeat(32));
   const sig = await w.signMessage(operatorAuthMessage(V.onion, w.address));
   ok(await verifyOperatorSig(V.onion, w.address, sig), "operator-auth message signs + verifies round-trip");
+
+  console.log("\nsignal hash (deterministic keccak256(utf8(message)) >> 8):");
+  // The circuit public x, byte-pinned so the Rust port can conformance-check it (T-RUST-1b).
+  const sh = V.signalHash;
+  ok(
+    calculateSignalHash(requestSignal(sh.target, sh.nonce)).toString() === sh.signalHashDecimal,
+    "calculateSignalHash(requestSignal(target,nonce)) matches the pinned decimal"
+  );
+
+  console.log("\nstaked-announce operator (pinned key + EIP-191 personal_sign):");
+  // Round-trip against the PINNED sig (not a freshly-generated one): the byte-pinned
+  // operatorSig must recover the pinned operator address.
+  const oa = V.operatorAnnounce;
+  ok(
+    (await import("ethers")).ethers.verifyMessage(operatorAuthMessage(V.onion, oa.operator), oa.operatorSig).toLowerCase()
+      === oa.operator.toLowerCase(),
+    "pinned operatorSig recovers the pinned operator (raw ethers recover)"
+  );
+  ok(
+    await verifyOperatorSig(V.onion, oa.operator, oa.operatorSig),
+    "verifyOperatorSig(onion, operator, operatorSig) === true against the pinned sig"
+  );
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: vectors selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

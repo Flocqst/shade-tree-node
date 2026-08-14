@@ -280,6 +280,46 @@ function makeHandler(spentSet) {
   };
 }
 
+// ---- graceful shutdown / connection draining (T-DEV-8) ----------------------
+// OFF the hot path: signal handlers + a small openSockets set only; request handling
+// is untouched. On SIGTERM/SIGINT we stop accepting NEW connections (server.close),
+// let in-flight tunnels drain, then exit 0. If they outlive the grace window we
+// force-destroy the stragglers and exit nonzero. server.close(cb) fires cb once the
+// listener is shut AND every existing connection has ended, so the openSockets set is
+// needed only to force-close on timeout (never consulted per-request).
+//
+// Factored out + fully injectable (server, timer, onExit) so the selftest can drive it
+// with a fake server + fake sockets + a fake clock, no real process signals involved.
+export function makeGracefulShutdown(server, {
+  openSockets = new Set(),
+  timeoutMs = 10000,
+  onExit = (code) => process.exit(code),
+  log = console.log,
+  label = "gateway",
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  let started = false; // idempotent: a second signal during drain is ignored
+  return function shutdown(signal) {
+    if (started) return;
+    started = true;
+    log(`${label}: draining (${signal || "shutdown"}); ${openSockets.size} in-flight, no new connections, ${timeoutMs}ms grace`);
+    let timer = null;
+    const finish = (code) => { if (timer) clearTimer(timer); onExit(code); };
+    // Arm the grace window FIRST so an immediate (synchronous) clean drain can clear it —
+    // force-close whatever is still open and exit nonzero if it elapses.
+    timer = setTimer(() => {
+      log(`${label}: drain timeout (${timeoutMs}ms) with ${openSockets.size} still open; forcing exit`);
+      for (const s of openSockets) { try { s.destroy(); } catch {} }
+      finish(1);
+    }, timeoutMs);
+    timer.unref?.();
+    // Stop the listener; cb fires once all existing connections have ended -> clean exit.
+    server.close(() => { log(`${label}: drained cleanly, exiting`); finish(0); });
+    return timer;
+  };
+}
+
 async function main() {
   await initRoots();
   const slash = await makeSlasher();
@@ -287,15 +327,26 @@ async function main() {
   setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000).unref();
 
   const server = net.createServer(makeHandler(spentSet));
+
+  // Track live tunnels for draining (add/delete only — no per-byte work).
+  const openSockets = new Set();
+  server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
+
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     console.log(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}  (epoch ${currentEpoch()}, ${EPOCH_SECONDS}s)`);
     console.log(`egress policy: :443 only (metadata-only TLS tunnel)`);
     console.log(`rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash`);
   });
+
+  const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);
+  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "gateway" });
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 // Only run the server when invoked directly; importing (the selftest) pulls the
-// exported makeSpentSet control flow with mocks.
+// exported makeSpentSet / makeGracefulShutdown control flow with mocks and installs
+// NO signal handlers (only main() does, below).
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }

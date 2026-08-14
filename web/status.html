@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>RGOE Fleet Status</title>
+<style>
+  :root {
+    --bg: #0c0e12;
+    --panel: #14181f;
+    --panel-2: #1a1f28;
+    --line: #262d38;
+    --fg: #e6ebf2;
+    --muted: #8a93a3;
+    --up: #4ade80;
+    --down: #f87171;
+    --warn: #fbbf24;
+    --accent: #7dd3fc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 32px 20px 64px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .card .value { font-size: 22px; margin-top: 6px; font-weight: 600; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; vertical-align: middle; }
+  .dot.up { background: var(--up); box-shadow: 0 0 8px var(--up); }
+  .dot.down { background: var(--down); box-shadow: 0 0 8px var(--down); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  .val-up { color: var(--up); }
+  .val-down { color: var(--down); }
+  .val-warn { color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  th, td { text-align: left; padding: 10px 14px; white-space: nowrap; }
+  thead th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--line); font-weight: 500; }
+  tbody tr { border-top: 1px solid var(--line); }
+  tbody tr:first-child { border-top: none; }
+  td.onion { color: var(--accent); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .badge.staked { color: var(--up); border-color: rgba(74,222,128,0.4); }
+  .badge.unstaked { color: var(--muted); }
+  .badge.none { color: var(--muted); opacity: 0.6; }
+  .empty { padding: 24px 14px; color: var(--muted); text-align: center; }
+  footer { margin-top: 22px; color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .note { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+  .err { color: var(--warn); font-size: 12px; margin-top: 10px; min-height: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>RGOE &middot; FLEET STATUS</h1>
+    <div class="sub" id="clock">connecting&hellip;</div>
+  </header>
+
+  <div class="cards">
+    <div class="card">
+      <div class="label">Bootnode</div>
+      <div class="value" id="bootnode"><span class="dot warn"></span>&hellip;</div>
+    </div>
+    <div class="card">
+      <div class="label">Fleet size</div>
+      <div class="value" id="fleetSize">&mdash;</div>
+    </div>
+    <div class="card">
+      <div class="label">Signature</div>
+      <div class="value" id="signer"><span class="dot warn"></span>&hellip;</div>
+    </div>
+    <div class="card">
+      <div class="label">Admission</div>
+      <div class="value" id="admission" style="font-size:16px;">&mdash;</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Onion (truncated)</th><th>Weight</th><th>Health</th><th>Staked</th></tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td class="empty" colspan="4">loading&hellip;</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <p class="note">
+    Privacy: this board shows only a <strong>truncated</strong> onion (first 16 chars) and a
+    <code>staked</code> boolean. Full <code>.onion</code> addresses and operator identities are
+    never exposed &mdash; the fleet is deliberately non-enumerable. Read-only, no auth, loopback by default.
+  </p>
+
+  <footer>
+    <span id="pinned"></span>
+    <span>auto-refresh 15s</span>
+  </footer>
+</div>
+
+<script>
+const POLL_MS = 15000;
+
+function healthClass(h) {
+  if (h === "up") return "val-up";
+  if (h === "down") return "val-down";
+  return "val-warn";
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function poll() {
+  const errEl = document.getElementById("err");
+  try {
+    const res = await fetch("/api/status", { cache: "no-store" });
+    const s = await res.json();
+    render(s);
+    errEl.textContent = s.error ? s.error : "";
+  } catch (e) {
+    errEl.textContent = "status fetch failed: " + e.message;
+    document.getElementById("bootnode").innerHTML = '<span class="dot down"></span><span class="val-down">unreachable</span>';
+  }
+}
+
+function render(s) {
+  document.getElementById("clock").textContent =
+    "updated " + new Date(s.lastFetch || Date.now()).toLocaleTimeString();
+
+  const boot = document.getElementById("bootnode");
+  boot.innerHTML = s.bootnodeReachable
+    ? '<span class="dot up"></span><span class="val-up">up</span>'
+    : '<span class="dot down"></span><span class="val-down">down</span>';
+
+  document.getElementById("fleetSize").textContent = s.fleetSize;
+  document.getElementById("admission").textContent = s.admission || "—";
+
+  const sig = document.getElementById("signer");
+  sig.innerHTML = s.signerOk
+    ? '<span class="dot up"></span><span class="val-up">verified</span>'
+    : '<span class="dot down"></span><span class="val-down">unverified</span>';
+
+  const pinned = s.signerPinned ? s.signerPinned.slice(0, 16) + "…" : "no signer pinned";
+  document.getElementById("pinned").textContent = "pinned signer: " + pinned;
+
+  const rows = document.getElementById("rows");
+  const gws = s.gateways || [];
+  if (!gws.length) {
+    rows.innerHTML = '<tr><td class="empty" colspan="4">no live gateways</td></tr>';
+    return;
+  }
+  rows.innerHTML = gws.map((g) => {
+    let badge;
+    if (g.staked === true) badge = '<span class="badge staked">staked</span>';
+    else if (g.staked === false) badge = '<span class="badge unstaked">unstaked</span>';
+    else badge = '<span class="badge none">n/a</span>';
+    return "<tr>"
+      + '<td class="onion">' + esc(g.onionShort) + "…</td>"
+      + "<td>" + esc(g.weight) + "</td>"
+      + '<td class="' + healthClass(g.health) + '">' + esc(g.health) + "</td>"
+      + "<td>" + badge + "</td>"
+      + "</tr>";
+  }).join("");
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

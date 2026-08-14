@@ -9,11 +9,22 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
 const noContracts = process.argv.includes("--no-contracts");
+
+// Fast lane (RGOE_FAST=1 or --fast): skip the slow real-Groth16-proof suites and forge,
+// running only the quick node selftests for tight iteration. CI keeps the full run.
+const fast = process.env.RGOE_FAST === "1" || process.argv.includes("--fast");
+
+// Explicit denylist of slow suites, matched by filename (basename). Add here to extend.
+const SLOW_SUITES = new Set([
+  "rln.selftest.mjs",
+  "rln-slash.property.selftest.mjs",
+  "timing.selftest.mjs",
+]);
 
 // Recursively find *.selftest.mjs, skipping node_modules / out / build dirs.
 function findSelftests(dir, acc = []) {
@@ -27,8 +38,20 @@ function findSelftests(dir, acc = []) {
   return acc;
 }
 
-const selftests = findSelftests(ROOT).sort();
+const allSelftests = findSelftests(ROOT).sort();
+
+// In fast mode, split off the slow suites (by basename) so we can run the rest and
+// report exactly what was skipped -- never silently drop coverage.
+const skipped = fast ? allSelftests.filter((f) => SLOW_SUITES.has(basename(f))) : [];
+const selftests = fast ? allSelftests.filter((f) => !SLOW_SUITES.has(basename(f))) : allSelftests;
 const results = [];
+
+if (fast) {
+  console.log("\n=== FAST LANE (RGOE_FAST) -- slow real-proof suites + forge skipped ===");
+  console.log(
+    `skipped ${skipped.length} slow suites: ${skipped.map((f) => relative(ROOT, f)).join(", ") || "(none matched denylist)"}`
+  );
+}
 
 console.log(`\n=== node selftests (${selftests.length}) ===`);
 for (const f of selftests) {
@@ -41,7 +64,9 @@ for (const f of selftests) {
   if (!passed && r.stdout) console.log(r.stdout.split("\n").filter((l) => l.includes("FAIL")).map((l) => "        " + l).join("\n"));
 }
 
-if (!noContracts) {
+if (fast) {
+  console.log(`\n=== foundry contract suite ===\n  SKIP  fast lane (RGOE_FAST) -- run full 'npm test' for contracts`);
+} else if (!noContracts) {
   console.log(`\n=== foundry contract suite ===`);
   const forge = spawnSync("forge", ["test"], { cwd: ROOT, encoding: "utf8" });
   if (forge.error && forge.error.code === "ENOENT") {

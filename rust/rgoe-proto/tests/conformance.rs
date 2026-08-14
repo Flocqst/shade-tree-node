@@ -6,14 +6,16 @@
 //! the assertion is byte/hex equality; ed25519 verify additionally checks a flipped
 //! bit is rejected.
 //!
-//! Only the functions with a vector in the fixture are exercised here. Functions
-//! deferred for lack of a vector (`calculate_signal_hash`, `verify_announce`) are
-//! documented stubs in `src/lib.rs` and intentionally NOT called.
+//! Only the functions with a vector in the fixture are exercised here.
+//! `calculate_signal_hash` is now conformance-checked against the `signalHash` vector
+//! (T-RUST-1b). `verify_announce` remains a documented stub in `src/lib.rs` (its
+//! operator-ECDSA / EIP-191 path needs secp256k1 in Rust) and is intentionally NOT
+//! called, even though the `operatorAnnounce` vector now exists for a future task.
 
 use rgoe_proto::{
-    canonical_announce_bytes, canonical_directory_bytes, ed25519_public_key, ed25519_sign,
-    ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
-    verify_directory, Announce, Directory, GatewayEntry,
+    calculate_signal_hash, canonical_announce_bytes, canonical_directory_bytes, ed25519_public_key,
+    ed25519_sign, ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion,
+    request_signal, verify_directory, Announce, Directory, GatewayEntry,
 };
 use serde_json::Value;
 
@@ -248,4 +250,21 @@ fn operator_auth_message_matches_vector() {
 fn request_signal_shape() {
     // No fixture value; assert the documented spec-6.2 shape (literal newlines).
     assert_eq!(request_signal("t", "n"), "rgoe:v3\nt\nn");
+}
+
+// -- 6. calculate_signal_hash (spec 6.2, keccak256 >> 8) -------------------
+
+#[test]
+fn calculate_signal_hash_matches_vector() {
+    let v = vectors();
+    let sh = &v["signalHash"];
+    let target = sh["target"].as_str().unwrap();
+    let nonce = sh["nonce"].as_str().unwrap();
+    let want = sh["signalHashDecimal"].as_str().unwrap();
+    // request_signal(target, nonce) -> calculate_signal_hash must equal the pinned decimal.
+    let got = calculate_signal_hash(&request_signal(target, nonce));
+    assert_eq!(got, want, "signal hash decimal must match the pinned vector");
+    // The fixture also pins the exact message the hash is taken over; hashing it directly
+    // must give the same value (guards request_signal + the hash jointly).
+    assert_eq!(calculate_signal_hash(sh["message"].as_str().unwrap()), want);
 }

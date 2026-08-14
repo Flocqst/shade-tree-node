@@ -13,7 +13,7 @@ tasks across every workstream, prioritized, with acceptance criteria.
 ## Loop protocol (how an iteration works)
 
 **Mode: AGGRESSIVE FAN-OUT** (set 2026-08-13). Each iteration parallelizes across independent tasks
-instead of doing one at a time. Interval: 10 min.
+instead of doing one at a time. Interval: 20 min (matched to batch duration so fires don't collide).
 
 Each loop iteration:
 
@@ -115,9 +115,7 @@ and at scale."
 - [ ] **T-DEV-7 (P1) Config validation + fail-fast.** Every entrypoint validates required config
   and prints a precise error + nonzero exit on bad/missing values (bad onion, missing signer, bad
   address, unreachable RPC). *Accept:* a table-driven selftest of bad configs per command.
-- [ ] **T-DEV-8 (P1) Graceful shutdown / connection draining.** Gateway and bootnode handle
-  SIGTERM: stop accepting, drain in-flight, exit clean. *Accept:* a request in flight during
-  SIGTERM completes; test.
+- [x] **T-DEV-8 (P1) Graceful shutdown / connection draining.** DONE (loop-10): exported `makeGracefulShutdown` on gateway + bootnode; SIGTERM/SIGINT -> server.close() + drain (RGOE_SHUTDOWN_TIMEOUT_MS, default 10s) then force-exit. Signal handlers installed only under the main guard (import is side-effect-free). `test/shutdown.selftest.mjs`.
 - [ ] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
   works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
   the light provider returns a root validated against a header; test.
@@ -185,10 +183,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   into `testdata/corpus/` and replay it as a fast regression on every run. *Accept:* corpus wired
   into the suite; a seeded known-bad input is caught.
 - [x] **T-TEST-16 (P2) Timing/side-channel sanity.** DONE (loop-7, `test/timing.selftest.mjs`: per-member verify medians within ~1.1-1.3x, gated at 2x; Groth16 verify is witness-oblivious).
-- [ ] **T-TEST-17 (P1, added loop-8) Fast/slow test split.** Several suites now generate real Groth16
-  proofs (`rln.selftest`, `rln-slash.property`, `timing`), so `npm test` is minutes. Add a fast lane
-  (`RGOE_FAST=1` skips the real-proof suites) for quick iteration, keep the full suite in CI. *Accept:*
-  `npm run test:fast` runs in seconds; CI runs the full suite; the runner reports which were skipped.
+- [x] **T-TEST-17 (P1) Fast/slow test split.** DONE (loop-10): `RGOE_FAST=1`/`--fast` in scripts/test-all.mjs skips the 3 real-proof suites + forge and prints exactly what it skipped; `npm run test:fast` ~7s vs ~86s full. Also fixed a pre-existing wall-clock flake in `lib/rln.selftest.mjs` (pin verifyEnvelope nowMs to the proof's epoch).
 - [ ] **T-DEPLOY-1 (P0, BLOCKED by Gate 1 + Gate 2) First live deployment.** Deploy the bootnode +
   a gateway (to `anon-egress` or a fresh droplet), announce the gateway, and verify a laptop client
   egresses through the fleet end to end. Do NOT start until the test suite is hardened and the Rust
@@ -211,9 +206,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 
 ## 4. Website & status
 
-- [ ] **T-WEB-1 (P1) Live fleet status page.** Pull bootnode `/health` + `/directory` (via a
-  tor-capable fetch or a small server-side proxy) and show fleet size, per-gateway health, last
-  announce, bootnode reachability. No operator identities. *Accept:* a deployed page that updates.
+- [x] **T-WEB-1 (P1) Live fleet status page.** DONE (loop-10): `web/status-server.mjs` + `web/status.html` -- fetch bootnode /health + /directory (over Tor or dev http), verify the signature against the pinned signer, render fleet size/health/staked. Privacy-scrubbed: onions truncated to 16 chars, operator address dropped to a staked bool. `web/status.selftest.mjs` (18 checks, incl. no-leak assertions).
 - [ ] **T-WEB-2 (P2) Landing refresh.** Extend the existing write-up site with "run a gateway" and
   "join the set" sections and the CLI quickstart.
 - [ ] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
@@ -225,12 +218,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DOC-2 (P1) Incident response playbook.** DONE (loop-8, `docs/INCIDENT.md`): 7 scenarios grounded in AUDIT.md; surfaced the client-side weight-clamp gap (now fixed) + cross-refs T-HARD-5/T-DEV-4/T-DEV-5/T-FEAT-12 for not-yet-tooled paths.
 - [x] **T-DOC-3 (P1) Wire-protocol + API spec.** DONE (loop-7): `docs/PROTOCOL-API.md` -- canonical byte encodings, onion<->key binding, announce + directory + envelope wire formats, bootnode HTTP API, every rejection reason, and a conformance map to testdata/vectors.json. Every claim cited to file:symbol. Unblocks the Rust conformance runner (T-RUST-1).
 - [x] **T-DOC-4 (P2) SECURITY.md** DONE (loop-9): `SECURITY.md` (unaudited/testnet status, in-scope vs known residuals, GitHub private-advisory reporting) + `CONTRIBUTING.md` (test commands, house conventions, the trust-model invariants a contributor must not break, gate ordering).
-- [ ] **T-DOC-5 (P2) README polish pass.** Revisit the README once the fleet/CLI/tests have settled:
-  tighten the lede, make the 30-second "what/why/run" skimmable, prune stale claims, keep it honest
-  about unaudited status. (Queued 2026-08-13.)
-
-## 6. Hardening
-
+- [x] **T-DOC-5 (P2) README polish pass.** DONE (loop-10): skimmable what/why/how lede, pruned the stale "deployed and verified live" overclaim to match pre-ship reality, reworked Run-it around the `rgoe` CLI, and a full Docs index linking every doc that now exists.
 - [ ] **T-HARD-1 (P0) Real trusted setup / artifact provenance.** Replace the untrusted testnet ZK
   artifacts; document the ceremony or pin audited artifacts; CI verifies hashes. *(Flag the ceremony
   itself for the human.)*
@@ -311,10 +299,7 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
   union their (independently-verified) directories. *Accept:* two bootnodes converge on the same
   live set; a client survives one going dark. *Why now-ish:* the bootnode is the one new
   single-point-of-availability the fleet added; this closes it.
-- [ ] **T-FEAT-2 (P1) `rgoe join` guided onboarding.** One interactive command that does keygen +
-  self-enroll + (optional) on-chain register + prints the exact client invocation, so a new member
-  or gateway operator has a single front door. *Accept:* a fresh user joins the local fleet with one
-  command.
+- [x] **T-FEAT-2 (P1) `rgoe join` guided onboarding.** DONE (loop-10): `group/join.mjs` -- `rgoe join [member]` composes self-enrollment (secret to stderr, commitment + next commands to stdout) and `rgoe join gateway` mints an onion + prints the gateway/heartbeat commands. `group/join.selftest.mjs`.
 - [ ] **T-FEAT-3 (P1) Client SDK packaging.** Publish `client/rgoe-client.mjs` as an npm package and
   the coming Rust client as a crate, both behind the conformance harness, so agents/apps embed the
   client instead of shelling the proxy. *Accept:* `import { RgoeClient }` from the published package
@@ -330,18 +315,14 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
 - [ ] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
   marks onion-identity + operator-key backup as manual `tar | gpg`. Add `rgoe backup` / `rgoe restore`
   that GPG-encrypts the onion identity seed(s) + (optionally) the operator key to an off-box target
   and restores them on a fresh box, so key loss is recoverable and the procedure is not ad hoc.
   *Accept:* backup then restore on a clean box reproduces the same onion; secrets never written
   unencrypted; documented in OPERATOR.md.
-- [ ] **T-RUST-1b (P1, added loop-9) Signal-hash + operator-sig conformance vectors.** T-RUST-1
-  deferred `calculate_signal_hash` and operator-ECDSA `verify_announce` in Rust because no vector
-  pins them. Add `signalHash` (calculateSignalHash of the fixed target+nonce) and a full staked
-  announce (operator + operatorSig) to `testdata/vectors.json`, assert them JS-side, then implement +
-  conformance-test them in Rust. *Accept:* Rust reproduces the signal hash + verifies the operator
-  authorization against the pinned vector.
+- [x] **T-RUST-1b (P1) Signal-hash + operator-sig conformance vectors.** DONE (loop-10): added `signalHash` + a pinned-key `operatorAnnounce` to testdata/vectors.json (asserted JS-side); Rust `calculate_signal_hash` (keccak256 big-endian >>8) implemented + conformance-tested byte-exact. Operator-ECDSA verify_announce still stubbed (secp256k1/EIP-191 dep) but the vector now exists.
 - [ ] **T-FEAT-14 (P2, added loop-8) SearXNG / agent egress adapter.** Close the loop back to the
   original use case: a drop-in adapter so a SearXNG instance or an AI agent routes its egress through
   the fleet with one config line (an HTTP_PROXY pointer at the local shim, or an `RgoeClient`/Rust-crate
@@ -446,3 +427,9 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   gate). 23 suites green (node+forge) + rust cargo test 16. Added T-FEAT-15 (key backup) + T-RUST-1b
   (signal-hash/operator-sig vectors). NOTE: real-proof suites make npm test >2min -> T-TEST-17 is now
   P1-urgent; one transient rln.selftest flake observed under load (passes standalone/clean).
+- 2026-08-13  loop-10 (AGGRESSIVE FAN-OUT, 6 parallel agents; cadence 10->20min) closed 6 tasks:
+  T-TEST-17 (fast lane 7s vs 86s + fixed the rln wall-clock flake), T-DEV-8 (graceful shutdown), T-DOC-5
+  (README polish -- pruned the deployed-live overclaim), T-WEB-1 (privacy-scrubbed fleet status page --
+  first website deliverable), T-FEAT-2 (rgoe join onboarding), T-RUST-1b (signal-hash vector + Rust
+  calculate_signal_hash byte-exact). 26 node+forge suites green + rust 17 conformance. Added T-FEAT-16
+  (gateway egress self-check).

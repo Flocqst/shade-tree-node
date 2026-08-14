@@ -40,7 +40,8 @@ use std::fmt;
 
 use data_encoding::Specification;
 use ed25519_dalek::{Signer, SigningKey, Signature, Verifier, VerifyingKey};
-use sha3::{Digest, Sha3_256};
+use num_bigint::BigUint;
+use sha3::{Digest, Keccak256, Sha3_256};
 
 // --------------------------------------------------------------------------
 // Internal helpers (not part of the public wire surface)
@@ -411,11 +412,16 @@ pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> 
 /// and is handled by the client with a chain reader.
 pub fn verify_announce(_ann: &Announce, _now: u64, _skew: u64) -> Result<()> {
     // DEFERRED: the individual primitives it composes (onion_to_pubkey,
-    // canonical_announce_bytes, ed25519_verify) ARE implemented and conformance-tested,
-    // but testdata/vectors.json pins no full pass/fail `verifyAnnounce` case (operator
-    // ECDSA / stake, freshness `now`, nonce-replay guard). Add such vectors before
-    // wiring the ordered reason-code checks, so ordering/reason strings are pinned.
-    todo!("T-RUST-2: implement verify_announce once verifyAnnounce vectors exist")
+    // canonical_announce_bytes, ed25519_verify) ARE implemented and conformance-tested.
+    // The operator-stake branch (proof 2, spec 3.2) recovers an EIP-191 personal_sign
+    // signer over `operator_auth_message` — that needs secp256k1 + Ethereum-address
+    // derivation in Rust (deps not yet added). testdata/vectors.json now pins the
+    // `operatorAnnounce` vector (fixed test key -> operator + operatorSig) for exactly
+    // this future task, so the ECDSA path can be conformance-checked when implemented.
+    // Freshness `now`/skew and nonce-replay ordering still have no pass/fail vector.
+    // Add those before wiring the ordered reason-code checks, so ordering/reason
+    // strings are pinned.
+    todo!("T-RUST-2: implement verify_announce (operatorAnnounce vector now exists; needs secp256k1/EIP-191 + freshness/nonce vectors)")
 }
 
 // --------------------------------------------------------------------------
@@ -462,16 +468,19 @@ pub fn request_signal(target: &str, nonce: &str) -> String {
 
 /// `keccak256(utf8(message)) >> 8`, the circuit signal hash (spec 6.2).
 ///
-/// Reference: `lib/rln.mjs:122,:253 calculateSignalHash`. Deterministic. Returned
-/// as the decimal-string field element `x` matched by [`verify_directory`]'s sibling
-/// envelope check (`target-not-bound`, spec 6.4 row 2b).
-pub fn calculate_signal_hash(_message: &str) -> String {
-    // DEFERRED (needs a vector): `keccak256(message)` big-endian uint >> 8, decimal.
-    // Deterministic and testable, but testdata/vectors.json pins NO signal-hash value
-    // (no `x`/signalHash field), so there is nothing to conformance-check against yet.
-    // Add a `signalHash` vector (message -> decimal x) before implementing, so the
-    // keccak result is checked rather than invented.
-    todo!("T-RUST-1: implement calculate_signal_hash once a signalHash vector exists")
+/// Reference: `lib/rln.mjs:122,:253 calculateSignalHash` (rlnjs `calculateSignalHash`,
+/// `BigInt(keccak256(utf8(signal))) >> 8n`). Deterministic. Returned as the decimal-string
+/// field element `x`, the value `verifyEnvelope`'s target-binding check compares against
+/// `ps.x` (`target-not-bound`, spec 6.4 row 2b).
+///
+/// Semantics (verified against `testdata/vectors.json` `signalHash.signalHashDecimal`):
+/// take the 32-byte Keccak-256 digest of the UTF-8 message as a BIG-ENDIAN unsigned
+/// integer, shift right by 8 bits (drop the least-significant byte), render decimal.
+/// `Keccak256` here is Ethereum/rlnjs keccak (the original padding), NOT NIST `Sha3_256`.
+pub fn calculate_signal_hash(message: &str) -> String {
+    let digest = Keccak256::digest(message.as_bytes()); // 32 bytes, big-endian
+    let x = BigUint::from_bytes_be(&digest) >> 8u32; // drop least-significant byte
+    x.to_str_radix(10)
 }
 
 /// Bounds check for a signal field before hashing (spec 6.3).

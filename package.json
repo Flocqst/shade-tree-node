@@ -17,6 +17,7 @@
     "doctor": "node scripts/doctor.mjs",
     "demo": "node demo/server.mjs",
     "test": "node scripts/test-all.mjs",
+    "test:fast": "RGOE_FAST=1 node scripts/test-all.mjs --no-contracts",
     "test:node": "node scripts/test-all.mjs --no-contracts",
     "test:contracts": "forge test",
     "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts"

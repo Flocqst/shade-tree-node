@@ -17,5 +17,19 @@
   "canonicalAnnounceBytesHex": "7b2276223a312c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c22776569676874223a3130302c227473223a313030303030302c226e6f6e6365223a226162636465663031323334353637383961626364656630313233343536373839227d",
   "announceOnionSig": "b1169a85129aabed237b1623efd9074652ee2c12abb52499c6de343836dd43f392a7ef242deaa72814c353570b70edfd4b4b32690b27c20e103e1bff52465101",
   "operator": "0x000000000000000000000000000000000000dEaD",
-  "operatorAuthMessage": "RGOE gateway operator authorization\nonion=ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\noperator=0x000000000000000000000000000000000000dead"
+  "operatorAuthMessage": "RGOE gateway operator authorization\nonion=ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\noperator=0x000000000000000000000000000000000000dead",
+  "signalHash": {
+    "_note": "calculateSignalHash(requestSignal(target, nonce)) — the circuit public x. keccak256(utf8(message)) as a big-endian uint, shifted right by 8 bits (drop least-significant byte), rendered decimal. message = requestSignal(target, nonce) = `rgoe:v3\\n<target>\\n<nonce>`. Deterministic; the Rust port MUST reproduce signalHashDecimal.",
+    "target": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+    "nonce": "abcdef0123456789abcdef0123456789",
+    "message": "rgoe:v3\nucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\nabcdef0123456789abcdef0123456789",
+    "signalHashDecimal": "204701581662246253151434734527306652569280279223366053205810666354632431588"
+  },
+  "operatorAnnounce": {
+    "_note": "Staked-announce operator vector (admission=stake proof 2). operatorSig = personal_sign(operatorAuthMessage(onion, operator)) by a FIXED test-only key. EIP-191 personal_sign over a fixed key+message is deterministic, so operatorSig is byte-pinned. verifyOperatorSig(onion, operator, operatorSig) MUST recover `operator`.",
+    "operatorPriv": "0x4444444444444444444444444444444444444444444444444444444444444444",
+    "operator": "0x7564105E977516C53bE337314c7E53838967bDaC",
+    "operatorSig": "0x41eaf67398d3f3adac0d34b535f44559e04048091c2d90f23244a52779ac55c23df91b0204fcd7132f78dacc195b6c0ba1106b6eb987fb04b6f483329b71f1291c",
+    "operatorAuthMessage": "RGOE gateway operator authorization\nonion=ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\noperator=0x7564105e977516c53be337314c7e53838967bdac"
+  }
 }

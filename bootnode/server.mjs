@@ -257,6 +257,43 @@ export function makeServer(registry, { signerPub } = {}) {
   });
 }
 
+// ---- graceful shutdown / connection draining (T-DEV-8) ----------------------
+// Same pattern as the gateway (gateway/gateway.mjs): OFF the hot path — signal handlers
+// plus a small openSockets set only, request handling untouched. On SIGTERM/SIGINT we
+// stop accepting NEW connections (server.close), let the (short) in-flight requests
+// finish, then exit 0; a straggler past the grace window is force-closed and we exit
+// nonzero. Bootnode requests are short, so draining is near-instant in practice.
+//
+// Injectable (server, timer, onExit) so the selftest drives it with a fake server +
+// fake sockets + fake clock and no real process signals.
+export function makeGracefulShutdown(server, {
+  openSockets = new Set(),
+  timeoutMs = 10000,
+  onExit = (code) => process.exit(code),
+  log = console.log,
+  label = "bootnode",
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  let started = false; // idempotent: a second signal during drain is ignored
+  return function shutdown(signal) {
+    if (started) return;
+    started = true;
+    log(`${label}: draining (${signal || "shutdown"}); ${openSockets.size} in-flight, no new connections, ${timeoutMs}ms grace`);
+    let timer = null;
+    const finish = (code) => { if (timer) clearTimer(timer); onExit(code); };
+    // Arm the grace window FIRST so an immediate (synchronous) clean drain can clear it.
+    timer = setTimer(() => {
+      log(`${label}: drain timeout (${timeoutMs}ms) with ${openSockets.size} still open; forcing exit`);
+      for (const s of openSockets) { try { s.destroy(); } catch {} }
+      finish(1);
+    }, timeoutMs);
+    timer.unref?.();
+    server.close(() => { log(`${label}: drained cleanly, exiting`); finish(0); });
+    return timer;
+  };
+}
+
 // ---- main -------------------------------------------------------------------
 async function main() {
   const port = Number(process.env.RGOE_BOOTNODE_PORT || 8877);
@@ -278,14 +315,27 @@ async function main() {
   setInterval(() => registry.sweep(), Math.min(ttlSec, 60) * 1000).unref();
 
   const server = makeServer(registry, { signerPub: signer.pub });
+
+  // Track live connections for draining (add/delete only — no per-request work).
+  const openSockets = new Set();
+  server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
+
   server.listen(port, "127.0.0.1", () => {
     console.log(`bootnode up on 127.0.0.1:${port}  (admission=${admission}, stake=${stake.mode}, ttl=${ttlSec}s)`);
     console.log(`pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):`);
     console.log(`  ${signer.pub}`);
     console.log(`endpoints: POST /announce  GET /directory  GET /gateway/<onion>  GET /health`);
   });
+
+  const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);
+  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "bootnode" });
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
+// Only main() (direct run) installs signal handlers; importing the module (the
+// selftest) pulls the exported makeRegistry / makeServer / makeGracefulShutdown with
+// mocks and installs NONE.
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }

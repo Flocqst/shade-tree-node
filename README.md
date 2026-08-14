@@ -2,13 +2,23 @@
 
 A Tor onion service that egresses to the clearnet only for clients who prove, in
 zero knowledge, that they belong to a curated set. Everyone else is dropped before
-a byte leaves. The point is a clean-IP egress that stays clean without ever
-learning who its users are.
+a byte leaves. The point is a clean-IP egress that stays clean without ever learning
+who its users are.
 
-It runs as a **fleet**: many gateways, discovered live through a **bootnode**, with
-membership and stake rooted on chain and a client that rotates across gateways per
-request. It is a reference implementation, deployed and verified live end to end, and
-**unaudited** (see [Security and audit](#security-and-audit)).
+- **What it is.** An application-layer reputation gate on top of Tor onion services.
+  It runs as a fleet: many gateways, discovered live through a bootnode, membership and
+  stake rooted on chain, and a client that rotates across gateways per request.
+- **Why it matters.** Tor exit IPs are a public, auto-blocked list, so honest Tor users
+  get walled out. This gates on a *proof of membership* instead of an identity, so a
+  clean egress IP stays scarce and sybil-resistant without a trusted third party ever
+  learning who you are.
+- **How to run it.** One CLI, `rgoe`. The 30-second local loop is [below](#run-it); the
+  full walkthrough is in [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+
+It is a reference implementation, **unaudited**, on **testnet ZK artifacts** (see
+[Security and audit](#security-and-audit)). It runs end to end today, from a local loop
+to a one-command droplet fleet; a live deployment to real users is gated behind test
+hardening and the distributable Rust client (see [Scope](#scope-what-it-is-and-is-not)).
 
 The write-up, with the exit-blocking benchmark and the gate protocol, is at
 [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app)
@@ -20,17 +30,16 @@ The write-up, with the exit-blocking benchmark and the gate protocol, is at
 Tor exit IPs are a public, auto-blocked list with perpetually bad reputation
 ([torbulkexitlist](https://check.torproject.org/torbulkexitlist),
 [FireHOL tor_exits](https://iplists.firehol.org/?ipset=tor_exits)), so honest Tor
-users get locked out. Measured directly over the same 36 sites: a home IP was
-blocked 8.3 percent of the time, a datacenter IP 16.7, and Tor 17.1, with the
-sites that wall Tor at 90 to 100 percent mostly fronted by commercial anti-bot
-vendors; method and classifier in
-[`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md).
+users get locked out. Measured directly over the same 36 sites: a home IP was blocked
+8.3 percent of the time, a datacenter IP 16.7, and Tor 17.1, with the sites that wall
+Tor at 90 to 100 percent mostly fronted by commercial anti-bot vendors; method and
+classifier in [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md).
 The usual escape, a [residential proxy](docs/residential-proxies.md), trades
-IP-reputation evasion for a fully trusted third party who links every request to
-your billing identity. Underneath both: an open clean-IP egress is blocklisted
-within hours, so clean IPs stay clean only by being gated and scarce. We gate on a
-proof of membership instead of an identity, which keeps sybil and rate resistance
-while decoupling them from the IP and from who you are.
+IP-reputation evasion for a fully trusted third party who links every request to your
+billing identity. Underneath both: an open clean-IP egress is blocklisted within hours,
+so clean IPs stay clean only by being gated and scarce. We gate on a proof of membership
+instead of an identity, which keeps sybil and rate resistance while decoupling them from
+the IP and from who you are.
 
 ## Design
 
@@ -73,9 +82,9 @@ Three things make it a system rather than one proxy:
   (`lib/root-provider.mjs`), so there is no `members.json` to keep in sync and the operator never
   holds a member secret.
 - **The fleet is discovered live.** Gateways announce to a **bootnode** (`bootnode/`), which
-  serves a signed directory of live onions; the client pulls it over Tor and rotates per request.
-  The onion is never on chain, and the bootnode is a cache, not a trust root. See
-  [`docs/BOOTNODE.md`](docs/BOOTNODE.md).
+  serves a signed directory of live onions; the client pulls it over Tor, verifies it, caches a
+  persisted last-known-good copy, and rotates per request. The onion is never on chain, and the
+  bootnode is a cache, not a trust root. See [`docs/BOOTNODE.md`](docs/BOOTNODE.md).
 
 ## Run it
 
@@ -87,16 +96,8 @@ npm link                 # puts `rgoe` on PATH (or use `node bin/rgoe.mjs`)
 rgoe doctor              # check node, tor, deps, keys
 ```
 
-Fastest path to a running fleet, on a fresh Ubuntu droplet:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
-```
-
-It installs Tor and Node, mints the onions, starts the bootnode + gateway + heartbeat as
-systemd units, and prints the bootnode onion, its pinned signer, and the client command.
-
-Local, understand-the-pieces version (each a terminal):
+**The 30-second local loop** stands up a bootnode, a gateway, and a client on one box
+(each line its own terminal; you need a local Tor daemon, which the repo ships):
 
 ```bash
 rgoe keygen tor/hs-bootnode           # mint an onion identity
@@ -109,18 +110,30 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
 ```
 
 The returned IP is a gateway's, not yours; the gateway never learned your IP; the request
-carried a fresh RLN proof of membership. Full walkthrough (local and droplet) in
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md); every command and variable in
-[`docs/CLI.md`](docs/CLI.md) and [`docs/CONFIG.md`](docs/CONFIG.md).
+carried a fresh RLN proof of membership. Watch the gate drop non-members with
+`node scripts/probe.mjs {noproof|garbage|wronggroup}`.
 
-Watch the gate drop non-members: `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
+**The one-command droplet** brings the same fleet up on a fresh Ubuntu box:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+```
+
+It installs Tor and Node, mints the onions, starts the bootnode + gateway + heartbeat as
+systemd units, and prints the bootnode onion, its pinned signer, and the client command.
+
+Full walkthrough (local, on-chain mode, and droplet) is in
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md); every command in [`docs/CLI.md`](docs/CLI.md)
+and every variable in [`docs/CONFIG.md`](docs/CONFIG.md).
 
 ## Security and audit
 
 This is a reference implementation, unaudited, and the ZK artifacts came from an untrusted
 testnet ceremony. It is ready to be reviewed end to end: the trust boundaries, the threat
 model per party, the test inventory, and what to read in what order are in
-[`docs/AUDIT.md`](docs/AUDIT.md).
+[`docs/AUDIT.md`](docs/AUDIT.md). The security policy and how to report privately are in
+[`SECURITY.md`](SECURITY.md); the auditor's guide and written invariants for the contracts
+are in [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md).
 
 The whole repo is tested. One command runs every node selftest plus the Foundry contract suite:
 
@@ -132,9 +145,9 @@ npm run test:node        # node selftests only (no foundry)
 Coverage today: the security-critical directory module (onion↔key binding, signature
 verification, poison resistance, rotation), the bootnode discovery loop end to end (every
 adversarial announce rejected), the RLN spent-set and slashing control flow, the on-chain
-`StakedReputationSet` and `GatewayRegistry` (Foundry), the stake verifier, the Tor key-format
-correctness, the CLI, and the client selection path. See [`docs/AUDIT.md`](docs/AUDIT.md) for
-the per-suite breakdown.
+`StakedReputationSet` and `GatewayRegistry` (Foundry), the stake verifier, the client-side
+stake re-verification path, the Tor key-format correctness, the CLI, and the client selection
+path. See [`docs/AUDIT.md`](docs/AUDIT.md) for the per-suite breakdown.
 
 ## Scope: what it is and is not
 
@@ -146,9 +159,15 @@ Built and verified:
 - **Operator never holds a secret.** Self-enrollment: only the commitment leaves the member.
 - **On-chain admission with stake and slashing.** `StakedReputationSet` (members) and an optional
   `GatewayRegistry` (operators); over-spenders are slashed by cryptographic reconstruction.
-- **A live fleet.** Bootnode discovery, per-request gateway rotation, failover, last-known-good
-  caching. The onion is never on chain; the bootnode is a cache, not a trust root.
+- **A live fleet.** Bootnode discovery, per-request gateway rotation, failover, and a persisted
+  last-known-good directory cache. Clients re-derive each onion's key and, opt-in with
+  `RGOE_VERIFY_STAKE`, re-check a gateway's operator signature and live stake themselves rather
+  than trusting the bootnode's label. The onion is never on chain; the bootnode is a cache, not a
+  trust root.
 - **Metadata-only tunnel.** TCP `CONNECT :443` only; TLS stays end to end.
+- **A Rust conformance target.** `rust/` (`rgoe-proto` + `rgoe-client`) byte-matches the JS wire
+  formats against `testdata/vectors.json` (13 conformance tests); this is Gate 2, in progress: the
+  harness passes, the Rust client MVP is next.
 
 Deliberately out of scope, or still an operator responsibility:
 
@@ -163,10 +182,33 @@ Deliberately out of scope, or still an operator responsibility:
   IPs. Sourcing and rotating clean egress IPs is an operational problem, not a protocol one.
 - **Rendezvous DoS.** Anyone with a `.onion` can force verify work; Tor's onion proof-of-work
   defense is the outer gate, enabled where the tor build has the `pow` module.
+- **Not yet deployed for real use.** A live fleet serving members is gated behind test hardening
+  (Gate 1) and the distributable Rust client (Gate 2); the plan and gates are in
+  [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md).
 - **Unaudited, testnet ZK artifacts.** Do not put real funds or real anonymity needs on this yet.
 
 Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-review.md).
-Milestone design and status: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## Docs
+
+| Doc | What it is |
+|-----|------------|
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Stand up the whole system: local loop, on-chain mode, one-command droplet |
+| [`docs/CLI.md`](docs/CLI.md), [`docs/CONFIG.md`](docs/CONFIG.md) | Every `rgoe` command and every `RGOE_*` variable + default |
+| [`docs/OPERATOR.md`](docs/OPERATOR.md) | Runbook for running a gateway or bootnode in production |
+| [`docs/INCIDENT.md`](docs/INCIDENT.md) | Incident-response playbook for the failure modes that matter |
+| [`docs/BOOTNODE.md`](docs/BOOTNODE.md) | The live-discovery design: announce, signed directory, trust boundary |
+| [`docs/ONCHAIN.md`](docs/ONCHAIN.md) | On-chain admission: staked set, gateway registry, root provider |
+| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Anonymous-payment design (designed, not built) |
+| [`docs/AUDIT.md`](docs/AUDIT.md) | Threat model, trust boundaries, test inventory, review order |
+| [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md) | Auditor's guide + written invariants for the Solidity contracts |
+| [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |
+| [`SECURITY.md`](SECURITY.md) | Security policy: what is in scope, what is known, how to report |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to run the tests and the house rules a change must hold |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Protocol-design milestones and their status |
+| [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) | The shipping backlog and the release gates (test → Rust client → deploy) |
+| [`docs/STATUS.md`](docs/STATUS.md), [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Live results; per-party worst case; the benchmark |
+| [`docs/post/`](docs/post/) | The published write-up (HTML + figures) |
 
 ## Layout
 
@@ -182,18 +224,13 @@ Milestone design and status: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | `contracts/GatewayRegistry.sol` | Optional gateway operator stake (onion never on chain) |
 | `gateway/gateway.mjs` | Onion-side egress: verify, dedup/slash, tunnel, drop |
 | `client/rgoe-client.mjs`, `client/shim.mjs` | The fleet client (library) and its HTTP-CONNECT proxy |
-| `client/selection.mjs` | Per-request gateway selection over the directory / bootnode |
+| `client/selection.mjs` | Per-request gateway selection + client-side stake re-verification |
 | `bootnode/server.mjs` | Live discovery service (its own onion); serves the signed directory |
 | `bootnode/announce.mjs`, `keygen.mjs`, `heartbeat.mjs`, `fetch.mjs` | Announce protocol, onion identity, gateway heartbeat, client fetch |
 | `bootnode/deploy/` | One-command droplet bring-up |
 | `group/enroll.mjs` | Self-enrollment (member generates its own identity) |
 | `group/register-onchain.mjs`, `register-gateway.mjs` | Stake a member commitment / a gateway operator |
+| `rust/` | Rust conformance target: `rgoe-proto` (wire formats) + `rgoe-client` (Gate 2) |
 | `smithers/` | The whole roadmap as a runnable [Smithers](https://smithers.sh) workflow |
 | `docker/`, `Dockerfile`, `docker-compose.yml` | Container image + a local tor/bootnode/gateway/client fleet |
 | `scripts/test-all.mjs` | The audit entrypoint: every selftest + the contract suite |
-| `docs/AUDIT.md` | Threat model, trust boundaries, test inventory, review order |
-| `docs/QUICKSTART.md`, `CLI.md`, `CONFIG.md`, `BOOTNODE.md` | Getting started, commands, config, discovery design |
-| `docs/ROADMAP.md`, `ONCHAIN.md`, `PAYMENTS.md` | Milestone design; on-chain admission; anonymous-payment design |
-| `docs/SHIP-PLAN.md` | The shipping backlog: dev, testing, deploy, hardening, monitoring, Rust client |
-| `docs/STATUS.md`, `adversarial-review.md`, `exit-blocking-benchmark.md` | Live results; per-party worst case; the benchmark |
-| `docs/post/` | The published write-up (HTML + figures) |
