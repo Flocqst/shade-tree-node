@@ -25,3 +25,8 @@ identity.local.json
 **/identity.local.json
 bootnode/bootnode-signer.key
 hs_ed25519_secret_key
+
+# bootnode write-through persistence (runtime state, not source)
+bootnode/bootnode-state.json
+**/bootnode-state.json
+coverage/

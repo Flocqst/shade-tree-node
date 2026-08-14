@@ -38,6 +38,58 @@
 
 use std::fmt;
 
+use data_encoding::Specification;
+use ed25519_dalek::{Signer, SigningKey, Signature, Verifier, VerifyingKey};
+use sha3::{Digest, Sha3_256};
+
+// --------------------------------------------------------------------------
+// Internal helpers (not part of the public wire surface)
+// --------------------------------------------------------------------------
+
+/// Base32, lowercase, NO padding, alphabet `abcdefghijklmnopqrstuvwxyz234567`.
+/// Mirrors `lib/directory.mjs:63 B32` exactly (Tor v3 onion alphabet).
+fn base32() -> data_encoding::Encoding {
+    let mut spec = Specification::new();
+    spec.symbols.push_str("abcdefghijklmnopqrstuvwxyz234567");
+    // padding stays None => no `=` padding, matching JS base32Encode/Decode.
+    spec.encoding().expect("valid base32 spec")
+}
+
+/// Two-byte v3 onion checksum: `SHA3-256(".onion checksum" || pubkey || 0x03)[:2]`.
+/// Reference: `lib/directory.mjs:105`/`:117`.
+fn onion_checksum(pubkey: &[u8; 32]) -> [u8; 2] {
+    let mut h = Sha3_256::new();
+    h.update(b".onion checksum");
+    h.update(pubkey);
+    h.update([0x03u8]);
+    let digest = h.finalize();
+    [digest[0], digest[1]]
+}
+
+/// Append a JSON string literal to `out` with the exact escaping `JSON.stringify`
+/// emits: `"` `\` and the C0 controls (`\b \t \n \f \r`, else `\u00XX`). The onion
+/// alphabet and hex fields never need escaping, but this keeps the encoders faithful
+/// to `JSON.stringify` for any field value.
+fn push_json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{09}' => out.push_str("\\t"),
+            '\u{0a}' => out.push_str("\\n"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\u{0d}' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 // --------------------------------------------------------------------------
 // Errors
 // --------------------------------------------------------------------------
@@ -145,18 +197,44 @@ pub struct Announce {
 /// Returns the verbatim spec-2 message on failure (`Error::Onion`):
 /// `bad base32 char in onion`, `not a v3 onion (expected 56 chars)`,
 /// `v3 onion decodes to 35 bytes`, `not onion version 3`, `onion checksum mismatch`.
-pub fn onion_to_pubkey(_onion: &str) -> Result<[u8; 32]> {
-    // T-RUST-1: base32 no-pad decode, split 32|2|1, SHA3-256 checksum, version 0x03.
-    todo!("T-RUST-1: implement onion_to_pubkey per docs/PROTOCOL-API.md section 2")
+pub fn onion_to_pubkey(onion: &str) -> Result<[u8; 32]> {
+    // Strip a trailing ".onion" suffix (case-insensitive) and lowercase, mirroring
+    // `addr = onion.replace(/\.onion$/, "").toLowerCase()` (lib/directory.mjs:97).
+    let lower = onion.to_lowercase();
+    let addr = lower.strip_suffix(".onion").unwrap_or(&lower);
+    if addr.len() != 56 {
+        return Err(Error::Onion("not a v3 onion (expected 56 chars)"));
+    }
+    let decoded = base32()
+        .decode(addr.as_bytes())
+        .map_err(|_| Error::Onion("bad base32 char in onion"))?;
+    if decoded.len() != 35 {
+        return Err(Error::Onion("v3 onion decodes to 35 bytes"));
+    }
+    let mut pubkey = [0u8; 32];
+    pubkey.copy_from_slice(&decoded[0..32]);
+    let checksum = &decoded[32..34];
+    let version = decoded[34];
+    if version != 0x03 {
+        return Err(Error::Onion("not onion version 3"));
+    }
+    if checksum != onion_checksum(&pubkey) {
+        return Err(Error::Onion("onion checksum mismatch"));
+    }
+    Ok(pubkey)
 }
 
 /// Encode a 32-byte ed25519 public key as a v3 `.onion` address (with suffix).
 ///
 /// Reference: `lib/directory.mjs:114 pubkeyToOnion` (spec 2). Inverse of
 /// [`onion_to_pubkey`]. The address string is 56 base32 no-pad lowercase chars.
-pub fn pubkey_to_onion(_pubkey: &[u8; 32]) -> String {
-    // T-RUST-1: build pubkey||checksum||0x03, base32 no-pad lowercase, append ".onion".
-    todo!("T-RUST-1: implement pubkey_to_onion per docs/PROTOCOL-API.md section 2")
+pub fn pubkey_to_onion(pubkey: &[u8; 32]) -> String {
+    let checksum = onion_checksum(pubkey);
+    let mut buf = Vec::with_capacity(35);
+    buf.extend_from_slice(pubkey);
+    buf.extend_from_slice(&checksum);
+    buf.push(0x03);
+    format!("{}.onion", base32().encode(&buf))
 }
 
 // --------------------------------------------------------------------------
@@ -174,9 +252,22 @@ pub fn pubkey_to_onion(_pubkey: &[u8; 32]) -> String {
 /// by a general JSON serializer (key order and number formatting must match the JS
 /// `JSON.stringify` output byte-for-byte; see `testdata/vectors.json`
 /// `canonicalAnnounceBytesHex`).
-pub fn canonical_announce_bytes(_ann: &Announce) -> Vec<u8> {
-    // T-RUST-1: emit {"v":..,"onion":"..","weight":..,"ts":..,"nonce":".."} as utf8.
-    todo!("T-RUST-1: implement canonical_announce_bytes per docs/PROTOCOL-API.md section 1.1")
+pub fn canonical_announce_bytes(ann: &Announce) -> Vec<u8> {
+    // Hand-built in fixed key order { v, onion, weight, ts, nonce }, no whitespace,
+    // matching `JSON.stringify` byte-for-byte (bootnode/announce.mjs:38).
+    let mut s = String::new();
+    s.push_str("{\"v\":");
+    s.push_str(&ann.v.to_string());
+    s.push_str(",\"onion\":");
+    push_json_string(&mut s, &ann.onion);
+    s.push_str(",\"weight\":");
+    s.push_str(&ann.weight.to_string());
+    s.push_str(",\"ts\":");
+    s.push_str(&ann.ts.to_string());
+    s.push_str(",\"nonce\":");
+    push_json_string(&mut s, &ann.nonce);
+    s.push('}');
+    s.into_bytes()
 }
 
 /// Canonical signed bytes of a directory (spec 1.2).
@@ -187,10 +278,32 @@ pub fn canonical_announce_bytes(_ann: &Announce) -> Vec<u8> {
 /// health }, ...] }))`. Only those four gateway fields, in that order, are covered;
 /// top-level `signer`/`signature` and per-gateway `operator`/`staked` are EXCLUDED.
 /// Hand-build the bytes in fixed key order (see [`canonical_announce_bytes`]).
-pub fn canonical_directory_bytes(_dir: &Directory) -> Vec<u8> {
-    // T-RUST-1: emit {"version":..,"issued":..,"gateways":[{"onion":..,"pubkey":..,
-    //           "weight":..,"health":".."}]} as utf8, byte-matching JSON.stringify.
-    todo!("T-RUST-1: implement canonical_directory_bytes per docs/PROTOCOL-API.md section 1.2")
+pub fn canonical_directory_bytes(dir: &Directory) -> Vec<u8> {
+    // Fixed key order { version, issued, gateways:[{ onion, pubkey, weight, health }] },
+    // no whitespace, matching `JSON.stringify` (lib/directory.mjs:129). Top-level
+    // signer/signature and per-gateway operator/staked are EXCLUDED.
+    let mut s = String::new();
+    s.push_str("{\"version\":");
+    s.push_str(&dir.version.to_string());
+    s.push_str(",\"issued\":");
+    s.push_str(&dir.issued.to_string());
+    s.push_str(",\"gateways\":[");
+    for (i, g) in dir.gateways.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str("{\"onion\":");
+        push_json_string(&mut s, &g.onion);
+        s.push_str(",\"pubkey\":");
+        push_json_string(&mut s, &g.pubkey);
+        s.push_str(",\"weight\":");
+        s.push_str(&g.weight.to_string());
+        s.push_str(",\"health\":");
+        push_json_string(&mut s, &g.health);
+        s.push('}');
+    }
+    s.push_str("]}");
+    s.into_bytes()
 }
 
 // --------------------------------------------------------------------------
@@ -202,9 +315,8 @@ pub fn canonical_directory_bytes(_dir: &Directory) -> Vec<u8> {
 /// Reference: `lib/directory.mjs ed25519PublicKey`. Deterministic (RFC 8032).
 /// Conformance: `testdata/vectors.json` `signerSeed -> signerPub`,
 /// `onionSeed -> onionPub`.
-pub fn ed25519_public_key(_seed: &[u8; 32]) -> [u8; 32] {
-    // T-RUST-1: ed25519-dalek SigningKey::from_bytes(seed).verifying_key().
-    todo!("T-RUST-1: implement ed25519_public_key")
+pub fn ed25519_public_key(seed: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(seed).verifying_key().to_bytes()
 }
 
 /// ed25519 sign `msg` with a raw 32-byte seed (RFC 8032, deterministic).
@@ -212,18 +324,22 @@ pub fn ed25519_public_key(_seed: &[u8; 32]) -> [u8; 32] {
 /// Reference: `lib/directory.mjs:46 ed25519Sign` = `crypto.sign(null, msg, key)`.
 /// Returns the 64-byte signature. Conformance targets: `directorySignature`,
 /// `announceOnionSig` in `testdata/vectors.json`.
-pub fn ed25519_sign(_msg: &[u8], _seed: &[u8; 32]) -> [u8; 64] {
-    // T-RUST-1: ed25519-dalek SigningKey::from_bytes(seed).sign(msg).
-    todo!("T-RUST-1: implement ed25519_sign")
+pub fn ed25519_sign(msg: &[u8], seed: &[u8; 32]) -> [u8; 64] {
+    SigningKey::from_bytes(seed).sign(msg).to_bytes()
 }
 
 /// Verify a 64-byte ed25519 signature over `msg` against a raw 32-byte pubkey.
 ///
 /// Reference: `lib/directory.mjs ed25519Verify`. Used by [`verify_directory`] and
 /// the announce onion-control check.
-pub fn ed25519_verify(_msg: &[u8], _sig: &[u8; 64], _pubkey: &[u8; 32]) -> bool {
-    // T-RUST-1: ed25519-dalek VerifyingKey::from_bytes(pubkey).verify(msg, sig).is_ok().
-    todo!("T-RUST-1: implement ed25519_verify")
+pub fn ed25519_verify(msg: &[u8], sig: &[u8; 64], pubkey: &[u8; 32]) -> bool {
+    // `verify` (not `verify_strict`) matches node's `crypto.verify(null, ...)` /
+    // RFC 8032 cofactored equation used by the JS reference (lib/directory.mjs:50).
+    let vk = match VerifyingKey::from_bytes(pubkey) {
+        Ok(vk) => vk,
+        Err(_) => return false,
+    };
+    vk.verify(msg, &Signature::from_bytes(sig)).is_ok()
 }
 
 // --------------------------------------------------------------------------
@@ -238,10 +354,48 @@ pub fn ed25519_verify(_msg: &[u8], _sig: &[u8; 64], _pubkey: &[u8; 32]) -> bool 
 /// `no-directory`, `unsigned`, `signer-not-pinned`, `bad-signature`,
 /// `bad-onion:<onion[:12]>..:<msg>`, `pubkey-onion-mismatch:<onion[:12]>..`.
 /// On success returns `Ok(())`.
-pub fn verify_directory(_dir: &Directory, _pinned_signer_hex: &str) -> Result<()> {
-    // T-RUST-2: run checks in the spec-4.3 order; re-derive each pubkey via
-    //           onion_to_pubkey; verify signature over canonical_directory_bytes.
-    todo!("T-RUST-2: implement verify_directory per docs/PROTOCOL-API.md section 4.3")
+pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> {
+    // Order mirrors lib/directory.mjs:152 verifyDirectory. (`no-directory` — dir not
+    // an object — is unrepresentable in the typed Rust struct, so it is elided.)
+    let signature_hex = match &dir.signature {
+        Some(s) => s,
+        None => return Err(Error::Reason("unsigned".into())),
+    };
+    if let Some(signer) = &dir.signer {
+        if !pinned_signer_hex.is_empty()
+            && signer.to_lowercase() != pinned_signer_hex.to_lowercase()
+        {
+            return Err(Error::Reason("signer-not-pinned".into()));
+        }
+    }
+
+    // Decode pinned signer + signature; any malformed input fails as `bad-signature`
+    // (the JS ed25519Verify swallows decode/parse errors and returns false).
+    let sig_ok = (|| -> Option<bool> {
+        let pk_bytes: [u8; 32] = hex::decode(pinned_signer_hex).ok()?.try_into().ok()?;
+        let sig_bytes: [u8; 64] = hex::decode(signature_hex).ok()?.try_into().ok()?;
+        Some(ed25519_verify(
+            &canonical_directory_bytes(dir),
+            &sig_bytes,
+            &pk_bytes,
+        ))
+    })()
+    .unwrap_or(false);
+    if !sig_ok {
+        return Err(Error::Reason("bad-signature".into()));
+    }
+
+    for g in &dir.gateways {
+        let onion12: String = g.onion.chars().take(12).collect();
+        let derived = match onion_to_pubkey(&g.onion) {
+            Ok(pk) => pk,
+            Err(e) => return Err(Error::Reason(format!("bad-onion:{onion12}..:{e}"))),
+        };
+        if hex::encode(derived) != g.pubkey.to_lowercase() {
+            return Err(Error::Reason(format!("pubkey-onion-mismatch:{onion12}..")));
+        }
+    }
+    Ok(())
 }
 
 /// Verify an announce record (spec 3.4).
@@ -256,9 +410,12 @@ pub fn verify_directory(_dir: &Directory, _pinned_signer_hex: &str) -> Result<()
 /// Operator/stake proof (spec 3.2) is out of scope for this signature-only entry
 /// and is handled by the client with a chain reader.
 pub fn verify_announce(_ann: &Announce, _now: u64, _skew: u64) -> Result<()> {
-    // T-RUST-2: onion_to_pubkey -> freshness -> nonce replay -> verify onion_sig
-    //           over canonical_announce_bytes. Operator/stake proof: separate.
-    todo!("T-RUST-2: implement verify_announce per docs/PROTOCOL-API.md section 3.4")
+    // DEFERRED: the individual primitives it composes (onion_to_pubkey,
+    // canonical_announce_bytes, ed25519_verify) ARE implemented and conformance-tested,
+    // but testdata/vectors.json pins no full pass/fail `verifyAnnounce` case (operator
+    // ECDSA / stake, freshness `now`, nonce-replay guard). Add such vectors before
+    // wiring the ordered reason-code checks, so ordering/reason strings are pinned.
+    todo!("T-RUST-2: implement verify_announce once verifyAnnounce vectors exist")
 }
 
 // --------------------------------------------------------------------------
@@ -309,8 +466,12 @@ pub fn request_signal(target: &str, nonce: &str) -> String {
 /// as the decimal-string field element `x` matched by [`verify_directory`]'s sibling
 /// envelope check (`target-not-bound`, spec 6.4 row 2b).
 pub fn calculate_signal_hash(_message: &str) -> String {
-    // T-RUST-1: keccak256(message) as big-endian uint, >> 8, formatted decimal.
-    todo!("T-RUST-1: implement calculate_signal_hash per docs/PROTOCOL-API.md section 6.2")
+    // DEFERRED (needs a vector): `keccak256(message)` big-endian uint >> 8, decimal.
+    // Deterministic and testable, but testdata/vectors.json pins NO signal-hash value
+    // (no `x`/signalHash field), so there is nothing to conformance-check against yet.
+    // Add a `signalHash` vector (message -> decimal x) before implementing, so the
+    // keccak result is checked rather than invented.
+    todo!("T-RUST-1: implement calculate_signal_hash once a signalHash vector exists")
 }
 
 /// Bounds check for a signal field before hashing (spec 6.3).

@@ -1,0 +1,23 @@
+{
+  "all": true,
+  "include": [
+    "lib/**",
+    "bootnode/**",
+    "client/**",
+    "group/**",
+    "gateway/**",
+    "bin/**"
+  ],
+  "exclude": [
+    "**/*.selftest.mjs",
+    "**/selftest.mjs",
+    "test/**",
+    "scripts/**",
+    "node_modules/**",
+    "experiments/**",
+    "demo/**",
+    "out/**"
+  ],
+  "reporter": ["text", "lcov"],
+  "clean": true
+}

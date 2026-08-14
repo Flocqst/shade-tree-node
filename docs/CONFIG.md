@@ -12,6 +12,7 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `RGOE_BOOTNODE_ADMISSION` | `open` | Admission policy: `open` (onion-control only) or `stake` (require live operator stake). | bootnode server | `--admission` |
 | `RGOE_BOOTNODE_TTL` | `900` | Seconds a gateway stays live without re-announcing before it ages out. | bootnode server | `--ttl` |
 | `RGOE_BOOTNODE_SIGNER_KEY` | `bootnode/bootnode-signer.key` | Path to the pinned `{pub,priv}` JSON signer; minted and persisted if absent. | bootnode server | `--signer-key` |
+| `RGOE_BOOTNODE_STORE` | (off) | Optional JSON state file for write-through persistence. When set, each accepted announce is mirrored to disk and reloaded on boot so a restart does not blank the fleet until every gateway re-announces. Reload re-verifies each record (onion control + operator stake) and drops any past its TTL, so a stale or tampered store can never admit anything a live announce would reject. | bootnode server | — |
 | `RGOE_BOOTNODE_ONION` | (required for heartbeat / bootnode discovery) | The bootnode onion to announce to (heartbeat) / to fetch the live directory from (client). | heartbeat, client selection | `--bootnode` |
 | `RGOE_BOOTNODE_HEARTBEAT` | `300` | Re-announce interval in seconds. | heartbeat | `--interval` |
 | `RGOE_GW_IDENTITY` | `tor/hs/identity.local.json` | Path to the onion identity `{onion, seed}` (from `keygen`) the heartbeat announces. | heartbeat | `--identity` |

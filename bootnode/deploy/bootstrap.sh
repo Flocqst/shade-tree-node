@@ -109,6 +109,7 @@ WorkingDirectory=${RGOE_DIR}
 Environment=RGOE_BOOTNODE_PORT=${RGOE_BOOTNODE_PORT}
 Environment=RGOE_BOOTNODE_ADMISSION=${RGOE_ADMISSION}
 Environment=RGOE_BOOTNODE_SIGNER_KEY=${RGOE_DIR}/deploy-state/bootnode-signer.key
+Environment=RGOE_BOOTNODE_STORE=${RGOE_DIR}/deploy-state/bootnode-state.json
 ExecStart=$(command -v node) ${RGOE_DIR}/bootnode/server.mjs
 Restart=always
 RestartSec=3

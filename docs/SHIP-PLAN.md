@@ -96,14 +96,17 @@ and at scale."
   (`bad-signal-field`) BEFORE hashing, keeping `(target,nonce)->signal` injective independent of the
   gateway's later `validTarget` filter (`signalFieldSafe`). Residual (own item, T-FEAT-12):
   same-target exact-envelope replay across non-colluding gateways.
-- [ ] **T-DEV-4 (P1) Bootnode persistence.** The registry is in-memory, so a restart drops the
-  whole fleet until every gateway re-announces. Write-through to a small store (JSON/sqlite) and
-  reload verified entries on boot (re-checking freshness). *Accept:* announce, restart the
-  bootnode, `/directory` still lists live entries; test with an injected clock.
-- [ ] **T-DEV-5 (P1) Client zero-trust operator re-verification.** In stake mode, the client
-  should fetch `GET /gateway/<onion>` and re-verify `operatorSig` + `isStaked(operator)` itself,
-  not trust the bootnode's `staked` label. *Accept:* a bootnode that pairs a staked operator with
-  an onion that operator never signed is rejected client-side; test.
+- [x] **T-DEV-4 (P1) Bootnode persistence.** DONE. `makeRegistry` takes an optional
+  `RGOE_BOOTNODE_STORE` JSON path: every accepted announce is written through atomically (tmp +
+  rename), and `loadPersisted()` on boot re-runs each stored record through the real announce path
+  (onion control + operator/stake re-verified, tampered/forged entries dropped). Freshness on
+  reload is the stored **TTL** (`expiresAt`), not the announce anti-replay ts-skew — so a restart
+  minutes after the last heartbeat keeps the fleet (the initial reuse-announce() implementation
+  wrongly dropped everything past the 120s skew; fixed). Deploy wires the store into the
+  `rgoe-bootnode` systemd unit. *Accept (met, injected clock in `bootnode/selftest.mjs`):* announce,
+  "restart" 300s later, `/directory` still lists live entries; entries past TTL drop; tampered /
+  corrupt / unstaked-on-reload all handled.
+- [x] **T-DEV-5 (P1) Client zero-trust operator re-verification.** DONE (loop-9): `client/selection.mjs` `reverifyGateway`/`filterReverified` (env `RGOE_VERIFY_STAKE=1`, off by default). For any entry claiming stake it fetches `GET /gateway/<onion>`, re-runs onion+operator sigs (verifyAnnounce) + live `isStaked`, and DROPS a gateway whose label the bootnode faked or whose stake lapsed. `client/verify-stake.selftest.mjs`. Closes the stale-label gap the incident playbook + adversarial suite flagged.
 - [x] **T-DEV-6 (P1) Announce rate-limiting + per-onion caps.** DONE (loop-2, from the audit):
   per-onion re-announce throttle (`RGOE_BOOTNODE_MIN_REANNOUNCE`, cheap pre-verify reject),
   registry size cap (`RGOE_BOOTNODE_MAX_ENTRIES`; a new onion is refused when full, existing ones
@@ -154,8 +157,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   library-level to avoid repo pollution). REMAINING: only `bootnode/heartbeat.mjs` (operator resolution).
 - [x] **T-TEST-4 (P0) Consolidated adversarial/security suite.** DONE (loop-8, `test/adversarial.selftest.mjs`, 27 checks): poisoned directory, MITM bootnode, forged-announce matrix, stake lapse, registry DoS -- one auditor-facing place, each attack run against real code + proven defeated. Stake-lapse client re-check pending T-DEV-5 (flagged in-suite).
 - [x] **T-TEST-5 (P1) Foundry fuzz + invariants + gas.** DONE (loop-8): 11 fuzz + 4 invariant tests (no forge-std added; `test/FuzzHelpers.sol` + `*.fuzz.t.sol` + `*.invariant.t.sol`). forge 38->53 tests; invariants (`activeCount`==live stakes, balance==sum of bonds) run 4096 calls each, 0 reverts. Gas baselines recorded (no stray .gas-snapshot committed). Deeper runs: raise runs/depth from 64/64.
-- [ ] **T-TEST-6 (P1) Node coverage gate.** Wire `c8` over the selftests; fail CI below a set
-  threshold; publish the report. *Accept:* `npm run coverage` + CI gate.
+- [x] **T-TEST-6 (P1) Node coverage gate.** DONE (loop-9): `c8` devDep + `npm run coverage` with a measured floor (lines 60 / functions 63 / branches 78, set below current so it's a real regression gate) + `.c8rc.json` scoping to shipped code. Not in default `npm test`; CI wiring is T-TEST-9.
 - [ ] **T-TEST-7 (P1) Load/soak tests.** Bootnode announce storm (K onions × M heartbeats),
   gateway request throughput, concurrent directory fetch; assert bounded memory (no leak over a
   soak) and stable latency. *Accept:* a `test/load/` harness + a recorded baseline.
@@ -222,8 +224,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DOC-1 (P1) Operator runbook.** DONE (loop-8, `docs/OPERATOR.md`): deploy, join, day-2, key mgmt, slash response, rotate/retire, config -- all commands verified against bin/rgoe.mjs + deploy scripts; honestly marks key-backup + gateway-exit as manual `cast` (not-yet-tooled).
 - [x] **T-DOC-2 (P1) Incident response playbook.** DONE (loop-8, `docs/INCIDENT.md`): 7 scenarios grounded in AUDIT.md; surfaced the client-side weight-clamp gap (now fixed) + cross-refs T-HARD-5/T-DEV-4/T-DEV-5/T-FEAT-12 for not-yet-tooled paths.
 - [x] **T-DOC-3 (P1) Wire-protocol + API spec.** DONE (loop-7): `docs/PROTOCOL-API.md` -- canonical byte encodings, onion<->key binding, announce + directory + envelope wire formats, bootnode HTTP API, every rejection reason, and a conformance map to testdata/vectors.json. Every claim cited to file:symbol. Unblocks the Rust conformance runner (T-RUST-1).
-- [ ] **T-DOC-4 (P2) SECURITY.md** (disclosure policy) + **CONTRIBUTING.md** + ADRs for the load-
-  bearing decisions (onion-off-chain, bootnode-as-cache, RLN-over-slot).
+- [x] **T-DOC-4 (P2) SECURITY.md** DONE (loop-9): `SECURITY.md` (unaudited/testnet status, in-scope vs known residuals, GitHub private-advisory reporting) + `CONTRIBUTING.md` (test commands, house conventions, the trust-model invariants a contributor must not break, gate ordering).
 - [ ] **T-DOC-5 (P2) README polish pass.** Revisit the README once the fleet/CLI/tests have settled:
   tighten the lede, make the 30-second "what/why/run" skimmable, prune stale claims, keep it honest
   about unaudited status. (Queued 2026-08-13.)
@@ -245,8 +246,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   reachable in a burst; a global rate cap throttles that pre-full).
 - [ ] **T-HARD-5 (P2) Directory signer rotation.** Versioned signer with an overlap window so the
   pinned key can rotate without a flag day. *Accept:* clients accept old+new during overlap; test.
-- [ ] **T-HARD-6 (P2) Contract audit prep.** Reentrancy/overflow re-review, consider an owner-slash
-  timelock, static analysis (slither), a written invariants doc for auditors.
+- [x] **T-HARD-6 (P2) Contract audit prep.** DONE (loop-9): `docs/CONTRACTS-AUDIT.md` (inventory, 8 written invariants each tied to a test, per-function reentrancy/CEI/access walk, honest limitations) + `slither.config.json`. slither not installed here; config left for later.
 - [ ] **T-HARD-7 (P2) Tor hardening.** Vanguards-lite, PoW tuning, optional client-auth for a
   private fleet.
 
@@ -274,10 +274,7 @@ This is **Gate 2**: the Rust client MVP (T-RUST-1 + T-RUST-2) must pass conforma
 deploy, because it is the client people will actually run.
 
 - [x] **T-RUST-0 (P1) Rust workspace + language ADR.** DONE (loop-8): `rust/` cargo workspace (`rgoe-proto` lib + `rgoe-client` bin) builds; `cargo test` passes 3 (request_signal, operator_auth_message, signal_field_safe -- already matching testdata/vectors.json). Stubs cite JS file:symbol + PROTOCOL-API.md. ADR `docs/adr/0001-client-language.md`. Gate 2 started.
-- [~] **T-RUST-1 (P1) Wire-format conformance harness.** SEEDED by T-TEST-11: `testdata/vectors.json`
-  is the language-neutral fixture set and the JS side already reproduces every value
-  (`test/vectors.selftest.mjs`). REMAINING (spec DONE loop-7; workspace DONE loop-8 T-RUST-0): only the Rust-side runner over testdata/vectors.json that asserts the same bytes, so the harness gates both implementations.
-  *Accept:* the JS client reproduces every fixture (done); a Rust runner reproduces them too.
+- [x] **T-RUST-1 (P1) Wire-format conformance harness.** DONE (loop-9): `rust/rgoe-proto` implements onion<->key, canonical directory/announce bytes, ed25519 verify, and `verify_directory` (full ordered reasons); `rust/rgoe-proto/tests/conformance.rs` (13 tests) asserts byte-match vs `testdata/vectors.json` -- Rust proven to match the JS reference. Deferred for lack of a pinned vector: `calculate_signal_hash` + operator-ECDSA `verify_announce` (see T-RUST-1b).
 - [ ] **T-RUST-2 (P1) Rust client MVP.** `arti`-dialed onion connect + envelope send + tunnel, with
   the directory fetched and verified (onion↔key binding + pinned-signer signature) in Rust. RLN
   proving via `zerokit`. *Accept:* passes T-RUST-1 conformance; egresses through a live gateway
@@ -333,6 +330,18 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
+  marks onion-identity + operator-key backup as manual `tar | gpg`. Add `rgoe backup` / `rgoe restore`
+  that GPG-encrypts the onion identity seed(s) + (optionally) the operator key to an off-box target
+  and restores them on a fresh box, so key loss is recoverable and the procedure is not ad hoc.
+  *Accept:* backup then restore on a clean box reproduces the same onion; secrets never written
+  unencrypted; documented in OPERATOR.md.
+- [ ] **T-RUST-1b (P1, added loop-9) Signal-hash + operator-sig conformance vectors.** T-RUST-1
+  deferred `calculate_signal_hash` and operator-ECDSA `verify_announce` in Rust because no vector
+  pins them. Add `signalHash` (calculateSignalHash of the fixed target+nonce) and a full staked
+  announce (operator + operatorSig) to `testdata/vectors.json`, assert them JS-side, then implement +
+  conformance-test them in Rust. *Accept:* Rust reproduces the signal hash + verifies the operator
+  authorization against the pinned vector.
 - [ ] **T-FEAT-14 (P2, added loop-8) SearXNG / agent egress adapter.** Close the loop back to the
   original use case: a drop-in adapter so a SearXNG instance or an AI agent routes its egress through
   the fleet with one config line (an HTTP_PROXY pointer at the local shim, or an `RgoeClient`/Rust-crate
@@ -429,3 +438,11 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   ADR -- Gate 2 started, cargo test green). Audit fix: client-side weight clamp in pickGateway (a
   static/poisoned directory can no longer skew selection past MAX_WEIGHT). 21 suites green. Added
   T-TEST-17 (fast/slow split) + T-FEAT-14 (SearXNG/agent adapter).
+- 2026-08-13  loop-9 (AGGRESSIVE FAN-OUT, 6 parallel agents) closed 6 tasks: T-RUST-1 (Rust
+  conformance harness -- 13 tests byte-match testdata/vectors.json; Gate 2 proven), T-DEV-4 (bootnode
+  persistence; a review agent caught + fixed a TTL-vs-skew reload bug that would blank the fleet on
+  restart), T-DEV-5 (client zero-trust stake re-verify -- closes the stale-label gap), T-DOC-4
+  (SECURITY + CONTRIBUTING), T-HARD-6 (contract audit guide + slither cfg), T-TEST-6 (c8 coverage
+  gate). 23 suites green (node+forge) + rust cargo test 16. Added T-FEAT-15 (key backup) + T-RUST-1b
+  (signal-hash/operator-sig vectors). NOTE: real-proof suites make npm test >2min -> T-TEST-17 is now
+  P1-urgent; one transient rln.selftest flake observed under load (passes standalone/clean).

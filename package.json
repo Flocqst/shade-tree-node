@@ -18,7 +18,8 @@
     "demo": "node demo/server.mjs",
     "test": "node scripts/test-all.mjs",
     "test:node": "node scripts/test-all.mjs --no-contracts",
-    "test:contracts": "forge test"
+    "test:contracts": "forge test",
+    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts"
   },
   "dependencies": {
     "@semaphore-protocol/group": "^4.0.0",
@@ -29,5 +30,8 @@
     "poseidon-lite": "^0.3.0",
     "rlnjs": "^3.3.0",
     "socks": "^2.8.3"
+  },
+  "devDependencies": {
+    "c8": "^12.0.0"
   }
 }

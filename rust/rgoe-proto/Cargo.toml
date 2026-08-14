@@ -7,14 +7,14 @@ description = "Trust-critical RGOE wire-format checks (onion<->ed25519 binding, 
 publish = false
 
 [dependencies]
-# NOTE (T-RUST-1): crypto deps intentionally NOT added yet so the scaffold builds
-# fast in CI. When implementing the stubs below, add:
-#   ed25519-dalek  -- RFC 8032 ed25519 sign/verify (null-digest, raw 32-byte seed/pubkey)
-#   sha3           -- SHA3-256 onion checksum + keccak256 signal hash
-#   data-encoding  -- base32 no-pad lowercase (alphabet abcdefghijklmnopqrstuvwxyz234567)
-#   serde/serde_json -- ONLY for parsing untrusted input; canonical bytes are hand-built
-#                       in fixed key order (see canonical_*_bytes), NEVER via a serializer.
+# T-RUST-1 crypto/encoding deps (wire-format conformance surface):
+ed25519-dalek = "2"   # RFC 8032 ed25519 sign/verify (null-digest, raw 32-byte seed/pubkey)
+sha3 = "0.10"         # SHA3-256 onion checksum (keccak256 signal hash later, T-RUST-1 stub)
+data-encoding = "2"   # base32 no-pad lowercase (alphabet abcdefghijklmnopqrstuvwxyz234567)
+hex = "0.4"           # lowercase hex for pubkey/signature (de)serialization
+# NOTE: canonical_*_bytes are hand-built in fixed key order (see the encoders below),
+# NEVER via a serializer — serde is intentionally NOT a dependency of the canonical path.
 
 [dev-dependencies]
-# NOTE (T-RUST-1): the conformance runner reads testdata/vectors.json and asserts
-# byte-equality. Add serde_json + hex here when wiring it up.
+# T-RUST-1 conformance runner reads testdata/vectors.json and asserts byte-equality.
+serde_json = "1"

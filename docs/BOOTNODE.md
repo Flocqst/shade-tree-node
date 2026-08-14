@@ -98,6 +98,18 @@ by continuing to announce (`rgoe heartbeat`, every `--interval` seconds); a dead
 out without anyone deregistering it. Clients cache the last-known-good directory, so a dead or
 poisoned bootnode degrades to the previous good fleet, never to nothing.
 
+### Surviving a restart
+
+The live set is in-memory by default, so a bootnode restart would blank the fleet until every
+gateway's next heartbeat. Set `RGOE_BOOTNODE_STORE=<path>` (the deploy sets it automatically) to
+turn on **write-through persistence**: every accepted announce is mirrored to a small JSON file
+and reloaded on boot. Reload is not blind trust — each stored record is re-run through the same
+announce verification (onion control, and in stake mode a live on-chain `isStaked` re-check), and
+any entry already past its TTL is dropped. Freshness on reload is the **TTL** (how long an
+accepted gateway stays listed), not the announce anti-replay window — so a restart minutes after
+the last heartbeat keeps the fleet, while a stale or tampered store can never resurrect a
+long-dead gateway or inject an onion nobody controls.
+
 ## Client side
 
 ```bash

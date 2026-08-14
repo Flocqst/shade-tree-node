@@ -1,0 +1,79 @@
+# Security policy
+
+## Status
+
+This is a reference implementation. It is **unaudited**, and its ZK artifacts
+(`circuits/rln/`) came from an **untrusted testnet phase-2 ceremony**
+(`circuits/rln/ARTIFACTS.md`). Do not put real funds or real anonymity needs on
+it yet. Treat everything here as testnet-only until an audit and a real trusted
+setup land (`docs/SHIP-PLAN.md` T-HARD-1).
+
+The full trust model, per-party threat model, and trust boundaries are in
+[`docs/AUDIT.md`](docs/AUDIT.md). Read it before reporting: several sharp edges
+are already known and documented, and a report against one of those is a
+duplicate, not a finding.
+
+## In scope
+
+Reports that show a real defect in the shipped code, for example:
+
+- A break in a cryptographic guarantee from `docs/AUDIT.md`: client anonymity to
+  the gateway, membership soundness, per-request unlinkability, the onion-to-key
+  binding, or the slash-on-over-spend control flow.
+- A signature or parser that accepts input it must reject (directory, announce,
+  envelope, onion derivation, on-chain reads).
+- A way to poison the fleet view a client acts on, past what the bootnode is
+  already trusted for (it is a cache, not a trust root; see below).
+- A contract bug in `StakedReputationSet` or `GatewayRegistry` (stake lifecycle,
+  slash authorization, fund custody).
+- A secret reaching a log or the wire (member identity secret, seed, onion
+  secret key).
+
+## Known and out of scope
+
+These are documented limitations, not vulnerabilities. Please do not file them
+as new reports; concrete improvements to them are welcome as pull requests
+instead.
+
+- **Unaudited, testnet ZK artifacts.** Untrusted ceremony output.
+  (`docs/AUDIT.md` "Known unaudited surfaces"; residual T-HARD-1.)
+- **Cross-gateway exact-envelope replay.** Target binding stops a proof being
+  redirected, but an exact-envelope replay to the *same* target still egresses,
+  and non-colluding gateways share no spent-set, so one proof can be amplified
+  across the fleet. Design tracked as T-FEAT-12.
+- **Stale `staked` label.** In stake mode the client currently trusts the
+  bootnode's `staked` label for the operator-to-onion pairing rather than
+  re-fetching `GET /gateway/<onion>` and re-verifying the operator signature and
+  live stake itself. Tracked as T-DEV-5.
+- **No directory signer rotation.** The pinned directory signer cannot yet
+  rotate with an overlap window. Tracked as T-HARD-5.
+- **Deploy bootstrap not integration-tested.** `bootnode/deploy/bootstrap.sh`
+  runs as root on a fresh box and has no integration test yet; read it before
+  running it. (`docs/AUDIT.md`.)
+- Anything under "Scope: what it is and is not" in the README that is called out
+  as deliberately out of scope or an operator responsibility (no payments,
+  sourcing clean egress IPs, rendezvous DoS, and so on).
+
+See `docs/SHIP-PLAN.md` for the full residual list and its priorities.
+
+## Reporting
+
+Report privately. Do not open a public issue for a suspected vulnerability.
+
+- Open a private security advisory on GitHub for
+  `dmarzzz/reputation-gated-onion-egress`
+  (repository → Security → Advisories → "Report a vulnerability").
+
+That is the intended private channel. There is no dedicated security email.
+
+Please include: the affected file and symbol, the trust boundary crossed, a
+reproduction (a failing `*selftest.mjs` or `forge` test is ideal, since the
+whole repo is tested that way), and the impact.
+
+## Disclosure
+
+This is a small reference project, so treat these as expectations, not a
+contract. We aim to acknowledge a report within a few days and to work toward a
+fix on a reasonable, coordinated timeline before public disclosure. If a report
+turns out to match an already-documented limitation above, we will say so and
+point at the tracking task rather than treat it as a new issue.

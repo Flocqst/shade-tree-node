@@ -23,11 +23,17 @@
 //   RGOE_BOOTNODE_SIGNER_KEY {pub,priv} JSON path for the pinned signer (default bootnode/bootnode-signer.key)
 //   RGOE_BOOTNODE_ADMISSION  open | stake                               (default open)
 //   RGOE_BOOTNODE_TTL        seconds a gateway stays live w/o re-announce (default 900)
+//   RGOE_BOOTNODE_STORE      OPTIONAL JSON path for write-through persistence  (default off)
+//                            When set, accepted announces are mirrored to disk and reloaded
+//                            on boot so a restart does not blank the fleet until every gateway
+//                            re-announces. Reload re-runs each stored record through the real
+//                            announce path, so persistence can never admit anything a live
+//                            announce would reject (see loadPersisted below).
 //   RGOE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
 
 import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -75,12 +81,77 @@ function makeNonceGuard(ttlMs) {
 const MAX_WEIGHT = 1000;
 export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, now = () => Math.floor(Date.now() / 1000),
     maxEntries = Number(process.env.RGOE_BOOTNODE_MAX_ENTRIES || 10000),
-    minReannounceSec = Number(process.env.RGOE_BOOTNODE_MIN_REANNOUNCE || 5) }) {
+    minReannounceSec = Number(process.env.RGOE_BOOTNODE_MIN_REANNOUNCE || 5),
+    // OPTIONAL persistence: a JSON store the live set is mirrored to. Off (null) by default, so
+    // unset behavior — and every existing test — is byte-for-byte unchanged.
+    persistPath = process.env.RGOE_BOOTNODE_STORE || null }) {
   const live = new Map(); // onion -> { pubkey, weight, operator, staked, rec, expiresAt, lastAt }
   const nonces = makeNonceGuard(ttlSec * 1000);
   const requireStake = admission === "stake";
+  // While replaying the store on boot we call announce() but must NOT write-through each replay
+  // (it would churn the file mid-reload); a single persist() after reload prunes what dropped.
+  let reloading = false;
 
-  async function announce(rec) {
+  // Write-through the CURRENT live set. We store the raw signed announce records (rec) + their
+  // expiresAt — NOT derived state (pubkey/weight/staked). That is deliberate: reload must
+  // RE-VERIFY from the signed record, never trust a cached verdict, so nothing on disk can grant
+  // trust the crypto/stake path would not. Written atomically (tmp + rename) so a crash mid-write
+  // cannot leave a truncated store. Persistence is a convenience cache: a write failure logs and
+  // is swallowed, never breaking an accepted announce.
+  function persist() {
+    if (!persistPath) return;
+    try {
+      const entries = [...live.values()].map((e) => ({ rec: e.rec, expiresAt: e.expiresAt }));
+      mkdirSync(dirname(persistPath), { recursive: true });
+      const tmp = persistPath + ".tmp";
+      writeFileSync(tmp, JSON.stringify({ version: 1, entries }));
+      renameSync(tmp, persistPath);
+    } catch (e) {
+      console.error(`[bootnode] persist write failed (continuing): ${e.message}`);
+    }
+  }
+
+  // Reload-on-boot. For EACH persisted record we re-run the real announce() path — verifyAnnounce
+  // (onion control + operator/stake) plus every DoS cap. WHY re-verify instead of trusting the
+  // file: persistence must not be a trust bypass. A record is restored only if its onion signature
+  // (and, in stake mode, its live operator stake) still verifies, so
+  //   - a tampered store entry (e.g. a flipped onionSig) fails signature verification and is dropped,
+  //   - a poisoned file can add nothing a live gateway could not have announced itself,
+  //   - an operator who has since unstaked drops (isStaked is re-read on chain, fail-closed).
+  // FRESHNESS on reload is the stored TTL (expiresAt), NOT the live-announce anti-replay window.
+  // Those are different clocks: the ts-skew (~120s) bounds how old a LIVE announce may be to defeat
+  // replay; the TTL (~900s) bounds how long an ACCEPTED gateway stays listed without re-announcing.
+  // A restart 300s after the last heartbeat is normal and must keep the fleet — so we gate each
+  // entry on its own expiresAt here and tell announce() to skip the ts-skew for this replay of our
+  // OWN atomically-written store. An entry already past expiresAt is dropped (a stale store cannot
+  // resurrect a long-dead gateway). Returns { loaded, dropped } for boot logging/tests.
+  async function loadPersisted() {
+    if (!persistPath || !existsSync(persistPath)) return { loaded: 0, dropped: 0 };
+    let stored;
+    try {
+      stored = JSON.parse(readFileSync(persistPath, "utf8"));
+    } catch (e) {
+      console.error(`[bootnode] persist read failed, ignoring store: ${e.message}`);
+      return { loaded: 0, dropped: 0 };
+    }
+    const entries = Array.isArray(stored?.entries) ? stored.entries : [];
+    let loaded = 0, dropped = 0;
+    reloading = true;
+    try {
+      for (const ent of entries) {
+        // TTL freshness gate (against the current clock), independent of the announce ts-skew.
+        if (!ent || typeof ent.expiresAt !== "number" || ent.expiresAt <= now()) { dropped++; continue; }
+        const r = await announce(ent.rec, { fromStore: { expiresAt: ent.expiresAt } });
+        if (r.ok) loaded++; else dropped++;
+      }
+    } finally {
+      reloading = false;
+    }
+    persist(); // rewrite the store once so dropped (stale/tampered) records don't linger on disk
+    return { loaded, dropped };
+  }
+
+  async function announce(rec, { fromStore = null } = {}) {
     // Cheap pre-checks BEFORE the expensive signature verify, so a flood is rejected early.
     const onionKey = typeof rec?.onion === "string" ? rec.onion : null;
     const existing = onionKey ? live.get(onionKey) : null;
@@ -89,6 +160,10 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 
     const v = await verifyAnnounce(rec, {
       now: now(),
+      // Reloading our OWN persisted store: freshness is the stored TTL (checked in loadPersisted),
+      // not the anti-replay ts window — so don't drop a gateway announced more than one skew-window
+      // before the restart. Onion control + operator stake are still fully re-verified.
+      ...(fromStore ? { skew: Number.MAX_SAFE_INTEGER } : {}),
       isStaked: stake?.isStaked,
       requireStake,
       seenNonce: nonces,
@@ -101,16 +176,21 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       operator: v.operator,
       staked: v.staked,
       rec,
-      expiresAt: now() + ttlSec,
+      // Preserve the original expiry across a restart (don't silently extend a gateway's TTL);
+      // a live announce gets a fresh now()+ttlSec.
+      expiresAt: fromStore ? fromStore.expiresAt : now() + ttlSec,
       lastAt: now(),
     });
+    if (!reloading) persist(); // write-through on each accepted announce (skipped during reload)
     return { ok: true, onion: v.onion, staked: v.staked };
   }
 
   function sweep() {
     const t = now();
-    for (const [onion, e] of live) if (e.expiresAt <= t) live.delete(onion);
+    let evicted = false;
+    for (const [onion, e] of live) if (e.expiresAt <= t) { live.delete(onion); evicted = true; }
     nonces.sweep();
+    if (evicted && !reloading) persist(); // keep the store from retaining aged-out gateways
   }
 
   // Build the signed directory over currently-live entries — the exact shape
@@ -130,7 +210,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
-  return { announce, directory, sweep, record, size: () => live.size, admission, ttlSec };
+  return { announce, directory, sweep, record, loadPersisted, size: () => live.size, admission, ttlSec };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
@@ -186,8 +266,15 @@ async function main() {
 
   const signer = await loadOrMintSigner(signerPath);
   const stake = makeStakeVerifier();
-  const registry = makeRegistry({ signer, stake, admission, ttlSec });
+  const persistPath = process.env.RGOE_BOOTNODE_STORE || null;
+  const registry = makeRegistry({ signer, stake, admission, ttlSec, persistPath });
   registry.ttlSec = ttlSec;
+  // Reload-on-boot: re-announce any persisted fleet so a restart doesn't blank the directory
+  // until every gateway re-announces. Each record is re-verified (stale/tampered ones drop).
+  if (persistPath) {
+    const { loaded, dropped } = await registry.loadPersisted();
+    console.log(`persistence: reloaded ${loaded} gateway(s) from ${persistPath} (${dropped} dropped as stale/invalid)`);
+  }
   setInterval(() => registry.sweep(), Math.min(ttlSec, 60) * 1000).unref();
 
   const server = makeServer(registry, { signerPub: signer.pub });
