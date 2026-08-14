@@ -19,7 +19,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGHT } from "../lib/directory.mjs";
+import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGHT, canonicalCaps, DEFAULT_EGRESS_PORT, DEFAULT_PROTO_VERSION } from "../lib/directory.mjs";
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
@@ -635,9 +635,70 @@ async function ensureLoaded() {
   return loaded;
 }
 
+// ---- capability-aware selection (T-FEAT-10) -------------------------------------
+// A request may carry a capability REQUIREMENT — { port, proto, region }, all optional —
+// so the client routes to a gateway that can actually serve it (a destination port the
+// gateway's egress policy allows, a mutually-supported envelope version, or a coarse region).
+// Capabilities are the gateway's SIGNED self-declaration (dir entry `caps` + `capsSig`,
+// already verified by verifyDirectory before we ever get here).
+//
+// OPT-IN and byte-identical by default: `selectCandidates()` with no requirement takes the
+// EXACT path it did before (requirementActive(null) === false -> the fleet is not filtered).
+// A requirement that NO gateway meets FAILS CLOSED — selectCandidates throws a clear error
+// naming the unmet requirement, rather than silently dialing an incapable gateway.
+
+// Does one directory entry satisfy a capability requirement? Pure + TOTAL. A gateway that
+// advertises NO caps is assumed to meet only the conservative default (DEFAULT_EGRESS_PORT /
+// DEFAULT_PROTO_VERSION) — it cannot prove a non-default capability, so it is not selected for
+// one. Region is NEVER implicit (a gateway must advertise a region to match a region require).
+export function gatewayMeetsRequirement(entry, req) {
+  if (!req || typeof req !== "object") return true;
+  const caps = canonicalCaps(entry && entry.caps);
+  if (req.port != null) {
+    const port = Number(req.port);
+    if (Array.isArray(caps.ports)) { if (!caps.ports.includes(port)) return false; }
+    else if (port !== DEFAULT_EGRESS_PORT) return false;
+  }
+  if (req.proto != null) {
+    const v = Number(req.proto);
+    if (caps.proto) { if (!(v >= caps.proto.min && v <= caps.proto.max)) return false; }
+    else if (v !== DEFAULT_PROTO_VERSION) return false;
+  }
+  if (req.region != null) {
+    if (!caps.region || caps.region !== req.region) return false;
+  }
+  return true;
+}
+
+// A requirement is "active" only if it actually constrains something; an absent/empty object
+// leaves selection untouched (the byte-identical default path).
+export function requirementActive(req) {
+  return Boolean(req && typeof req === "object" && (req.port != null || req.proto != null || req.region != null));
+}
+
+function describeRequirement(req) {
+  const parts = [];
+  if (req.port != null) parts.push(`port=${req.port}`);
+  if (req.proto != null) parts.push(`proto=${req.proto}`);
+  if (req.region != null) parts.push(`region=${req.region}`);
+  return parts.join(",");
+}
+
+// Filter a gateway list to those meeting `req`. Returns the SAME array reference when the
+// requirement is inactive, so callers stay on the byte-identical weight-only path. Exported
+// for direct unit testing of the capability filter.
+export function filterByCapability(gateways, req) {
+  if (!requirementActive(req)) return gateways;
+  return gateways.filter((g) => gatewayMeetsRequirement(g, req));
+}
+
 // Returns an ordered list of candidate gateways to try this CONNECT: the weighted
 // pick first, then failovers. Each is { onion }.
-export async function selectCandidates() {
+//
+// `req` (optional, T-FEAT-10): a capability requirement { port?, proto?, region? }. OMITTED or
+// empty => today's behavior exactly. Present => the fleet is pre-filtered to capable gateways
+// and, if none qualify, this throws (fail closed) with a reason naming the requirement.
+export async function selectCandidates(req = null) {
   const { dir } = await ensureLoaded();
   let gateways = dir.gateways;
   if (VERIFY_STAKE) gateways = await filterReverified(gateways);
@@ -647,6 +708,16 @@ export async function selectCandidates() {
   // NEW weight-scaled COPIES, leaving the signed weight and the live reportHealth/reportResult targets
   // untouched.
   gateways = applyReceiptWeights(gateways);
+  // Capability-aware filter (T-FEAT-10). OPT-IN: only runs when `req` actually constrains
+  // something, so the default path is byte-identical (filterByCapability returns the same
+  // array reference for an inactive requirement). When active but no gateway qualifies, fail
+  // CLOSED with a clear reason rather than dial an incapable gateway.
+  if (requirementActive(req)) {
+    gateways = filterByCapability(gateways, req);
+    if (gateways.length === 0) {
+      throw new Error(`no gateway meets capability requirement: ${describeRequirement(req)}`);
+    }
+  }
   // Run selection over the (possibly filtered/adjusted) fleet. Reuse the SAME entry objects so
   // reportHealth's in-place mutation (keyed by onion on dir.gateways) still lands on them.
   const view = gateways === dir.gateways ? dir : { ...dir, gateways };

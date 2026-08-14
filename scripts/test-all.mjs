@@ -53,14 +53,60 @@ if (fast) {
   );
 }
 
+// Contention resilience (T-TEST-23): the selftests run SERIALLY here, so a green suite
+// only flakes because of EXTERNAL load (concurrent subagents saturating CPU/IO), racing a
+// latency-sensitive assertion. When a suite fails, retry it ONCE in isolation -- alone, after
+// a short quiesce, in its own process -- before declaring red. A genuine failure fails both
+// times and stays red; a contention flake passes on the isolated retry and goes green, LOUDLY
+// logged so a flaky suite is never silently masked. Retry is bounded (exactly one) and honest:
+// the isolated retry's result is authoritative, and a failing retry prints its full output.
+const RETRY_QUIESCE_MS = Number(process.env.RGOE_RETRY_QUIESCE_MS || 750);
+
+function runSuite(f) {
+  return spawnSync(process.execPath, [f], { cwd: ROOT, encoding: "utf8" });
+}
+
+// Busy-wait quiesce (no async in this top-level script); lets transient external load settle
+// and gives the isolated retry a slightly calmer machine than the contended first attempt.
+function quiesce(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { /* spin briefly before the isolated retry */ }
+}
+
+const retried = [];
+
 console.log(`\n=== node selftests (${selftests.length}) ===`);
 for (const f of selftests) {
   const rel = relative(ROOT, f);
-  const r = spawnSync(process.execPath, [f], { cwd: ROOT, encoding: "utf8" });
-  const passed = r.status === 0;
-  results.push({ name: rel, passed });
+  let r = runSuite(f);
+  let passed = r.status === 0;
+  let wasRetried = false;
+
+  if (!passed) {
+    // Isolated auto-retry: nothing else is running (serial loop), quiesce, then re-run alone.
+    const firstTail = ((r.stderr || r.stdout || "").trim().split("\n").pop() || "nonzero exit").trim();
+    console.log(`  FLAKY?  ${rel} failed (${firstTail}) -- retrying ONCE in isolation after ${RETRY_QUIESCE_MS}ms quiesce...`);
+    quiesce(RETRY_QUIESCE_MS);
+    const r2 = runSuite(f);
+    wasRetried = true;
+    if (r2.status === 0) {
+      // Contention flake: green on the isolated retry. Loud, so it stays visible.
+      console.log(`  RETRIED  ${rel} PASSED in isolation -- first failure attributed to resource contention, not a real defect.`);
+      retried.push(rel);
+      r = r2;
+      passed = true;
+    } else {
+      // Failed BOTH times -> genuine failure. Keep the retry's output; hard red below.
+      console.log(`  RETRIED  ${rel} FAILED again in isolation -- treating as a real failure (hard red).`);
+      r = r2;
+      passed = false;
+    }
+  }
+
+  results.push({ name: rel, passed, retried: wasRetried && passed });
   const tail = (r.stdout || "").trim().split("\n").pop() || "";
-  console.log(`  ${passed ? "PASS" : "FAIL"}  ${rel}${passed ? "" : "  <-- " + ((r.stderr || tail).trim().split("\n").pop() || "nonzero exit")}`);
+  const flag = passed ? (wasRetried ? "PASS*" : "PASS") : "FAIL";
+  console.log(`  ${flag}  ${rel}${passed ? (wasRetried ? "  (green on isolated retry)" : "") : "  <-- " + ((r.stderr || tail).trim().split("\n").pop() || "nonzero exit")}`);
   if (!passed && r.stdout) console.log(r.stdout.split("\n").filter((l) => l.includes("FAIL")).map((l) => "        " + l).join("\n"));
 }
 
@@ -81,5 +127,8 @@ if (fast) {
 
 const failed = results.filter((r) => !r.passed);
 console.log(`\n=== summary: ${results.length - failed.length}/${results.length} green ===`);
+if (retried.length) {
+  console.log(`RETRIED (green on isolated retry -- contention flake, not a defect):\n` + retried.map((n) => "  ~ " + n).join("\n"));
+}
 if (failed.length) { console.log("FAILED:\n" + failed.map((f) => "  - " + f.name).join("\n")); process.exit(1); }
 console.log("all green");

@@ -222,6 +222,9 @@ mod tests {
             gateways: onions.iter().map(|o| entry(o, "up")).collect(),
             signer: None,
             signature: None,
+            signers: None,
+            signatures: None,
+            threshold: None,
         }
     }
 

@@ -57,6 +57,14 @@ pub struct DirectoryDto {
     pub signer: Option<String>,
     #[serde(default)]
     pub signature: Option<String>,
+    // T-FEAT-9c: carry the M-of-N threshold fields through so the client consumes
+    // threshold-signed directories (verify_directory auto-delegates when present).
+    #[serde(default)]
+    pub signers: Option<Vec<String>>,
+    #[serde(default)]
+    pub signatures: Option<Vec<String>>,
+    #[serde(default)]
+    pub threshold: Option<i64>,
 }
 
 impl DirectoryDto {
@@ -78,6 +86,9 @@ impl DirectoryDto {
                 .collect(),
             signer: self.signer,
             signature: self.signature,
+            signers: self.signers,
+            signatures: self.signatures,
+            threshold: self.threshold,
         }
     }
 }

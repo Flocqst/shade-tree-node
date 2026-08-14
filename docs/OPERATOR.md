@@ -270,13 +270,49 @@ tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
 - **Fail-open.** A gateway that cannot reach the tally degrades to the per-gateway
   T-FEAT-12 defense and keeps serving — the tally is defense-in-depth, never an admission
   authority, so a partition or a broken peer cannot deny legitimate members.
-- **Off by default.** No shared transport is wired unless one is configured. **This build
-  ships no cross-host transport yet** (real signed gossip over the bootnode / a mesh is a
-  follow-up that implements the same `publish(nullifier, epoch)` / `subscribe(cb)` seam),
-  so today the gateway runs exactly the per-gateway behavior. When the tally is active the
-  gateway logs `fleet tally: ON` at startup. Note: with the tally enabled a nullifier is
-  single-use **fleet-wide**, so a client that fails over to another gateway must use a
-  fresh RLN slot (a follow-up on the client side); until then, keep it off in production.
+- **Off by default.** No shared transport is wired unless one is configured. With no
+  `RGOE_FLEET_TALLY_PEERS` set the gateway runs **exactly** the per-gateway behavior
+  (byte-identical to T-FEAT-12). When the tally is active the gateway logs `fleet tally: ON`
+  at startup. Note: with the tally enabled a nullifier is single-use **fleet-wide**, so a
+  client that fails over to another gateway must use a fresh RLN slot (a follow-up on the
+  client side); until then, keep it off in production.
+
+#### Real cross-host transport (T-FEAT-20b — HTTP push)
+
+The tally speaks to the fleet through an injectable `{ publish(nullifier, epoch),
+subscribe(cb) }` seam. The bundled real transport (`makeHttpTallyTransport` in
+`gateway/fleet-tally.mjs`) is a tiny **HTTP push**: each gateway exposes an inbound
+announcement endpoint and POSTs `{"nullifier":…,"epoch":…}` to each **configured peer**
+gateway. It is a direct **1-hop** push to a fixed peer set — not a forwarding flood — so a
+nullifier crosses the wire at most once per peer per admit (no gossip storm, no loops: the
+inbound handler only records locally, it never re-publishes).
+
+- **Enable it** with `RGOE_FLEET_TALLY_PEERS` (comma-separated peer gateways). A peer that is
+  an `.onion` is reached **over Tor** (reusing the bootnode fetch path — no exit node, the
+  peer never learns this gateway's IP); a bare `host:port` peer is reached with a plain HTTP
+  POST (localhost / private management network). Set `RGOE_FLEET_TALLY_LISTEN` (`host:port` or
+  `port`, default `127.0.0.1:0`) for this gateway's inbound endpoint — behind Tor, map the
+  gateway's onion to that local port. `RGOE_FLEET_TALLY_PATH` overrides the endpoint path
+  (default `/fleet-tally`). For a full mesh, list the other gateways as each gateway's peers
+  (federation, T-FEAT-1, already discovers them).
+- **Trust model — peers are semi-trusted.** Peers are fleet gateways the operator configured,
+  not the open internet, but the transport assumes any peer can be down, slow, or malicious
+  and bounds the damage:
+  - **Fail-open, both directions.** Outbound POSTs are fire-and-forget with a per-peer timeout
+    (`RGOE_FLEET_TALLY_TIMEOUT_MS`, default 4s); a refused / 500 / slow / partitioned peer is
+    swallowed and **never** blocks admission — `publish()` returns synchronously and the
+    gateway proceeds on its local defense. Inbound malformed / oversized bodies are dropped
+    (400/413), never crash the endpoint.
+  - **Only two fields ever read.** The inbound handler reads **only** `nullifier` and `epoch`;
+    any extra key a peer stuffs into the body is ignored, never stored, never acted on — the
+    same privacy invariant as above, now enforced at the wire boundary.
+  - **Bounded blast radius.** A malicious peer flooding fake nullifiers can at worst fill this
+    gateway's per-epoch bucket up to the flood cap (`maxPerEpoch`, memory stays bounded; past
+    the cap recording simply stops — lose dedup, never deny). It cannot cause a fleet-wide
+    outage. A live nullifier is `H(identitySecret, externalNullifier)`, per-request
+    pseudorandom and unpredictable, so a flooder cannot pre-image a **future** honest member's
+    nullifier to get it pre-rejected — its garbage collides with nothing real, and the only
+    harm stays on the flooder. Response reads are byte-capped against an unbounded reply.
 
 ---
 
@@ -347,6 +383,11 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
 | `RGOE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. |
 | `RGOE_TOR_HOST` / `RGOE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
+| `RGOE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
+| `RGOE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
+| `RGOE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
+| `RGOE_FLEET_TALLY_TIMEOUT_MS` | (none) | Per-peer push timeout (default 4000). A slow/down peer is swallowed (fail-open), never blocks admission. |
+| `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
 
 On the systemd deploy, set these as `Environment=` lines in the relevant unit
 (`/etc/systemd/system/rgoe-*.service`), then `systemctl daemon-reload && systemctl

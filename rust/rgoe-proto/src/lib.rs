@@ -147,6 +147,15 @@ pub struct GatewayEntry {
 
 /// A signed directory (spec 4.1). `signer`/`signature` are top-level and excluded
 /// from the canonical signed bytes (spec 1.2).
+///
+/// The `signers`/`signatures`/`threshold` fields are the OPTIONAL M-of-N threshold
+/// extension (T-FEAT-9 / T-FEAT-9b). Like `signer`/`signature`, they are top-level and
+/// EXCLUDED from [`canonical_directory_bytes`] — every threshold signer signs the SAME
+/// canonical bytes as the single-sig path. A directory carrying ANY of the three is in
+/// threshold mode (see [`verify_directory_threshold`]); a directory carrying none takes
+/// the unchanged single-`signer` path, so an existing directory is byte-for-byte the old
+/// behavior. Reference: `lib/directory.mjs` (`isThresholdDirectory`, `signDirectoryThreshold`,
+/// `verifyDirectoryThreshold`).
 #[derive(Debug, Clone)]
 pub struct Directory {
     /// directory format version (== 1).
@@ -159,6 +168,16 @@ pub struct Directory {
     pub signer: Option<String>,
     /// hex ed25519 signature over `canonical_directory_bytes(dir)`.
     pub signature: Option<String>,
+    /// M-of-N: hex ed25519 pubkeys of the N signers (NOT signed; positional with
+    /// `signatures`). `None` == single-sig directory.
+    pub signers: Option<Vec<String>>,
+    /// M-of-N: hex ed25519 signatures over `canonical_directory_bytes(dir)`, positional
+    /// with `signers`. `None` == single-sig directory.
+    pub signatures: Option<Vec<String>>,
+    /// M-of-N: how many DISTINCT pinned signers must produce a valid signature. Typed
+    /// `i64` so a non-positive threshold is representable and rejected `bad-threshold`
+    /// (mirrors the JS `Number.isInteger && >= 1` guard). `None` == single-sig directory.
+    pub threshold: Option<i64>,
 }
 
 /// An announce record (spec 3). Built by `bootnode/announce.mjs:51 buildAnnounce`,
@@ -348,16 +367,145 @@ pub fn ed25519_verify(msg: &[u8], sig: &[u8; 64], pubkey: &[u8; 32]) -> bool {
 // 4.3 verifyDirectory / 3.4 verifyAnnounce
 // --------------------------------------------------------------------------
 
+/// True iff a directory is in M-of-N threshold mode — it carries ANY of the optional
+/// `threshold`/`signers`/`signatures` fields (`lib/directory.mjs:217 isThresholdDirectory`).
+/// When none are present, [`verify_directory`] takes the unchanged single-`signer` path,
+/// so an existing directory can never be silently reinterpreted as threshold.
+fn is_threshold_directory(dir: &Directory) -> bool {
+    dir.threshold.is_some() || dir.signers.is_some() || dir.signatures.is_some()
+}
+
+/// Shared gateway onion<->pubkey binding check (spec 4, `lib/directory.mjs:224
+/// checkGatewayBindings`): each entry's `pubkey` MUST equal the ed25519 key encoded in its
+/// own v3 `.onion`. Returns the FIRST bad entry's reason. Used by BOTH the single-sig and
+/// threshold verify paths so they never drift; the reason strings are byte-identical to the
+/// loop the single-sig path used before it was factored out here.
+fn check_gateway_bindings(dir: &Directory) -> Result<()> {
+    for g in &dir.gateways {
+        let onion12: String = g.onion.chars().take(12).collect();
+        let derived = match onion_to_pubkey(&g.onion) {
+            Ok(pk) => pk,
+            Err(e) => return Err(Error::Reason(format!("bad-onion:{onion12}..:{e}"))),
+        };
+        if hex::encode(derived) != g.pubkey.to_lowercase() {
+            return Err(Error::Reason(format!("pubkey-onion-mismatch:{onion12}..")));
+        }
+    }
+    Ok(())
+}
+
+/// Normalize the pinned-signer allowlist to lowercase hex with any leading `0x` stripped,
+/// dropping empty entries (`lib/directory.mjs:190 normalizePinnedSigners`). A one-element
+/// slice models the single-string pin; the single-sig path stays byte-for-byte the old
+/// behavior. Lowercasing precedes the `0x` strip, matching `p.toLowerCase().replace(/^0x/, "")`.
+fn normalize_pinned_signers(pinned: &[&str]) -> Vec<String> {
+    pinned
+        .iter()
+        .filter(|p| !p.is_empty()) // drop empty BEFORE norm, as JS drops falsy members
+        .map(|p| {
+            let lower = p.to_lowercase();
+            lower.strip_prefix("0x").unwrap_or(&lower).to_string()
+        })
+        .collect()
+}
+
+/// Verify an M-of-N threshold directory (T-FEAT-9 / T-FEAT-9b).
+///
+/// Reference: `lib/directory.mjs:253 verifyDirectoryThreshold`.
+///
+/// Accepts iff at least `threshold` DISTINCT signers from the client's PINNED allowlist
+/// each produced a valid ed25519 signature over the SAME `canonical_directory_bytes(dir)`
+/// the single-sig path checks (threshold fields are excluded from the canonical bytes,
+/// exactly like `signer`/`signature`). On success returns the matched distinct signer
+/// pubkeys (normalized, in first-seen order — mirrors the JS `[...counted]`).
+///
+/// TOTAL — never panics on adversarial input. Checks run in the JS order, returning the
+/// FIRST failure's reason code verbatim:
+/// - non-integer / `< 1` threshold (here: absent or `<= 0`) -> `bad-threshold`
+/// - `signers`/`signatures` absent or unequal length -> `bad-signatures`
+/// - `threshold` greater than N provided -> `threshold-exceeds-signers`
+/// - a signer appearing twice is counted ONCE (one key cannot self-satisfy M-of-N)
+/// - an unpinned signer is ignored (never counts)
+/// - a signer/signature whose hex fails to decode simply does not verify (not fatal)
+/// - fewer than `threshold` distinct valid pinned sigs -> `threshold-not-met:<got>/<want>`
+/// - then the gateway onion<->pubkey bindings (`bad-onion:..` / `pubkey-onion-mismatch:..`)
+///
+/// (The JS `no-directory` guard and the per-entry non-string skip are unrepresentable in
+/// the typed Rust struct — `signers`/`signatures` are `Vec<String>` — and are elided,
+/// exactly as [`verify_directory`] elides `no-directory`.)
+pub fn verify_directory_threshold(dir: &Directory, pinned_signers: &[&str]) -> Result<Vec<String>> {
+    let pinned: HashSet<String> = normalize_pinned_signers(pinned_signers)
+        .into_iter()
+        .collect();
+
+    let threshold = match dir.threshold {
+        Some(t) if t >= 1 => t,
+        _ => return Err(Error::Reason("bad-threshold".into())),
+    };
+    let (signers, signatures) = match (&dir.signers, &dir.signatures) {
+        (Some(s), Some(sig)) if s.len() == sig.len() => (s, sig),
+        _ => return Err(Error::Reason("bad-signatures".into())),
+    };
+    if threshold > signers.len() as i64 {
+        return Err(Error::Reason("threshold-exceeds-signers".into()));
+    }
+
+    let bytes = canonical_directory_bytes(dir);
+    let mut counted: HashSet<String> = HashSet::new(); // DISTINCT pinned signers that verified
+    let mut order: Vec<String> = Vec::new(); // first-seen order, mirrors JS [...counted]
+    for i in 0..signers.len() {
+        let lower = signers[i].to_lowercase();
+        let norm = lower.strip_prefix("0x").unwrap_or(&lower).to_string();
+        if !pinned.contains(&norm) {
+            continue; // unpinned -> ignored
+        }
+        if counted.contains(&norm) {
+            continue; // already-counted distinct signer -> counted once
+        }
+        // Decode pubkey + signature hex; any malformed hex simply does not verify (the JS
+        // ed25519Verify swallows decode errors and returns false), so this signer is skipped.
+        let verified = (|| -> Option<bool> {
+            let pk: [u8; 32] = hex::decode(&norm).ok()?.try_into().ok()?;
+            let sig: [u8; 64] = hex::decode(&signatures[i]).ok()?.try_into().ok()?;
+            Some(ed25519_verify(&bytes, &sig, &pk))
+        })()
+        .unwrap_or(false);
+        if verified {
+            counted.insert(norm.clone());
+            order.push(norm);
+        }
+    }
+    if (order.len() as i64) < threshold {
+        return Err(Error::Reason(format!(
+            "threshold-not-met:{}/{}",
+            order.len(),
+            threshold
+        )));
+    }
+    check_gateway_bindings(dir)?;
+    Ok(order)
+}
+
 /// Verify a signed directory against a pinned signer pubkey (spec 4.2/4.3).
 ///
-/// Reference: `lib/directory.mjs:152 verifyDirectory`.
+/// Reference: `lib/directory.mjs:284 verifyDirectory`.
 ///
-/// Checks, in order, returning the FIRST failure's reason code:
+/// A threshold directory (any of `signers`/`signatures`/`threshold` present) verifies
+/// under the M-of-N rule ([`verify_directory_threshold`], with the single pinned signer
+/// as a one-element allowlist); everything else takes the unchanged single-signer path.
+///
+/// Single-sig checks, in order, returning the FIRST failure's reason code:
 /// `no-directory`, `unsigned`, `signer-not-pinned`, `bad-signature`,
 /// `bad-onion:<onion[:12]>..:<msg>`, `pubkey-onion-mismatch:<onion[:12]>..`.
 /// On success returns `Ok(())`.
 pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> {
-    // Order mirrors lib/directory.mjs:152 verifyDirectory. (`no-directory` — dir not
+    // Threshold directories delegate to the M-of-N rule (before the single-sig `unsigned`
+    // check, mirroring lib/directory.mjs:288). The single pinned signer becomes a
+    // one-element allowlist, so a 1-of-1 threshold directory is the natural generalization.
+    if is_threshold_directory(dir) {
+        return verify_directory_threshold(dir, &[pinned_signer_hex]).map(|_| ());
+    }
+    // Order mirrors lib/directory.mjs verifyDirectory. (`no-directory` — dir not
     // an object — is unrepresentable in the typed Rust struct, so it is elided.)
     let signature_hex = match &dir.signature {
         Some(s) => s,
@@ -387,17 +535,8 @@ pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> 
         return Err(Error::Reason("bad-signature".into()));
     }
 
-    for g in &dir.gateways {
-        let onion12: String = g.onion.chars().take(12).collect();
-        let derived = match onion_to_pubkey(&g.onion) {
-            Ok(pk) => pk,
-            Err(e) => return Err(Error::Reason(format!("bad-onion:{onion12}..:{e}"))),
-        };
-        if hex::encode(derived) != g.pubkey.to_lowercase() {
-            return Err(Error::Reason(format!("pubkey-onion-mismatch:{onion12}..")));
-        }
-    }
-    Ok(())
+    // Same onion<->pubkey binding check the threshold path uses (byte-identical reasons).
+    check_gateway_bindings(dir)
 }
 
 /// Verify an announce record (spec 3.4).
@@ -959,6 +1098,9 @@ mod tests {
             gateways: vec![gw("a", 100, "up"), gw("b", 200, "up"), gw("c", 700, "up")],
             signer: None,
             signature: None,
+            signers: None,
+            signatures: None,
+            threshold: None,
         };
         let mut rng = mulberry32(12345);
         let empty = HashSet::new();
@@ -1002,6 +1144,9 @@ mod tests {
             gateways: vec![gw("a", 1000, "up"), gw("b", 1_000_000_000, "up")],
             signer: None,
             signature: None,
+            signers: None,
+            signatures: None,
+            threshold: None,
         };
         let mut rng = mulberry32(999);
         let empty = HashSet::new();
@@ -1028,6 +1173,9 @@ mod tests {
             ],
             signer: None,
             signature: None,
+            signers: None,
+            signatures: None,
+            threshold: None,
         };
         let mut rng = mulberry32(7);
         let order = selection_order(&dir, &mut rng);

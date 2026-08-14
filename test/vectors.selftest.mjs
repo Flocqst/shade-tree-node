@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createPublicKey } from "node:crypto";
-import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, signDirectoryThreshold, verifyDirectory } from "../lib/directory.mjs";
+import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, signDirectoryThreshold, verifyDirectory, CAPS_DOMAIN, canonicalCaps, canonicalCapsBytes, signCaps } from "../lib/directory.mjs";
 import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "../bootnode/announce.mjs";
 import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
@@ -100,6 +100,26 @@ async function main() {
   );
   const builtReceipt = buildReceipt({ onion: rc.onion, epoch: rc.epoch, onionSeedHex: V.onionSeed, ok: rc.ok });
   ok(builtReceipt.sig === rc.receiptOnionSig, "receipt onion signature matches the pinned vector (ed25519 determinism)");
+
+  console.log("\ngateway capabilities (T-FEAT-10; additive — golden announce/directory bytes above are UNCHANGED):");
+  const cap = V.capabilities;
+  ok(CAPS_DOMAIN === cap.capsDomain, "CAPS_DOMAIN matches the pinned vector");
+  ok(JSON.stringify(canonicalCaps(cap.caps)) === JSON.stringify(cap.caps), "canonicalCaps is idempotent on the pinned (already-canonical) caps");
+  ok(canonicalCapsBytes(V.onion, cap.caps).toString("hex") === cap.canonicalCapsBytesHex, "canonical caps bytes match the pinned vector");
+  ok(signCaps(V.onion, cap.caps, V.onionSeed) === cap.capsSig, "caps onion signature matches the pinned vector (ed25519 determinism)");
+  // An announce that CARRIES caps re-derives byte-exactly, and — the load-bearing property —
+  // it DIFFERS from the no-caps golden announce (proving caps really are in the signed bytes
+  // when present, while the no-caps vector above stayed byte-identical).
+  const annCaps = { ...V.announce, caps: cap.caps };
+  ok(canonicalAnnounceBytes(annCaps).toString("hex") === cap.announceWithCaps.canonicalBytesHex, "announce-with-caps canonical bytes match the pinned vector");
+  ok(ed25519Sign(canonicalAnnounceBytes(annCaps), V.onionSeed) === cap.announceWithCaps.onionSig, "announce-with-caps onion signature matches the pinned vector");
+  ok(cap.announceWithCaps.canonicalBytesHex !== V.canonicalAnnounceBytesHex, "announce-with-caps bytes DIFFER from the no-caps golden vector (caps really are signed when present)");
+  // A directory entry carrying caps + capsSig re-derives byte-exactly and verifies.
+  const dirCaps = { version: 1, issued: 1000000, gateways: [{ onion: V.onion, pubkey: V.onionPub, weight: 100, health: "up", caps: cap.caps, capsSig: cap.capsSig }] };
+  ok(canonicalDirectoryBytes(dirCaps).toString("hex") === cap.directoryWithCaps.canonicalBytesHex, "directory-with-caps canonical bytes match the pinned vector");
+  const dirCapsSigned = signDirectory({ ...dirCaps, signer: V.signerPub }, V.signerSeed);
+  ok(dirCapsSigned.signature === cap.directoryWithCaps.signature, "directory-with-caps signature matches the pinned vector");
+  ok(verifyDirectory(dirCapsSigned, V.signerPub).ok, "the pinned directory-with-caps verifies (caps signature checked)");
 
   console.log("\nversion-negotiation reason labels (stable public literals; runtime suffixes not pinned):");
   const pr = V.protoReasons;

@@ -16,9 +16,9 @@ use rgoe_proto::{
     accept_envelope_version, calculate_signal_hash, canonical_announce_bytes,
     canonical_directory_bytes, canonical_receipt_bytes, ed25519_public_key, ed25519_sign,
     ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
-    select_proto_version, sign_receipt, verify_directory, verify_receipt, Announce, Directory,
-    EnvelopeVersion, GatewayEntry, Receipt, REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION,
-    REASON_UNSUPPORTED_VERSION,
+    select_proto_version, sign_receipt, verify_directory, verify_directory_threshold,
+    verify_receipt, Announce, Directory, EnvelopeVersion, GatewayEntry, Receipt,
+    REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION, REASON_UNSUPPORTED_VERSION,
 };
 use serde_json::Value;
 
@@ -60,6 +60,9 @@ fn vector_directory(v: &Value) -> Directory {
         }],
         signer: Some(s(v, "signerPub").to_string()),
         signature: Some(s(v, "directorySignature").to_string()),
+        signers: None,
+        signatures: None,
+        threshold: None,
     }
 }
 
@@ -470,5 +473,228 @@ fn proto_reason_labels_match_vector() {
     assert!(
         nomut.starts_with(&format!("{}:", s(p, "noMutualVersion"))),
         "got {nomut}"
+    );
+}
+
+// -- 9. threshold (M-of-N) directory (T-FEAT-9b, lib/directory.mjs) ---------
+//
+// Consumes the `thresholdDirectory` vector: a 2-of-3 directory whose 3 signatures
+// (fixed test seeds, RFC 8032 deterministic) are byte-pinned. Every check byte-matches
+// the JS `verifyDirectoryThreshold` behavior.
+
+/// String array field of an object as `Vec<String>`.
+fn strvec(v: &Value, k: &str) -> Vec<String> {
+    v.get(k)
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("vector field {k} missing or not an array"))
+        .iter()
+        .map(|x| x.as_str().expect("array element is a string").to_string())
+        .collect()
+}
+
+/// Build the threshold `Directory` pinned in the fixture's `thresholdDirectory` block.
+/// Its single gateway matches the single-sig `onion`/`onionPub` (weight 100, health "up"),
+/// so its `canonical_directory_bytes` are byte-IDENTICAL to `canonicalDirectoryBytesHex`.
+fn threshold_directory(v: &Value) -> Directory {
+    let td = &v["thresholdDirectory"];
+    Directory {
+        version: td["version"].as_u64().unwrap(),
+        issued: td["issued"].as_u64().unwrap(),
+        gateways: vec![GatewayEntry {
+            onion: td["onion"].as_str().unwrap().to_string(),
+            pubkey: td["onionPub"].as_str().unwrap().to_string(),
+            weight: 100,
+            health: "up".to_string(),
+            operator: None,
+            staked: None,
+        }],
+        signer: None,
+        signature: None,
+        signers: Some(strvec(td, "signers")),
+        signatures: Some(strvec(td, "signatures")),
+        threshold: Some(td["threshold"].as_i64().unwrap()),
+    }
+}
+
+/// The three pinned signer pubkeys from the vector.
+fn threshold_pins(v: &Value) -> Vec<String> {
+    strvec(&v["thresholdDirectory"], "signers")
+}
+
+#[test]
+fn threshold_canonical_bytes_are_identical_to_single_sig() {
+    // The whole additive-extension claim: the threshold fields are EXCLUDED from the
+    // canonical bytes, so a threshold directory over the same {version,issued,gateways}
+    // hashes byte-for-byte the same as the single-sig `canonicalDirectoryBytesHex`.
+    let v = vectors();
+    let bytes = canonical_directory_bytes(&threshold_directory(&v));
+    assert_eq!(hex::encode(&bytes), s(&v, "canonicalDirectoryBytesHex"));
+}
+
+#[test]
+fn threshold_directory_accepts_valid_2_of_3() {
+    let v = vectors();
+    let dir = threshold_directory(&v);
+    let pins = threshold_pins(&v);
+    let pin_refs: Vec<&str> = pins.iter().map(String::as_str).collect();
+    // All three signatures are valid; threshold is 2 => verifies, and every distinct
+    // pinned signer is counted (3 >= 2).
+    let matched = verify_directory_threshold(&dir, &pin_refs)
+        .expect("valid 2-of-3 must verify under the pinned set");
+    assert_eq!(matched.len(), 3, "all three pinned signers verify");
+    for p in &pins {
+        assert!(matched.contains(p), "matched set includes {p}");
+    }
+    // A pinned 2-subset (drop one signer) still meets the 2-of-3 threshold.
+    let two: Vec<&str> = pin_refs.iter().take(2).copied().collect();
+    let m2 = verify_directory_threshold(&dir, &two).expect("2 pinned signers meet threshold 2");
+    assert_eq!(m2.len(), 2);
+}
+
+#[test]
+fn threshold_directory_one_pinned_signer_not_met() {
+    let v = vectors();
+    let dir = threshold_directory(&v);
+    let pins = threshold_pins(&v);
+    // Only ONE signer pinned => at most one distinct valid sig => below threshold 2.
+    let err = verify_directory_threshold(&dir, &[pins[0].as_str()])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "threshold-not-met:1/2");
+
+    // The single-sig `verify_directory` entry point DELEGATES to the threshold rule
+    // (it must NOT treat a threshold directory as `unsigned` — the T-FEAT-9b bug).
+    // With one pinned signer it reaches the same threshold-not-met, not "unsigned".
+    let err2 = verify_directory(&dir, pins[0].as_str())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err2, "threshold-not-met:1/2");
+}
+
+#[test]
+fn threshold_directory_rejects_duplicate_unpinned_and_bad_shapes() {
+    let v = vectors();
+    let pins = threshold_pins(&v);
+    let sigs = strvec(&v["thresholdDirectory"], "signatures");
+    let pin_refs: Vec<&str> = pins.iter().map(String::as_str).collect();
+
+    // DUPLICATE: the same pinned signer listed 3x with its own valid sig is counted ONCE,
+    // so a 2-of-N cannot be self-satisfied by one key => threshold-not-met:1/2.
+    let mut dup = threshold_directory(&v);
+    dup.signers = Some(vec![pins[0].clone(), pins[0].clone(), pins[0].clone()]);
+    dup.signatures = Some(vec![sigs[0].clone(), sigs[0].clone(), sigs[0].clone()]);
+    assert_eq!(
+        verify_directory_threshold(&dup, &pin_refs)
+            .unwrap_err()
+            .to_string(),
+        "threshold-not-met:1/2"
+    );
+
+    // UNPINNED: pin only signer[2]; signers[0]/[1] are ignored though their sigs are valid
+    // => one distinct pinned+valid => threshold-not-met:1/2.
+    let dir = threshold_directory(&v);
+    assert_eq!(
+        verify_directory_threshold(&dir, &[pins[2].as_str()])
+            .unwrap_err()
+            .to_string(),
+        "threshold-not-met:1/2"
+    );
+
+    // TAMPERED: flip a bit in two of the three sigs => only one distinct valid => not met.
+    let mut tam = threshold_directory(&v);
+    let mut s0 = hex::decode(&sigs[0]).unwrap();
+    s0[0] ^= 0x01;
+    let mut s1 = hex::decode(&sigs[1]).unwrap();
+    s1[0] ^= 0x01;
+    tam.signatures = Some(vec![hex::encode(s0), hex::encode(s1), sigs[2].clone()]);
+    assert_eq!(
+        verify_directory_threshold(&tam, &pin_refs)
+            .unwrap_err()
+            .to_string(),
+        "threshold-not-met:1/2"
+    );
+
+    // bad-threshold: absent, zero, and negative all reject (mirrors JS `!isInteger || < 1`).
+    for bad in [None, Some(0), Some(-1)] {
+        let mut d = threshold_directory(&v);
+        d.threshold = bad;
+        assert_eq!(
+            verify_directory_threshold(&d, &pin_refs)
+                .unwrap_err()
+                .to_string(),
+            "bad-threshold"
+        );
+    }
+
+    // bad-signatures: missing signatures array, or unequal lengths.
+    let mut nosig = threshold_directory(&v);
+    nosig.signatures = None;
+    assert_eq!(
+        verify_directory_threshold(&nosig, &pin_refs)
+            .unwrap_err()
+            .to_string(),
+        "bad-signatures"
+    );
+    let mut mismatch = threshold_directory(&v);
+    mismatch.signatures = Some(vec![sigs[0].clone()]); // 3 signers, 1 signature
+    assert_eq!(
+        verify_directory_threshold(&mismatch, &pin_refs)
+            .unwrap_err()
+            .to_string(),
+        "bad-signatures"
+    );
+
+    // threshold-exceeds-signers: an unsatisfiable threshold > N.
+    let mut over = threshold_directory(&v);
+    over.threshold = Some(5); // only 3 signers provided
+    assert_eq!(
+        verify_directory_threshold(&over, &pin_refs)
+            .unwrap_err()
+            .to_string(),
+        "threshold-exceeds-signers"
+    );
+
+    // TOTAL on garbage signer/signature hex: non-hex entries simply do not verify
+    // (never panic) => below threshold, not a crash.
+    let mut garbage = threshold_directory(&v);
+    garbage.signers = Some(vec!["zz".into(), pins[1].clone(), pins[2].clone()]);
+    garbage.signatures = Some(vec!["nothex".into(), sigs[1].clone(), sigs[2].clone()]);
+    // signers[1] and signers[2] are still valid+pinned => 2 distinct => meets threshold 2.
+    let ok = verify_directory_threshold(&garbage, &pin_refs)
+        .expect("two valid pinned sigs still meet the threshold despite one garbage entry");
+    assert_eq!(ok.len(), 2);
+}
+
+#[test]
+fn threshold_directory_rejects_grafted_onion() {
+    // Once the threshold is met, the gateway onion<->pubkey binding is still enforced
+    // (shared with the single-sig path). Graft a different onion under the entry and it
+    // must reject `pubkey-onion-mismatch:` — the signatures still verify (bytes exclude
+    // gateways? no: gateways ARE signed) so we must NOT resign; instead assert the binding
+    // fails AFTER threshold. Here we keep the signed onion but swap only `pubkey`.
+    let v = vectors();
+    let pins = threshold_pins(&v);
+    let pin_refs: Vec<&str> = pins.iter().map(String::as_str).collect();
+    let mut dir = threshold_directory(&v);
+    // Swap the pubkey to the signer key's (a valid but WRONG key for this onion). This
+    // changes the canonical bytes, so re-sign all three over the tampered bytes so we get
+    // PAST threshold-not-met to the binding check (mirrors the single-sig grafted test).
+    dir.gateways[0].pubkey = s(&v, "signerPub").to_string();
+    let tampered_bytes = canonical_directory_bytes(&dir);
+    let seeds = strvec(&v["thresholdDirectory"], "signerSeeds");
+    let resigs: Vec<String> = seeds
+        .iter()
+        .map(|seed| {
+            let sk: [u8; 32] = hex::decode(seed).unwrap().try_into().unwrap();
+            hex::encode(ed25519_sign(&tampered_bytes, &sk))
+        })
+        .collect();
+    dir.signatures = Some(resigs);
+    let err = verify_directory_threshold(&dir, &pin_refs)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.starts_with("pubkey-onion-mismatch:"),
+        "expected pubkey-onion-mismatch, got {err}"
     );
 }

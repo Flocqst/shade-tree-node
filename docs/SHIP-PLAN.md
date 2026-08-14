@@ -356,14 +356,14 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
 - [x] **T-FEAT-20 (P2, added loop-14) Cross-fleet shared nonce tally (the T-FEAT-12 residual).** T-FEAT-12 defends ONE gateway against exact-envelope replay, but a non-colluding fleet has no shared spent-set, so a malicious gateway can fan a captured envelope to peers (each sees it once). Add a gossiped/shared per-epoch spent-nullifier tally across gateways (composes with T-FEAT-1 federation) so the rate cap + replay defense hold fleet-wide. Must pair with RLN's per-request nullifiers so the shared tally is not itself a linkability channel (ROADMAP #1). *Accept:* a replay to a SECOND gateway is rejected once the tally propagates. DONE (loop-29): the tally UNIT + loopback transport + gateway wiring (only nullifier+epoch cross, fail-open, default off). Remaining = the real transport (T-FEAT-20b).
-- [ ] **T-FEAT-20b (P2, added loop-29) Real cross-host fleet-tally gossip transport.** T-FEAT-20 shipped the
+- [x] **T-FEAT-20b (P2, added loop-29) Real cross-host fleet-tally gossip transport.** T-FEAT-20 shipped the
   injectable tally + a loopback transport (two in-process gateways). Build the real async cross-host transport
   that implements the same `publish(nullifier,epoch)` / `subscribe(cb)` seam over the network (e.g. a
   gossip/pubsub among gateways, or via a bootnode relay), preserving the privacy invariant (ONLY nullifier+epoch
   on the wire) and fail-open behavior (a partition/malicious peer never denies service). Composes with T-FEAT-1
   federation (peers are already discovered). *Accept:* two gateways on separate processes/hosts reject a
   cross-gateway replay once gossip propagates; a killed peer degrades to per-gateway defense with no outage.
-- [ ] **T-TEST-23 (P3, added loop-29) Make the test runner robust to parallel resource contention.**
+- [x] **T-TEST-23 (P3, added loop-29) Make the test runner robust to parallel resource contention.**
   `scripts/test-all.mjs` runs node selftests and, under load (observed twice in loop-29 with concurrent
   subagents), 4 unrelated suites (`lib/metrics`, `test/adversarial`, `test/concurrency`, `test/log-hygiene`)
   flaked — all pass individually and on a clean re-run. Make the runner resilient: either bound concurrency,
@@ -426,13 +426,26 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   test exercising directory-advertised range → client pre-selection → gateway handshake agreement. Composes
   with T-FEAT-10 (capability advertisement). *Accept:* a directory carrying per-gateway version ranges verifies;
   a client skips a gateway with no mutual version BEFORE dialing; absent ranges behave exactly as today.
-- [ ] **T-FEAT-10 (P2, added loop-4) Gateway capability advertisement + capability-aware selection.**
+- [x] **T-FEAT-10 (P2, added loop-4) Gateway capability advertisement + capability-aware selection.**
   Gateways advertise capabilities in their signed announce (allowed egress ports/policy, a region/AS
   hint, protocol versions); clients select gateways matching the request's needs, so the fleet goes
   from "any gateway" to "the right gateway" as egress policy grows (T-DEV-10). Capabilities must be
   coarse enough not to fingerprint a member's request. *Accept:* an announce carries signed
   capabilities; a client needing port X only selects gateways advertising X; capability set is
-  bucketed, not free-form.
+  bucketed, not free-form. DONE (loop-31, JS): additive omit-when-absent caps (byte-identical when absent),
+  onion-bound capsSig (a directory signer can't forge them), opt-in fail-closed selection. Producer wiring =
+  T-FEAT-10b; Rust parity = T-FEAT-10c.
+- [ ] **T-FEAT-10b (P3, added loop-31) Wire the gateway to advertise its REAL capabilities.** T-FEAT-10 added
+  build/verify/select support for signed caps, but the gateway heartbeat (bootnode/heartbeat.mjs) doesn't yet
+  POPULATE them — a real gateway should advertise its actual egress policy's allowed ports (from T-DEV-10
+  makeEgressPolicy), a self-declared coarse region (env, e.g. RGOE_GATEWAY_REGION from REGION_BUCKETS), and its
+  proto range. *Accept:* a gateway started with a region + non-default egress policy announces matching signed
+  caps; a client `selectCandidates({port})` routes to it; still byte-identical when no caps are configured.
+- [ ] **T-FEAT-10c (P3, added loop-31) Rust capability-aware selection parity.** The Rust client (rgoe-proto
+  Directory/GatewayEntry + rgoe-client selection) doesn't carry or filter on capabilities. Add the caps field +
+  capsSig verify to the Rust directory/announce structs and an opt-in capability filter mirroring JS
+  gatewayMeetsRequirement, conformance-checked against the new `capabilities` vector. *Accept:* Rust rejects a
+  forged cap (bad-caps-sig) and filters by port/proto like JS; absent-caps path unchanged.
 - [x] **T-FEAT-9 (P2, added loop-3) Threshold-signed directory.** Today the directory trusts one
   bootnode signer key; compromising it poisons every client's fleet view (they still can't be sent a
   forged onion — onion-control is re-checked — but entries could be omitted/reordered). Sign the
@@ -442,7 +455,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   rogue signer cannot produce an accepted directory. *Depends on:* T-FEAT-1. DONE (loop-30, JS): additive
   signers/signatures/threshold, distinct-pinned-signer counting, adversarial-total; golden vectors unchanged.
   Rust parity = T-FEAT-9b.
-- [ ] **T-FEAT-9b (P2, added loop-30) Rust threshold-directory verify parity.** The Rust port
+- [x] **T-FEAT-9b (P2, added loop-30) Rust threshold-directory verify parity.** The Rust port
   `rust/rgoe-proto/src/lib.rs verify_directory` + its `Directory` struct are single-signer only (they treat a
   threshold directory as `unsigned`). Add `signers`/`signatures`/`threshold` to the struct and a
   `verify_directory_threshold` sibling mirroring the JS distinct-pinned-signer counting + reason codes, and
@@ -796,3 +809,23 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   block, whose canonical bytes == the existing canonicalDirectoryBytesHex, proving same-bytes signing); rotation
   + vectors selftests green unchanged; adversarial garbage → ok:false no throw. Full suite 59/59 green; lint
   clean. Filed T-FEAT-9b (Rust verify_directory threshold parity — the Rust port is single-signer only).
+- 2026-08-14  loop-31  BREADTH fan-out of 4 (disjoint files) + a cross-crate integration fix: T-FEAT-9b (Rust
+  threshold-directory verify parity — verify_directory_threshold ported line-for-line from JS: same check order,
+  reason codes, distinct-pinned-signer counting, adversarial-total; 25 conformance [+5] + 9 unit green, single-sig
+  unchanged), T-TEST-23 (test-all.mjs isolated auto-retry — a failed suite is retried ONCE alone after a quiesce;
+  authoritative + loud + bounded; proven with throwaway flaky-passes-on-retry vs hardfail-stays-red), T-FEAT-20b
+  (real cross-host fleet-tally transport — HTTP push 1-hop to a fixed peer set [no gossip storm], .onion peers over
+  Tor, only (nullifier,epoch) on the wire [raw-capture asserted], fail-open, bounded, gateway.mjs untouched
+  drop-in), T-FEAT-10 (gateway capability advertisement — coarse self-declared {ports,region,proto} appended to
+  canonical bytes ONLY when present [absent = byte-identical, proven 3 ways], signed under the announce sig AND a
+  standalone onion-bound capsSig so a directory signer can't forge them [tested → bad-caps-sig], opt-in
+  capability-aware selectCandidates(req) that fails closed; 50 assertions). CROSS-CRATE FIX (mine): T-FEAT-9b's
+  new Directory struct fields broke rgoe-client's two struct literals; I did the proper T-FEAT-9c wiring —
+  DirectoryDto now parses signers/signatures/threshold and into_proto passes them through, so the RUST CLIENT
+  consumes M-of-N directories (verify_directory auto-delegates); workspace builds, rgoe-client 21 tests green.
+  INTEGRATION AUDIT (mine): git-diff'd testdata/vectors.json = 15 additions / 0 deletions (existing golden
+  canonical bytes + signatures byte-UNCHANGED); capability + fleet-tally-transport selftests green; the caps
+  forgery + tally privacy invariants verified. Full suite 61/61 green; Rust rgoe-proto 25+9 / rgoe-client 21 /
+  rgoe-rln 6+1; clippy/fmt/lint clean. Filed T-FEAT-10b (wire the gateway heartbeat to populate its real caps from
+  the egress policy + a region env, so gateways actually advertise — build/verify support it, the producer side
+  is a follow-up).

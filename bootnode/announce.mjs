@@ -29,14 +29,20 @@
 // So the fleet is not enumerable on chain and one stake can rotate across many onions.
 
 import { randomBytes } from "node:crypto";
-import { onionToPubkey, ed25519Sign, verifyOnionControl } from "../lib/directory.mjs";
+import { onionToPubkey, ed25519Sign, verifyOnionControl, canonicalCaps, hasCaps, signCaps, verifyCapsSig } from "../lib/directory.mjs";
 
 export const ANNOUNCE_VERSION = 1;
 export const DEFAULT_ANNOUNCE_SKEW = 120; // seconds a {ts} may lead/lag the verifier's clock
 
 // The bytes the ONION key signs: fixed field order, independent of JSON whitespace.
-export function canonicalAnnounceBytes({ v, onion, weight, ts, nonce }) {
+// T-FEAT-10: capabilities are an OPTIONAL signed field. They are included ONLY when present
+// (canonicalCaps + hasCaps), APPENDED after {v,onion,weight,ts,nonce}, so an announce WITHOUT
+// caps serializes byte-IDENTICALLY to before — the golden canonicalAnnounceBytes vector is
+// unchanged. When present, caps are covered by the main onion signature (bound to ts/nonce),
+// so they cannot be forged or altered without the onion key.
+export function canonicalAnnounceBytes({ v, onion, weight, ts, nonce, caps }) {
   const payload = { v, onion, weight, ts, nonce };
+  if (hasCaps(caps)) payload.caps = canonicalCaps(caps);
   return Buffer.from(JSON.stringify(payload), "utf8");
 }
 
@@ -48,7 +54,7 @@ export function operatorAuthMessage(onion, operator) {
 
 // Build a signed announce. `onionSeedHex` is the 32-byte ed25519 seed behind the onion
 // (bootnode/keygen.mjs writes it). `operator`/`operatorSig` are optional (stake mode).
-export function buildAnnounce({ onion, weight = 100, onionSeedHex, operator = null, operatorSig = null, ts, nonce }) {
+export function buildAnnounce({ onion, weight = 100, onionSeedHex, operator = null, operatorSig = null, ts, nonce, caps = null }) {
   const rec = {
     v: ANNOUNCE_VERSION,
     onion,
@@ -56,6 +62,14 @@ export function buildAnnounce({ onion, weight = 100, onionSeedHex, operator = nu
     ts: ts ?? Math.floor(Date.now() / 1000),
     nonce: nonce ?? cryptoNonce(),
   };
+  // T-FEAT-10: attach normalized capabilities + a standalone durable capsSig BEFORE signing,
+  // so the main onionSig covers the caps (canonicalAnnounceBytes includes them when present)
+  // and the capsSig can be copied onto the directory entry for zero-trust re-verification.
+  // Omitted entirely when caps are absent/empty -> byte-identical to a legacy announce.
+  if (hasCaps(caps)) {
+    rec.caps = canonicalCaps(caps);
+    rec.capsSig = signCaps(onion, rec.caps, onionSeedHex);
+  }
   rec.onionSig = ed25519Sign(canonicalAnnounceBytes(rec), onionSeedHex);
   if (operator && operatorSig) {
     rec.operator = String(operator).toLowerCase();
@@ -104,6 +118,21 @@ export async function verifyAnnounce(rec, { now = Math.floor(Date.now() / 1000),
     return { ok: false, reason: "bad-onion-sig" };
   }
 
+  // T-FEAT-10: carry capabilities through, verified. If caps are present they are already
+  // covered by the onionSig above (they are in canonicalAnnounceBytes), so getting here proves
+  // authenticity; we normalize to the canonical signed view so any unsigned junk key a hostile
+  // relay appended is dropped (ignored safely, never fatal). A standalone capsSig, when present,
+  // must ALSO verify against the onion key (it is what a directory entry re-checks). Malformed
+  // caps normalize to empty -> reported as null (no caps), never an exception.
+  let caps = null;
+  if (rec.caps !== undefined && rec.caps !== null) {
+    if (rec.capsSig !== undefined && !verifyCapsSig(rec.onion, rec.caps, rec.capsSig)) {
+      return { ok: false, reason: "bad-caps-sig" };
+    }
+    const c = canonicalCaps(rec.caps);
+    caps = hasCaps(c) ? c : null;
+  }
+
   // proof 2: operator stake (optional unless requireStake).
   let operator = null, staked = false;
   if (rec.operator && rec.operatorSig) {
@@ -122,7 +151,7 @@ export async function verifyAnnounce(rec, { now = Math.floor(Date.now() / 1000),
   if (requireStake && !staked) return { ok: false, reason: "not-staked" };
 
   if (seenNonce) seenNonce.add(`${rec.onion}:${rec.nonce}`);
-  return { ok: true, onion: rec.onion, pubkey, operator, staked };
+  return { ok: true, onion: rec.onion, pubkey, operator, staked, caps };
 }
 
 // Recover the operator address from a personal_sign over operatorAuthMessage and confirm

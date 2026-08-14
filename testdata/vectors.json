@@ -65,6 +65,21 @@
       "e42d8dd1303238901e13239a4c484c0eb5d3e38e3d132cb6ed17a3951decf8e58cbf8ccf380549214c63f0d697d00b81404a44ee9d6a5f91eb34b90b14241e06"
     ]
   },
+  "capabilities": {
+    "_note": "T-FEAT-10 gateway capability advertisement. ADDITIVE: caps + capsSig are OPTIONAL, OMITTED from canonical bytes when absent, so the canonicalAnnounceBytes/canonicalDirectoryBytes GOLDEN vectors above are byte-UNCHANGED (an announce/directory without caps is byte-identical to before). Reuses the SAME onion key as `onion`/`onionSeed`/`onionPub`. canonicalCaps normalizes to fixed order {ports(deduped,sorted),region(coarse bucket),proto{min,max}}. capsSig = ed25519Sign(canonicalCapsBytes = utf8(capsDomain) || utf8(JSON {onion,caps}), onionSeed) — durable (no ts), onion-bound, RFC 8032 deterministic so byte-pinned. announceWithCaps.canonicalBytesHex/onionSig pin an announce that CARRIES caps (caps appended after nonce, covered by the main onion sig). directoryWithCaps pins the directory canonical bytes + bootnode signature for an entry carrying caps+capsSig. The Rust client must reproduce capsDomain, canonicalCapsBytesHex, capsSig, and both canonical-bytes hexes.",
+    "capsDomain": "RGOE gateway capabilities v1\n",
+    "caps": { "ports": [80, 443], "region": "eu", "proto": { "min": 3, "max": 3 } },
+    "canonicalCapsBytesHex": "52474f452067617465776179206361706162696c69746965732076310a7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2263617073223a7b22706f727473223a5b38302c3434335d2c22726567696f6e223a226575222c2270726f746f223a7b226d696e223a332c226d6178223a337d7d7d",
+    "capsSig": "9a5363c4d90612177c3223ca136b7f155f272e1d6117dfc7912c5892aa73da924f1b9490bb610a3f855b482ae7dcdb88cd69c8dba41b9db6b827440b1acfd503",
+    "announceWithCaps": {
+      "canonicalBytesHex": "7b2276223a312c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c22776569676874223a3130302c227473223a313030303030302c226e6f6e6365223a226162636465663031323334353637383961626364656630313233343536373839222c2263617073223a7b22706f727473223a5b38302c3434335d2c22726567696f6e223a226575222c2270726f746f223a7b226d696e223a332c226d6178223a337d7d7d",
+      "onionSig": "1a195bc36c610df650c25609d481170f4897993749a34ddd3bd6ccf8d2ab01699563192cfa8177e77dab521003adfeb41f38042831a8c0f68f23c300f0b63c00"
+    },
+    "directoryWithCaps": {
+      "canonicalBytesHex": "7b2276657273696f6e223a312c22697373756564223a313030303030302c226761746577617973223a5b7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c227075626b6579223a2261303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630222c22776569676874223a3130302c226865616c7468223a227570222c2263617073223a7b22706f727473223a5b38302c3434335d2c22726567696f6e223a226575222c2270726f746f223a7b226d696e223a332c226d6178223a337d7d2c2263617073536967223a223961353336336334643930363132313737633332323363613133366237663135356632373265316436313137646663373931326335383932616137336461393234663162393439306262363130613366383535623438326165376463646238386364363963386462613431623964623662383237343430623161636664353033227d5d7d",
+      "signature": "2139e310980b5b1fd2a892535052b03c5342a7527dcda13438882a5bfdd2a2976a7919004f3a24550b5bb8d3365c2e035e6d3e78b5e058722ec1be36d0a2d804"
+    }
+  },
   "protoReasons": {
     "_note": "Stable public reason LABELS for wire version-negotiation rejects. Only the fixed literal prefixes are pinned — the full runtime reason strings additionally carry the offending/observed version numbers and ranges (e.g. `unsupported-version:4`, `no-mutual-version:client=1-2,gateway=5-6`), which are context-dependent and NOT pinned. badVersion/unsupportedVersion are the `label` field returned by acceptEnvelopeVersion (gateway/gateway.mjs); noMutualVersion is the reason prefix from selectProtoVersion (client/rgoe-client.mjs). The Rust client MUST emit these same literal labels/prefixes.",
     "badVersion": "bad-version",
