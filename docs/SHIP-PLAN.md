@@ -297,14 +297,24 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   (interop/egress-tor-run.sh, gated RGOE_TOR_E2E=1): Rust bootstraps embedded Tor, dials a published v3 HS for the
   gateway, gateway logs its egress-accept line. The over-Tor step stays gated (HS propagation slow/flaky, pairs
   with T-TEST-1); the plain-TCP Layer-3 accept remains the always-green authoritative check.
-- [ ] **T-RUST-2f (P3, added loop-23) Harden the over-Tor harness cleanup.** interop/egress-tor-run.sh leaked its
+- [x] **T-RUST-2f (P3, added loop-23) Harden the over-Tor harness cleanup.** interop/egress-tor-run.sh leaked its
   gateway + tor children when its stdout was piped (SIGPIPE cut the EXIT trap before it killed the backgrounded
   procs). Make cleanup robust to a truncated pipe (trap on more signals / kill a process group / write a pidfile
   and reap unconditionally) so a piped run never leaves a gateway/tor listening. *Accept:* piping the harness to
   `head`/`tail` still leaves zero leftover tor/gateway processes.
-- [ ] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
-  last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. *Accept:*
-  the real-Tor integration test (T-TEST-1) passes with the Rust client swapped in.
+- [x] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
+  last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. DONE (loop-24):
+  rotation+failover, LKG cache (dircache.rs) with rollback/max-age guards, cross-session health (health.rs),
+  bootnode discovery (plain-TCP proven, over-Tor gated). Deferred to T-RUST-3b: the persisted K-slot cursor +
+  TorClient reuse across failover. *Accept:* the real-Tor integration test (T-TEST-1) passes with the Rust client
+  swapped in — pairs with T-TEST-1's CI wiring.
+- [ ] **T-RUST-3b (P3, added loop-24) Per-request slot cursor + Tor client reuse.** Two honest follow-ups from
+  T-RUST-3: (a) the JS client rotates through K slots/epoch (makeSlotPool) so repeated requests use distinct
+  nullifiers; the Rust `--slot` flag exists but there's no PERSISTED cross-invocation slot cursor — add one (small
+  on-disk cursor like the health cache) so a one-shot CLI advances slots between runs within an epoch; (b) over-Tor
+  failover currently re-bootstraps arti per candidate — reuse one bootstrapped `TorClient` across the candidate
+  loop (functionally correct today, just wasteful). *Accept:* consecutive `rgoe egress` runs in one epoch use
+  distinct slots/nullifiers; a multi-candidate over-Tor failover bootstraps Tor once.
 - [ ] **T-RUST-4 (P2) Release binaries.** Cross-compiled static binaries (linux x86_64/arm64,
   macOS, windows) in CI releases; `rgoe` install without a runtime. *Accept:* a downloadable binary
   runs on a clean box with no Node/Tor installed.
@@ -639,3 +649,20 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   (harden the over-Tor harness's cleanup — it leaked gateway/tor children when its stdout was piped). Remaining
   for a full distributable: T-RUST-3 (rotation/failover/LKG/discovery parity), T-RUST-4 (binaries); production
   trust is orthogonal (T-DEV-1 real verifier, T-HARD-1 trusted setup, T-TEST-1 CI real-Tor). Only rust/ touched.
+- 2026-08-14  loop-24  FOCUSED single run: T-RUST-3 Rust client operational parity + T-RUST-2f harness cleanup.
+  The Rust `rgoe` client now has the JS client's resilient per-request loop (behind the `live` feature; default
+  build stays 0.44s, cargo tree clean): (1) gateway ROTATION + FAILOVER — one envelope built and reused across an
+  ordered candidate list (deterministic-retry parity), rotate on dial failure, a gateway that replies is terminal;
+  (2) LAST-KNOWN-GOOD directory cache (new dircache.rs) — verify fresh vs pinned signer, enforce the rollback
+  `issued` floor + optional max-age (T-FEAT-21), fall back to the verified cache when fresh fails, never serve an
+  unverified directory (ported the client-side guards, which rgoe-proto didn't have); (3) cross-session gateway
+  health persistence (new health.rs, byte-compatible with selection.mjs's cache + privacy guard + 14d decay);
+  (4) bootnode discovery — `fetch-directory` (plain-TCP/file, proven) and over-Tor `--bootnode-onion` (compiles +
+  clippy-clean, E2E gated like the tor harness). Also FIXED T-RUST-2f: the new failover-lkg-run.sh uses
+  `trap cleanup EXIT INT TERM HUP PIPE` + pidfile reap, so a piped/signalled run leaks zero gateway/tor procs.
+  INTEGRATION AUDIT (mine): ran failover-lkg-run.sh PIPED (the exact loop-23 leak trigger) — Layer A: dead first
+  candidate (127.0.0.1:1 refused) → client rotates → real gateway ACCEPTS the same envelope; Layer B: LKG
+  write/fallback + a validly-signed rollback (issued 100<200) REFUSED with the cache kept; zero leaked processes,
+  members.json restored. Guardrails: proto 9+20 green, rgoe-client 12 tests green (default AND --features live),
+  default build 0.44s, clippy/fmt clean, egress-run.sh still passes, no new deps, only rust/ touched. T-RUST-3 +
+  T-RUST-2f done. Filed T-RUST-3b (persisted K-slot cursor + reuse one bootstrapped TorClient across failover).

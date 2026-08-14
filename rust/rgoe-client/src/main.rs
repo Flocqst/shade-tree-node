@@ -14,11 +14,13 @@
 use std::collections::HashSet;
 use std::process::ExitCode;
 
-use rgoe_proto::{
-    pick_gateway, selection_order, verify_directory, verify_receipt, Directory, GatewayEntry,
-    Receipt,
-};
+use rgoe_proto::{pick_gateway, selection_order, verify_directory, verify_receipt, Receipt};
 use serde::Deserialize;
+
+mod dircache;
+mod health;
+
+use dircache::DirectoryDto;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,57 +28,11 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 // Untrusted-JSON DTOs (serde) -> rgoe-proto structs (trust-critical checks)
 // --------------------------------------------------------------------------
 //
-// These mirror the on-the-wire JSON shape (lib/directory.mjs signed directory,
-// lib/receipt.mjs receipt). They are UNTRUSTED input: we deserialize them, map them
-// into the rgoe-proto types, and let rgoe-proto do every security-critical decision
-// (onion<->pubkey binding, pinned-signer signature, receipt onion binding + sig).
-
-#[derive(Deserialize)]
-struct DirEntryDto {
-    onion: String,
-    pubkey: String,
-    weight: u64,
-    health: String,
-    #[serde(default)]
-    operator: Option<String>,
-    #[serde(default)]
-    staked: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct DirectoryDto {
-    version: u64,
-    issued: u64,
-    #[serde(default)]
-    gateways: Vec<DirEntryDto>,
-    #[serde(default)]
-    signer: Option<String>,
-    #[serde(default)]
-    signature: Option<String>,
-}
-
-impl DirectoryDto {
-    fn into_proto(self) -> Directory {
-        Directory {
-            version: self.version,
-            issued: self.issued,
-            gateways: self
-                .gateways
-                .into_iter()
-                .map(|g| GatewayEntry {
-                    onion: g.onion,
-                    pubkey: g.pubkey,
-                    weight: g.weight,
-                    health: g.health,
-                    operator: g.operator,
-                    staked: g.staked,
-                })
-                .collect(),
-            signer: self.signer,
-            signature: self.signature,
-        }
-    }
-}
+// The directory DTO now lives in `dircache` (it owns directory loading + the LKG
+// cache). The receipt DTO stays here. Both are UNTRUSTED input: we deserialize
+// them, map them into the rgoe-proto types, and let rgoe-proto do every
+// security-critical decision (onion<->pubkey binding, pinned-signer signature,
+// receipt onion binding + sig).
 
 #[derive(Deserialize)]
 struct ReceiptDto {
@@ -154,6 +110,82 @@ fn default_seed() -> u32 {
         .unwrap_or(0x1234_5678)
 }
 
+/// Current wall clock in milliseconds (for the LKG max-age guard + health-cache
+/// decay/last-seen, both of which are ms like the JS `Date.now()`).
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Parse an optional `--max-age-ms <n>` into the LKG freshness guard. A default
+/// 5-minute skew grace (matching selection.mjs `RGOE_DIRECTORY_MAX_AGE_SKEW_MS`)
+/// is added on top of the bound so a lagging client clock doesn't spuriously reject
+/// a just-issued directory.
+fn parse_max_age(args: &[String]) -> dircache::MaxAge {
+    dircache::MaxAge {
+        max_age_ms: take_flag(args, "--max-age-ms").and_then(|s| s.parse::<u64>().ok()),
+        skew_ms: take_flag(args, "--max-age-skew-ms")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(5 * 60 * 1000),
+    }
+}
+
+/// `fetch-directory`: obtain a FRESH directory (from `--file`, or `--bootnode-tcp`
+/// over plain HTTP), verify it against the pinned signer, apply the rollback +
+/// optional max-age guards against the last-known-good cache, write the cache, and
+/// print a summary. This is the default-build, no-Tor path that proves the
+/// discovery -> verify -> LKG-cache chain; the `live` egress `--bootnode-onion`
+/// reuses the same dircache machinery over embedded Tor.
+fn cmd_fetch_directory(args: &[String]) -> ExitCode {
+    let Some(signer) = take_flag(args, "--signer") else {
+        eprintln!("fetch-directory: missing --signer <hex>");
+        return ExitCode::from(2);
+    };
+    let cache = take_flag(args, "--cache").map(std::path::PathBuf::from);
+    let max_age = parse_max_age(args);
+
+    // Fresh source: exactly one of --file (offline) or --bootnode-tcp (plain HTTP).
+    let fresh: Result<String, String> = if let Some(f) = take_flag(args, "--file") {
+        read_file(&f)
+    } else if let Some(hp) = take_flag(args, "--bootnode-tcp") {
+        let path = take_flag(args, "--path").unwrap_or_else(|| "/directory".to_string());
+        let host = hp.split(':').next().unwrap_or("127.0.0.1").to_string();
+        dircache::fetch_http_plain(&hp, &host, &path)
+    } else {
+        eprintln!(
+            "fetch-directory: need a source: --file <f> (offline) or --bootnode-tcp <host:port> \
+             (plain HTTP). Live embedded-Tor discovery is `egress --bootnode-onion` (--features live)."
+        );
+        return ExitCode::from(2);
+    };
+
+    match dircache::resolve_directory(fresh, cache.as_deref(), &signer, max_age, now_ms()) {
+        Ok(out) => {
+            println!("ok");
+            println!(
+                "source: {}",
+                match out.source {
+                    dircache::Source::Fresh => "fresh",
+                    dircache::Source::Cache => "cache",
+                }
+            );
+            if let Some(fe) = out.fresh_error {
+                println!("fresh-error: {fe}");
+            }
+            println!("issued: {}", out.dir.issued);
+            println!("gateways: {}", out.dir.gateways.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            println!("not-ok: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 // --------------------------------------------------------------------------
 // CLI
 // --------------------------------------------------------------------------
@@ -169,9 +201,20 @@ SUBCOMMANDS:
         Parse a signed directory JSON file and verify it against the pinned
         ed25519 signer (onion<->pubkey binding + signature). Prints ok / reason.
 
-    select <dir-file> --signer <hex> [--seed <n>]
+    fetch-directory --signer <hex> [--cache <f>] [--max-age-ms <n>]
+                    (--file <f> | --bootnode-tcp <host:port> [--path </directory>])
+        Obtain a FRESH directory (offline --file, or --bootnode-tcp plain HTTP),
+        verify it, apply the rollback + optional max-age guards against the
+        last-known-good --cache, write the cache, and print source/issued/gateways.
+        On a failed or refused fresh fetch, falls back to the verified LKG cache
+        (never serves an unverified directory). Embedded-Tor bootnode discovery is
+        `egress --bootnode-onion` in a --features live build.
+
+    select <dir-file> --signer <hex> [--seed <n>] [--health-cache <f>]
         Verify the directory, then print the weighted-random chosen gateway onion
         and the full failover order. --seed makes the choice reproducible.
+        --health-cache seeds each gateway's health from persisted egress failover
+        feedback, so a gateway that failed last session starts deprioritized.
 
     verify-receipt <receipt-file> --onion <onion>
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
@@ -184,14 +227,27 @@ SUBCOMMANDS:
         in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
         circuits) binding <target>, opens a connection to the gateway, sends the
         envelope exactly as client/rgoe-client.mjs does, and reports accept/reject.
+        FAILOVER: the transport yields an ORDERED candidate list; the ONE envelope is
+        built once and REUSED across candidates (deterministic-retry parity). On a
+        dial failure the client rotates to the next candidate until one accepts; a
+        gate REFUSAL is terminal (matches client/rgoe-client.mjs connect()).
         Choose exactly one TRANSPORT:
-          --directory <f> --signer <hex>  Verify the signed directory, pick a gateway,
-                                          and dial its .onion over EMBEDDED TOR (arti;
+          --directory <f> --signer <hex>  Verify the signed directory (LKG-cached via
+                                          --cache), pick the weighted failover ORDER,
+                                          and dial each .onion over EMBEDDED TOR (arti;
                                           no system tor daemon, no SOCKS). [default path]
-          --onion <addr[:port]>           Dial this specific .onion over embedded Tor
-                                          (default port 80, the gateway HS virtual port).
-          --plain-tcp <host:port>         Escape hatch: dial plain TCP, no Tor (the
-                                          loop-22 socket path; used by the CI harness).
+                                          Optional: --cache <f> (LKG), --health-cache <f>
+                                          (seed + record cross-session liveness),
+                                          --max-age-ms <n>.
+          --bootnode-onion <onion> --signer <hex>
+                                          Fetch /directory from the bootnode onion over
+                                          EMBEDDED TOR, verify + LKG-cache it, then select
+                                          + failover exactly as --directory. Same optional
+                                          --cache/--health-cache/--max-age-ms.
+          --onion <a[:p]>[,<a[:p]>...]    Dial these specific .onion(s) over embedded Tor,
+                                          in order (default port 80). Comma = failover list.
+          --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
+                                          (comma = failover list; used by the CI harness).
         Envelope options:
           --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf)
           --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
@@ -285,11 +341,22 @@ fn cmd_select(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let dir = dto.into_proto();
+    let mut dir = dto.into_proto();
     // Zero-trust: never select from an unverified directory.
     if let Err(e) = verify_directory(&dir, &signer) {
         println!("not-ok: {e}");
         return ExitCode::from(1);
+    }
+
+    // Cross-session gateway deprioritization (T-RUST-3, reportResult parity): when a
+    // --health-cache is given, seed each gateway's health from the persisted liveness
+    // written by past `egress` failover feedback, so a gateway that failed enough last
+    // session starts `health:"down"` and is deprioritized (decay-pruned if long-idle).
+    // Absent the flag, selection is byte-identical to before.
+    if let Some(hc) = take_flag(args, "--health-cache") {
+        let path = std::path::PathBuf::from(hc);
+        let mut cache = health::load(Some(&path));
+        health::seed(&mut dir, &mut cache, now_ms());
     }
 
     let mut rng = mulberry32(seed);
@@ -398,20 +465,59 @@ mod live {
     use std::collections::HashSet;
     use std::io::{Read, Write};
     use std::net::TcpStream;
+    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use serde::Deserialize;
 
-    use super::{default_seed, mulberry32, read_file, take_flag, DirectoryDto};
+    use super::{
+        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, take_flag,
+    };
 
-    /// The resolved transport for one egress: exactly one of these is selected from the
-    /// CLI flags. Plain-TCP is the loop-22 escape hatch; Onion is the default T-RUST-2e path.
+    /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
+    /// Onion is the default T-RUST-2e path (dialed over embedded Tor).
     enum Transport {
         /// `--plain-tcp <host:port>` — dial plain TCP, no Tor (the CI-harness / socket path).
         PlainTcp(String),
-        /// `--onion <addr>` or a directory selection — dial `<onion>.onion:<port>` over Tor.
+        /// `--onion <addr>`, a directory selection, or bootnode discovery — dial
+        /// `<onion>.onion:<port>` over embedded Tor.
         Onion { onion: String, port: u16 },
+    }
+
+    impl Transport {
+        /// Human-readable dial label (printed on success + used as the health-cache key
+        /// for onion transports).
+        fn label(&self) -> String {
+            match self {
+                Transport::PlainTcp(hp) => hp.clone(),
+                Transport::Onion { onion, port } => format!("{onion}.onion:{port}"),
+            }
+        }
+        /// The onion (with suffix) this transport reports liveness for, or `None` for a
+        /// plain-TCP dial (which is never a signed-directory gateway).
+        fn health_onion(&self) -> Option<String> {
+            match self {
+                Transport::Onion { onion, .. } => Some(format!("{onion}.onion")),
+                Transport::PlainTcp(_) => None,
+            }
+        }
+    }
+
+    /// Cross-session liveness feedback context (only set for the directory / bootnode
+    /// paths, where the candidate onions come from a SIGNED directory). Mirrors
+    /// `selection.mjs` reportResult: after each dial we fold the outcome into the local
+    /// health cache so a failing gateway starts deprioritized next session.
+    struct HealthCtx {
+        cache_path: PathBuf,
+        known: HashSet<String>,
+        cache: health::HealthCache,
+    }
+
+    /// The full egress plan: the ordered candidates + optional health feedback.
+    struct EgressPlan {
+        transports: Vec<Transport>,
+        health: Option<HealthCtx>,
     }
 
     #[derive(Deserialize)]
@@ -445,6 +551,15 @@ mod live {
         now / epoch_seconds()
     }
 
+    // Per-step embedded-Tor timeout (bootstrap + connect each), RGOE_TOR_TIMEOUT_SECS.
+    fn tor_timeout_secs() -> u64 {
+        std::env::var("RGOE_TOR_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n: &u64| n > 0)
+            .unwrap_or(180)
+    }
+
     // A 16-byte random nonce -> 32 hex chars, matching client/rgoe-client.mjs
     // `randomBytes(16).toString("hex")`. No `rand` runtime dep: splitmix64 over a
     // clock+pid seed is ample for a per-request nonce (uniqueness, not secrecy). A
@@ -472,22 +587,132 @@ mod live {
         serde_json::from_str(&raw).map_err(|e| format!("parse {path}: {e}"))
     }
 
-    // Reuse the deterministic select path: verify the signed directory against the pinned
-    // signer, then weighted-pick a gateway and return its `.onion` (the SAME select code the
-    // deterministic `select` subcommand runs). The returned onion is what arti then dials
-    // over Tor — so the transport target comes from a signature-verified directory, never a
-    // raw host the caller typed.
-    fn select_onion(dir_file: &str, signer: &str) -> Result<String, String> {
-        use rgoe_proto::{pick_gateway, verify_directory};
-        let dto: DirectoryDto = load_json(dir_file)?;
-        let dir = dto.into_proto();
-        verify_directory(&dir, signer).map_err(|e| format!("directory rejected: {e}"))?;
-        let mut rng = mulberry32(default_seed());
-        let empty: HashSet<String> = HashSet::new();
-        match pick_gateway(&dir, &empty, &mut rng) {
-            Some(g) => Ok(g.onion.clone()),
-            None => Err("no gateways in directory".into()),
+    // Turn a FRESH directory (a file read, or a bootnode fetch over Tor) into the ordered
+    // onion candidate list for failover — the SAME LKG-cache + guards + weighted
+    // selection_order the JS client runs (selection.mjs ensureLoaded -> selectCandidates):
+    //   1. dircache::resolve_directory verifies the fresh directory against the pinned
+    //      signer, applies the rollback + optional max-age guards vs the LKG --cache, and
+    //      writes the cache — or falls back to the verified LKG cache when fresh fails
+    //      (never an unverified list).
+    //   2. When a --health-cache is given, seed each gateway's health from persisted
+    //      cross-session liveness so a gateway that failed last session starts deprioritized.
+    //   3. selection_order yields the weighted pick first, then the rest as failover targets.
+    // Returns the candidate transports + the health feedback context (recorded after each
+    // dial so this session's failures deprioritize the gateway next session).
+    fn directory_candidates(
+        fresh: Result<String, String>,
+        rest: &[String],
+        signer: &str,
+    ) -> Result<(Vec<Transport>, Option<HealthCtx>), String> {
+        use rgoe_proto::selection_order;
+
+        let cache_path = take_flag(rest, "--cache").map(PathBuf::from);
+        let max_age = parse_max_age(rest);
+        let out =
+            dircache::resolve_directory(fresh, cache_path.as_deref(), signer, max_age, now_ms())?;
+        if out.source == dircache::Source::Cache {
+            eprintln!(
+                "egress: using last-known-good directory cache ({})",
+                out.fresh_error.as_deref().unwrap_or("fresh unavailable")
+            );
         }
+        let mut dir = out.dir;
+
+        // Cross-session deprioritization (reportResult parity): seed health, keep the cache
+        // + known-onion set for post-dial feedback.
+        let health_ctx = if let Some(hc) = take_flag(rest, "--health-cache") {
+            let path = PathBuf::from(hc);
+            let mut cache = health::load(Some(&path));
+            health::seed(&mut dir, &mut cache, now_ms());
+            let known: HashSet<String> = dir.gateways.iter().map(|g| g.onion.clone()).collect();
+            Some(HealthCtx {
+                cache_path: path,
+                known,
+                cache,
+            })
+        } else {
+            None
+        };
+
+        let mut rng = mulberry32(default_seed());
+        let order = selection_order(&dir, &mut rng);
+        if order.is_empty() {
+            return Err("no gateways in directory".into());
+        }
+        let mut transports = Vec::with_capacity(order.len());
+        for g in &order {
+            let (onion, _) = parse_onion_addr(&g.onion, 80)?;
+            transports.push(Transport::Onion { onion, port: 80 });
+        }
+        eprintln!(
+            "egress: {} candidate gateway(s) from verified directory; first = {}",
+            transports.len(),
+            transports[0].label()
+        );
+        Ok((transports, health_ctx))
+    }
+
+    // Fetch GET /directory from the bootnode onion over EMBEDDED TOR (arti), returning the
+    // raw JSON body — the dynamic-fleet source (loadFromBootnode, selection.mjs). The body is
+    // then handed to directory_candidates, which VERIFIES it against the pinned signer before
+    // anything is used, so a lying/MITM'd bootnode cannot forge an entry. Speaks minimal
+    // HTTP/1.1 over the Tor stream (dircache::http_get_request / parse_http_body), exactly
+    // like bootnode/fetch.mjs does over its SOCKS tunnel.
+    fn fetch_directory_over_tor(bootnode_onion: &str) -> Result<String, String> {
+        use arti_client::{TorClient, TorClientConfig};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (onion, port) = parse_onion_addr(bootnode_onion, 80)?;
+        let host = format!("{onion}.onion");
+        let timeout_secs = tor_timeout_secs();
+        let timeout = Duration::from_secs(timeout_secs);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime: {e}"))?;
+        rt.block_on(async move {
+            eprintln!("egress: bootstrapping embedded Tor (arti) for bootnode discovery ...");
+            let tor = tokio::time::timeout(
+                timeout,
+                TorClient::create_bootstrapped(TorClientConfig::default()),
+            )
+            .await
+            .map_err(|_| format!("arti bootstrap timed out after {timeout_secs}s"))?
+            .map_err(|e| format!("arti bootstrap: {e}"))?;
+
+            eprintln!("egress: fetching /directory from {host}:{port} over Tor ...");
+            let mut stream = tokio::time::timeout(timeout, tor.connect((host.as_str(), port)))
+                .await
+                .map_err(|_| format!("bootnode connect timed out after {timeout_secs}s"))?
+                .map_err(|e| format!("connect bootnode {host}:{port}: {e}"))?;
+
+            let req = dircache::http_get_request(&host, "/directory");
+            stream
+                .write_all(req.as_bytes())
+                .await
+                .map_err(|e| format!("write request: {e}"))?;
+            stream.flush().await.map_err(|e| format!("flush: {e}"))?;
+
+            let mut buf: Vec<u8> = Vec::with_capacity(4096);
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = stream
+                    .read(&mut chunk)
+                    .await
+                    .map_err(|e| format!("read response: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > dircache::MAX_HTTP_RESP {
+                    return Err(format!(
+                        "bootnode response exceeded {} bytes",
+                        dircache::MAX_HTTP_RESP
+                    ));
+                }
+            }
+            dircache::parse_http_body(&buf)
+        })
     }
 
     // Parse `<addr[:port]>` into (onion-without-suffix, port). Default port 80 = the gateway
@@ -518,11 +743,7 @@ mod live {
         use arti_client::{TorClient, TorClientConfig};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let timeout_secs: u64 = std::env::var("RGOE_TOR_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .filter(|&n: &u64| n > 0)
-            .unwrap_or(180);
+        let timeout_secs = tor_timeout_secs();
         let timeout = Duration::from_secs(timeout_secs);
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -618,31 +839,87 @@ mod live {
         })
     }
 
-    // Resolve exactly one transport from the CLI flags. Order of precedence:
-    //   --plain-tcp  (explicit escape hatch, no Tor)  >  --onion  >  --directory/--signer.
-    // A directory selection is the default T-RUST-2e path (verified directory -> onion).
-    fn resolve_transport(rest: &[String]) -> Result<Transport, String> {
-        if let Some(hp) = take_flag(rest, "--plain-tcp") {
-            return Ok(Transport::PlainTcp(hp));
+    // Resolve the ordered FAILOVER plan from the CLI flags. Order of precedence:
+    //   --plain-tcp (escape hatch) > --onion > --bootnode-onion > --directory.
+    // A comma-separated --plain-tcp/--onion is an explicit failover LIST (dead first,
+    // live second, ...); --directory/--bootnode-onion derive the ordered list from the
+    // signed directory's weighted selection_order (with LKG caching + health).
+    fn resolve_plan(rest: &[String]) -> Result<EgressPlan, String> {
+        if let Some(list) = take_flag(rest, "--plain-tcp") {
+            let transports: Vec<Transport> = list
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Transport::PlainTcp(s.to_string()))
+                .collect();
+            if transports.is_empty() {
+                return Err("--plain-tcp: no targets".into());
+            }
+            return Ok(EgressPlan {
+                transports,
+                health: None,
+            });
         }
-        if let Some(addr) = take_flag(rest, "--onion") {
-            let (onion, port) = parse_onion_addr(&addr, 80)?;
-            return Ok(Transport::Onion { onion, port });
+        if let Some(list) = take_flag(rest, "--onion") {
+            let mut transports = Vec::new();
+            for addr in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let (onion, port) = parse_onion_addr(addr, 80)?;
+                transports.push(Transport::Onion { onion, port });
+            }
+            if transports.is_empty() {
+                return Err("--onion: no targets".into());
+            }
+            return Ok(EgressPlan {
+                transports,
+                health: None,
+            });
         }
-        if let (Some(dirf), Some(signer)) =
-            (take_flag(rest, "--directory"), take_flag(rest, "--signer"))
-        {
-            let onion = select_onion(&dirf, &signer)?;
-            let (onion, _) = parse_onion_addr(&onion, 80)?;
-            eprintln!("egress: selected gateway {onion}.onion from verified directory");
-            return Ok(Transport::Onion { onion, port: 80 });
+        if let Some(bootnode) = take_flag(rest, "--bootnode-onion") {
+            let Some(signer) = take_flag(rest, "--signer") else {
+                return Err("--bootnode-onion needs --signer <hex>".into());
+            };
+            // Discovery over Tor is the FRESH source; a fetch failure still degrades to the
+            // verified LKG cache inside directory_candidates (never nothing / never unverified).
+            let fresh = fetch_directory_over_tor(&bootnode);
+            let (transports, health) = directory_candidates(fresh, rest, &signer)?;
+            return Ok(EgressPlan { transports, health });
+        }
+        if let Some(dirf) = take_flag(rest, "--directory") {
+            let Some(signer) = take_flag(rest, "--signer") else {
+                return Err("--directory needs --signer <hex>".into());
+            };
+            let fresh = read_file(&dirf); // a read failure -> LKG cache fallback
+            let (transports, health) = directory_candidates(fresh, rest, &signer)?;
+            return Ok(EgressPlan { transports, health });
         }
         Err(
-            "no transport: pass --directory <f> --signer <hex> (dial the selected onion over \
-             Tor), --onion <addr> (dial a specific onion over Tor), or --plain-tcp <host:port> \
-             (no Tor)"
+            "no transport: pass --directory <f> --signer <hex> or --bootnode-onion <onion> \
+             --signer <hex> (dial the selected onion(s) over Tor), --onion <addr[,addr...]> \
+             (dial specific onion(s) over Tor), or --plain-tcp <host:port[,host:port...]> (no Tor)"
                 .to_string(),
         )
+    }
+
+    // Dial one candidate + send the framed envelope. Ok(ack) means the gateway replied
+    // (accept OR refuse — terminal); Err means a dial/IO failure the failover loop rotates on.
+    fn dial_send(t: &Transport, wire: &str) -> Result<serde_json::Value, String> {
+        match t {
+            Transport::PlainTcp(hp) => {
+                eprintln!("egress: dialing {hp} (plain TCP, no Tor) ...");
+                send_envelope(hp, wire)
+            }
+            Transport::Onion { onion, port } => tor_dial_and_send(onion, *port, wire),
+        }
+    }
+
+    // Fold one dial outcome into the health cache (reportResult parity). No-op unless a
+    // health context is present (directory/bootnode paths) and the transport is a
+    // signed-directory onion.
+    fn report(health: &mut Option<HealthCtx>, t: &Transport, ok: bool) {
+        let (Some(ctx), Some(onion)) = (health.as_mut(), t.health_onion()) else {
+            return;
+        };
+        health::update(&mut ctx.cache, &ctx.known, &onion, ok, None, now_ms());
     }
 
     pub fn run_egress(rest: &[String]) -> ExitCode {
@@ -659,10 +936,10 @@ mod live {
             }
         };
 
-        // Resolve the transport up front so a missing/ambiguous transport fails BEFORE the
-        // (expensive) proof build.
-        let transport = match resolve_transport(rest) {
-            Ok(t) => t,
+        // Resolve the ordered failover plan up front so a missing/ambiguous transport (or an
+        // unusable directory with no LKG fallback) fails BEFORE the expensive proof build.
+        let mut plan = match resolve_plan(rest) {
+            Ok(p) => p,
             Err(e) => {
                 eprintln!("egress (live): {e}");
                 return ExitCode::from(2);
@@ -735,47 +1012,66 @@ mod live {
         });
         let wire = serde_json::to_string(&envelope).expect("serialize envelope") + "\n";
 
-        // Dispatch to the resolved transport. Both send the SAME `wire` and read one
-        // newline-terminated ack; `gateway` in the success print is the human-readable dial.
-        let (gateway_label, sent) = match &transport {
-            Transport::PlainTcp(hp) => {
-                eprintln!("egress: dialing gateway {hp} (plain TCP, no Tor) ...");
-                (hp.clone(), send_envelope(hp, &wire))
-            }
-            Transport::Onion { onion, port } => {
-                let label = format!("{onion}.onion:{port}");
-                (label, tor_dial_and_send(onion, *port, &wire))
-            }
-        };
-
-        match sent {
-            Ok(ack) => {
-                let ok = ack
-                    .get("ok")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                if ok {
-                    println!("ok");
-                    println!("gateway: {gateway_label}");
-                    println!("target: {}", built.target);
-                    println!("nullifier: {}", built.nullifier);
-                    if let Some(r) = ack.get("receipt") {
-                        println!("receipt: {r}");
-                    }
-                    ExitCode::SUCCESS
-                } else {
-                    let err = ack
-                        .get("err")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("(no err field)");
-                    println!("not-ok: gate-refused: {err}");
-                    ExitCode::from(1)
+        // FAILOVER LOOP (client/rgoe-client.mjs connect()). The ONE envelope built above is
+        // REUSED across every candidate (deterministic-retry: a retry reproduces the SAME
+        // share). Rotate to the next candidate on a DIAL failure; a gateway that replied
+        // (accept OR gate-refuse) is TERMINAL, matching the JS client. Each dial outcome is
+        // fed back into the health cache (reportResult) so a failing gateway is deprioritized
+        // next session.
+        let n = plan.transports.len();
+        let mut last_err: Option<String> = None;
+        let mut outcome: Option<(String, serde_json::Value)> = None;
+        // Move the transports out so `report` can borrow `plan.health` mutably in the loop.
+        let transports = std::mem::take(&mut plan.transports);
+        for (i, t) in transports.iter().enumerate() {
+            eprintln!("egress: candidate {}/{}: {}", i + 1, n, t.label());
+            match dial_send(t, &wire) {
+                Ok(ack) => {
+                    report(&mut plan.health, t, true); // dial succeeded (accept or refuse)
+                    outcome = Some((t.label(), ack));
+                    break;
+                }
+                Err(e) => {
+                    report(&mut plan.health, t, false); // dial failed -> rotate
+                    eprintln!("egress: candidate {} failed ({e}); rotating", t.label());
+                    last_err = Some(e);
                 }
             }
-            Err(e) => {
-                eprintln!("egress: {e}");
-                ExitCode::from(3)
+        }
+
+        // Persist the session's liveness feedback once (best-effort; no-op if no health ctx).
+        if let Some(ctx) = plan.health.as_mut() {
+            health::save(Some(&ctx.cache_path), &mut ctx.cache);
+        }
+
+        let Some((gateway_label, ack)) = outcome else {
+            eprintln!(
+                "egress: all {n} candidate(s) failed; last error: {}",
+                last_err.as_deref().unwrap_or("(none)")
+            );
+            return ExitCode::from(3);
+        };
+
+        let ok = ack
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if ok {
+            println!("ok");
+            println!("gateway: {gateway_label}");
+            println!("target: {}", built.target);
+            println!("nullifier: {}", built.nullifier);
+            if let Some(r) = ack.get("receipt") {
+                println!("receipt: {r}");
             }
+            ExitCode::SUCCESS
+        } else {
+            let err = ack
+                .get("err")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("(no err field)");
+            println!("not-ok: gate-refused: {err}");
+            ExitCode::from(1)
         }
     }
 }
@@ -789,6 +1085,7 @@ fn main() -> ExitCode {
     let rest = &args[1..];
     match sub.as_str() {
         "verify-directory" => cmd_verify_directory(rest),
+        "fetch-directory" => cmd_fetch_directory(rest),
         "select" => cmd_select(rest),
         "verify-receipt" => cmd_verify_receipt(rest),
         "egress" => cmd_egress(rest),
