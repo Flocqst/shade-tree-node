@@ -224,8 +224,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   gateway, join the fleet. *Accept:* `docs/OPERATOR.md`.
 - [ ] **T-DOC-2 (P1) Incident response playbook.** Bootnode down, gateway compromised, key leak,
   chain/RPC outage, mass-DROP spike. *Accept:* `docs/INCIDENT.md`.
-- [ ] **T-DOC-3 (P1) Wire-protocol + API spec.** The bootnode HTTP API and the envelope/announce
-  wire formats, versioned. *Accept:* `docs/PROTOCOL-API.md`.
+- [x] **T-DOC-3 (P1) Wire-protocol + API spec.** DONE (loop-7): `docs/PROTOCOL-API.md` -- canonical byte encodings, onion<->key binding, announce + directory + envelope wire formats, bootnode HTTP API, every rejection reason, and a conformance map to testdata/vectors.json. Every claim cited to file:symbol. Unblocks the Rust conformance runner (T-RUST-1).
 - [ ] **T-DOC-4 (P2) SECURITY.md** (disclosure policy) + **CONTRIBUTING.md** + ADRs for the load-
   bearing decisions (onion-off-chain, bootnode-as-cache, RLN-over-slot).
 - [ ] **T-DOC-5 (P2) README polish pass.** Revisit the README once the fleet/CLI/tests have settled:
@@ -285,8 +284,7 @@ deploy, because it is the client people will actually run.
   language). *Accept:* `rust/` builds an empty workspace in CI; `docs/adr/` entry.
 - [~] **T-RUST-1 (P1) Wire-format conformance harness.** SEEDED by T-TEST-11: `testdata/vectors.json`
   is the language-neutral fixture set and the JS side already reproduces every value
-  (`test/vectors.selftest.mjs`). REMAINING: document the vector format in the wire spec (T-DOC-3) and
-  add a Rust-side runner that asserts the same bytes, so the harness gates both implementations.
+  (`test/vectors.selftest.mjs`). REMAINING (spec DONE loop-7, docs/PROTOCOL-API.md): only the Rust-side runner that asserts the same bytes, so the harness gates both implementations.
   *Accept:* the JS client reproduces every fixture (done); a Rust runner reproduces them too.
 - [ ] **T-RUST-2 (P1) Rust client MVP.** `arti`-dialed onion connect + envelope send + tunnel, with
   the directory fetched and verified (onion↔key binding + pinned-signer signature) in Rust. RLN
