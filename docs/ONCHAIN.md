@@ -266,12 +266,24 @@ gate:
 
 The two providers are **not fully symmetric**, and it constrains the contract: a light
 client can only prove a root that lives in an **on-chain storage slot**, so the
-light-client path *requires* the group's root to be maintained on chain (an on-chain
-incremental Merkle tree, e.g. Semaphore's on-chain group). The node provider can instead
-reconstruct the tree from `Member*` events, because there you already trust the node's
-log view. So the decision rule is simple: if you want the light-client path at all, put
-the root on chain; if you only ever run the node path, event reconstruction is enough.
-Building the on-chain-root version is the safer default, since it serves both providers.
+light-client path *requires* the group's root to be maintained on chain. **As of T-DEV-9
+this is done:** `StakedReputationSet` maintains the identical RLN depth-20 Poseidon(2)
+incremental tree on chain and commits the current root to a fixed slot
+(`currentRoot`, `ROOT_STORAGE_SLOT = 3`), with the same zero-in-place removal semantics as
+the off-chain `reconstructRoot`, so the two roots are equal by construction (pinned to the
+`lib/rln-removal-parity` golden in `test/StakedReputationSet.t.sol::test_Root_*`). The node
+provider can instead reconstruct the tree from `Member*` events, because there you already
+trust the node's log view. Both paths now work against the same contract.
+
+*Honest scope of the shipped light client.* `LightClientRootProvider` verifies the account
++ storage Merkle-Patricia proofs from `eth_getProof` against a block's `stateRoot`, so a
+hostile RPC cannot forge the root's **value**. What it does not yet do is validate that
+`stateRoot` against the beacon sync committee (the actual Helios step) — by default the
+state root is fetched from the RPC at a confirmed depth and *trusted*. That header
+validation is the filed follow-up **T-DEV-9b**; a `trustedStateRoot(blockTag)` injection
+hook is already in place so a Helios sidecar can supply a consensus-verified root and close
+the last trust gap. A `RGOE_LIGHT_MODE=storageat` fallback (trusts the RPC for the value,
+no proof) exists for RPCs without `eth_getProof` and is clearly the weaker mode.
 
 Both providers read at a **confirmation depth**, and this is what ties back to the
 unbonding constraint. Reading *finalized* state means a reorg can never retroactively

@@ -120,9 +120,17 @@ and at scale."
   capture ~all client traffic. Tested in `bootnode/selftest.mjs` (registry hardening).
 - [x] **T-DEV-7 (P1) Config validation.** DONE (module, loop-13): `lib/config.mjs` -- pure per-role (bootnode/gateway/client/member-enroll) required/optional validators grounded in what code actually reads (honestly narrowed the ambiguous rules); `validateConfig(role,env)->{ok,errors}`. `lib/config.selftest.mjs`. WIRING into entrypoints deferred to T-DEV-7b.
 - [x] **T-DEV-8 (P1) Graceful shutdown / connection draining.** DONE (loop-10): exported `makeGracefulShutdown` on gateway + bootnode; SIGTERM/SIGINT -> server.close() + drain (RGOE_SHUTDOWN_TIMEOUT_MS, default 10s) then force-exit. Signal handlers installed only under the main guard (import is side-effect-free). `test/shutdown.selftest.mjs`.
-- [ ] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
+- [x] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
   works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
-  the light provider returns a root validated against a header; test.
+  the light provider returns a root validated against a header; test. DONE (loop-33): full on-chain depth-20
+  Poseidon tree; currentRoot@slot-3; EIP-1186 MPT verifier; on-chain root == reconstructRoot golden == Rust tree.
+- [ ] **T-DEV-9b (P3, added loop-33) Validate the light-client stateRoot (beacon / Helios).** T-DEV-9's
+  `LightClientRootProvider` cryptographically verifies the slot VALUE against the block `stateRoot` (EIP-1186 MPT),
+  but currently TRUSTS the `stateRoot` itself (fetched from the RPC at a confirmed depth). The `trustedStateRoot(blockTag)`
+  injection hook is already in place. Close the last trust anchor: validate the stateRoot via the beacon-chain
+  sync committee — embed or sidecar a Helios light client and feed its verified execution stateRoot through the
+  hook. *Accept:* the provider rejects a stateRoot the sync committee did not attest; with a Helios root, the whole
+  chain (sync-committee → stateRoot → account proof → storage proof → root) is verified end-to-end, no RPC trust.
 - [x] **T-DEV-10 (P2) Configurable egress policy.** DONE (loop-12): exported `makeEgressPolicy({allow,deny})` (default-deny; deny wins; `*`/`*.suffix`/exact host + `*`/exact port). `RGOE_EGRESS_ALLOW`/`RGOE_EGRESS_DENY`, default `*:443` = exactly the old behavior (byte-equivalence table proves it). A policy reject DROPs `bad-target-policy` + increments the metric. Startup warns when widened past :443 (no longer metadata-only). `gateway/egress-policy.selftest.mjs`.
 - [x] **T-DEV-11 (P2) Directory scale.** DONE (loop-12): GET /directory gains a strong sha256 ETag + If-None-Match (304 on unchanged) + gzip (Accept-Encoding), all transport-only (signature/content unchanged). Removed the dead verifyDirectory import. Pagination deferred (registry maxEntries caps count). `bootnode/directory-scale.selftest.mjs`.
 - [x] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
@@ -417,7 +425,12 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   an unknown version is rejected with a clear reason rather than a silent mis-parse. *Accept:* a
   client and gateway on overlapping ranges interoperate; on disjoint ranges they fail with a precise
   version error; a downgrade cannot strip the target binding.
-- [ ] **T-TEST-20 (P2, added loop-17) Directory version-range advertisement + negotiation e2e.** T-FEAT-11
+- [x] **T-TEST-20 (P2, added loop-17) Directory version-range advertisement + negotiation e2e.** DELIVERED by
+  T-FEAT-10 + T-FEAT-11 (closed loop-33): T-FEAT-10 put the signed proto `{min,max}` range in the directory/announce
+  caps (additive, capsSig-authenticated, carried through JS + Rust verify) and made `selectCandidates({proto})`
+  prefer a gateway advertising an overlapping range (fail-closed if none), and T-FEAT-11 does the client↔gateway
+  handshake — so a client pre-selects by advertised version BEFORE dialing and the handshake agrees. Original text
+  below.  ORIGINAL: T-FEAT-11
   negotiates protocol version only over the client↔gateway handshake (the gateway advertises its range in the
   version-reject reply); it explicitly deferred advertising the supported range in the SIGNED announce/directory
   so a client could pre-filter or pre-select before dialing. Add the range to `bootnode/announce.mjs` +
@@ -840,3 +853,22 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   (mine): cargo build --workspace + test --workspace green (rgoe-proto 9+32 / rgoe-client 26 / rgoe-rln 6+1),
   clippy/fmt clean; full JS suite 62/62 green; lint clean. The capability feature is now COMPLETE end-to-end
   (JS produce/verify/select + Rust proto/client). No new backlog filed (feature closed).
+- 2026-08-14  loop-33  FOCUSED single run: T-DEV-9 on-chain incremental tree + root accessor (light-client root
+  verification). Chose the FULL on-chain tree over the committed-slot shortcut: StakedReputationSet.sol now
+  maintains the identical depth-20 arity-2 Poseidon(2) RLN tree on chain (zero value keccak256(GROUP_ID)>>8,
+  20 hashes/change, sparse node store), wired to match reconstructRoot event-for-event (register=insert,
+  exit/slash-while-active=zero-in-place at the original index, withdraw/slash-while-exiting=no tree change);
+  currentRoot committed to storage slot 3, provable via eth_getProof. `LightClientRootProvider` (was a throwing
+  stub) now works with a self-contained EIP-1186 Merkle-Patricia proof verifier (ethers keccak/RLP, NO new dep):
+  verifies the account proof vs the block stateRoot → storageHash → storage proof vs the slot value; a
+  Helios-injection hook (`trustedStateRoot`) is the seam for validating the stateRoot itself (the one remaining
+  trust anchor). INTEGRATION AUDIT (mine): reran the Foundry root tests — currentRoot after register-3/slash-middle
+  == 14367190…513838, the EXACT loop-26 reconstructRoot golden, so the membership tree is now consistent
+  ON-CHAIN == JS == RUST (T-DEV-2/2b) to one value; and the light-client selftest — the MPT verifier REJECTS every
+  tampering class (proof node, leaf/root-swap, reported≠proven value, account proof, incomplete) and reports
+  verified:false in the storageat fallback. Full suite 63/63 green (72 forge tests); no existing test weakened
+  (constructor unchanged, GROUP_ID hardcoded to the JS default). Also CLOSED T-TEST-20 (delivered by
+  T-FEAT-10 signed proto-range caps + T-FEAT-11 handshake). Filed T-DEV-9b (validate the stateRoot via a beacon
+  sync-committee / Helios sidecar through the trustedStateRoot hook — the last light-client trust anchor).
+  AUTONOMOUS ROADMAP COMPLETE: 97/102 done; the 5 open items are all human-gated (T-HARD-1 trusted setup,
+  T-DEPLOY-1/2 deploy), circuit-blocked (T-FEAT-8), or speculative P3 (T-FEAT-7).

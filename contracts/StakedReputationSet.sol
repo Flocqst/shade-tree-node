@@ -27,6 +27,20 @@ pragma solidity ^0.8.24;
 // locally and verify their local root against the event log (docs/ROADMAP.md #2). A
 // companion on-chain incremental-tree + root accessor can replace that later without
 // changing this contract's admission/stake logic.
+//
+// T-DEV-9: that companion is now here. This contract ALSO maintains the identical RLN
+// depth-20 Poseidon(2) incremental Merkle tree on chain, so the current membership root
+// lives in a deterministic STORAGE SLOT (`currentRoot`, ROOT_STORAGE_SLOT below) and a
+// light client can prove it with `eth_getProof` against a block's stateRoot — no trusted
+// RPC event replay required (lib/root-provider.mjs LightClientRootProvider). The on-chain
+// tree tracks the SAME zero-in-place removal semantics the off-chain reconstructRoot uses
+// (register = insert at the append index; exit/slash-while-active = zero the leaf at its
+// original index), so `currentRoot` == the off-chain reconstructRoot root by construction
+// (proven in test/StakedReputationSet.t.sol::test_Root_* against the lib/rln-removal-parity
+// golden). The gas cost is 20 Poseidon(2) hashes per membership change; see the note by
+// `_updateLeaf`.
+
+import {PoseidonT3} from "./PoseidonT3.sol";
 
 /// Verifies a ZK proof that the caller knows the identity secret behind `commitment`.
 /// Used to authorize exit and withdrawal without revealing which member (R1/R2).
@@ -64,6 +78,43 @@ contract StakedReputationSet {
     uint64 public nextIndex;                    // append-only leaf counter
     uint256 public activeCount;                 // members currently staked
 
+    // ---- on-chain incremental Merkle tree (T-DEV-9) ---------------------------
+    //
+    // The RLN admission root, maintained on chain so a light client can state-prove it.
+    // MUST mirror the off-chain tree exactly (lib/rln.mjs newGroup / root-provider.mjs
+    // reconstructRoot): a depth-20, arity-2 tree hashed with Poseidon(2) over BN254, whose
+    // zero value is `keccak256(GROUP_ID) >> 8` (Semaphore v3 group convention) and whose
+    // removals are ZERO-IN-PLACE at the leaf's original index.
+
+    uint256 public constant TREE_DEPTH = 20; // circom-rln RLN(20,16); matches lib/rln.mjs TREE_DEPTH
+    // Semaphore/RLN group id. MUST equal the JS RGOE_RLN_IDENTIFIER (default 1) so the
+    // zero value — and therefore every root — matches the off-chain tree. If you change
+    // one side you MUST change the other (same coordination the tree depth already needs).
+    uint256 public constant GROUP_ID = 1;
+
+    /// The current membership Merkle root, kept in a fixed storage slot so it is provable
+    /// via `eth_getProof`. Declared FIRST among the tree state so its slot is stable and
+    /// known: it is storage slot `ROOT_STORAGE_SLOT`. The empty tree's root is the depth-20
+    /// all-zero-leaf root (NOT zero); an empty set is that value, which the off-chain
+    /// reconstructRoot represents as `null` — same meaning, different encoding.
+    uint256 public currentRoot;
+
+    /// The storage slot `currentRoot` occupies. A light client reads this slot directly
+    /// via eth_getProof / eth_getStorageAt. Asserted against `vm.load` in the Foundry test
+    /// so a future storage reorder that moves the root fails loudly instead of silently.
+    uint256 public constant ROOT_STORAGE_SLOT = 3;
+
+    // Precomputed zero subtree roots: _zeroes[i] is the root of an empty subtree of height
+    // i (_zeroes[0] = leaf zero value, _zeroes[i] = Poseidon2(_zeroes[i-1], _zeroes[i-1])).
+    // _zeroes[TREE_DEPTH] is the empty-tree root. Filled once in the constructor.
+    uint256[TREE_DEPTH + 1] private _zeroes;
+
+    // Sparse node store: _treeNode[level][index] is the materialized node, or unset (0) to
+    // mean "the empty subtree value _zeroes[level]". Real leaves/nodes are Poseidon field
+    // elements (and the zero LEAF is _zeroes[0], itself nonzero), so 0 unambiguously means
+    // "never written" — exactly the length-based default the JS @zk-kit tree uses.
+    mapping(uint256 => mapping(uint256 => uint256)) private _treeNode;
+
     // ---- events (off-chain tree + gateway root refresh) -----------------------
 
     event MemberRegistered(uint256 indexed commitment, uint64 indexed index);
@@ -100,6 +151,57 @@ contract StakedReputationSet {
         UNBONDING = unbonding;
         withdrawVerifier = _withdrawVerifier;
         hasher = _hasher;
+
+        // Initialize the incremental tree's zero subtree roots and the empty-tree root.
+        // _zeroes[0] = keccak256(GROUP_ID) >> 8 (Semaphore v3 `hash(id)` leaf zero value).
+        uint256 zero = uint256(keccak256(abi.encodePacked(GROUP_ID))) >> 8;
+        _zeroes[0] = zero;
+        for (uint256 i = 1; i <= TREE_DEPTH; i++) {
+            zero = PoseidonT3.hash([zero, zero]);
+            _zeroes[i] = zero;
+        }
+        currentRoot = zero; // empty-tree root (depth-20 all-zero-leaf root)
+    }
+
+    // ---- incremental Merkle tree internals (T-DEV-9) --------------------------
+
+    /// Set leaf `index` to `value` and recompute the root, walking the depth-20 path and
+    /// updating every node on it. Mirrors the zk-kit IncrementalMerkleTree insert/update
+    /// exactly: at each level the node's sibling is read from the sparse store (defaulting
+    /// to the level's empty-subtree value), the parent is Poseidon2(left, right), and we
+    /// ascend. Works for both an append (register) and an in-place overwrite (removal sets
+    /// the leaf back to _zeroes[0]). Cost: TREE_DEPTH Poseidon2 hashes per call.
+    function _updateLeaf(uint256 index, uint256 value) internal {
+        uint256 node = value;
+        uint256 idx = index;
+        for (uint256 level = 0; level < TREE_DEPTH; level++) {
+            _treeNode[level][idx] = node;
+            uint256 left;
+            uint256 right;
+            if (idx & 1 == 0) {
+                left = node;
+                right = _nodeAt(level, idx + 1);
+            } else {
+                left = _nodeAt(level, idx - 1);
+                right = node;
+            }
+            node = PoseidonT3.hash([left, right]);
+            idx >>= 1;
+        }
+        currentRoot = node;
+    }
+
+    /// The materialized node at (level, index), or the level's empty-subtree value when the
+    /// slot was never written (0 sentinel; see `_treeNode`).
+    function _nodeAt(uint256 level, uint256 index) internal view returns (uint256) {
+        uint256 v = _treeNode[level][index];
+        return v == 0 ? _zeroes[level] : v;
+    }
+
+    /// The leaf zero value (_zeroes[0]); exposed for cross-checking against the off-chain
+    /// tree's `zeroValue`.
+    function treeZeroValue() external view returns (uint256) {
+        return _zeroes[0];
     }
 
     // ---- register (R1) --------------------------------------------------------
@@ -116,6 +218,7 @@ contract StakedReputationSet {
         members[commitment] = Member({bond: BOND, index: index, exitInitiatedAt: 0});
         activeCount++;
         emit MemberRegistered(commitment, index);
+        _updateLeaf(index, commitment); // append the leaf; refresh currentRoot
     }
 
     // ---- exit + withdraw (R2, R4) --------------------------------------------
@@ -135,6 +238,7 @@ contract StakedReputationSet {
         m.exitInitiatedAt = uint64(block.timestamp);
         activeCount--; // no longer in the admission set, though still slashable
         emit MemberExiting(commitment, m.exitInitiatedAt, uint64(block.timestamp + UNBONDING));
+        _updateLeaf(m.index, _zeroes[0]); // leave the admission root: zero the leaf in place
     }
 
     /// ZK-authorized. After UNBONDING elapses and if not slashed, pay BOND to a
@@ -173,9 +277,15 @@ contract StakedReputationSet {
 
         uint256 amount = m.bond;
         bool wasActive = m.exitInitiatedAt == 0;
+        uint64 idx = m.index; // capture before delete for the tree update
         delete members[commitment];
         if (wasActive) activeCount--;
         emit MemberSlashed(commitment, receiver);
+        // Zero the leaf ONLY if the member was still in the admission set. A slash of an
+        // already-exiting member left the tree at initiateExit; re-zeroing would be a no-op
+        // here but is skipped to mirror reconstructRoot (which ignores a removal event for a
+        // commitment no longer live), keeping the two roots identical event-for-event.
+        if (wasActive) _updateLeaf(idx, _zeroes[0]);
 
         (bool ok, ) = receiver.call{value: amount}("");
         if (!ok) revert PayoutFailed();

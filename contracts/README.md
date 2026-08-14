@@ -23,13 +23,22 @@ in a mapping and are emitted as events (`MemberRegistered` / `MemberExiting` /
 `MemberWithdrawn` / `MemberSlashed`); the gateway and clients rebuild the tree from the
 log and verify their local root against it (ROADMAP #2).
 
-**This is enough only for the trusted-node root provider.** The light-client provider
-(`lib/root-provider.mjs`, `LightClientRootProvider`) can only state-prove a root that
-lives in an **on-chain storage slot**, so supporting it requires an on-chain incremental
-Merkle tree that exposes the current root as state (e.g. compose with Semaphore's
-on-chain group, or add a LeanIMT to this contract). If the light-client path matters,
-build the on-chain-root version — it serves both providers; the off-chain-reconstruction
-version serves only the node path. See docs/ONCHAIN.md, "Reading the root".
+**Both root providers are now supported (T-DEV-9).** `StakedReputationSet` ALSO maintains
+the identical RLN depth-20 Poseidon(2) incremental Merkle tree on chain and commits the
+current root to a fixed storage slot (`currentRoot`, `ROOT_STORAGE_SLOT = 3`), updated on
+every membership change with the SAME zero-in-place removal semantics as the off-chain
+`reconstructRoot` (register = insert at the append index; exit / slash-while-active = zero
+the leaf at its original index). So `currentRoot` equals the off-chain reconstructRoot root
+by construction (pinned to the `lib/rln-removal-parity` golden in
+`test/StakedReputationSet.t.sol::test_Root_*`). The light-client provider
+(`lib/root-provider.mjs`, `LightClientRootProvider`) proves that slot with `eth_getProof`
+and verifies the account + storage Merkle-Patricia proofs against a block's state root — so
+it no longer trusts an RPC's event replay for the root's VALUE. What it still trusts is the
+state root itself (fetched at a confirmed depth); validating that header against the beacon
+sync committee (Helios) is the filed follow-up **T-DEV-9b**, with a `trustedStateRoot` hook
+already in place to inject a verified root. Cost: 20 Poseidon(2) hashes per membership
+change (~1.25M gas / register on the vendored pure-Solidity Poseidon; fine for testnet).
+See docs/ONCHAIN.md, "Reading the root".
 
 ## Known simplifications (reference scope)
 
