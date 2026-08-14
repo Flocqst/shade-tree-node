@@ -38,6 +38,18 @@
 //                            false-negative probe is therefore a soft failure, never an outage.
 //   RGOE_BOOTNODE_PROBE_INTERVAL  seconds between probe cycles                 (default 120)
 //   RGOE_BOOTNODE_PROBE_FAILS     consecutive failed probes before demote      (default 3)
+//   RGOE_BOOTNODE_PEERS      OPTIONAL comma-list of PEER bootnode onions to federate with
+//                            (default off/empty => today's standalone behavior, byte-identical).
+//                            When set, a pull loop periodically fetches each peer's /directory over
+//                            Tor, pulls each listed gateway's stored announce (GET /gateway/<onion>),
+//                            and re-verifies it through the SAME real announce path (onion control +
+//                            operator/stake) before MERGING it into this registry. The peer's own
+//                            directory signature is NEVER trusted as authority over entries -- a
+//                            forged/tampered gossiped gateway is rejected exactly as a direct
+//                            announce. See bootnode/federation.mjs + docs/BOOTNODE.md (Federation).
+//   RGOE_BOOTNODE_FED_INTERVAL    seconds between federation pull cycles       (default 60)
+//   RGOE_BOOTNODE_FED_MAX_PULL    max gateways pulled per peer per cycle (bounds a hostile peer)
+//   RGOE_BOOTNODE_ONION      OPTIONAL this bootnode's own onion, filtered out of the peer set
 //   RGOE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
 
 import http from "node:http";
@@ -52,6 +64,7 @@ import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
 import { registry as metrics } from "../lib/metrics.mjs";
 import { log } from "../lib/log.mjs";
+import { makeFederation, parsePeers } from "./federation.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -306,6 +319,60 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     return { ok: true, onion: v.onion, staked: v.staked };
   }
 
+  // ---- gossip merge (T-FEAT-1 federation) -----------------------------------
+  // Admit ONE announce record pulled from a PEER bootnode, re-verified from scratch through
+  // the SAME real path a direct announce takes -- the peer's signature over its directory is
+  // NEVER trusted as authority over the entry. The rec is the verbatim signed announce a client
+  // would fetch from GET /gateway/<onion>, so verifyAnnounce re-checks onion control (the v3
+  // .onion IS its ed25519 key) and, in stake mode, the operator sig + a LIVE on-chain isStaked
+  // against THIS bootnode's own chain view. A forged/tampered/unstaked gossiped entry is rejected
+  // exactly as a direct announce would be. Differences from announce(), all safety-preserving:
+  //   - freshness is the TTL against the announce's OWN ts (skew bypassed, like the store reload):
+  //     a gossiped announce is legitimately relayed and may be older than the anti-replay window,
+  //     but it can live no longer than ttlSec past the ts the origin gateway signed -- so a peer
+  //     cannot keep a dead gateway alive by re-gossiping a fixed old rec (its ts never moves), and
+  //     gossip never REFRESHES a TTL (loop/propagation bound).
+  //   - dedup by onion: an entry we already hold at an equal-or-later expiry is a no-op (merged
+  //     false) -- gossip never SHORTENS or churns a fresher local (e.g. directly-heartbeated) entry.
+  //   - the same maxEntries cap: a NEW gossiped onion is refused when full (existing refresh is fine).
+  //   - no nonce-guard coupling: dedup is by expiry above, so re-pulling the same rec is idempotent
+  //     rather than a replayed-nonce rejection; the onion-control SIGNATURE is still fully verified,
+  //     which is the actual security crux, not the anti-replay nonce.
+  async function admitGossip(rec) {
+    const onionKey = typeof rec?.onion === "string" ? rec.onion : null;
+    if (!onionKey) return { ok: false, reason: "no-onion", merged: false };
+    const ts = typeof rec.ts === "number" ? rec.ts : null;
+    if (ts == null) return { ok: false, reason: "stale-ts", merged: false };
+    const gossipExpiry = ts + ttlSec;
+    // TTL/freshness gate: an origin announce whose TTL already lapsed cannot be resurrected.
+    if (gossipExpiry <= now()) return { ok: false, reason: "stale-gossip", merged: false };
+    const existing = live.get(onionKey);
+    // Dedup: we already hold this onion at least as fresh -> nothing to do, don't re-verify/churn.
+    if (existing && existing.expiresAt >= gossipExpiry) return { ok: true, reason: "fresh-existing", merged: false, onion: onionKey };
+    // Capacity: honor the DoS cap. A NEW onion must fit; an existing one may always refresh.
+    if (!existing && live.size >= maxEntries) { sweep(); if (live.size >= maxEntries) return { ok: false, reason: "registry-full", merged: false }; }
+    const v = await verifyAnnounce(rec, {
+      now: now(),
+      skew: Number.MAX_SAFE_INTEGER, // freshness is the TTL gate above, not the anti-replay window
+      isStaked: stake?.isStaked,
+      requireStake,
+      seenNonce: null, // idempotent re-pull; onion-control sig is still fully verified
+    });
+    if (!v.ok) return { ok: false, reason: v.reason, merged: false };
+    const rawWeight = Number.isFinite(rec.weight) ? rec.weight : 100;
+    live.set(v.onion, {
+      pubkey: v.pubkey,
+      weight: Math.max(0, Math.min(MAX_WEIGHT, rawWeight)), // clamp self-attested weight
+      operator: v.operator,
+      staked: v.staked,
+      rec,
+      expiresAt: gossipExpiry, // origin-bounded, never extended by gossip
+      lastAt: now(),
+    });
+    if (!reloading) persist();
+    return { ok: true, reason: "merged", merged: true, onion: v.onion, staked: v.staked };
+  }
+
   function sweep() {
     const t = now();
     let evicted = false;
@@ -404,8 +471,8 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
-  return { announce, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size,
-    liveOnions: () => [...live.keys()], prober, admission, ttlSec };
+  return { announce, admitGossip, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size,
+    liveOnions: () => [...live.keys()], maxEntries: () => maxEntries, prober, admission, ttlSec };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
@@ -568,6 +635,17 @@ async function main() {
   if (prober) {
     prober.start();
     log.info("active health probing on", { intervalSec: prober.intervalMs / 1000, failThreshold: prober.health.failThreshold });
+  }
+
+  // OPTIONAL bootnode federation / gossip (T-FEAT-1). Off unless RGOE_BOOTNODE_PEERS is set, so
+  // the default (empty) is byte-for-byte today's standalone bootnode. When on, we pull each peer's
+  // directory + per-gateway announces over Tor and re-verify every entry through the real announce
+  // path before merging (bootnode/federation.mjs). The timer self-unrefs (never holds the process).
+  const peers = parsePeers(process.env.RGOE_BOOTNODE_PEERS, { self: process.env.RGOE_BOOTNODE_ONION });
+  if (peers.length) {
+    const federation = makeFederation({ registry, peers, log });
+    federation.start();
+    log.info("bootnode federation on", { peers, intervalSec: federation.intervalMs / 1000 });
   }
 
   const server = makeServer(registry, { signerPub: signer.pub });

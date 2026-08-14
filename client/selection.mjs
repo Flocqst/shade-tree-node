@@ -345,6 +345,10 @@ export function _setRng(fn) { _rng = typeof fn === "function" ? fn : Math.random
 // re-rolling the dice each time). In-memory session state — NOT a new persistence store. Test seam.
 let _swrr = new Map();
 export function _resetRotationState() { _swrr = new Map(); }
+// Read-only test seam (T-FEAT-24): expose the SWRR deficit map's size so a regression test can prove
+// the map stays bounded — pruned to the live fleet each spreadSelectionOrder() call — without making
+// _swrr public. No behavior change; nothing writes through this.
+export function _swrrSize() { return _swrr.size; }
 
 // Effective selection weight: mirror lib/directory.mjs clampWeight (undefined/NaN => 1, negative => 0,
 // huge => MAX_WEIGHT) so the spread path bounds gateway-attested weight exactly as pickGateway does.

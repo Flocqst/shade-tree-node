@@ -85,7 +85,7 @@ and at scale."
   (`lib/root-provider.mjs` COORDINATION note). Make JS and contract agree on removal semantics.
   *Accept:* register 3, slash the middle, both sides compute the identical root; test. DONE (loop-26): JS aligned
   to the contract's zero-in-place convention; three-way triangulated proof; full suite green.
-- [ ] **T-DEV-2b (P2, added loop-26) Rust RLN tree removal parity.** `rust/rgoe-rln/src/tree.rs` (T-RUST-2c) is
+- [x] **T-DEV-2b (P2, added loop-26) Rust RLN tree removal parity.** `rust/rgoe-rln/src/tree.rs` (T-RUST-2c) is
   insertion-only — no removal path. To stay consistent with the loop-26 JS reconstruction and the contract's
   immutable indices, add a `remove(index)` that zeroes the leaf at its ORIGINAL index (leaf → the tree zero value,
   other indices/paths preserved) and recomputes the root. *Accept:* Rust tree root after register-3/remove-middle
@@ -314,7 +314,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   bootnode discovery (plain-TCP proven, over-Tor gated). Deferred to T-RUST-3b: the persisted K-slot cursor +
   TorClient reuse across failover. *Accept:* the real-Tor integration test (T-TEST-1) passes with the Rust client
   swapped in — pairs with T-TEST-1's CI wiring.
-- [ ] **T-RUST-3b (P3, added loop-24) Per-request slot cursor + Tor client reuse.** Two honest follow-ups from
+- [x] **T-RUST-3b (P3, added loop-24) Per-request slot cursor + Tor client reuse.** Two honest follow-ups from
   T-RUST-3: (a) the JS client rotates through K slots/epoch (makeSlotPool) so repeated requests use distinct
   nullifiers; the Rust `--slot` flag exists but there's no PERSISTED cross-invocation slot cursor — add one (small
   on-disk cursor like the health cache) so a one-shot CLI advances slots between runs within an epoch; (b) over-Tor
@@ -332,7 +332,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-MON-3 (P2) Dashboards + alerts.** DONE (loop-12): `monitoring/grafana-dashboard.json` (panels on the real T-MON-2 metric names, verify-latency histogram_quantile) + `monitoring/alerts.yml` (9 rules cross-ref SLO.md/INCIDENT.md) + `monitoring/README.md` (loopback scrape via tunnel). Burn-rate alerts deferred (need production volume).
 - [x] **T-MON-4 (P2) External uptime checks.** DONE (loop-12): `scripts/uptime-probe.mjs` -- fetch bootnode /health + /directory over Tor, verify the signature against the pinned signer, emit JSON or `--format nagios` (exit 0/2), fail closed, privacy-scrubbed (count only). `scripts/uptime-probe.selftest.mjs` + `monitoring/UPTIME.md`.
 - [x] **T-MON-5 (P2) SLOs + error budget.** DONE (loop-11): `docs/SLO.md` -- 6 SLIs mapped to the T-MON-2 metrics, proposed SLOs with windows/rationale, error-budget math tied to INCIDENT.md, explicit non-SLOs (anonymity is correctness not availability). Three targets flagged [NEEDS DATA] until a real fleet/cohort exists.
-- [ ] **T-FEAT-1 (P1) Bootnode federation / gossip.** More than one bootnode, gossiping announces
+- [x] **T-FEAT-1 (P1) Bootnode federation / gossip.** More than one bootnode, gossiping announces
   so discovery is not a single availability point. A client can pin multiple bootnode signers and
   union their (independently-verified) directories. *Accept:* two bootnodes converge on the same
   live set; a client survives one going dark. *Why now-ish:* the bootnode is the one new
@@ -343,7 +343,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   bootnode aggregates it into the advertised `weight`/`health` (never per-member), so rotation
   favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
   a slow gateway loses weight fleet-wide; a privacy note proving no member is fingerprinted.
-- [ ] **T-FEAT-24 (P3, added loop-18; CORRECTED) Regression test for SWRR `_swrr` map bounding.** Correction to
+- [x] **T-FEAT-24 (P3, added loop-18; CORRECTED) Regression test for SWRR `_swrr` map bounding.** Correction to
   the loop-18 audit note: `_swrr` is ALREADY bounded — `spreadSelectionOrder` (`client/selection.mjs:384-387`)
   deletes every deficit key not in the current live fleet on each call, and when `RGOE_ROTATION_SPREAD` is off
   the map is never written at all, so there is no unbounded-growth bug (my original claim that it "is never
@@ -355,7 +355,21 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-FEAT-5 (P2) Deterministic member subkeys.** DONE (loop-11): `lib/subkeys.mjs` -- HMAC-SHA512(master, `rgoe-subkey:v1\n{context}\n{index}`) mod FIELD -> a valid RLN secret; `deriveIdentity` composes it to a registerable rateCommitment. Determinism, unlinkability across 80 context/index pairs, field-range, RLN composition, master isolation, + a pinned golden vector. `lib/subkeys.selftest.mjs`.
 - [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
-- [ ] **T-FEAT-20 (P2, added loop-14) Cross-fleet shared nonce tally (the T-FEAT-12 residual).** T-FEAT-12 defends ONE gateway against exact-envelope replay, but a non-colluding fleet has no shared spent-set, so a malicious gateway can fan a captured envelope to peers (each sees it once). Add a gossiped/shared per-epoch spent-nullifier tally across gateways (composes with T-FEAT-1 federation) so the rate cap + replay defense hold fleet-wide. Must pair with RLN's per-request nullifiers so the shared tally is not itself a linkability channel (ROADMAP #1). *Accept:* a replay to a SECOND gateway is rejected once the tally propagates.
+- [x] **T-FEAT-20 (P2, added loop-14) Cross-fleet shared nonce tally (the T-FEAT-12 residual).** T-FEAT-12 defends ONE gateway against exact-envelope replay, but a non-colluding fleet has no shared spent-set, so a malicious gateway can fan a captured envelope to peers (each sees it once). Add a gossiped/shared per-epoch spent-nullifier tally across gateways (composes with T-FEAT-1 federation) so the rate cap + replay defense hold fleet-wide. Must pair with RLN's per-request nullifiers so the shared tally is not itself a linkability channel (ROADMAP #1). *Accept:* a replay to a SECOND gateway is rejected once the tally propagates. DONE (loop-29): the tally UNIT + loopback transport + gateway wiring (only nullifier+epoch cross, fail-open, default off). Remaining = the real transport (T-FEAT-20b).
+- [ ] **T-FEAT-20b (P2, added loop-29) Real cross-host fleet-tally gossip transport.** T-FEAT-20 shipped the
+  injectable tally + a loopback transport (two in-process gateways). Build the real async cross-host transport
+  that implements the same `publish(nullifier,epoch)` / `subscribe(cb)` seam over the network (e.g. a
+  gossip/pubsub among gateways, or via a bootnode relay), preserving the privacy invariant (ONLY nullifier+epoch
+  on the wire) and fail-open behavior (a partition/malicious peer never denies service). Composes with T-FEAT-1
+  federation (peers are already discovered). *Accept:* two gateways on separate processes/hosts reject a
+  cross-gateway replay once gossip propagates; a killed peer degrades to per-gateway defense with no outage.
+- [ ] **T-TEST-23 (P3, added loop-29) Make the test runner robust to parallel resource contention.**
+  `scripts/test-all.mjs` runs node selftests and, under load (observed twice in loop-29 with concurrent
+  subagents), 4 unrelated suites (`lib/metrics`, `test/adversarial`, `test/concurrency`, `test/log-hygiene`)
+  flaked — all pass individually and on a clean re-run. Make the runner resilient: either bound concurrency,
+  auto-retry a failed suite once in isolation before declaring red, or mark the genuinely
+  contention-sensitive suites to run serially. *Accept:* the full suite is stable under a loaded machine
+  (no false red from contention); a real failure still fails.
 - [x] **T-FEAT-21 (P2, added loop-15) Directory `issued` max-age bound (client-side).** loop-15 F2 gave the client a monotonic `issued` FLOOR (never accept a directory older than the newest seen), which stops rollback within a session. It does NOT bound staleness on a COLD start: a client with no prior state accepts whatever `issued` the bootnode first serves, so a bootnode that is simply far behind (or is replaying a months-old directory to a fresh client) is undetectable. Add an optional absolute freshness bound — reject a fresh directory whose `issued` is older than `now - RGOE_DIRECTORY_MAX_AGE_MS` — with a generous default and clock-skew grace, fail-closed to the last-good cache. Must not break legitimate static-file directories (opt-in / large default). *Accept:* a directory `issued` beyond the max-age bound is rejected on first load; a within-bound one loads; the bound is configurable and off by default for file sources.
 - [x] **T-TEST-18 (P2, added loop-15) Kill the OnchainStakeVerifier surviving mutants.** T-TEST-10's Stryker run scored 66% on `lib/gateway-registry.mjs`; every survivor clusters in the on-chain `OnchainStakeVerifier` path — error-message strings not asserted, the `now - hit.at < cacheMs` expiry boundary (`<` vs `<=`) untested, the operator cache-key `.toLowerCase()` untested (mixed-casing), the allowlist `.filter(Boolean)` drop untested, and the `typeof ret === "string"` / `/^0x0*/` return-shape guards untested. Source is correct; the suite just doesn't prove it. Add targeted cases to `lib/gateway-registry.selftest.mjs` to kill each. *Accept:* a re-run of `npx stryker run --mutate lib/gateway-registry.mjs` shows the named survivors killed (score materially up), source unchanged.
 - [x] **T-TEST-19 (P1, added loop-16) Cover the `blockTag()` reorg-safety branch of OnchainStakeVerifier.** T-TEST-18's Stryker run left the ENTIRE `RGOE_CONFIRMATIONS > 0` head-N branch in `lib/gateway-registry.mjs` `blockTag()` (compute `latest - confirmations` and read stake at that older block) untested — every current test reads at `latest`, so no mutant in that branch is killed and a regression that silently disabled finality/reorg protection would pass green. This is real coverage of a security control (reading stake at a confirmed depth so a reorg can't flash a fake stake), not cosmetic. Add cases with an injected `eth_blockNumber` + a stubbed archival read asserting the request targets `latest - N` (hex) and that `RGOE_CONFIRMATIONS=0`/unset still reads `latest`. *Accept:* the `blockTag` branch mutants die; both the confirmed-depth and latest paths are asserted; source unchanged.
@@ -741,3 +755,21 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   fixture + generator (all -> circuits/rln/ARTIFACTS.md). GATE 1 CODE PATH COMPLETE (T-DEV-1/2 + T-TEST-1). The
   only thing between here and a real deploy is the HUMAN-run production trusted-setup ceremony (T-HARD-1) — I
   cannot and must not run it. Gate 3 (deploy) is unblocked on code, gated on that ceremony + a human deploy go.
+- 2026-08-14  loop-29  BREADTH fan-out of 5 (disjoint files): T-FEAT-1 (bootnode federation/gossip —
+  RGOE_BOOTNODE_PEERS pull loop re-verifies each gossiped gateway through the SAME verifyAnnounce path
+  [onion-control + operator sig + live isStaked]; the peer's directory signature carries ZERO admission weight;
+  pulls the self-authenticating per-gateway announce, not /directory; TTL from the origin announce; 40 offline
+  assertions incl. 7 rejection cases; default byte-identical), T-FEAT-20 (cross-fleet shared nonce tally, closes
+  the T-FEAT-12 fleet-wide residual — only (nullifier,epoch) crosses the wire [per-epoch pseudorandom, no
+  member/share.y/target → no linkability], FAIL-OPEN defense-in-depth, bounded/epoch-scoped; two-gateway replay
+  rejected; a distributed over-spend is rejected but NOT slashed cross-gateway [refuses to ship share.y];
+  default byte-identical), T-DEV-2b (Rust tree remove() zero-in-place — register-3/remove-middle root ==
+  the loop-26 JS golden, confirmed 3 ways), T-RUST-3b (persisted K-slot cursor [K=8 from lib/rln.mjs; advances
+  0→1→2, resets on epoch roll] + single-bootstrap TorClient reuse across failover), T-FEAT-24 (regression test
+  proving the SWRR _swrr map prunes departed-fleet keys after a full churn). INTEGRATION AUDIT (mine): reran the
+  federation rejection suite (all 7 forged/tampered/stale/unstaked cases rejected + not merged) and the
+  fleet-tally privacy/two-gateway/fail-open cases; confirmed only (nullifier,epoch) crosses. Guardrails: JS suite
+  57/57, Rust rgoe-client 21 / rgoe-proto 9+20 / rgoe-rln 6+1 green, default Rust build fast (clean graph),
+  clippy/fmt/lint clean, all files disjoint. Filed T-FEAT-20b (real async cross-host fleet-tally gossip transport
+  — this run is loopback-only) + T-TEST-23 (make scripts/test-all.mjs robust to parallel resource contention;
+  4 unrelated suites flaked under load twice this loop, all pass individually).

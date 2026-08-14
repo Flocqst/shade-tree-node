@@ -167,6 +167,65 @@ impl MerkleTree {
         self.nodes[0].iter().position(|l| l == leaf)
     }
 
+    /// The leaf value at `index` (mirrors `Group.members[index]`). After a
+    /// [`remove`](Self::remove) the vacated slot reads back as the tree zero
+    /// value (`zeroes[0]`).
+    pub fn leaf(&self, index: usize) -> Fr {
+        self.nodes[0][index]
+    }
+
+    /// The tree zero value (`zeroes[0]` = `hash(id)`), i.e. the value a removed
+    /// leaf takes. Exposed so callers can assert the zero-in-place convention.
+    pub fn zero_value(&self) -> Fr {
+        self.zeroes[0]
+    }
+
+    /// Remove the leaf at its ORIGINAL `index` using the ZERO-IN-PLACE convention
+    /// — the on-chain contract's immutable append-only indices and the loop-26 JS
+    /// `reconstructRoot` (`lib/root-provider.mjs`) both use it, and this matches
+    /// `@zk-kit/incremental-merkle-tree`'s `delete(index)` (which is
+    /// `update(index, zeroes[0])`) as reached through Semaphore-v3 `Group.delete`.
+    ///
+    /// The leaf becomes the tree zero value (`zeroes[0]` — the keccak-seeded
+    /// `hash(id)`, NOT `0` and NOT a Poseidon zero), every other leaf keeps its
+    /// index and Merkle path, and the root is recomputed over the zeroed leaf.
+    /// The leaf count is unchanged, so higher-level node lengths are unchanged;
+    /// the tree never collapses to the empty-tree special case (a fully-emptied
+    /// tree still has `len` zero-valued leaves, matching the JS group).
+    pub fn remove(&mut self, index: usize) {
+        assert!(
+            index < self.nodes[0].len(),
+            "leaf index {index} out of range"
+        );
+        // Zero-in-place: set the leaf to the tree's zero value, then recompute.
+        self.nodes[0][index] = self.zeroes[0];
+        self.recompute();
+    }
+
+    /// Recompute `nodes[1..=depth]` from the current `nodes[0]`, filling missing
+    /// right-children with `zeroes[level]` — the identical fold `new` performs, so
+    /// a zero-in-place `remove` yields exactly the root a fresh build over the same
+    /// (post-removal) leaf array would.
+    fn recompute(&mut self) {
+        for level in 0..self.depth {
+            let len = self.nodes[level].len();
+            let count = len.div_ceil(2); // ceil(len / arity), arity == 2
+            let mut parents = Vec::with_capacity(count);
+            for index in 0..count {
+                let left = self.nodes[level]
+                    .get(2 * index)
+                    .copied()
+                    .unwrap_or(self.zeroes[level]);
+                let right = self.nodes[level]
+                    .get(2 * index + 1)
+                    .copied()
+                    .unwrap_or(self.zeroes[level]);
+                parents.push(poseidon2(left, right));
+            }
+            self.nodes[level + 1] = parents;
+        }
+    }
+
     /// A membership proof for the leaf at `index`: `(siblings, path_indices)`,
     /// each of length `depth`. `siblings[l]` is the sibling node at level `l`
     /// (an actual node, or `zeroes[l]` for an empty subtree); `path_indices[l]`

@@ -19,6 +19,11 @@ use serde::Deserialize;
 
 mod dircache;
 mod health;
+// The persisted K-slot cursor is used only by the `live` egress path (see the `live`
+// module); its unit tests run on the default build under `test`. Gating the module to
+// those two cfgs keeps the default NON-test build from compiling it at all.
+#[cfg(any(feature = "live", test))]
+mod slotcursor;
 
 use dircache::DirectoryDto;
 
@@ -221,8 +226,8 @@ SUBCOMMANDS:
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
     egress <TRANSPORT> --identity <f> --members <f> --target <host:port>
-           [--circuits <dir>] [--epoch <n>] [--slot <i>] [--rln-identifier <n>]
-           [--k <n>] [--nonce <hex>]
+           [--circuits <dir>] [--epoch <n>] [--slot <i>] [--slot-cursor <f>]
+           [--rln-identifier <n>] [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
         in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
         circuits) binding <target>, opens a connection to the gateway, sends the
@@ -257,6 +262,9 @@ SUBCOMMANDS:
                       no external circuit files — T-RUST-4)
           --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
           --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
+          --slot-cursor  persist a per-epoch slot cursor (or RGOE_SLOT_CURSOR) so
+                      consecutive egress runs in one epoch advance 0,1,…,K-1 (distinct
+                      nullifiers) and reset on epoch roll; --slot overrides it
           --rln-identifier  group id (default 1)     --nonce  32-hex per-request nonce
         Without the feature: prints an honest not-built error.
 
@@ -474,7 +482,8 @@ mod live {
     use serde::Deserialize;
 
     use super::{
-        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, take_flag,
+        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, slotcursor,
+        take_flag,
     };
 
     /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
@@ -551,6 +560,22 @@ mod live {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         now / epoch_seconds()
+    }
+
+    // Where to persist the K-slot cursor (opt-in, like --health-cache): the
+    // `--slot-cursor <f>` flag wins, else the RGOE_SLOT_CURSOR env, else none (no
+    // persistence -> slot 0, the historical default, so existing harnesses are
+    // unchanged). An empty/"off"/"0" env value is an explicit OFF.
+    fn slot_cursor_path(rest: &[String]) -> Option<PathBuf> {
+        if let Some(f) = take_flag(rest, "--slot-cursor") {
+            return Some(PathBuf::from(f));
+        }
+        let v = std::env::var("RGOE_SLOT_CURSOR").ok()?;
+        let v = v.trim();
+        if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
+            return None;
+        }
+        Some(PathBuf::from(v))
     }
 
     // Per-step embedded-Tor timeout (bootstrap + connect each), RGOE_TOR_TIMEOUT_SECS.
@@ -734,76 +759,115 @@ mod live {
         Ok((onion, port))
     }
 
-    // Dial the gateway `.onion` over EMBEDDED TOR (arti) and send the framed envelope,
-    // reading one newline-terminated ack — the read/frame contract is IDENTICAL to the
-    // plain-TCP `send_envelope`, so the gateway cannot tell the transports apart.
+    // One bootstrapped embedded-Tor client (arti) + its Tokio runtime, REUSED across the
+    // whole failover candidate loop (T-RUST-3b). Bootstrap is the slow part of a Tor dial;
+    // the previous code re-bootstrapped a fresh `TorClient` (and a fresh runtime) for EVERY
+    // candidate, which was purely wasteful — every onion candidate shares the same Tor
+    // network view, so one bootstrap serves them all. We bootstrap ONCE (lazily, only if a
+    // candidate is actually an onion) and call `connect()` per candidate on the same client.
     //
-    // The RLN envelope is built BEFORE this runs (build_envelope spins up and drops its own
-    // Tokio runtime for the wasm witness), so creating the arti runtime here never nests one
-    // runtime inside another. Bootstrap + connect are each bounded by RGOE_TOR_TIMEOUT_SECS.
-    fn tor_dial_and_send(onion: &str, port: u16, wire: &str) -> Result<serde_json::Value, String> {
-        use arti_client::{TorClient, TorClientConfig};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // The RLN envelope is built BEFORE this is created (build_envelope spins up and drops its
+    // own Tokio runtime for the wasm witness), so creating this runtime never nests one
+    // runtime inside another. Bootstrap + each connect are bounded by RGOE_TOR_TIMEOUT_SECS.
+    struct TorSession {
+        rt: tokio::runtime::Runtime,
+        // `create_bootstrapped` hands back an `Arc<TorClient>` (the client is not itself
+        // Clone); the Arc is the cheap-to-clone reuse handle shared across the loop.
+        client: std::sync::Arc<arti_client::TorClient<tor_rtcompat::PreferredRuntime>>,
+        timeout: Duration,
+        timeout_secs: u64,
+    }
 
-        let timeout_secs = tor_timeout_secs();
-        let timeout = Duration::from_secs(timeout_secs);
+    impl TorSession {
+        // Bootstrap arti ONCE. Called lazily on the first onion candidate so a run whose
+        // failover order is all plain-TCP never pays for a bootstrap.
+        fn bootstrap() -> Result<Self, String> {
+            use arti_client::{TorClient, TorClientConfig};
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("tokio runtime: {e}"))?;
-
-        rt.block_on(async move {
-            eprintln!("egress: bootstrapping embedded Tor (arti) ...");
-            let config = TorClientConfig::default();
-            let tor = tokio::time::timeout(timeout, TorClient::create_bootstrapped(config))
+            let timeout_secs = tor_timeout_secs();
+            let timeout = Duration::from_secs(timeout_secs);
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+            eprintln!("egress: bootstrapping embedded Tor (arti) once for the failover loop ...");
+            let client = rt.block_on(async {
+                tokio::time::timeout(
+                    timeout,
+                    TorClient::create_bootstrapped(TorClientConfig::default()),
+                )
                 .await
                 .map_err(|_| format!("arti bootstrap timed out after {timeout_secs}s"))?
-                .map_err(|e| format!("arti bootstrap: {e}"))?;
-
-            let host = format!("{onion}.onion");
-            eprintln!("egress: dialing {host}:{port} over Tor ...");
-            let mut stream = tokio::time::timeout(timeout, tor.connect((host.as_str(), port)))
-                .await
-                .map_err(|_| format!("onion connect timed out after {timeout_secs}s"))?
-                .map_err(|e| format!("connect onion {host}:{port}: {e}"))?;
-
-            stream
-                .write_all(wire.as_bytes())
-                .await
-                .map_err(|e| format!("write envelope: {e}"))?;
-            stream
-                .flush()
-                .await
-                .map_err(|e| format!("flush envelope: {e}"))?;
-
-            let mut buf: Vec<u8> = Vec::with_capacity(256);
-            let mut chunk = [0u8; 512];
-            loop {
-                let n = stream
-                    .read(&mut chunk)
-                    .await
-                    .map_err(|e| format!("read ack: {e}"))?;
-                if n == 0 {
-                    return Err("gateway closed the connection before an ack".to_string());
-                }
-                if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
-                    buf.extend_from_slice(&chunk[..nl]);
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > 64 * 1024 {
-                    return Err("ack exceeded 64KiB without a newline".to_string());
-                }
-            }
-            let line = String::from_utf8_lossy(&buf);
-            serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
-                format!(
-                    "bad ack json ({e}): {}",
-                    line.chars().take(160).collect::<String>()
-                )
+                .map_err(|e| format!("arti bootstrap: {e}"))
+            })?;
+            Ok(Self {
+                rt,
+                client,
+                timeout,
+                timeout_secs,
             })
-        })
+        }
+
+        // Dial the gateway `.onion` over the ALREADY-bootstrapped client and send the framed
+        // envelope, reading one newline-terminated ack — the read/frame contract is IDENTICAL
+        // to the plain-TCP `send_envelope`, so the gateway cannot tell the transports apart.
+        fn dial_and_send(
+            &self,
+            onion: &str,
+            port: u16,
+            wire: &str,
+        ) -> Result<serde_json::Value, String> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let timeout = self.timeout;
+            let timeout_secs = self.timeout_secs;
+            let client = std::sync::Arc::clone(&self.client);
+            self.rt.block_on(async move {
+                let host = format!("{onion}.onion");
+                eprintln!("egress: dialing {host}:{port} over Tor ...");
+                let mut stream =
+                    tokio::time::timeout(timeout, client.connect((host.as_str(), port)))
+                        .await
+                        .map_err(|_| format!("onion connect timed out after {timeout_secs}s"))?
+                        .map_err(|e| format!("connect onion {host}:{port}: {e}"))?;
+
+                stream
+                    .write_all(wire.as_bytes())
+                    .await
+                    .map_err(|e| format!("write envelope: {e}"))?;
+                stream
+                    .flush()
+                    .await
+                    .map_err(|e| format!("flush envelope: {e}"))?;
+
+                let mut buf: Vec<u8> = Vec::with_capacity(256);
+                let mut chunk = [0u8; 512];
+                loop {
+                    let n = stream
+                        .read(&mut chunk)
+                        .await
+                        .map_err(|e| format!("read ack: {e}"))?;
+                    if n == 0 {
+                        return Err("gateway closed the connection before an ack".to_string());
+                    }
+                    if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
+                        buf.extend_from_slice(&chunk[..nl]);
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > 64 * 1024 {
+                        return Err("ack exceeded 64KiB without a newline".to_string());
+                    }
+                }
+                let line = String::from_utf8_lossy(&buf);
+                serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
+                    format!(
+                        "bad ack json ({e}): {}",
+                        line.chars().take(160).collect::<String>()
+                    )
+                })
+            })
+        }
     }
 
     // Dial plain TCP, send the framed envelope, read one newline-terminated ack, parse it.
@@ -904,13 +968,26 @@ mod live {
 
     // Dial one candidate + send the framed envelope. Ok(ack) means the gateway replied
     // (accept OR refuse — terminal); Err means a dial/IO failure the failover loop rotates on.
-    fn dial_send(t: &Transport, wire: &str) -> Result<serde_json::Value, String> {
+    // `tor` holds the shared bootstrapped session (T-RUST-3b): the first onion candidate
+    // bootstraps it, every later onion candidate reuses it. A bootstrap failure leaves `tor`
+    // as `None`, so a later onion candidate may retry — the reuse only caches SUCCESS.
+    fn dial_send(
+        t: &Transport,
+        wire: &str,
+        tor: &mut Option<TorSession>,
+    ) -> Result<serde_json::Value, String> {
         match t {
             Transport::PlainTcp(hp) => {
                 eprintln!("egress: dialing {hp} (plain TCP, no Tor) ...");
                 send_envelope(hp, wire)
             }
-            Transport::Onion { onion, port } => tor_dial_and_send(onion, *port, wire),
+            Transport::Onion { onion, port } => {
+                if tor.is_none() {
+                    *tor = Some(TorSession::bootstrap()?);
+                }
+                // Just populated (or already present): reuse the one bootstrapped client.
+                tor.as_ref().unwrap().dial_and_send(onion, *port, wire)
+            }
         }
     }
 
@@ -955,12 +1032,22 @@ mod live {
         let epoch = take_flag(rest, "--epoch")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(current_epoch);
-        let slot = take_flag(rest, "--slot")
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
         let k = take_flag(rest, "--k")
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(8);
+            .unwrap_or(slotcursor::K_SLOTS);
+        // Slot resolution (parity with makeSlotPool, client/rgoe-client.mjs):
+        //   1. explicit `--slot <i>` always wins and leaves any cursor untouched.
+        //   2. otherwise, if a persisted cursor is configured (`--slot-cursor <f>` or
+        //      RGOE_SLOT_CURSOR), advance it: consecutive egress runs in one epoch get
+        //      distinct slots 0,1,…,K-1 (distinct nullifiers), resetting on epoch roll.
+        //   3. with no cursor and no `--slot`, preserve the historical default of slot 0.
+        let slot = match take_flag(rest, "--slot").and_then(|s| s.parse::<u64>().ok()) {
+            Some(explicit) => explicit,
+            None => match slot_cursor_path(rest) {
+                Some(path) => slotcursor::next_slot(Some(&path), epoch, k),
+                None => 0,
+            },
+        };
         let rln_identifier = take_flag(rest, "--rln-identifier").unwrap_or_else(|| "1".to_string());
         let nonce = take_flag(rest, "--nonce").unwrap_or_else(gen_nonce);
 
@@ -1032,11 +1119,14 @@ mod live {
         let n = plan.transports.len();
         let mut last_err: Option<String> = None;
         let mut outcome: Option<(String, serde_json::Value)> = None;
+        // One bootstrapped Tor client shared across the whole loop (T-RUST-3b): lazily
+        // created by the first onion candidate, reused by every later one.
+        let mut tor: Option<TorSession> = None;
         // Move the transports out so `report` can borrow `plan.health` mutably in the loop.
         let transports = std::mem::take(&mut plan.transports);
         for (i, t) in transports.iter().enumerate() {
             eprintln!("egress: candidate {}/{}: {}", i + 1, n, t.label());
-            match dial_send(t, &wire) {
+            match dial_send(t, &wire, &mut tor) {
                 Ok(ack) => {
                     report(&mut plan.health, t, true); // dial succeeded (accept or refuse)
                     outcome = Some((t.label(), ack));

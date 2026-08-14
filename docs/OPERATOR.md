@@ -240,6 +240,44 @@ cast tx 0x<hash> --rpc-url https://<rpc-endpoint>   # foundry; check it was mine
 Confirm the member's stake in `StakedReputationSet` moved to the receiver, and that the
 over-spending member can no longer egress (repeated `DROP rate-slashed`).
 
+### Cross-fleet replay defense (shared nonce tally — T-FEAT-20)
+
+Each gateway defends itself against an exact-envelope replay with a per-gateway
+seen-envelope cache (T-FEAT-12): a captured envelope resent to the **same** gateway
+outside the honest-retry window (`RGOE_REPLAY_WINDOW_MS`, default 5s) is dropped
+`replayed-envelope`. That cache is local, so a non-colluding fleet had no shared
+spent-set — a malicious relay could fan one captured envelope to **peer** gateways and
+each would serve it once.
+
+The optional **shared nonce tally** (`gateway/fleet-tally.mjs`) closes that: gateways
+share a per-epoch spent-**nullifier** tally, so a nullifier admitted at gateway A
+propagates and gateway B rejects the same envelope `replayed-envelope` once it has the
+tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
+
+- **What crosses the wire, and why it is safe.** Only the pair `(nullifier, epoch)` is
+  shared — never member identity/commitment, never `share.y` (the secret a slash
+  reconstructs from), never the egress `target`, never `share.x` or the nonce. An RLN
+  nullifier is per-epoch, per-request, and pseudorandom (unlinkable to the member — the
+  same property that already lets one gateway dedup on it without learning who the member
+  is), so sharing it adds no linkability beyond what the admitting gateway already had. A
+  peer learns only "some request with nullifier N happened in epoch E." Because `share.y`
+  never leaves a gateway, the tally is **not** a slashing/deanonymization side channel.
+- **Slashing stays local.** A slash needs two shares under one nullifier; since `share.y`
+  is not shared, a **distributed** over-spend (the two shares landing on different
+  gateways) is rejected fleet-wide but slashed only where both shares land. That is the
+  intended privacy trade — the alternative (gossiping shares) would leak the very bytes
+  that reconstruct an identity.
+- **Fail-open.** A gateway that cannot reach the tally degrades to the per-gateway
+  T-FEAT-12 defense and keeps serving — the tally is defense-in-depth, never an admission
+  authority, so a partition or a broken peer cannot deny legitimate members.
+- **Off by default.** No shared transport is wired unless one is configured. **This build
+  ships no cross-host transport yet** (real signed gossip over the bootnode / a mesh is a
+  follow-up that implements the same `publish(nullifier, epoch)` / `subscribe(cb)` seam),
+  so today the gateway runs exactly the per-gateway behavior. When the tally is active the
+  gateway logs `fleet tally: ON` at startup. Note: with the tally enabled a nullifier is
+  single-use **fleet-wide**, so a client that fails over to another gateway must use a
+  fresh RLN slot (a follow-up on the client side); until then, keep it off in production.
+
 ---
 
 ## 6. Rotate or retire a gateway

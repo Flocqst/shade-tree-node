@@ -241,6 +241,57 @@ process.exit(0);`;
     ok(new Set(order.map((c) => c.onion)).size === 4, "the full failover order still covers all 4 gateways with no duplicates");
   }
 
+  // ---- T-FEAT-24: the SWRR _swrr deficit map stays bounded — pruned to the live fleet on churn ----
+  // _swrr is module-private session state (onion -> current deficit). spreadSelectionOrder deletes every
+  // key not in the current live fleet on each call, so it can't grow unboundedly across directory
+  // refreshes. This proves that structurally via the read-only _swrrSize() seam: spread over fleet A,
+  // then swap to a COMPLETELY DISJOINT fleet B and spread again — the departed fleet-A keys must be
+  // pruned (size stays 3, never 6). A still-in-fleet but "down" gateway must KEEP its deficit (it is
+  // still in the fleet, only out of the spread pool), so it is not pruned. DIRECTORY_PATH is fixed to
+  // eqPath at import and RGOE_DIRECTORY_REFRESH_MS=0 reloads it every call, so overwriting the file
+  // swaps the live fleet in-process.
+  console.log("\n_swrr bounding (T-FEAT-24): fleet churn prunes departed onions, keeps live (incl. down) ones:");
+  const fa = [newKey(), newKey(), newKey()];
+  const faOnions = fa.map((k) => pubkeyToOnion(k.pub));
+  const fb = [newKey(), newKey(), newKey()]; // fleet B: NO onion shared with fleet A
+  const fbOnions = fb.map((k) => pubkeyToOnion(k.pub));
+  const bareFb = fbOnions.map((o) => o.replace(/\.onion$/, ""));
+  const issuedA = Math.floor(Date.now() / 1000) + 10; // above any issued already accepted this process
+  const dirA = signDirectory({
+    version: 1, issued: issuedA,
+    gateways: fa.map((k, i) => ({ onion: faOnions[i], pubkey: k.pub, weight: 100, health: "up" })),
+    signer: signer.pub,
+  }, signer.priv);
+  const dirB = signDirectory({
+    version: 1, issued: issuedA + 1,
+    gateways: fb.map((k, i) => ({ onion: fbOnions[i], pubkey: k.pub, weight: 100, health: "up" })),
+    signer: signer.pub,
+  }, signer.priv);
+
+  sel._setRng(mulberry32(0x24fea724));
+  sel._resetRotationState();
+  sel._resetIssuedFloor();
+  ok(sel._swrrSize() === 0, "_swrr starts empty after _resetRotationState()");
+
+  // Spread over fleet A — its 3 onions populate the deficit map.
+  writeFileSync(eqPath, JSON.stringify(dirA) + "\n");
+  for (let i = 0; i < 12; i++) await sel.selectCandidates();
+  ok(sel._swrrSize() > 0, "_swrr is populated after spreading over fleet A (size > 0)");
+  ok(sel._swrrSize() === 3, `_swrr holds exactly fleet A's 3 onions (size=${sel._swrrSize()})`);
+
+  // Swap the ENTIRE fleet to B (no shared onions) and spread again — the departed fleet-A keys must be
+  // pruned, so the map retains ONLY the live fleet (3), never growing to 6.
+  writeFileSync(eqPath, JSON.stringify(dirB) + "\n");
+  for (let i = 0; i < 12; i++) await sel.selectCandidates();
+  ok(sel._swrrSize() === 3, `after full fleet churn _swrr retains ONLY live fleet B (3), departed fleet A pruned — not 6 (size=${sel._swrrSize()})`);
+
+  // A temporarily-"down" gateway that is STILL in the fleet keeps its deficit (it is in `all`, only out
+  // of the spread pool), so the prune leaves it — the map does not shrink to 2.
+  sel.reportResult(bareFb[0], { ok: false });
+  sel.reportResult(bareFb[0], { ok: false }); // 2 fails => "down"
+  for (let i = 0; i < 6; i++) await sel.selectCandidates();
+  ok(sel._swrrSize() === 3, `a still-in-fleet but DOWN gateway keeps its deficit (not pruned) — size stays 3 (size=${sel._swrrSize()})`);
+
   rmSync(work, { recursive: true, force: true });
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: rotation selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

@@ -32,6 +32,7 @@ import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECOND
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
+import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
 import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
 import { log } from "../lib/log.mjs";
 
@@ -114,10 +115,17 @@ async function initRoots() {
 // resend (dropped connection) repeats here, and it does so within seconds — comfortably
 // inside the window. Anything repeating on ONE gateway seconds/minutes later is a replay.
 //
-// NOTE (bigger later step, docs/ROADMAP.md #1): this defends a single gateway only. A
-// non-colluding fleet still has no SHARED spent-set, so a malicious gateway can still fan a
-// captured envelope out to its PEERS (each sees it once). Closing that needs a gossiped /
-// shared cross-fleet nonce tally, tracked separately — this ships the per-gateway half now.
+// CROSS-FLEET (T-FEAT-20): the per-gateway cache above defends ONE gateway only. A
+// non-colluding fleet still has no SHARED spent-set, so a malicious relay can fan a captured
+// envelope out to its PEERS (each sees it once). The optional `sharedTally` (gateway/fleet-
+// tally.mjs) closes that: on a nullifier we have NOT seen locally, we first ask the shared
+// tally whether a PEER already admitted it this epoch and, if so, reject it as an exact
+// fleet-wide replay; when we DO admit a first-seen nullifier, we record it to the tally so
+// peers reject the same envelope. Only (nullifier, epoch) crosses the tally — never share.y,
+// target, or member identity (see the privacy note in fleet-tally.mjs). The tally is consulted
+// ONLY on the first-locally-seen branch, so the local slash path (2nd distinct share.x) and the
+// honest-retry window are UNCHANGED, and it is fail-OPEN: any tally error degrades to exactly
+// the per-gateway defense. sharedTally=null (the default) => byte-identical to T-FEAT-12.
 //
 // reconstruct/derive/slash are injected so the selftest can drive this control flow with
 // mocks (the real lib + on-chain slasher land at combine). `now` is injectable so the
@@ -126,6 +134,7 @@ export function makeSpentSet({
   reconstruct = reconstructSecret,
   derive = deriveCommitment,
   slash,
+  sharedTally = null,
   ttlMs = 2 * EPOCH_SECONDS * 1000,
   replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000,
   now = () => Date.now(),
@@ -143,9 +152,24 @@ export function makeSpentSet({
     const e = seen.get(k);
 
     if (!e) {
+      // First time THIS gateway sees this nullifier. Before admitting, ask the shared fleet
+      // tally whether a PEER already admitted it this epoch — if so, this is an exact
+      // fleet-wide replay (a captured envelope fanned to us), reject it. `has()` is fail-open:
+      // an unreachable/throwing tally returns false and we fall through to the local admit, so
+      // a tally outage degrades to the per-gateway defense, never denies a legitimate member.
+      if (sharedTally && sharedTally.has(nullifier, opts.epoch)) {
+        log.warn("replayed-envelope rejected (fleet tally)", {
+          nullifier: String(nullifier).slice(0, 10) + "..",
+          scope: "fleet",
+        });
+        return { ok: false, action: "replayed-envelope", reason: "replayed-envelope", scope: "fleet" };
+      }
       const t = now();
       seen.set(k, { xs: new Set([String(share.x)]), first: share, slashed: false, at: t });
       seenEnv.set(ek, t);
+      // Announce the admitted nullifier so peers reject the same envelope. Only (nullifier,
+      // epoch) is shared; record() is fail-open (a publish failure never blocks this egress).
+      if (sharedTally) sharedTally.record(nullifier, opts.epoch);
       return { ok: true, action: "first" };
     }
     if (e.slashed) return { ok: false, action: "slashed", reason: "rate-slashed" };
@@ -576,8 +600,11 @@ function makeHandler(spentSet, { makeReceipt = null } = {}) {
 
       // Step 4: nullifier dedup + share collection; slashes on 2nd distinct signal.
       // Pass the envelope nonce so the seen-envelope cache (T-FEAT-12) can reject an
-      // exact-envelope replay outside the honest-retry window as "replayed-envelope".
-      const res = await spentSet.admit(v.nullifier, v.share, { nonce: env.nonce });
+      // exact-envelope replay outside the honest-retry window as "replayed-envelope", and the
+      // proof's externalNullifier as the per-epoch scope key for the shared fleet tally
+      // (T-FEAT-20). externalNullifier is the fleet-agreed per-epoch value, so both gateways
+      // key the same nullifier into the same epoch bucket.
+      const res = await spentSet.admit(v.nullifier, v.share, { nonce: env.nonce, epoch: v.externalNullifier });
       if (!res.ok) {
         log.warn("drop", { reason: res.reason, nullifier: String(v.nullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "drop", reason: res.reason });
@@ -653,7 +680,11 @@ export function makeGracefulShutdown(server, {
 async function main() {
   await initRoots();
   const slash = await makeSlasher();
-  const spentSet = makeSpentSet({ slash });
+  // Optional cross-fleet shared spent-nullifier tally (T-FEAT-20). null unless a real
+  // cross-host transport is wired — which this run does NOT bundle (follow-up), so this is
+  // null by default and makeSpentSet({ sharedTally:null }) is byte-identical to T-FEAT-12.
+  const sharedTally = makeConfiguredFleetTally();
+  const spentSet = makeSpentSet({ slash, sharedTally });
   setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000).unref();
 
   // Optional signed success receipts (T-FEAT-13); null unless RGOE_RECEIPTS=1.
@@ -688,6 +719,7 @@ async function main() {
     log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
     const replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000;
     log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
+    if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

@@ -110,6 +110,68 @@ accepted gateway stays listed), not the announce anti-replay window — so a res
 the last heartbeat keeps the fleet, while a stale or tampered store can never resurrect a
 long-dead gateway or inject an onion nobody controls.
 
+## Federation (multiple bootnodes)
+
+The bootnode is the one new single-point-of-availability the fleet adds. **Federation** closes
+that: run more than one bootnode and let them gossip, so discovery survives any one going dark.
+Off by default — with no `RGOE_BOOTNODE_PEERS` set, a bootnode is byte-for-byte the standalone one
+above.
+
+```bash
+# each bootnode lists the OTHER bootnodes' onions
+RGOE_BOOTNODE_PEERS=<peerA>.onion,<peerB>.onion \
+RGOE_BOOTNODE_ONION=<this-bootnode>.onion \
+RGOE_BOOTNODE_FED_INTERVAL=60 \
+  rgoe bootnode ...
+```
+
+| env | default | meaning |
+|---|---|---|
+| `RGOE_BOOTNODE_PEERS` | *(empty → off)* | comma-list of peer bootnode onions to federate with |
+| `RGOE_BOOTNODE_FED_INTERVAL` | `60` | seconds between pull cycles |
+| `RGOE_BOOTNODE_FED_MAX_PULL` | `maxEntries` | max gateways pulled per peer per cycle (bounds a hostile peer) |
+| `RGOE_BOOTNODE_ONION` | *(unset)* | this bootnode's own onion, filtered out of the peer set |
+
+### Cache, not trust root — applied to gossip
+
+A pull loop (`bootnode/federation.mjs`, a self-unref'd timer) periodically fetches each peer's
+`GET /directory` over Tor, and for **each listed onion** pulls that gateway's stored signed announce
+from the peer's `GET /gateway/<onion>`. Every pulled announce is then re-run through the **same real
+`verifyAnnounce` path a direct announce takes** (`registry.admitGossip`) before it is merged:
+
+- **The peer's directory signature is never trusted as authority over entries.** The peer's
+  `/directory` is used only as a *hint list of onion strings*; its signer, pubkey, weight, health and
+  operator/staked labels carry no admission weight. Admission comes entirely from re-verifying the
+  per-gateway announce — which is why federation pulls `/gateway/<onion>` rather than trusting
+  `/directory` alone (the directory shape omits the `onionSig`/`ts`/`nonce`/`operatorSig` needed to
+  re-verify an entry, so it is not independently re-verifiable per entry).
+- **A forged / tampered / unstaked gossiped gateway is rejected exactly as a direct announce would
+  be**: the v3 `.onion` *is* its ed25519 key, so a swapped onion or a flipped signed field breaks the
+  onion signature (`bad-onion-sig`); in stake mode the operator sig is re-checked and `isStaked` is
+  re-read on **this** bootnode's own chain view (`not-staked` / `bad-operator-sig`). So gossip can add
+  nothing a live gateway could not have announced to us directly.
+
+### Loop / DoS bounding
+
+- **Freshness is the origin announce's own TTL.** A merged entry expires at `ts + ttl` of the
+  announce the origin gateway signed — never refreshed by gossip. So a peer cannot keep a dead gateway
+  alive by re-gossiping a fixed old record, and an entry never re-propagates its own TTL. Re-pulling
+  the same record is idempotent (dedup by onion + expiry; gossip never shortens a fresher local entry,
+  e.g. one heartbeated to us directly). An announce whose `ts + ttl` already lapsed is dropped
+  (`stale-gossip`).
+- **The existing DoS caps still hold.** `maxEntries` bounds what is admitted (a new gossiped onion is
+  refused when full); `RGOE_BOOTNODE_FED_MAX_PULL` bounds how many gateways we fetch from any one peer,
+  so a hostile peer advertising a giant directory cannot make us do unbounded per-gateway fetches.
+- **Fail-soft.** A down peer (fetch throws) is skipped; one failing gateway fetch doesn't abort the
+  peer; one failing peer doesn't abort the cycle. Federation is strictly additive — it only *consumes*
+  peers, exposing no new endpoint and no new linkability/DoS surface. Persistence + sweep are
+  unchanged: a merged entry is written through and re-verified on reload like any other.
+
+*Accept (proven offline in `bootnode/federation.selftest.mjs`, injected fetch + clock):* two bootnodes
+converge on the same live set; the forged/tampered/unstaked/stale rejection matrix; dedup + no-shorten;
+the caps; fail-soft over a dark peer; and a no-peer registry directory byte-identical to a
+federation-free one.
+
 ## Client side
 
 ```bash

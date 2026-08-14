@@ -134,3 +134,74 @@ fn three_member_root_and_path_match() {
         );
     }
 }
+
+#[test]
+fn remove_middle_matches_zero_in_place_reconstruction() {
+    // T-DEV-2b: register 3, remove the MIDDLE one, and the Rust tree root must equal
+    // the JS `reconstructRoot` / contract root under the ZERO-IN-PLACE convention.
+    //
+    // The three leaves are the RLN rate commitments for secrets 111/222/333
+    // (`deriveCommitment` in lib/rln.mjs), NOT the raw 111/222/333 used above. Golden
+    // values regenerated with:
+    //
+    // ```text
+    // node --input-type=module -e '
+    //   import { deriveCommitment } from "./lib/rln.mjs";
+    //   for (const s of [111n,222n,333n]) console.log(deriveCommitment(s));
+    // '
+    // ```
+    let c0 =
+        dec_to_fr("11302006078516901731073162965056551612114122314181142374993834332168998510316");
+    let c1 =
+        dec_to_fr("13078298592394202577483675563300534726994257275923319700649466251612691437670");
+    let c2 =
+        dec_to_fr("5527131182811693631850291830791844533392664118062693956923196629560743717040");
+
+    // The loop-26 JS/contract golden root for {register c0@0,c1@1,c2@2; slash c1}.
+    // It is the SAME constant pinned in lib/rln-removal-parity.selftest.mjs and
+    // docs/SHIP-PLAN.md T-DEV-2 — the three-way triangulated JS↔contract oracle.
+    const GOLDEN_ROOT: &str =
+        "14367190620832145537223890636337926502210861635134078778082353204233456513838";
+
+    let mut tree = MerkleTree::new(&id1(), TREE_DEPTH, &[c0, c1, c2]);
+    tree.remove(1); // vacate the ORIGINAL index of the middle member (zero-in-place)
+
+    assert_eq!(
+        fr_to_dec(&tree.root()),
+        GOLDEN_ROOT,
+        "Rust remove-middle root must equal the JS reconstructRoot / contract golden"
+    );
+
+    // Survivors keep their exact indices; the vacated slot holds the tree zero value.
+    assert_eq!(tree.index_of(&c0), Some(0), "survivor c0 keeps index 0");
+    assert_eq!(tree.index_of(&c2), Some(2), "survivor c2 keeps index 2");
+    assert_eq!(tree.index_of(&c1), None, "removed c1 is no longer present");
+    assert_eq!(
+        fr_to_dec(&tree.leaf(1)),
+        fr_to_dec(&tree.zero_value()),
+        "vacated middle slot holds the tree zero value (NOT 0, NOT a Poseidon zero)"
+    );
+
+    // Zero-in-place removal must equal a fresh build over the post-removal leaf array
+    // (the property the interop harness cross-checks against the JS oracle).
+    let rebuilt = MerkleTree::new(&id1(), TREE_DEPTH, &[c0, tree.zero_value(), c2]);
+    assert_eq!(
+        fr_to_dec(&tree.root()),
+        fr_to_dec(&rebuilt.root()),
+        "remove(index) == fresh build with leaf[index] = zero value"
+    );
+
+    // A surviving member's Merkle path still proves against the post-removal root:
+    // c2 at index 2 keeps a valid path (right-child at level 0 vacated to the zero value).
+    let (siblings, path_indices) = tree.create_proof(2);
+    assert_eq!(siblings.len(), TREE_DEPTH);
+    assert_eq!(
+        path_indices[0], 0,
+        "c2 at index 2 is a left child at level 0"
+    );
+    assert_eq!(
+        fr_to_dec(&siblings[0]),
+        fr_to_dec(&tree.zero_value()),
+        "c2's level-0 sibling is the vacated (index 3) empty slot = zero value"
+    );
+}
