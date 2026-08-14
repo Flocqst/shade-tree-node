@@ -205,6 +205,54 @@ each `pubkey` is re-derived from the self-authenticating onion address.
 
 `<onion[:12]>` is the first 12 chars of the onion string.
 
+### 4.4 Threshold (M-of-N) directory — T-FEAT-9 — `lib/directory.mjs`
+
+The single-signer directory trusts ONE bootnode key: compromise it and a client's fleet
+*view* can be steered (entries omitted/reordered — a forged onion is still impossible, onion
+control is re-checked). A directory MAY instead be signed by an M-of-N set of INDEPENDENT
+signers (composes with T-FEAT-1 federation: each federated bootnode is one signer), so no
+single key compromise produces an accepted directory.
+
+The extension is **additive**. Three OPTIONAL top-level fields carry it, and they are
+**excluded from `canonicalDirectoryBytes` exactly like `signer`/`signature`** (section 1.2) —
+so every signer signs the *same* canonical bytes as the single-sig directory over the same
+`{version,issued,gateways}`, and the byte encoding is unchanged:
+
+```jsonc
+{
+  "version": 1, "issued": <unix>, "gateways": [ /* … */ ],
+  "signers":    ["<hex ed25519 pubkey>", …],   // index-aligned with signatures
+  "signatures": ["<hex ed25519 over canonicalDirectoryBytes(dir)>", …],
+  "threshold":  <M>                            // distinct valid pinned sigs required
+}
+```
+
+A directory carrying NONE of `signers`/`signatures`/`threshold` takes the unchanged
+single-`signer` path (`verifyDirectory`, section 4.2). The classic single-signer directory is
+the 1-of-1 case and verifies byte-for-byte as before. Produced by
+`signDirectoryThreshold(dir, [seedHex…], M)`; verified by `verifyDirectoryThreshold` (which
+`verifyDirectory` delegates to when any threshold field is present).
+
+**Verify rule.** Accept iff at least `threshold` **distinct** signers from the client's PINNED
+allowlist (`normalizePinnedSigners`, the T-HARD-5 set) each produced a valid signature over
+`canonicalDirectoryBytes(dir)`. A signer counted **once** (one key cannot self-satisfy M-of-N
+by signing twice); an unpinned signer is **ignored**; a malformed entry is **skipped**. The
+per-gateway onion↔pubkey binding (section 4.3, reasons 5–6) is then checked identically.
+
+| # | Reason | Condition |
+| --- | --- | --- |
+| 1 | `no-directory` | `dir` not an object |
+| 2 | `bad-threshold` | `threshold` not an integer ≥ 1 |
+| 3 | `bad-signatures` | `signers`/`signatures` not equal-length arrays |
+| 4 | `threshold-exceeds-signers` | `threshold` > number of provided signers (unsatisfiable) |
+| 5 | `threshold-not-met:<got>/<want>` | fewer than `threshold` distinct valid pinned sigs |
+| 6 | `bad-onion:…` / `pubkey-onion-mismatch:…` | as section 4.3 |
+| — | success | `{ ok:true, signers:[matched…], threshold }` |
+
+Golden vector: `testdata/vectors.json` `thresholdDirectory` (2-of-3, fixed seeds; its canonical
+bytes equal `canonicalDirectoryBytesHex`). Rust follow-up: `rust/rgoe-proto` `verify_directory`
+is single-signer only and needs a threshold sibling to consume this shape (noted, not built).
+
 ## 5. Bootnode HTTP API
 
 Server: `bootnode/server.mjs:151` `makeServer`. All responses

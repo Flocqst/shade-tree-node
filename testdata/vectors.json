@@ -42,6 +42,29 @@
     "canonicalReceiptBytesHex": "52474f4520656772657373207375636365737320726563656970742076310a7b2276223a312c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2265706f6368223a2238333333222c226f6b223a747275657d",
     "receiptOnionSig": "c1d246c1fcff963bb8d5e28c57826d736a8481a38447ba3d7e05101a0b8d93a41fb260ea6e7d6693ae07f3ecfee86760e222e7a19510cc9288c5883a2276c401"
   },
+  "thresholdDirectory": {
+    "_note": "T-FEAT-9 M-of-N threshold-signed directory. ADDITIVE: signers/signatures/threshold are OPTIONAL top-level fields EXCLUDED from canonicalDirectoryBytes exactly like the single-sig signer/signature, so the canonical bytes over this directory are byte-IDENTICAL to canonicalDirectoryBytesHex above (same {version,issued,gateways}). Each signer signs those same canonical bytes with raw ed25519 (RFC 8032 deterministic, so signatures are byte-pinned). Verify rule: >= threshold DISTINCT pinned signers with a valid sig. The Rust client (rust/rgoe-proto verify_directory) needs a threshold follow-up to consume this. Signer seeds are fixed test-only keys.",
+    "version": 1,
+    "issued": 1000000,
+    "onion": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+    "onionPub": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "threshold": 2,
+    "signerSeeds": [
+      "3131313131313131313131313131313131313131313131313131313131313131",
+      "3232323232323232323232323232323232323232323232323232323232323232",
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "signers": [
+      "48075a597e721a156e2e0799de5cc0c5324dc6e7eaf1cdd46250868ec53215dd",
+      "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9",
+      "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"
+    ],
+    "signatures": [
+      "1feb7cfdd6c6ccbc51ab3a5a91569ff4d613844f178c24437617f1ae37fcf56ce0b02e7ec56e4ad5d90f925a0fc83dc72ad7bb9217e8987a95ec88e30f99fe04",
+      "29e743841cac32edbf35351c30c2a3a380695b5a0678278104f4146ad242cefb0e8444b21b5179c837a465ac47fd74cff4a26f7f0f4219cb6b16740cde3d240c",
+      "e42d8dd1303238901e13239a4c484c0eb5d3e38e3d132cb6ed17a3951decf8e58cbf8ccf380549214c63f0d697d00b81404a44ee9d6a5f91eb34b90b14241e06"
+    ]
+  },
   "protoReasons": {
     "_note": "Stable public reason LABELS for wire version-negotiation rejects. Only the fixed literal prefixes are pinned — the full runtime reason strings additionally carry the offending/observed version numbers and ranges (e.g. `unsupported-version:4`, `no-mutual-version:client=1-2,gateway=5-6`), which are context-dependent and NOT pinned. badVersion/unsupportedVersion are the `label` field returned by acceptEnvelopeVersion (gateway/gateway.mjs); noMutualVersion is the reason prefix from selectProtoVersion (client/rgoe-client.mjs). The Rust client MUST emit these same literal labels/prefixes.",
     "badVersion": "bad-version",

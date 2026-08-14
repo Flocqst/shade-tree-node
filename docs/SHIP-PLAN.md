@@ -433,13 +433,21 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   coarse enough not to fingerprint a member's request. *Accept:* an announce carries signed
   capabilities; a client needing port X only selects gateways advertising X; capability set is
   bucketed, not free-form.
-- [ ] **T-FEAT-9 (P2, added loop-3) Threshold-signed directory.** Today the directory trusts one
+- [x] **T-FEAT-9 (P2, added loop-3) Threshold-signed directory.** Today the directory trusts one
   bootnode signer key; compromising it poisons every client's fleet view (they still can't be sent a
   forged onion — onion-control is re-checked — but entries could be omitted/reordered). Sign the
   directory with a k-of-n set of independent bootnode signers so no single key compromise steers the
   fleet. Composes with T-FEAT-1 (federation): each federated bootnode is one signer. *Accept:*
   clients accept a directory only with >= k valid signatures from the pinned signer set; a single
-  rogue signer cannot produce an accepted directory. *Depends on:* T-FEAT-1.
+  rogue signer cannot produce an accepted directory. *Depends on:* T-FEAT-1. DONE (loop-30, JS): additive
+  signers/signatures/threshold, distinct-pinned-signer counting, adversarial-total; golden vectors unchanged.
+  Rust parity = T-FEAT-9b.
+- [ ] **T-FEAT-9b (P2, added loop-30) Rust threshold-directory verify parity.** The Rust port
+  `rust/rgoe-proto/src/lib.rs verify_directory` + its `Directory` struct are single-signer only (they treat a
+  threshold directory as `unsigned`). Add `signers`/`signatures`/`threshold` to the struct and a
+  `verify_directory_threshold` sibling mirroring the JS distinct-pinned-signer counting + reason codes, and
+  conformance-check it against the `thresholdDirectory` vector. *Accept:* Rust accepts a valid 2-of-3 threshold
+  directory and rejects sub-threshold/duplicate/unpinned, matching JS; single-sig path unchanged.
 - [ ] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** Today membership is binary
   and every member gets the same per-epoch slot budget `K`. Let standing scale the budget: a member
   with higher on-chain stake (or accrued good behavior) proves, in zero knowledge, a budget tier and
@@ -773,3 +781,18 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   clippy/fmt/lint clean, all files disjoint. Filed T-FEAT-20b (real async cross-host fleet-tally gossip transport
   — this run is loopback-only) + T-TEST-23 (make scripts/test-all.mjs robust to parallel resource contention;
   4 unrelated suites flaked under load twice this loop, all pass individually).
+- 2026-08-14  loop-30  FOCUSED single run: T-FEAT-9 threshold-signed directory (M-of-N). Removes the
+  single-directory-signer trust point — composes with loop-29 federation (each bootnode = one signer). STRICTLY
+  ADDITIVE: three OPTIONAL top-level fields (signers/signatures/threshold) EXCLUDED from canonicalDirectoryBytes
+  exactly like the single-sig signer/signature, so every signer signs the SAME canonical bytes and the encoding
+  is byte-unchanged; a directory with none of them falls through to the unchanged single-signer path (the 1-of-1
+  case). verifyDirectory delegates to verifyDirectoryThreshold when threshold fields are present: accept iff
+  >= threshold DISTINCT signers from the client's PINNED allowlist (reuses normalizePinnedSigners / the T-HARD-5
+  rotation set) each produced a valid sig. TOTAL/adversarial-safe: duplicate signer counted once, unpinned
+  ignored, malformed skipped (no throw), bad-threshold / threshold-exceeds-signers / threshold-not-met:g/w
+  reasons. New exports signDirectoryThreshold / verifyDirectoryThreshold / ed25519PubFromSeed;
+  lib/directory-threshold.selftest.mjs. INTEGRATION AUDIT (mine): git-diffed testdata/vectors.json — the existing
+  canonicalDirectoryBytesHex/directorySignature vectors are UNTOUCHED (additive only: new thresholdDirectory
+  block, whose canonical bytes == the existing canonicalDirectoryBytesHex, proving same-bytes signing); rotation
+  + vectors selftests green unchanged; adversarial garbage → ok:false no throw. Full suite 59/59 green; lint
+  clean. Filed T-FEAT-9b (Rust verify_directory threshold parity — the Rust port is single-signer only).

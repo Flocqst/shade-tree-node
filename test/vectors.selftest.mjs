@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createPublicKey } from "node:crypto";
-import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, verifyDirectory } from "../lib/directory.mjs";
+import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, signDirectoryThreshold, verifyDirectory } from "../lib/directory.mjs";
 import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "../bootnode/announce.mjs";
 import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
@@ -42,6 +42,18 @@ async function main() {
   const signed = signDirectory({ ...dir, signer: V.signerPub }, V.signerSeed);
   ok(signed.signature === V.directorySignature, "directory signature matches the pinned vector (ed25519 determinism)");
   ok(verifyDirectory(signed, V.signerPub).ok, "the pinned signed directory verifies against the pinned signer");
+
+  console.log("\nthreshold directory (T-FEAT-9 M-of-N; same canonical bytes, additive fields):");
+  const td = V.thresholdDirectory;
+  const tdBase = { version: td.version, issued: td.issued, gateways: [{ onion: td.onion, pubkey: td.onionPub, weight: 100, health: "up" }] };
+  // The whole point: threshold signing covers the SAME canonical bytes as the single-sig vector.
+  ok(canonicalDirectoryBytes(tdBase).toString("hex") === V.canonicalDirectoryBytesHex, "threshold directory canonical bytes are byte-identical to the single-sig vector");
+  const tdSigned = signDirectoryThreshold(tdBase, td.signerSeeds, td.threshold);
+  ok(JSON.stringify(tdSigned.signers) === JSON.stringify(td.signers), "threshold signer pubkeys re-derive from the fixed seeds");
+  ok(JSON.stringify(tdSigned.signatures) === JSON.stringify(td.signatures), "threshold signatures match the pinned vector (ed25519 determinism)");
+  const tdV = verifyDirectory(tdSigned, td.signers);
+  ok(tdV.ok && tdV.signers.length >= td.threshold, "the pinned threshold directory verifies against the full pinned signer set");
+  ok(verifyDirectory(tdSigned, [td.signers[0]]).reason === `threshold-not-met:1/${td.threshold}`, "one pinned signer is below threshold -> threshold-not-met");
 
   console.log("\nannounce (deterministic canonical bytes + onion signature):");
   ok(canonicalAnnounceBytes(V.announce).toString("hex") === V.canonicalAnnounceBytesHex, "canonical announce bytes match the pinned vector");
