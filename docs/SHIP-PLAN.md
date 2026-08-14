@@ -85,7 +85,11 @@ and at scale."
   `target-not-bound`. Closes the redirect where a malicious gateway replays a member's proof to a
   peer with a different destination. Tested in `lib/rln.selftest.mjs` (swapped target, swapped nonce,
   missing nonce); wire change threaded through `client/rgoe-client.mjs`, the gateway, and
-  `scripts/demo-e2e.mjs`.
+  `scripts/demo-e2e.mjs`. HARDENED (loop-6 self-audit): the signal is newline-delimited, so
+  `verifyEnvelope` now rejects a `target`/`nonce` carrying the delimiter or an over-long nonce
+  (`bad-signal-field`) BEFORE hashing, keeping `(target,nonce)->signal` injective independent of the
+  gateway's later `validTarget` filter (`signalFieldSafe`). Residual (own item, T-FEAT-12):
+  same-target exact-envelope replay across non-colluding gateways.
 - [ ] **T-DEV-4 (P1) Bootnode persistence.** The registry is in-memory, so a restart drops the
   whole fleet until every gateway re-announces. Write-through to a small store (JSON/sqlite) and
   reload verified entries on boot (re-checking freshness). *Accept:* announce, restart the
@@ -341,6 +345,15 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-12 (P2, added loop-6) Cross-gateway replay defense (per-epoch nonce cache).** Target
+  binding (T-DEV-3) stops a captured proof being REDIRECTED, but an exact-envelope replay to the SAME
+  target still egresses, and across non-colluding gateways there is no shared spent-set, so a
+  malicious gateway could replay a member's envelope to peers and amplify the member's apparent
+  traffic on one proof. Add a per-epoch seen-nonce cache on the gateway (reject an exact replay), and
+  design an optional shared/gossiped spent-nullifier tally across the fleet (composes with T-FEAT-1
+  federation) so the rate cap holds fleet-wide. *Accept:* an exact replay to one gateway is rejected;
+  a design note for the cross-gateway tally with its linkability tradeoff (must pair with RLN's
+  per-request nullifiers, ROADMAP #1).
 - [ ] **T-FEAT-11 (P2, added loop-5) Envelope/protocol version negotiation.** The wire envelope is
   now v3-with-nonce (loop-5). Add explicit min/max version negotiation between client and gateway (and
   in the announce/directory) so the envelope and announce formats can evolve to v4+ without a flag
@@ -399,3 +412,7 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   the signal hash from target+nonce and binds it to the proof's x; a swapped-target replay is now
   rejected). Wire change threaded through client/gateway/demo-e2e; 3 new rln.selftest cases. Added
   T-FEAT-11 (envelope version negotiation). 14 suites green.
+- 2026-08-13  loop-6  audited the loop-5 P0 fix; hardened it (signalFieldSafe: reject delimiter in
+  target/nonce + over-long nonce before hashing, keeping the signal encoding injective); 3 new
+  rln.selftest cases. Independent adversarial review of the binding in flight. Added T-FEAT-12
+  (cross-gateway replay defense). 14 suites green.
