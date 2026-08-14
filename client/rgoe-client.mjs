@@ -18,7 +18,7 @@
 // The shim (client/shim.mjs) is now a thin HTTP-CONNECT front-end over this same class.
 
 import { readFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Duplex } from "node:stream";
@@ -133,6 +133,46 @@ function tunnelStream(socket, rest) {
   return dup;
 }
 
+// ---- per-request SOCKS circuit isolation (T-FEAT-17) ----------------------------
+// Tor with `IsolateSOCKSAuth` (bootnode/deploy/torrc.hardened, T-HARD-7) forks a SEPARATE
+// circuit per distinct SOCKS username/password pair. The client sends NO auth today, so
+// every request through a given SocksPort may share ONE circuit — collapsing the
+// per-request gateway + slot rotation's unlinkability back onto a shared Tor path. Fix:
+// give each REQUEST a unique SOCKS credential, so each request rides its own circuit.
+//
+// socksAuthForRequest(seed) -> { userId, password }, two opaque 16-byte hex tags Tor only
+// compares for equality:
+//   - seed given (the request nonce): the credential is DERIVED deterministically from it,
+//     so it is DISTINCT across different requests (different nonces) yet STABLE across every
+//     dial attempt / gateway failover of ONE logical request.
+//   - seed omitted: a fresh random credential (each call = a new circuit).
+//
+// RETRY / CIRCUIT DECISION: we seed from the request nonce (connect() passes envelope.nonce)
+// so a RETRY of the same logical request — an onion cold-start retry inside _dial, or a
+// failover to another gateway — REUSES THE SAME circuit identity, mirroring the
+// deterministic-retry invariant (same signal => same share across failover). We deliberately
+// prefer this over a fresh circuit per dial ATTEMPT: cross-request unlinkability is the
+// property that matters, and it is fully bought by distinct requests getting distinct
+// credentials; pinning one request to one circuit identity avoids fanning a single request
+// across multiple guards/circuits (extra correlation vantage points) for no unlinkability
+// gain. (A fresh-per-attempt credential is also safe — just call with no seed — but that is
+// not the safer default.)
+//
+// CAVEAT — a Tor daemon WITHOUT IsolateSOCKSAuth, or any plain no-auth SOCKS5 proxy: the
+// socks lib always advertises NoAuth and only ADDS username/password to its method list when
+// a credential is present; if the server selects NoAuth it proceeds WITHOUT sending the
+// credential (an ordinary SOCKS5 connect). So these credentials are harmless — Tor without
+// the flag just ignores them, and a no-auth proxy never negotiates them. Tor WITH the flag
+// selects username/password (to enable isolation) and forks a circuit per credential.
+export function socksAuthForRequest(seed) {
+  if (seed == null) {
+    return { userId: randomBytes(16).toString("hex"), password: randomBytes(16).toString("hex") };
+  }
+  const tag = (label) =>
+    createHash("sha256").update("rgoe-socks-isolation:" + label + ":").update(String(seed)).digest("hex").slice(0, 32);
+  return { userId: tag("uid"), password: tag("pwd") };
+}
+
 export class RgoeClient {
   constructor(opts = {}) {
     this.secret = opts.secret || process.env.RGOE_SECRET;
@@ -140,6 +180,11 @@ export class RgoeClient {
     this.torHost = opts.torHost || process.env.RGOE_TOR_HOST || "127.0.0.1";
     this.torPort = Number(opts.torPort || process.env.RGOE_TOR_PORT || 9250);
     this.dialAttempts = Number(opts.dialAttempts || 4);
+    // Per-request SOCKS circuit isolation (T-FEAT-17): default ON, harmless without
+    // IsolateSOCKSAuth. Disable with { socksIsolation: false } or RGOE_SOCKS_ISOLATION=0.
+    this.socksIsolation = opts.socksIsolation !== false && process.env.RGOE_SOCKS_ISOLATION !== "0";
+    // Injectable SOCKS client (tests pass a fake); defaults to the real `socks` lib.
+    this._socks = opts.socksClient || SocksClient;
     // Gateway selection: a pinned onion, or a signed directory (fleet rotation).
     this.onion = (opts.onion || process.env.RGOE_ONION || "").replace(/\.onion$/, "") || null;
     const dir = opts.directory || process.env.RGOE_DIRECTORY || null;
@@ -175,12 +220,17 @@ export class RgoeClient {
   }
 
   // Dial one gateway onion over Tor SOCKS, retrying through onion cold-start.
-  async _dial(onion, attempts = this.dialAttempts) {
+  // `socksAuth` (T-FEAT-17) is the per-request SOCKS credential; it is reused for EVERY
+  // attempt here (and by connect() across gateway failover) so a retry rides the SAME Tor
+  // circuit identity. null => legacy no-auth dial. See socksAuthForRequest above.
+  async _dial(onion, attempts = this.dialAttempts, socksAuth = null) {
     let lastErr;
     for (let i = 0; i < attempts; i++) {
       try {
-        const { socket } = await SocksClient.createConnection({
-          proxy: { host: this.torHost, port: this.torPort, type: 5 },
+        const proxy = { host: this.torHost, port: this.torPort, type: 5 };
+        if (socksAuth) { proxy.userId = socksAuth.userId; proxy.password = socksAuth.password; }
+        const { socket } = await this._socks.createConnection({
+          proxy,
           command: "connect",
           destination: { host: onion + ".onion", port: 80 },
           timeout: 120000,
@@ -218,12 +268,17 @@ export class RgoeClient {
     const wire = JSON.stringify(envelope) + "\n";
     const sel = this.onion ? null : await this._sel();
 
+    // One SOCKS credential for the whole logical request (derived from its nonce), reused
+    // across every gateway failover below so a retry keeps the SAME Tor circuit identity
+    // while DIFFERENT requests get DIFFERENT circuits (T-FEAT-17).
+    const socksAuth = this.socksIsolation ? socksAuthForRequest(envelope.nonce) : null;
+
     let sock = null, usedOnion = null, lastErr = null;
     for (const cand of onions) {
       const t0 = Date.now();
       emit({ phase: "dial", status: "start", onion: cand });
       try {
-        sock = await this._dial(cand);
+        sock = await this._dial(cand, this.dialAttempts, socksAuth);
         usedOnion = cand;
         sel?.reportResult?.(cand, { ok: true, latencyMs: Date.now() - t0 });
         emit({ phase: "dial", status: "done", onion: cand, latencyMs: Date.now() - t0 });

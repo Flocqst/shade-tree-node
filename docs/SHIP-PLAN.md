@@ -119,11 +119,8 @@ and at scale."
 - [ ] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
   works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
   the light provider returns a root validated against a header; test.
-- [ ] **T-DEV-10 (P2) Configurable egress policy.** Beyond `:443`-only: an allow/deny list of
-  target host:port ranges, default-deny. *Accept:* policy enforced + logged; test.
-- [ ] **T-DEV-11 (P2) Directory scale.** Compress/paginate `/directory`; bound entry count; a
-  stable ETag so clients can skip unchanged fetches. *Accept:* 10k-entry directory served + fetched
-  under a size/latency budget; load test.
+- [x] **T-DEV-10 (P2) Configurable egress policy.** DONE (loop-12): exported `makeEgressPolicy({allow,deny})` (default-deny; deny wins; `*`/`*.suffix`/exact host + `*`/exact port). `RGOE_EGRESS_ALLOW`/`RGOE_EGRESS_DENY`, default `*:443` = exactly the old behavior (byte-equivalence table proves it). A policy reject DROPs `bad-target-policy` + increments the metric. Startup warns when widened past :443 (no longer metadata-only). `gateway/egress-policy.selftest.mjs`.
+- [x] **T-DEV-11 (P2) Directory scale.** DONE (loop-12): GET /directory gains a strong sha256 ETag + If-None-Match (304 on unchanged) + gzip (Accept-Encoding), all transport-only (signature/content unchanged). Removed the dead verifyDirectory import. Pagination deferred (registry maxEntries caps count). `bootnode/directory-scale.selftest.mjs`.
 - [ ] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
   reflect reachability in `health`, so a silently-dead gateway is demoted before a client hits it.
 
@@ -250,10 +247,8 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [ ] **T-MON-1 (P1) Structured logging.** JSON logs with levels across gateway + bootnode; no
   secrets. *Accept:* logs parse; level configurable.
 - [x] **T-MON-2 (P1) Prometheus metrics.** DONE (loop-11): `lib/metrics.mjs` (zero-dep counters/gauges/histogram + Prometheus text render). Bootnode exposes `GET /metrics` (announces by result/reason, directory fetches, live gateways gauge); gateway (raw TCP) exposes metrics via a separate loopback http server on `RGOE_METRICS_PORT` (off by default) -- pass/drop by reason, slashes, active tunnels, verify-latency histogram. `lib/metrics.selftest.mjs`.
-- [ ] **T-MON-3 (P1) Dashboards + alerts.** Grafana dashboards (reuse the local OTel→Grafana stack)
-  and alerts: gateway/bootnode down, slash event, stake lapse, announce-rejection spike. *Accept:*
-  a dashboard JSON + alert rules in-repo.
-- [ ] **T-MON-4 (P2) External uptime checks** against onion `/health` via a tor-capable prober.
+- [x] **T-MON-3 (P2) Dashboards + alerts.** DONE (loop-12): `monitoring/grafana-dashboard.json` (panels on the real T-MON-2 metric names, verify-latency histogram_quantile) + `monitoring/alerts.yml` (9 rules cross-ref SLO.md/INCIDENT.md) + `monitoring/README.md` (loopback scrape via tunnel). Burn-rate alerts deferred (need production volume).
+- [x] **T-MON-4 (P2) External uptime checks.** DONE (loop-12): `scripts/uptime-probe.mjs` -- fetch bootnode /health + /directory over Tor, verify the signature against the pinned signer, emit JSON or `--format nagios` (exit 0/2), fail closed, privacy-scrubbed (count only). `scripts/uptime-probe.selftest.mjs` + `monitoring/UPTIME.md`.
 - [x] **T-MON-5 (P2) SLOs + error budget.** DONE (loop-11): `docs/SLO.md` -- 6 SLIs mapped to the T-MON-2 metrics, proposed SLOs with windows/rationale, error-budget math tied to INCIDENT.md, explicit non-SLOs (anonymity is correctness not availability). Three targets flagged [NEEDS DATA] until a real fleet/cohort exists.
 - [ ] **T-FEAT-1 (P1) Bootnode federation / gossip.** More than one bootnode, gossiping announces
   so discovery is not a single availability point. A client can pin multiple bootnode signers and
@@ -273,7 +268,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
-- [ ] **T-FEAT-17 (P2, added loop-11) Per-request SOCKS circuit isolation.** The hardened torrc (T-HARD-7) enables `IsolateSOCKSAuth`, but the client must actually send DISTINCT SOCKS credentials per request/gateway to get a distinct Tor circuit each time -- otherwise rotation shares a circuit and leaks correlation. Have the client pass unique SOCKS username/password per dial so each request rides its own circuit. *Accept:* two requests to the same gateway use different circuits (distinct SOCKS auth); no shared-circuit correlation across the per-request rotation.
+- [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
 - [ ] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
 - [ ] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
   marks onion-identity + operator-key backup as manual `tar | gpg`. Add `rgoe backup` / `rgoe restore`
@@ -282,11 +277,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   *Accept:* backup then restore on a clean box reproduces the same onion; secrets never written
   unencrypted; documented in OPERATOR.md.
 - [x] **T-RUST-1b (P1) Signal-hash + operator-sig conformance vectors.** DONE (loop-10): added `signalHash` + a pinned-key `operatorAnnounce` to testdata/vectors.json (asserted JS-side); Rust `calculate_signal_hash` (keccak256 big-endian >>8) implemented + conformance-tested byte-exact. Operator-ECDSA verify_announce still stubbed (secp256k1/EIP-191 dep) but the vector now exists.
-- [ ] **T-FEAT-14 (P2, added loop-8) SearXNG / agent egress adapter.** Close the loop back to the
-  original use case: a drop-in adapter so a SearXNG instance or an AI agent routes its egress through
-  the fleet with one config line (an HTTP_PROXY pointer at the local shim, or an `RgoeClient`/Rust-crate
-  binding for agents that call a function). *Accept:* a SearXNG `settings.yml` snippet + an agent code
-  snippet that egress through a gateway with no other changes; documented in QUICKSTART.
+- [x] **T-FEAT-14 (P2) SearXNG / agent egress adapter.** DONE (loop-12): `docs/ADAPTERS.md` (proxy-style SearXNG `outgoing.proxies` snippet verified vs official docs + library-style RgoeClient; HTTPS-only constraint documented) + `examples/agent-egress.mjs`. Closes back to the origin use case.
 - [ ] **T-FEAT-13 (P2, added loop-7) Signed egress success receipts.** A gateway that accepts a
   proof could still silently drop the actual egress. Have the gateway return a small signed receipt
   (its onion pubkey signs `{nullifier-prefix, ts, ok}` — NO target, to avoid a logging channel) so a
@@ -336,7 +327,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   paid-for without rebuilding the identity graph. *Accept:* a paid credential admits a member with
   no link to the funding source; scoped as its own sub-plan.
 
-- [ ] **T-CHORE-1 (P3, added loop-11) Remove dead imports.** eslint (T-TEST-9) flags 6 unused imports (bootnode/server.mjs verifyDirectory, group/sign-directory.mjs randomBytes, lib/semaphore.mjs readFile, test/adversarial + test/fuzz). Non-blocking warnings; remove them to keep lint noise-free.
+- [x] **T-CHORE-1 (P3) Remove dead imports.** DONE (loop-12): removed the 6 eslint-flagged unused imports; `npm run lint` now 0 warnings.
 
 ## Changelog
 
@@ -401,3 +392,8 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   scrub + signature gating HOLD; found + fixed a real total-ness bug in lib/directory.mjs verifyDirectory
   (threw on a non-string signer) + regression test + fuzz now injects it. 28 node+forge suites green.
   Added T-FEAT-17 (per-request SOCKS circuit isolation) + T-CHORE-1 (dead-import cleanup).
+- 2026-08-13  loop-12 (AGGRESSIVE FAN-OUT, 6 agents) closed 7 tasks: T-DEV-11 (directory ETag/304/gzip),
+  T-DEV-10 (configurable egress policy, default byte-equivalent to :443-only), T-FEAT-17 (per-request SOCKS
+  circuit isolation), T-MON-3 (Grafana dashboard + 9 alert rules), T-MON-4 (external Tor uptime prober),
+  T-FEAT-14 (SearXNG/agent adapter), T-CHORE-1 (dead imports -> lint 0 warnings). 32 node+forge suites green;
+  eslint clean. Added T-FEAT-18 (status-page history/sparkline).

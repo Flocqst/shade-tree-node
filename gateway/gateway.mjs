@@ -220,16 +220,82 @@ function reply(socket, obj) {
   try { socket.write(JSON.stringify(obj) + "\n"); } catch {}
 }
 
-function validTarget(target) {
-  if (typeof target !== "string") return null;
-  const m = target.match(/^([a-zA-Z0-9.\-]+):(\d{1,5})$/);
-  if (!m) return null;
-  const port = Number(m[2]);
+// ---- configurable egress target policy (T-DEV-10) ---------------------------
+// A pure, unit-testable policy layer over `host:port` egress targets. Semantics:
+// default-DENY — a target must match an ALLOW pattern AND no DENY pattern. Deny is
+// evaluated first, so deny wins. Patterns are `host:port` where:
+//   host: `*` (any host) | `*.suffix` (subdomains of suffix, NOT the bare apex) | exact
+//   port: `*` (any port) | an exact number in 1..65535
+// Multiple patterns are comma-separated. Malformed patterns are dropped safely (a
+// garbage entry never widens or breaks the policy).
+//
+// Default allow = `*:443` with empty deny === EXACTLY the old :443-only rule, so with
+// no env set nothing changes: the gateway stays a metadata-only TLS tunnel and never
+// sees plaintext.
+//
+// SECURITY: widening the allow list to non-TLS ports (e.g. `*:80`, `*:8080`) lets the
+// gateway observe PLAINTEXT for those connections — it is then NO LONGER a metadata-only
+// tunnel but a forward proxy that can read the bytes it carries, an operator opt-in with
+// real privacy implications. Keep the default (443-only) unless you accept that trade.
+export function makeEgressPolicy({ allow = "*:443", deny = "" } = {}) {
+  const parseList = (spec) =>
+    String(spec ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(parseEgressPattern)
+      .filter(Boolean); // drop malformed patterns safely
+  const allows = parseList(allow);
+  const denies = parseList(deny);
+  return function isAllowed(host, port) {
+    if (typeof host !== "string" || host.length === 0) return false;
+    const p = Number(port);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) return false;
+    const h = host.toLowerCase();
+    if (denies.some((pat) => matchEgressPattern(pat, h, p))) return false; // deny wins
+    return allows.some((pat) => matchEgressPattern(pat, h, p)); // else default-DENY
+  };
+}
+
+// Parse one `host:port` pattern into { host, port } (port kept as "*" or a number),
+// or null when malformed so the caller can drop it. Split on the LAST colon so hosts
+// (which never contain ':' in a valid target) are unambiguous.
+function parseEgressPattern(spec) {
+  const i = spec.lastIndexOf(":");
+  if (i <= 0 || i === spec.length - 1) return null; // need non-empty host and port
+  const host = spec.slice(0, i).toLowerCase();
+  const portStr = spec.slice(i + 1);
+  if (portStr === "*") return { host, port: "*" };
+  if (!/^\d{1,5}$/.test(portStr)) return null;
+  const port = Number(portStr);
   if (port < 1 || port > 65535) return null;
-  // PoC egress policy: TLS ports only, so the gateway is a metadata-only tunnel
-  // and never sees plaintext. Widen deliberately if you want a forward proxy.
-  if (port !== 443) return null;
-  return { host: m[1], port };
+  return { host, port };
+}
+
+function matchEgressPattern(pat, host, port) {
+  if (pat.port !== "*" && pat.port !== port) return false;
+  if (pat.host === "*") return true;
+  if (pat.host.startsWith("*.")) return host.endsWith(pat.host.slice(1)); // ".suffix"
+  return pat.host === host;
+}
+
+// Built once from env at import (unset => default `*:443`, empty deny => today's rule).
+const egressPolicy = makeEgressPolicy({
+  allow: process.env.RGOE_EGRESS_ALLOW,
+  deny: process.env.RGOE_EGRESS_DENY,
+});
+
+// Returns { ok:true, host, port } for an admitted target, else { ok:false, reason }.
+// reason distinguishes a malformed target ("bad-target") from one the policy refuses
+// ("bad-target-policy") so the drop metric and error reply are precise.
+function validTarget(target) {
+  if (typeof target !== "string") return { ok: false, reason: "bad-target" };
+  const m = target.match(/^([a-zA-Z0-9.\-]+):(\d{1,5})$/);
+  if (!m) return { ok: false, reason: "bad-target" };
+  const port = Number(m[2]);
+  if (port < 1 || port > 65535) return { ok: false, reason: "bad-target" };
+  if (!egressPolicy(m[1], port)) return { ok: false, reason: "bad-target-policy" };
+  return { ok: true, host: m[1], port };
 }
 
 function makeHandler(spentSet) {
@@ -262,9 +328,9 @@ function makeHandler(spentSet) {
       }
 
       const tgt = validTarget(env.target);
-      if (!tgt) {
-        M.requests.inc({ result: "drop", reason: "bad-target" });
-        reply(socket, { ok: false, err: "bad-target" });
+      if (!tgt.ok) {
+        M.requests.inc({ result: "drop", reason: tgt.reason });
+        reply(socket, { ok: false, err: tgt.reason });
         return socket.destroy();
       }
 
@@ -367,7 +433,10 @@ async function main() {
 
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     console.log(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}  (epoch ${currentEpoch()}, ${EPOCH_SECONDS}s)`);
-    console.log(`egress policy: :443 only (metadata-only TLS tunnel)`);
+    const allowDesc = process.env.RGOE_EGRESS_ALLOW || "*:443";
+    const denyDesc = process.env.RGOE_EGRESS_DENY || "";
+    const dflt = allowDesc === "*:443" && !denyDesc;
+    console.log(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
     console.log(`rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash`);
   });
 

@@ -1,0 +1,204 @@
+# Prometheus alerting rules for reputation-gated onion egress (T-MON-3).
+#
+# Every expr references a metric that actually exists:
+#   - rgoe_bootnode_announces_total{result,reason}   (counter, bootnode/server.mjs)
+#   - rgoe_bootnode_directory_fetches_total           (counter, bootnode/server.mjs)
+#   - rgoe_bootnode_live_gateways                     (gauge,   bootnode/server.mjs)
+#   - rgoe_gateway_requests_total{result,reason}      (counter, gateway/gateway.mjs)
+#   - rgoe_gateway_slashes_total                      (counter, gateway/gateway.mjs)
+#   - rgoe_gateway_active_tunnels                     (gauge,   gateway/gateway.mjs)
+#   - rgoe_gateway_verify_seconds_bucket/_sum/_count  (histogram, gateway/gateway.mjs)
+#   - up                                              (synthetic, from the scrape itself)
+#
+# Thresholds are grounded in docs/SLO.md. Numbers flagged [NEEDS DATA] in the SLO doc
+# stay conservative here and MUST be recalibrated against the first 30 days of real data.
+# Operational meaning of each alert is cross-referenced to docs/SLO.md and docs/INCIDENT.md.
+#
+# IMPORTANT: adjust the job matchers below to the job names you use in prometheus.yml.
+# This file assumes job="rgoe-bootnode" and job="rgoe-gateway" (see monitoring/README.md).
+
+groups:
+  - name: rgoe-bootnode
+    rules:
+      # up==0 means the scrape itself failed: the bootnode /metrics endpoint (loopback,
+      # same port as the HTTP transport) did not answer. Clients are cushioned by the
+      # last-known-good cached directory, so this is rarely member-visible, but it burns
+      # the bootnode-availability budget. See SLO.md 2.2 + INCIDENT.md #1.
+      - alert: BootnodeDown
+        expr: up{job="rgoe-bootnode"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: bootnode
+        annotations:
+          summary: "Bootnode {{ $labels.instance }} is down / unscrapable"
+          description: >-
+            Prometheus cannot scrape the bootnode /metrics endpoint on {{ $labels.instance }}
+            (up==0 for >2m). Discovery is degraded; clients fall back to the LKG directory
+            cache. Restore or restart the bootnode. Runbook: docs/INCIDENT.md #1. If it is
+            reachable but /directory verifies false, escalate to INCIDENT.md #2 (signer
+            compromise). SLO: docs/SLO.md 2.2.
+
+      # The whole failover story needs >=2 gateways to route between; below 2 there is no
+      # anonymity spread (1/1, not 1/N) and nowhere to fail over to. SLO.md 2.3.
+      - alert: FleetTooSmall
+        expr: max(rgoe_bootnode_live_gateways{job="rgoe-bootnode"}) < 2
+        for: 10m
+        labels:
+          severity: critical
+          component: fleet
+        annotations:
+          summary: "Fleet has fewer than 2 live gateways"
+          description: >-
+            rgoe_bootnode_live_gateways = {{ $value }} for >10m (SLO wants >=2). Below 2 there
+            is no failover spread and target metadata is 1/1, not 1/N. Add or restore gateways
+            before egress-success starts burning. Runbook: docs/INCIDENT.md #3, docs/SLO.md 2.3.
+
+      # Zero live gateways: nothing is dialable at all. Correctness (never admit an
+      # unverified gateway) is NOT relaxed to clear this; add real gateways.
+      - alert: FleetEmpty
+        expr: max(rgoe_bootnode_live_gateways{job="rgoe-bootnode"}) < 1
+        for: 5m
+        labels:
+          severity: critical
+          component: fleet
+        annotations:
+          summary: "No live gateways in the directory"
+          description: >-
+            rgoe_bootnode_live_gateways = {{ $value }} for >5m. The directory is empty; no
+            member can egress. Restore gateways. Do NOT clear this by weakening admission
+            (docs/SLO.md section 5 hard line). Runbook: docs/INCIDENT.md #3.
+
+      # Rejected announces are the gate working (a forged/rate-limited/registry-full announce
+      # SHOULD be rejected). A sustained high reject FRACTION with real announce volume means
+      # someone is hammering the bootnode. Guarded by a minimum accepted+rejected rate so an
+      # idle bootnode does not fire. Reasons: bad sig, rate-limited, registry-full (announce.mjs
+      # + registry). SLO.md section 1 (announce accept/reject = correctness counter, on the
+      # dashboard, alertable as an abuse signal).
+      - alert: AnnounceRejectionSpike
+        expr: >-
+          (
+            sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode", result="rejected"}[15m]))
+            /
+            clamp_min(sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode"}[15m])), 1e-9)
+          ) > 0.8
+          and
+          sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode"}[15m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          component: bootnode
+        annotations:
+          summary: "Announce rejection fraction > 80% on {{ $labels.instance }}"
+          description: >-
+            Over 15m, >80% of announces to {{ $labels.instance }} were rejected while announce
+            volume is non-trivial. Rejections are the gate working, but a sustained spike means
+            forged announces, a misconfigured legitimate gateway, or a full registry. Inspect the
+            reason breakdown on the RGOE dashboard (announce panel). This is not an availability
+            outage. Context: docs/SLO.md section 1.
+
+  - name: rgoe-gateway
+    rules:
+      # up==0 for a gateway scrape: its loopback /metrics server (RGOE_METRICS_PORT) did not
+      # answer. A single gateway being down is explicitly NOT an SLO (SLO.md section 4); the
+      # fleet routes around it. So this is a warning, and FleetTooSmall is the real page.
+      - alert: GatewayDown
+        expr: up{job="rgoe-gateway"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: gateway
+        annotations:
+          summary: "Gateway {{ $labels.instance }} is down / unscrapable"
+          description: >-
+            Prometheus cannot scrape gateway /metrics on {{ $labels.instance }} (up==0 for >5m).
+            Individual gateway uptime is NOT an SLO (docs/SLO.md section 4): client failover +
+            down-marking route around it, and the TTL drops it from the directory. Escalates only
+            if it pushes the fleet under 2 healthy (see FleetTooSmall). Runbook: docs/INCIDENT.md #3.
+
+      # A slash is the RLN rate limit WORKING (over-spend caught), NEVER an error budget line
+      # (SLO.md section 3 + 4). But a sudden rate spike is worth a human look: a broken client
+      # double-spending, or an attacker probing the nullifier logic. Warning only.
+      - alert: SlashSpike
+        expr: sum by (instance) (rate(rgoe_gateway_slashes_total{job="rgoe-gateway"}[15m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: gateway
+        annotations:
+          summary: "Elevated slash rate on {{ $labels.instance }}"
+          description: >-
+            rate(rgoe_gateway_slashes_total[15m]) = {{ printf \"%.3f\" $value }}/s on
+            {{ $labels.instance }} for >10m. A slash is the rate limit working (an RLN over-spend
+            caught), not a failure, so this never spends error budget. Investigate the cause: a
+            misbehaving client re-using a nullifier, or an attacker probing. Do NOT treat as an
+            availability incident. Runbook: docs/INCIDENT.md #7.
+
+      # Overall drop fraction. Gate DROPs are correct rejections and do NOT count against
+      # egress-success (SLO.md 2.1), so this alert is a SIGNAL to inspect the reason mix, not
+      # proof of an outage. A spike concentrated in root-not-recent across many nullifiers is
+      # the false-DROP / config-mismatch signal (INCIDENT.md #6), not a capacity problem.
+      # Guarded by a minimum request rate so a quiet gateway does not fire on noise.
+      - alert: HighDropRate
+        expr: >-
+          (
+            sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway", result="drop"}[10m]))
+            /
+            clamp_min(sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway"}[10m])), 1e-9)
+          ) > 0.5
+          and
+          sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway"}[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          component: gateway
+        annotations:
+          summary: "Drop fraction > 50% on {{ $labels.instance }}"
+          description: >-
+            Over 10m, >50% of requests to {{ $labels.instance }} were dropped (with non-trivial
+            volume). Gate DROPs are correct rejections, so first read the drop-reason breakdown on
+            the RGOE dashboard. A root-not-recent spike is a gate/config mismatch: align
+            RGOE_EPOCH_SECONDS / RGOE_SLOTS / RGOE_RLN_IDENTIFIER / root source and widen
+            RGOE_FRESHNESS_ROOTS (docs/INCIDENT.md #6, docs/SLO.md section 3). Dial/upstream-style
+            drops instead point at capacity: add gateways. Do NOT slash for these.
+
+      # Server-side verifyEnvelope latency vs SLO 2.4 (p95 < 50ms, p99 < 100ms, 7d). Uses the
+      # histogram buckets. This is verify CPU only, not end-to-end (Tor RTT is excluded by design).
+      # Sustained breach means the per-core verify ceiling (~30/s/core) is near: add cores/gateways,
+      # NEVER skip or weaken a verify check to buy latency (SLO.md section 5 hard line).
+      - alert: VerifyLatencyP95High
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le, instance) (rate(rgoe_gateway_verify_seconds_bucket{job="rgoe-gateway"}[5m]))
+          ) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          component: gateway
+        annotations:
+          summary: "verifyEnvelope p95 > 50ms on {{ $labels.instance }}"
+          description: >-
+            p95 of rgoe_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
+            {{ $labels.instance }} for >15m, over the SLO 2.4 target of 50ms. This is server-side
+            proof-verify CPU only. Approaching the ~30 verifies/sec/core ceiling: add cores or
+            gateways before backpressure turns into failed requests. Never buy latency by skipping
+            a verify check (docs/SLO.md 2.4 + section 5).
+
+      - alert: VerifyLatencyP99High
+        expr: >-
+          histogram_quantile(
+            0.99,
+            sum by (le, instance) (rate(rgoe_gateway_verify_seconds_bucket{job="rgoe-gateway"}[5m]))
+          ) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          component: gateway
+        annotations:
+          summary: "verifyEnvelope p99 > 100ms on {{ $labels.instance }}"
+          description: >-
+            p99 of rgoe_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
+            {{ $labels.instance }} for >15m, over the SLO 2.4 target of 100ms. Tail verify latency
+            is climbing; check for GC/scheduling jitter or verify-throughput saturation, and add
+            capacity. Runbook: docs/SLO.md 2.4, error-budget section 3.

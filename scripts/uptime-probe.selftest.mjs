@@ -1,0 +1,148 @@
+// Selftest for the external uptime prober (scripts/uptime-probe.mjs).
+//
+// Spins a MOCK bootnode (local http server) serving a real signDirectory()-signed /directory and
+// a /health, points the prober at it via RGOE_BOOTNODE_URL (dev mode, no Tor), and drives it as a
+// SUBPROCESS so we can assert the actual process EXIT CODES a monitor consumes:
+//   healthy         -> exit 0, ok:true, signerOk:true, correct fleetSize
+//   wrong signer    -> unhealthy, signerOk:false, nonzero exit
+//   unreachable     -> unhealthy, bootnodeReachable:false, nonzero exit
+//   --format nagios -> "OK: ..." exit 0 healthy / "CRITICAL: ..." exit 2 unhealthy
+//
+//   node scripts/uptime-probe.selftest.mjs   (exit 0 = all invariants held)
+
+import { spawn, execFileSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { signDirectory, pubkeyToOnion } from "../lib/directory.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PROBE = join(HERE, "uptime-probe.mjs");
+
+let failures = 0;
+const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
+
+// --- ed25519 raw-key helpers (same extraction the bootnode signer uses) --------
+const rawPubHex = (k) => { const der = k.export({ format: "der", type: "spki" }); return der.subarray(der.length - 32).toString("hex"); };
+const rawSeedHex = (k) => { const der = k.export({ format: "der", type: "pkcs8" }); return der.subarray(der.length - 32).toString("hex"); };
+function mintEd() { const { publicKey, privateKey } = generateKeyPairSync("ed25519"); return { pub: rawPubHex(publicKey), priv: rawSeedHex(privateKey) }; }
+
+// Build a real signed directory: each gateway's pubkey is the ed25519 key encoded in its own v3
+// .onion (pubkeyToOnion), so verifyDirectory's onion<->pubkey binding check passes.
+function makeSignedDir(signer, n) {
+  const gateways = [];
+  for (let i = 0; i < n; i++) {
+    const gw = mintEd();
+    gateways.push({ onion: pubkeyToOnion(gw.pub), pubkey: gw.pub, weight: 100, health: "up" });
+  }
+  return signDirectory({ version: 1, issued: Math.floor(Date.now() / 1000), gateways, signer: signer.pub }, signer.priv);
+}
+
+// The mock bootnode MUST run in its own process: the tests drive the prober with execFileSync
+// (synchronous), which blocks this process's event loop -- an in-process http server could not
+// answer the subprocess while we're blocked, so the child would just time out. A separate process
+// keeps serving. It serves fixed /health + /directory strings passed via env, prints its port.
+function startMockBootnode(dirJson, healthJson) {
+  const code = `
+    const http = require('http');
+    const s = http.createServer((req, res) => {
+      const send = (b) => { res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }); res.end(b); };
+      if (req.url === '/health') return send(process.env.MOCK_HEALTH);
+      if (req.url === '/directory') return send(process.env.MOCK_DIR);
+      res.writeHead(404); res.end();
+    });
+    s.listen(0, '127.0.0.1', () => process.stdout.write('PORT ' + s.address().port + '\\n'));
+  `;
+  const child = spawn(process.execPath, ["--input-type=commonjs", "-e", code], {
+    env: { ...process.env, MOCK_DIR: dirJson, MOCK_HEALTH: healthJson },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const port = new Promise((resolve, reject) => {
+    let buf = "";
+    child.stdout.on("data", (d) => { buf += d; const m = buf.match(/PORT (\d+)/); if (m) resolve(Number(m[1])); });
+    child.on("exit", (c) => reject(new Error("mock bootnode exited early, code " + c)));
+    setTimeout(() => reject(new Error("mock bootnode did not start in time")), 5000);
+  });
+  return { child, port };
+}
+
+// Run the prober as a subprocess with a curated env (parent RGOE_* stripped) and capture exit code.
+function runProbe(overrides, args = []) {
+  const env = { ...process.env };
+  delete env.RGOE_BOOTNODE_ONION; delete env.RGOE_BOOTNODE_URL; delete env.RGOE_DIR_SIGNER;
+  Object.assign(env, overrides);
+  try {
+    const stdout = execFileSync(process.execPath, [PROBE, ...args], { env, encoding: "utf8" });
+    return { status: 0, stdout };
+  } catch (e) {
+    return { status: e.status ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
+async function main() {
+  const signer = mintEd();
+  const FLEET = 3;
+  const dir = makeSignedDir(signer, FLEET);
+
+  // --- mock bootnode (separate process): /health + /directory --------------
+  const { child, port: portP } = startMockBootnode(
+    JSON.stringify(dir),
+    JSON.stringify({ ok: true, count: FLEET, admission: "open", signer: signer.pub })
+  );
+  const base = `http://127.0.0.1:${await portP}`;
+  // A port nothing listens on -> connection refused (fast, no hang).
+  const deadBase = "http://127.0.0.1:1";
+
+  try {
+    // 1. HEALTHY -----------------------------------------------------------
+    console.log("healthy:");
+    const h = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub });
+    ok(h.status === 0, "healthy -> exit 0");
+    let hj = {};
+    try { hj = JSON.parse(h.stdout.trim()); } catch {}
+    ok(hj.ok === true, "healthy -> ok:true");
+    ok(hj.bootnodeReachable === true, "healthy -> bootnodeReachable:true");
+    ok(hj.signerOk === true, "healthy -> signerOk:true");
+    ok(hj.fleetSize === FLEET, `healthy -> fleetSize:${FLEET} (count, not identities)`);
+    ok(!/\.onion/.test(h.stdout), "output prints no onion address (count only)");
+
+    // 2. WRONG PINNED SIGNER ----------------------------------------------
+    console.log("\nwrong pinned signer:");
+    const other = mintEd();
+    const w = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: other.pub });
+    ok(w.status !== 0, "wrong signer -> nonzero exit");
+    let wj = {};
+    try { wj = JSON.parse(w.stdout.trim()); } catch {}
+    ok(wj.ok === false, "wrong signer -> ok:false");
+    ok(wj.bootnodeReachable === true, "wrong signer -> still reachable (signature is what fails)");
+    ok(wj.signerOk === false, "wrong signer -> signerOk:false");
+
+    // 3. UNREACHABLE BOOTNODE ---------------------------------------------
+    console.log("\nunreachable bootnode:");
+    const u = runProbe({ RGOE_BOOTNODE_URL: deadBase, RGOE_DIR_SIGNER: signer.pub });
+    ok(u.status !== 0, "unreachable -> nonzero exit");
+    let uj = {};
+    try { uj = JSON.parse(u.stdout.trim()); } catch {}
+    ok(uj.ok === false, "unreachable -> ok:false");
+    ok(uj.bootnodeReachable === false, "unreachable -> bootnodeReachable:false");
+
+    // 4. NAGIOS FORMAT -----------------------------------------------------
+    console.log("\nnagios format:");
+    const nOk = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
+    ok(nOk.status === 0, "nagios healthy -> exit 0");
+    ok(/^OK:/.test(nOk.stdout.trim()), "nagios healthy -> 'OK: ...' line");
+    ok(nOk.stdout.includes(`fleet=${FLEET}`), "nagios healthy line reports fleet count");
+
+    const nBad = runProbe({ RGOE_BOOTNODE_URL: deadBase, RGOE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
+    ok(nBad.status === 2, "nagios unhealthy -> exit 2 (CRITICAL)");
+    ok(/^CRITICAL:/.test(nBad.stdout.trim()), "nagios unhealthy -> 'CRITICAL: ...' line");
+    ok(!/\.onion/.test(nBad.stdout), "nagios line leaks no onion address");
+  } finally {
+    child.kill();
+  }
+
+  console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: uptime-probe selftest (${failures} failure${failures === 1 ? "" : "s"})`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

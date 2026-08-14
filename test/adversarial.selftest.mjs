@@ -24,11 +24,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { generateOnionIdentity } from "../bootnode/keygen.mjs";
-import { buildAnnounce, operatorAuthMessage, canonicalAnnounceBytes } from "../bootnode/announce.mjs";
+import { buildAnnounce, operatorAuthMessage } from "../bootnode/announce.mjs";
 import { makeRegistry, makeServer, loadOrMintSigner } from "../bootnode/server.mjs";
 import { MockStakeVerifier } from "../lib/gateway-registry.mjs";
 import {
-  signDirectory, verifyDirectory, onionToPubkey, pubkeyToOnion, pickGateway,
+  signDirectory, verifyDirectory, onionToPubkey, pickGateway,
 } from "../lib/directory.mjs";
 
 let failures = 0;

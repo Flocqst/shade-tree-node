@@ -34,10 +34,11 @@
 import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { signDirectory, verifyDirectory } from "../lib/directory.mjs";
+import { signDirectory } from "../lib/directory.mjs";
 import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
 import { registry as metrics } from "../lib/metrics.mjs";
@@ -256,7 +257,26 @@ export function makeServer(registry, { signerPub } = {}) {
       }
       if (req.method === "GET" && url.pathname === "/directory") {
         M.directoryFetches.inc();
-        return send(res, 200, registry.directory());
+        // Transport-only scale features (T-DEV-11): ETag + conditional GET + gzip. NEITHER
+        // changes the directory CONTENT or its signature -- a client that ignores both still
+        // receives the identical signed bytes and verifies the decompressed JSON exactly as
+        // before. (The registry already caps entry count via maxEntries, so no pagination is
+        // needed now; pagination is a later step if a single fleet ever exceeds that cap.)
+        const body = Buffer.from(JSON.stringify(registry.directory()), "utf8");
+        // Strong ETag = sha256 of the signed directory bytes, so a client can skip re-downloading
+        // an unchanged directory (the common case between changes).
+        const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+        const inm = req.headers["if-none-match"];
+        if (inm && inm.split(",").some((t) => t.trim() === etag)) {
+          res.writeHead(304, { etag });
+          return res.end(); // 304 Not Modified: no body
+        }
+        const wantsGzip = /(^|[,\s])gzip($|[,;\s])/i.test(req.headers["accept-encoding"] || "");
+        const out = wantsGzip ? gzipSync(body) : body;
+        const headers = { "content-type": "application/json", etag, "content-length": out.length };
+        if (wantsGzip) headers["content-encoding"] = "gzip";
+        res.writeHead(200, headers);
+        return res.end(out);
       }
       // GET /gateway/<onion> -> the stored signed announce, for zero-trust re-verification.
       if (req.method === "GET" && url.pathname.startsWith("/gateway/")) {

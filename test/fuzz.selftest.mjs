@@ -30,7 +30,6 @@ function mulberry32(a) {
 }
 const rnd = mulberry32(SEED);
 const randInt = (n) => Math.floor(rnd() * n);
-const B32 = "abcdefghijklmnopqrstuvwxyz234567";
 function randStr(maxLen) {
   const len = randInt(maxLen);
   let s = "";
