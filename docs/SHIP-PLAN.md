@@ -173,9 +173,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   gateway mid-request (client fails over, no dropped connection to the caller), drop the bootnode
   (client uses last-known-good), lapse an operator's stake mid-session (entry demoted). *Accept:*
   each fault has a passing scenario.
-- [ ] **T-TEST-15 (P1) Fuzz regression corpus.** Persist any crashing/hanging input a fuzzer finds
-  into `testdata/corpus/` and replay it as a fast regression on every run. *Accept:* corpus wired
-  into the suite; a seeded known-bad input is caught.
+- [x] **T-TEST-15 (P1) Fuzz regression corpus.** DONE (loop-14): `testdata/corpus/regressions.json` (16 curated adversarial inputs drawn from real audit findings) replayed first+fast in `test/fuzz.selftest.mjs`; documented add-procedure. No entry revealed a still-unfixed bug.
 - [x] **T-TEST-16 (P2) Timing/side-channel sanity.** DONE (loop-7, `test/timing.selftest.mjs`: per-member verify medians within ~1.1-1.3x, gated at 2x; Groth16 verify is witness-oblivious).
 - [x] **T-TEST-17 (P1) Fast/slow test split.** DONE (loop-10): `RGOE_FAST=1`/`--fast` in scripts/test-all.mjs skips the 3 real-proof suites + forge and prints exactly what it skipped; `npm run test:fast` ~7s vs ~86s full. Also fixed a pre-existing wall-clock flake in `lib/rln.selftest.mjs` (pin verifyEnvelope nowMs to the proof's epoch).
 - [ ] **T-DEPLOY-1 (P0, BLOCKED by Gate 1 + Gate 2) First live deployment.** Deploy the bootnode +
@@ -199,8 +197,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 ## 4. Website & status
 
 - [x] **T-WEB-1 (P1) Live fleet status page.** DONE (loop-10): `web/status-server.mjs` + `web/status.html` -- fetch bootnode /health + /directory (over Tor or dev http), verify the signature against the pinned signer, render fleet size/health/staked. Privacy-scrubbed: onions truncated to 16 chars, operator address dropped to a staked bool. `web/status.selftest.mjs` (18 checks, incl. no-leak assertions).
-- [ ] **T-WEB-2 (P2) Landing refresh.** Extend the existing write-up site with "run a gateway" and
-  "join the set" sections and the CLI quickstart.
+- [x] **T-WEB-2 (P2) Landing refresh.** DONE (loop-14): `docs/post/RUN-A-GATEWAY.md` + `docs/post/JOIN.md` (landing-companion how-tos, commands verified, honest pre-ship status). Existing post HTML/figures untouched.
 - [ ] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
 - [ ] **T-WEB-4 (P3) Fleet map** (regions/ASNs, privacy-preserving).
 
@@ -258,9 +255,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
   a slow gateway loses weight fleet-wide; a privacy note proving no member is fingerprinted.
 - [x] **T-FEAT-5 (P2) Deterministic member subkeys.** DONE (loop-11): `lib/subkeys.mjs` -- HMAC-SHA512(master, `rgoe-subkey:v1\n{context}\n{index}`) mod FIELD -> a valid RLN secret; `deriveIdentity` composes it to a registerable rateCommitment. Determinism, unlinkability across 80 context/index pairs, field-range, RLN composition, master isolation, + a pinned golden vector. `lib/subkeys.selftest.mjs`.
-- [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
-  changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
-  returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
 - [ ] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
 - [ ] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
@@ -278,15 +273,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   drops, feeding the quality-aware rotation (T-FEAT-4). *Accept:* a successful egress returns a
   verifiable receipt; a gateway that drops traffic produces none; receipts carry no per-request
   target/member-identifying data.
-- [ ] **T-FEAT-12 (P2, added loop-6) Cross-gateway replay defense (per-epoch nonce cache).** Target
-  binding (T-DEV-3) stops a captured proof being REDIRECTED, but an exact-envelope replay to the SAME
-  target still egresses, and across non-colluding gateways there is no shared spent-set, so a
-  malicious gateway could replay a member's envelope to peers and amplify the member's apparent
-  traffic on one proof. Add a per-epoch seen-nonce cache on the gateway (reject an exact replay), and
-  design an optional shared/gossiped spent-nullifier tally across the fleet (composes with T-FEAT-1
-  federation) so the rate cap holds fleet-wide. *Accept:* an exact replay to one gateway is rejected;
-  a design note for the cross-gateway tally with its linkability tradeoff (must pair with RLN's
-  per-request nullifiers, ROADMAP #1).
+- [x] **T-FEAT-12 (P2) Cross-gateway replay defense (per-epoch nonce cache).** DONE (per-gateway half, loop-14): `makeSpentSet` fingerprints (nullifier, share.x, nonce); an identical envelope within `RGOE_REPLAY_WINDOW_MS` (5s) is an idempotent honest retry, later => rejected `replayed-envelope` (drop metric + log). Slash logic untouched; failover safe (hits different gateways). `gateway/replay-cache.selftest.mjs`. REMAINING: the fleet-wide gossiped tally (T-FEAT-20).
 - [ ] **T-FEAT-11 (P2, added loop-5) Envelope/protocol version negotiation.** The wire envelope is
   now v3-with-nonce (loop-5). Add explicit min/max version negotiation between client and gateway (and
   in the announce/directory) so the envelope and announce formats can evolve to v4+ without a flag
@@ -396,3 +383,10 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   policy: guarantees hold, but found + fixed a HIGH trailing-dot FQDN bypass (`sub.evil.com.` evaded a
   `*.evil.com` deny) via host canonicalization + a regression test. 36 node+forge suites green; lint clean.
   Added T-DEV-7b (wire config validation) + T-FEAT-19 (client gateway-reputation persistence).
+- 2026-08-13  loop-14 (AGGRESSIVE FAN-OUT, 6 agents + 1 review) closed 6 tasks: T-DEV-7b (config
+  validation wired into the CLI, fail-fast), T-FEAT-12 (per-gateway replay cache), T-FEAT-6 (directory delta
+  with reconstruct-and-verify trust), T-FEAT-19 (client gateway-reputation persistence), T-TEST-15 (fuzz
+  regression corpus, 16 entries), T-WEB-2 (landing how-tos). AUDIT of the loop-13 signer-rotation allowlist:
+  clean (unpinned signer can never verify; empty fails closed; single-string backward-compat exact). Fixed
+  the one LOW footgun it found (0x-prefixed pin silently rejected -> now accepted) + regression test.
+  40 node+forge suites green; lint clean. Added T-FEAT-20 (cross-fleet shared nonce tally).

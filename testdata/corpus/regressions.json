@@ -1,0 +1,134 @@
+{
+  "_note": "T-TEST-15 fuzz regression corpus. A curated, PERSISTENT set of known-tricky / adversarial inputs, one per real past finding, replayed on every `node test/fuzz.selftest.mjs` run (the `corpus` phase, which runs FIRST and FAST, before the random fuzzer). Any crashing/edge input a fuzzer or audit ever found is pinned here so it becomes a fast, deterministic, permanent regression. Keep this SMALL and high-signal: curated regressions, not a random blob. To add a newly-discovered input see the 'add-procedure' block at the top of test/fuzz.selftest.mjs.",
+  "_schema": {
+    "surface": "onionToPubkey | parseHttp | verifyDirectory | verifyAnnounce | canonicalDirectoryBytes",
+    "input": "for onionToPubkey: the onion string. for verifyDirectory/verifyAnnounce: the object argument.",
+    "inputHttp": "parseHttp only: { encoding: utf8|hex|base64, data } -> Buffer.",
+    "inputA/inputB": "canonicalDirectoryBytes only: the two directory objects that must serialize identically.",
+    "pinnedSigner": "verifyDirectory only (optional): the pinned-signer arg (hex string OR array).",
+    "opts": "verifyAnnounce only (optional): the options object.",
+    "expect.outcome": "throw (call MUST throw = rejection) | decode (onionToPubkey returns 64-hex) | parse (parseHttp returns) | reject (returns {ok:false}, MUST NOT throw, MUST NOT be ok:true) | equal-bytes",
+    "expect.reason": "reject: exact reason string.  expect.reasonPrefix: reject: reason startsWith.  expect.hex: decode: exact pubkey.  expect.equals: parse: deep-equal body."
+  },
+  "entries": [
+    {
+      "id": "vd-nonstring-signer-number",
+      "surface": "verifyDirectory",
+      "finding": "loop-11: real total-ness bug in verifyDirectory -- a hostile directory carrying a NON-STRING `signer` threw on `.toLowerCase()` instead of returning ok:false. THE headline regression this corpus exists to pin.",
+      "input": { "version": 1, "issued": 1000000, "gateways": [], "signer": 12345, "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+      "pinnedSigner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": { "outcome": "reject", "reason": "bad-signer-field" }
+    },
+    {
+      "id": "vd-nonstring-signer-object",
+      "surface": "verifyDirectory",
+      "finding": "loop-11 variant: an OBJECT `signer` must also be rejected as bad-signer-field, not throw. Guards the `typeof dir.signer !== 'string'` branch against the full grab-bag of non-string shapes.",
+      "input": { "version": 1, "issued": 1000000, "gateways": [], "signer": { "spoof": true }, "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+      "pinnedSigner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": { "outcome": "reject", "reason": "bad-signer-field" }
+    },
+    {
+      "id": "vd-null-directory",
+      "surface": "verifyDirectory",
+      "finding": "total-ness sanity: a non-object (null) directory must reject no-directory, never throw.",
+      "input": null,
+      "pinnedSigner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": { "outcome": "reject", "reason": "no-directory" }
+    },
+    {
+      "id": "vd-unsigned",
+      "surface": "verifyDirectory",
+      "finding": "total-ness sanity: a directory with no signature must reject unsigned before any crypto is attempted.",
+      "input": { "version": 1, "issued": 1000000, "gateways": [] },
+      "pinnedSigner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": { "outcome": "reject", "reason": "unsigned" }
+    },
+    {
+      "id": "vd-rotation-allowlist-nonstring-members",
+      "surface": "verifyDirectory",
+      "finding": "loop-13 (T-HARD-5 signer-rotation allowlist): the pinnedSigner arg may be an ARRAY. Non-string members must be dropped by normalizePinnedSigners so verifyDirectory stays total when the overlap set is fed junk. A garbage directory under such a set still rejects, never throws.",
+      "input": { "version": 1, "issued": 1000000, "gateways": [], "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+      "pinnedSigner": [ 123, null, { "x": 1 }, "abcdef" ],
+      "expect": { "outcome": "reject" }
+    },
+    {
+      "id": "onion-bad-checksum-56char",
+      "surface": "onionToPubkey",
+      "finding": "a string that is a well-formed 56-char v3 address (decodes to 35 bytes, version 0x03) but whose 2-byte checksum does not match SHA3-256(...). Must throw 'onion checksum mismatch' -- the address IS the key, so a forged onion cannot pass. (First char of the pinned test onion flipped u->a.)",
+      "input": "acnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+      "expect": { "outcome": "throw" }
+    },
+    {
+      "id": "onion-trailing-dot-host",
+      "surface": "onionToPubkey",
+      "finding": "loop-13 lineage (informational): a trailing-dot FQDN (`...onion.`) was a HIGH egress-policy bypass in the egress module. Here on onionToPubkey the trailing dot defeats the `/\\.onion$/` strip, leaving a 62-char address that is correctly rejected as not-56-chars. Pinned so the onion decoder's trailing-dot handling never silently regresses.",
+      "input": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion.",
+      "expect": { "outcome": "throw" }
+    },
+    {
+      "id": "onion-newline-delimiter-injection",
+      "surface": "onionToPubkey",
+      "finding": "loop-6 lineage (target-binding delimiter injection): a newline embedded in an onion address. The signal/announce encodings are newline-delimited, so a delimiter in a field must never survive into a decoded key. onionToPubkey rejects it (bad base32 length after the .onion strip).",
+      "input": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad\n.onion",
+      "expect": { "outcome": "throw" }
+    },
+    {
+      "id": "onion-valid-decode-anchor",
+      "surface": "onionToPubkey",
+      "finding": "happy-path anchor (testdata/vectors.json): the pinned valid v3 onion MUST decode to its pinned 32-byte ed25519 key. Guards against a change that rejects (or mis-decodes) real addresses while chasing the adversarial cases.",
+      "input": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+      "expect": { "outcome": "decode", "hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0" }
+    },
+    {
+      "id": "http-garbage-no-terminator",
+      "surface": "parseHttp",
+      "finding": "hostile / garbage bytes with no CRLFCRLF header terminator must throw 'no HTTP header terminator', not hang or index past the buffer. A lying bootnode cannot wedge the parser.",
+      "inputHttp": { "encoding": "hex", "data": "deadbeef00ff" },
+      "expect": { "outcome": "throw" }
+    },
+    {
+      "id": "http-non-200-status",
+      "surface": "parseHttp",
+      "finding": "a well-formed HTTP response with a non-200 status must throw (never returns a parsed body from an error page). The 200-only contract keeps a hostile bootnode from smuggling an error body as directory data.",
+      "inputHttp": { "encoding": "utf8", "data": "HTTP/1.1 503 Busy\r\n\r\nnope" },
+      "expect": { "outcome": "throw" }
+    },
+    {
+      "id": "http-valid-200-json-anchor",
+      "surface": "parseHttp",
+      "finding": "happy-path anchor: a proper 200 response with a JSON body must parse to that value. Guards against a change that hardens the parser into rejecting the real bootnode response shape.",
+      "inputHttp": { "encoding": "utf8", "data": "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":1,\"gateways\":[]}" },
+      "expect": { "outcome": "parse", "equals": { "version": 1, "gateways": [] } }
+    },
+    {
+      "id": "announce-newline-onion",
+      "surface": "verifyAnnounce",
+      "finding": "loop-6 lineage: an announce whose onion field carries a newline delimiter. verifyAnnounce must stay TOTAL (async, returns {ok:false}) and reject at the onion decode (bad-onion:*), never throw an uncaught rejection.",
+      "input": { "v": 1, "onion": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad\n.onion", "weight": 100, "ts": 1000000, "nonce": "00", "onionSig": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+      "opts": { "now": 1000000 },
+      "expect": { "outcome": "reject", "reasonPrefix": "bad-onion" }
+    },
+    {
+      "id": "announce-non-object",
+      "surface": "verifyAnnounce",
+      "finding": "total-ness sanity: a non-object (null) announce must resolve to reject no-announce, never an uncaught rejection.",
+      "input": null,
+      "expect": { "outcome": "reject", "reason": "no-announce" }
+    },
+    {
+      "id": "announce-wrong-version",
+      "surface": "verifyAnnounce",
+      "finding": "total-ness sanity: an announce with an unknown version must reject bad-version:<v> up front, before any crypto or clock check.",
+      "input": { "v": 2, "onion": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion" },
+      "expect": { "outcome": "reject", "reason": "bad-version:2" }
+    },
+    {
+      "id": "canonical-permutation-invariance",
+      "surface": "canonicalDirectoryBytes",
+      "finding": "signed-bytes invariant (fuzz property #5): the canonical serialization must NOT depend on key order or on unsigned extra fields, or a signature would be tied to JSON formatting. inputA and inputB are the same logical directory with shuffled key order + junk unsigned fields; they must produce byte-identical output.",
+      "inputA": { "version": 1, "issued": 42, "gateways": [ { "onion": "aaa.onion", "pubkey": "deadbeef", "weight": 100, "health": "up" }, { "onion": "bbb.onion", "pubkey": "cafebabe", "weight": 50, "health": "down" } ] },
+      "inputB": { "gateways": [ { "health": "up", "note": "junk", "weight": 100, "pubkey": "deadbeef", "onion": "aaa.onion" }, { "weight": 50, "onion": "bbb.onion", "health": "down", "pubkey": "cafebabe", "extra": [1, 2, 3] } ], "issued": 42, "version": 1, "extraTopLevel": { "unsigned": true } },
+      "expect": { "outcome": "equal-bytes" }
+    }
+  ]
+}

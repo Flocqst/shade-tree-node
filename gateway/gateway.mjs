@@ -87,25 +87,82 @@ async function initRoots() {
 // private circuit witness). Stores the first share; a second DISTINCT evaluation point
 // (distinct public `x`) under the same nullifier is a provable over-spend: reconstruct
 // the identitySecret from the two shares, derive the rateCommitment leaf, and slash. An
-// IDENTICAL replay (same share.x) is deduped and is NEVER slashed (no new point).
+// IDENTICAL replay (same share.x) is NEVER slashed (no new point) — but see below for
+// exactly WHEN that identical replay egresses vs is rejected.
 //
-// reconstruct/derive/slash are injected so the selftest can drive this control flow
-// with mocks (the real lib + on-chain slasher land at combine).
-export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveCommitment, slash, ttlMs = 2 * EPOCH_SECONDS * 1000 } = {}) {
-  const seen = new Map(); // nullifier -> { xs:Set, first:share, slashed:bool, at:number }
+// ---- cross-gateway replay defense: per-epoch seen-envelope cache (T-FEAT-12) ----
+// Target binding (T-DEV-3) stops a captured proof being REDIRECTED to a new target, but an
+// EXACT-envelope replay (same nullifier + same share.x + same nonce/target) to the SAME
+// gateway still passed the nullifier dedup as an "honest retry" and egressed idempotently,
+// with no time bound. A malicious relay could therefore replay a member's captured envelope
+// to peer gateways and amplify apparent traffic on one proof. We add a per-gateway defense:
+//
+//   The seen-envelope cache fingerprints each admitted envelope by (nullifier, share.x,
+//   nonce) and records WHEN it was first seen HERE. On an identical share.x under a live
+//   nullifier:
+//     - age <= RGOE_REPLAY_WINDOW_MS  => an in-flight HONEST retry (e.g. a dropped
+//       connection re-sent within a few seconds). Idempotent: action "replay", ok:true,
+//       NO second egress, NO slash. This preserves the deterministic-retry allowance.
+//     - age  > RGOE_REPLAY_WINDOW_MS  (or a fingerprint we never recorded, e.g. same
+//       share.x under a different nonce) => an ABUSIVE late replay. Rejected ok:false,
+//       action/reason "replayed-envelope"; the handler counts the drop metric + logs.
+//
+// Why a SHORT window is the right scoping, and why it does not break failover: the client
+// reuses the SAME envelope across gateway FAILOVER, but failover hits DIFFERENT gateways,
+// so a PER-gateway cache never sees that legitimate reuse twice. Only a genuine same-gateway
+// resend (dropped connection) repeats here, and it does so within seconds — comfortably
+// inside the window. Anything repeating on ONE gateway seconds/minutes later is a replay.
+//
+// NOTE (bigger later step, docs/ROADMAP.md #1): this defends a single gateway only. A
+// non-colluding fleet still has no SHARED spent-set, so a malicious gateway can still fan a
+// captured envelope out to its PEERS (each sees it once). Closing that needs a gossiped /
+// shared cross-fleet nonce tally, tracked separately — this ships the per-gateway half now.
+//
+// reconstruct/derive/slash are injected so the selftest can drive this control flow with
+// mocks (the real lib + on-chain slasher land at combine). `now` is injectable so the
+// window is deterministically testable without a real wall clock.
+export function makeSpentSet({
+  reconstruct = reconstructSecret,
+  derive = deriveCommitment,
+  slash,
+  ttlMs = 2 * EPOCH_SECONDS * 1000,
+  replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000,
+  now = () => Date.now(),
+} = {}) {
+  const seen = new Map();    // nullifier -> { xs:Set, first:share, slashed:bool, at:number }
+  const seenEnv = new Map(); // "nullifier|share.x|nonce" -> firstSeenAt (exact-envelope fingerprints)
   const keyOf = (nullifier) => String(nullifier);
+  const envKeyOf = (nullifier, share, nonce) => `${nullifier}|${share.x}|${nonce ?? ""}`;
 
-  async function admit(nullifier, share) {
+  async function admit(nullifier, share, opts = {}) {
     if (!share || share.x == null) return { ok: false, action: "bad-share", reason: "no-share" };
+    const nonce = opts.nonce;
     const k = keyOf(nullifier);
+    const ek = envKeyOf(nullifier, share, nonce);
     const e = seen.get(k);
 
     if (!e) {
-      seen.set(k, { xs: new Set([String(share.x)]), first: share, slashed: false, at: Date.now() });
+      const t = now();
+      seen.set(k, { xs: new Set([String(share.x)]), first: share, slashed: false, at: t });
+      seenEnv.set(ek, t);
       return { ok: true, action: "first" };
     }
     if (e.slashed) return { ok: false, action: "slashed", reason: "rate-slashed" };
-    if (e.xs.has(String(share.x))) return { ok: true, action: "replay" }; // idempotent honest retry
+    if (e.xs.has(String(share.x))) {
+      // Identical evaluation point == an exact-envelope replay to THIS gateway. Distinguish
+      // an in-flight honest retry (within the window) from an abusive late replay.
+      const firstAt = seenEnv.get(ek);
+      if (firstAt != null && (now() - firstAt) <= replayWindowMs) {
+        return { ok: true, action: "replay" }; // idempotent honest retry (dropped-conn resend)
+      }
+      // Out-of-window, or a fingerprint we never recorded (same share.x, foreign nonce): drop.
+      log.warn("replayed-envelope rejected", {
+        nullifier: String(nullifier).slice(0, 10) + "..",
+        ageMs: firstAt != null ? now() - firstAt : null,
+        windowMs: replayWindowMs,
+      });
+      return { ok: false, action: "replayed-envelope", reason: "replayed-envelope" };
+    }
 
     // Distinct public x under the same nullifier: the L+1-th point. Over-spend.
     e.slashed = true; // slash exactly once for this nullifier
@@ -122,8 +179,9 @@ export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveC
   }
 
   function sweep() {
-    const cutoff = Date.now() - ttlMs;
+    const cutoff = now() - ttlMs;
     for (const [k, e] of seen) if (e.at < cutoff) seen.delete(k);
+    for (const [ek, at] of seenEnv) if (at < cutoff) seenEnv.delete(ek);
   }
 
   return { admit, sweep, size: () => seen.size };
@@ -343,7 +401,9 @@ function makeHandler(spentSet) {
       }
 
       // Step 4: nullifier dedup + share collection; slashes on 2nd distinct signal.
-      const res = await spentSet.admit(v.nullifier, v.share);
+      // Pass the envelope nonce so the seen-envelope cache (T-FEAT-12) can reject an
+      // exact-envelope replay outside the honest-retry window as "replayed-envelope".
+      const res = await spentSet.admit(v.nullifier, v.share, { nonce: env.nonce });
       if (!res.ok) {
         log.warn("drop", { reason: res.reason, nullifier: String(v.nullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "drop", reason: res.reason });
@@ -447,6 +507,8 @@ async function main() {
     const dflt = allowDesc === "*:443" && !denyDesc;
     log.info(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
     log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
+    const replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000;
+    log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

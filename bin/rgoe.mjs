@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
+import { validateConfig, formatErrors } from "../lib/config.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -73,6 +74,24 @@ const COMMANDS = {
   doctor:            { script: "scripts/doctor.mjs",        help: "check the local setup (node, tor, keys, deps)" },
 };
 
+// command -> config ROLE (lib/config.mjs). Before spawning a service we validate the effective
+// RGOE_* env for its role and fail fast on a misconfig, instead of surfacing an opaque crash deep
+// inside Tor/RPC/crypto. Only commands whose role's required vars genuinely apply are listed:
+//   - heartbeat is gateway-SIDE, so it shares the gateway role.
+//   - client/shim share the client role (RGOE_SECRET + a discovery source are the real needs).
+//   - register-member maps to member-enroll (the on-chain member registration vars).
+// Deliberately NOT validated (skipped): keygen/enroll/join/sign-directory/doctor read no service
+// config, and register-gateway has no role whose required vars map cleanly (its bond/registry/
+// register-key inputs don't match any ROLE_SPEC), so we do not guess — it spawns unvalidated.
+const COMMAND_ROLE = {
+  bootnode: "bootnode",
+  gateway: "gateway",
+  heartbeat: "gateway",
+  client: "client",
+  shim: "client",
+  "register-member": "member-enroll",
+};
+
 function parse(argv) {
   const flags = {}, positionals = [];
   for (let i = 0; i < argv.length; i++) {
@@ -107,12 +126,30 @@ function main() {
   const { flags, positionals } = parse(rest);
   if (flags.help) { console.log(`rgoe ${cmd} — ${entry.help}`); process.exit(0); }
 
+  // Opt-out for unusual setups: `--no-validate` (or RGOE_SKIP_VALIDATE=1) bypasses the config
+  // check below. Consume the flag here so it never leaks to the child as a passthrough arg.
+  const skipValidate = "no-validate" in flags || process.env.RGOE_SKIP_VALIDATE === "1";
+  delete flags["no-validate"];
+
   const env = { ...process.env };
   const passthrough = []; // flags the module parses itself (e.g. keygen --label)
   for (const [flag, val] of Object.entries(flags)) {
     const envKey = FLAG_ENV[flag];
     if (envKey) env[envKey] = val;
     else { passthrough.push(`--${flag}`); if (val !== "true") passthrough.push(val); }
+  }
+
+  // Fail fast on invalid config BEFORE spawning a service: print exactly which RGOE_* var is
+  // wrong and why, then exit nonzero (never start the long-running process on a known-bad env).
+  const role = COMMAND_ROLE[cmd];
+  if (role && !skipValidate) {
+    const result = validateConfig(role, env);
+    if (!result.ok) {
+      console.error(`rgoe ${cmd}: config invalid for role "${role}" —`);
+      console.error(formatErrors(result));
+      console.error(`\nfix the above, or pass --no-validate (or set RGOE_SKIP_VALIDATE=1) to bypass.`);
+      process.exit(1);
+    }
   }
 
   const child = spawn(process.execPath, [join(ROOT, entry.script), ...positionals, ...passthrough], { stdio: "inherit", env });

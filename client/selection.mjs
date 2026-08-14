@@ -16,6 +16,7 @@
 //   reportResult(onion, { ok, latencyMs });
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDirectory, selectionOrder, reportHealth, verifyDirectory } from "../lib/directory.mjs";
@@ -38,6 +39,120 @@ const CACHE_PATH =
   (BOOTNODE_ONION ? join(HERE, "..", "cache", "bootnode-directory.lkg") : DIRECTORY_PATH ? DIRECTORY_PATH + ".lkg" : null);
 const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
 const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
+
+// ---- client-side gateway reputation persistence (T-FEAT-19) ---------------------
+// reportHealth() (lib/directory.mjs) mutates in-memory dir entries (_fails/health/_latencyMs),
+// which is LOST on restart: a gateway that failed all last session is forgotten and gets a fresh
+// weighted pick again this session. We keep a SMALL local, best-effort cache of per-gateway
+// liveness so a flaky gateway stays deprioritized ACROSS sessions until it proves healthy again.
+//
+// Scope + privacy: this is a LOCAL file only. It is never sent to the bootnode or the fleet, and
+// it stores only onions the client already learned from the SIGNED directory plus fail counts and
+// a latency EWMA. No member data, no directory contents. The cache is keyed by onion:
+//   onion -> { fails, lastFail, latencyMs, lastSeen }
+//
+// Fully OPTIONAL and non-breaking: if the path is empty or the dir isn't writable, load returns {}
+// and save no-ops (fail soft) — selection behaves exactly as the in-memory-only path does today.
+//
+// RGOE_HEALTH_CACHE   : path to the JSON file (default cache/gateway-health.json, which is gitignored).
+//                       Set to "" (or "off"/"0") to disable persistence entirely.
+// RGOE_HEALTH_MAX     : max distinct gateways retained (oldest-lastSeen evicted first).
+// RGOE_HEALTH_DECAY_MS: an entry not SEEN for this long is treated as recovered (not seeded, pruned).
+function resolveHealthCachePath() {
+  const raw = process.env.RGOE_HEALTH_CACHE;
+  if (raw === undefined) return join(HERE, "..", "cache", "gateway-health.json");
+  const v = raw.trim();
+  if (v === "" || v === "0" || v.toLowerCase() === "off") return null; // explicit OFF
+  return v;
+}
+const HEALTH_CACHE_PATH = resolveHealthCachePath();
+const HEALTH_MAX_ENTRIES = Math.max(1, Number(process.env.RGOE_HEALTH_MAX || 512));
+const HEALTH_DECAY_MS = Number(process.env.RGOE_HEALTH_DECAY_MS || 14 * 24 * 60 * 60 * 1000); // 14 days
+const HEALTH_FAIL_THRESHOLD = 2; // mirror reportHealth(): >= 2 consecutive fails => "down"
+
+// Read the persisted cache. Best-effort and TOTAL: any error (missing/unwritable/corrupt) yields an
+// empty map, so a broken cache can never break selection. Tolerates both the versioned envelope we
+// write ({version,entries}) and a bare onion->entry map.
+export function loadHealthCache(path = HEALTH_CACHE_PATH) {
+  if (!path) return {};
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (raw && typeof raw === "object") {
+      if (raw.entries && typeof raw.entries === "object") return raw.entries;
+      if (!raw.version) return raw; // bare map
+    }
+  } catch { /* fail soft */ }
+  return {};
+}
+
+// Cap the cache in place: evict the oldest-lastSeen entries down to HEALTH_MAX_ENTRIES so it can
+// never grow unboundedly. Mutates and returns the same object.
+function boundHealthCache(cache) {
+  const keys = Object.keys(cache);
+  if (keys.length <= HEALTH_MAX_ENTRIES) return cache;
+  keys.sort((a, b) => (cache[a]?.lastSeen || 0) - (cache[b]?.lastSeen || 0));
+  for (const k of keys.slice(0, keys.length - HEALTH_MAX_ENTRIES)) delete cache[k];
+  return cache;
+}
+
+// Write-through, bounded, best-effort. Returns true iff the file was written. A failure (no path,
+// read-only dir, ENOTDIR, ...) is swallowed: persistence is off, selection is unaffected.
+export function saveHealthCache(cache = _healthCache, path = HEALTH_CACHE_PATH) {
+  if (!path) return false;
+  try {
+    boundHealthCache(cache);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, entries: cache }, null, 2) + "\n");
+    return true;
+  } catch { return false; }
+}
+
+// Seed a freshly-loaded directory's in-memory liveness from the persisted cache, so a gateway that
+// failed a lot last session STARTS deprioritized (health "down" and/or a latency handicap) until it
+// proves healthy again this session. Decay, not blacklist: an entry not seen for HEALTH_DECAY_MS is
+// ignored (and will be pruned on the next save), so a long-idle or recovered gateway comes back.
+// Mutates dir.gateways in place (the same objects selectionOrder/reportHealth key on) and returns dir.
+export function seedHealthFromCache(dir, cache = _healthCache, now = Date.now()) {
+  if (!dir || !Array.isArray(dir.gateways) || !cache) return dir;
+  for (const g of dir.gateways) {
+    const e = cache[g.onion];
+    if (!e) continue;
+    if (typeof e.lastSeen === "number" && now - e.lastSeen >= HEALTH_DECAY_MS) {
+      delete cache[g.onion]; // decayed: recovered, prune
+      continue;
+    }
+    const fails = Number(e.fails) || 0;
+    if (fails > 0) g._fails = fails;
+    if (fails >= HEALTH_FAIL_THRESHOLD) g.health = "down";
+    if (typeof e.latencyMs === "number") g._latencyMs = e.latencyMs;
+  }
+  return dir;
+}
+
+// Fold one dial result into the persisted cache and write through. Privacy guard: only persist an
+// onion the client already knows from the SIGNED directory (never arbitrary caller input). A
+// successful dial resets fails (recovery); failures increment toward the "down" threshold.
+function updateHealthCache(dir, onion, { ok, latencyMs } = {}) {
+  if (!HEALTH_CACHE_PATH) return; // persistence disabled
+  if (!(dir.gateways || []).some((x) => x.onion === onion)) return; // unknown onion: don't persist
+  const now = Date.now();
+  const e = _healthCache[onion] || { fails: 0, lastFail: 0, latencyMs: null, lastSeen: 0 };
+  if (ok === false) {
+    e.fails = (e.fails || 0) + 1;
+    e.lastFail = now;
+  } else if (ok === true) {
+    e.fails = 0; // a successful dial recovers the gateway
+    if (typeof latencyMs === "number") {
+      e.latencyMs = e.latencyMs == null ? latencyMs : Math.round(0.7 * e.latencyMs + 0.3 * latencyMs);
+    }
+  }
+  e.lastSeen = now;
+  _healthCache[onion] = e;
+  saveHealthCache(_healthCache, HEALTH_CACHE_PATH);
+}
+
+// Loaded once at module init (best-effort). Env is read at import, same as the rest of this module.
+let _healthCache = loadHealthCache(HEALTH_CACHE_PATH);
 
 // The pinned directory signer(s). In a real bundle this is a hardcoded constant set
 // at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
@@ -202,6 +317,10 @@ async function ensureLoaded() {
         const p = prev.get(g.onion);
         if (p) { g.health = p.health; g._fails = p._fails; g._latencyMs = p._latencyMs; }
       }
+    } else {
+      // First load of the session: seed liveness from the persisted cross-session cache so a
+      // gateway that failed a lot last session starts deprioritized until it proves healthy again.
+      seedHealthFromCache(next.dir, _healthCache, now);
     }
     loaded = next;
     loadedAt = now;
@@ -235,4 +354,6 @@ export function reportResult(onion, { ok, latencyMs } = {}) {
   if (!loaded) return;
   const full = onion.endsWith(".onion") ? onion : onion + ".onion";
   reportHealth(loaded.dir, full, { ok, latencyMs });
+  // Write-through to the local cross-session cache (best-effort; no-op if persistence is off).
+  updateHealthCache(loaded.dir, full, { ok, latencyMs });
 }

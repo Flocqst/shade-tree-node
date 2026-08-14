@@ -8,9 +8,15 @@
 // Seeded (mulberry32) so any failure is reproducible: the seed is printed and can be replayed.
 
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { onionToPubkey, pubkeyToOnion, canonicalDirectoryBytes, verifyDirectory } from "../lib/directory.mjs";
 import { parseHttp } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CORPUS_PATH = join(HERE, "..", "testdata", "corpus", "regressions.json");
 
 const SEED = Number(process.env.RGOE_FUZZ_SEED || 0x9e3779b9);
 const N = Number(process.env.RGOE_FUZZ_N || 5000);
@@ -64,8 +70,140 @@ function fuzz(label, body) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T-TEST-15: fuzz REGRESSION CORPUS.
+//
+// A PERSISTENT, curated set of known-tricky / adversarial inputs (testdata/corpus/
+// regressions.json), one per real past finding, replayed on EVERY run. This phase
+// runs FIRST and FAST (before the random fuzzing below), so any crashing/edge input
+// a fuzzer or an audit ever found is caught immediately and DETERMINISTICALLY -- it
+// never has to be re-discovered by the seeded random walk. The random phases still
+// run after, to keep finding NEW cases.
+//
+// --- ADD-PROCEDURE: when the random fuzzer (or an audit) finds a NEW bad input ------
+// The random phases print the SEED on failure, so you can reproduce the offending
+// value. Turn it into a permanent regression by appending ONE entry to the `entries`
+// array in testdata/corpus/regressions.json, using a STABLE serialization:
+//
+//   surface: which function it hits -- one of
+//            onionToPubkey | parseHttp | verifyDirectory | verifyAnnounce | canonicalDirectoryBytes
+//   the input, serialized per surface:
+//     onionToPubkey            -> "input": "<the onion string>"
+//     parseHttp                -> "inputHttp": { "encoding": "utf8"|"hex"|"base64", "data": "<bytes>" }
+//     verifyDirectory          -> "input": <the directory object>, "pinnedSigner": <hex string | array>
+//     verifyAnnounce           -> "input": <the announce object>, "opts": { ... }   (opts optional)
+//     canonicalDirectoryBytes  -> "inputA": <dir>, "inputB": <dir>   (must serialize identically)
+//   expect.outcome, one of:
+//     "throw"       -- the call MUST throw (that IS rejection; used for onionToPubkey/parseHttp)
+//     "decode"      -- onionToPubkey returns a 64-hex key ("hex": "<expected>" to pin it)
+//     "parse"       -- parseHttp returns a value ("equals": <value> to deep-compare)
+//     "reject"      -- returns {ok:false} WITHOUT throwing ("reason" exact, or "reasonPrefix")
+//     "equal-bytes" -- canonicalDirectoryBytes(inputA) equals canonicalDirectoryBytes(inputB)
+//   plus a human "id" and a "finding" note citing the loop/audit it came from.
+//
+// The point: a total-ness bug (an input that THREW where it should have returned
+// ok:false, e.g. the loop-11 non-string `signer`) becomes a fast permanent regression
+// tagged with expect.outcome:"reject". No auto-persistence -- just this replay + the
+// documented append above. There is a serializeBytes() helper below to hexify a Buffer.
+// ---------------------------------------------------------------------------
+
+// Turn a Buffer into the {encoding:"hex", data} shape used by parseHttp corpus entries.
+export function serializeBytes(buf) {
+  return { encoding: "hex", data: Buffer.from(buf).toString("hex") };
+}
+
+function corpusBytes(inputHttp) {
+  const enc = inputHttp.encoding === "base64" ? "base64" : inputHttp.encoding === "hex" ? "hex" : "utf8";
+  return Buffer.from(inputHttp.data, enc);
+}
+
+// Assert a total surface (verifyDirectory/verifyAnnounce) rejected as documented: it
+// returned {ok:false} WITHOUT throwing, and matched the pinned reason if one is given.
+function checkReject(label, r, expect) {
+  if (typeof r !== "object" || r === null || typeof r.ok !== "boolean") return fail(`corpus ${label}: non-{ok} result ${JSON.stringify(r)}`);
+  if (r.ok !== false) return fail(`corpus ${label}: expected ok:false, got ${JSON.stringify(r)}`);
+  if (expect.reason !== undefined && r.reason !== expect.reason) return fail(`corpus ${label}: reason ${JSON.stringify(r.reason)} !== ${JSON.stringify(expect.reason)}`);
+  if (expect.reasonPrefix !== undefined && !String(r.reason).startsWith(expect.reasonPrefix)) return fail(`corpus ${label}: reason ${JSON.stringify(r.reason)} does not start with ${JSON.stringify(expect.reasonPrefix)}`);
+  ok(`corpus ${label} (reject${expect.reason ? " " + expect.reason : expect.reasonPrefix ? " " + expect.reasonPrefix + "*" : ""})`);
+}
+
+// Replay one corpus entry against its surface, asserting the documented outcome.
+// A THROW where the entry does not expect one is itself a FAILURE (that is exactly the
+// total-ness regression class this corpus guards -- e.g. the loop-11 non-string signer).
+async function replayEntry(e) {
+  const label = e.id;
+  const out = e.expect.outcome;
+  switch (e.surface) {
+    case "onionToPubkey": {
+      let res, threw = null;
+      try { res = onionToPubkey(e.input); } catch (err) { threw = err; }
+      if (out === "throw") return threw ? ok(`corpus ${label} (throw: ${threw.message})`) : fail(`corpus ${label}: expected throw, returned ${JSON.stringify(res)}`);
+      if (out === "decode") {
+        if (threw) return fail(`corpus ${label}: expected decode, threw ${threw.message}`);
+        if (!/^[0-9a-f]{64}$/.test(res)) return fail(`corpus ${label}: not a 64-hex key: ${JSON.stringify(res)}`);
+        if (e.expect.hex !== undefined && res !== e.expect.hex) return fail(`corpus ${label}: decoded ${res} !== ${e.expect.hex}`);
+        return ok(`corpus ${label} (decode)`);
+      }
+      return fail(`corpus ${label}: unsupported outcome ${out} for onionToPubkey`);
+    }
+    case "parseHttp": {
+      const buf = corpusBytes(e.inputHttp);
+      let res, threw = null;
+      try { res = parseHttp(buf); } catch (err) { threw = err; }
+      if (out === "throw") return threw ? ok(`corpus ${label} (throw: ${threw.message})`) : fail(`corpus ${label}: expected throw, returned ${JSON.stringify(res)}`);
+      if (out === "parse") {
+        if (threw) return fail(`corpus ${label}: expected parse, threw ${threw.message}`);
+        if (e.expect.equals !== undefined && JSON.stringify(res) !== JSON.stringify(e.expect.equals)) return fail(`corpus ${label}: parsed ${JSON.stringify(res)} !== ${JSON.stringify(e.expect.equals)}`);
+        return ok(`corpus ${label} (parse)`);
+      }
+      return fail(`corpus ${label}: unsupported outcome ${out} for parseHttp`);
+    }
+    case "verifyDirectory": {
+      let r, threw = null;
+      try { r = verifyDirectory(e.input, e.pinnedSigner); } catch (err) { threw = err; }
+      if (threw) return fail(`corpus ${label}: verifyDirectory threw (total-ness regression!) -> ${threw.message}`);
+      if (out === "reject") return checkReject(label, r, e.expect);
+      return fail(`corpus ${label}: unsupported outcome ${out} for verifyDirectory`);
+    }
+    case "verifyAnnounce": {
+      let r, threw = null;
+      try { r = await verifyAnnounce(e.input, e.opts || {}); } catch (err) { threw = err; }
+      if (threw) return fail(`corpus ${label}: verifyAnnounce threw (total-ness regression!) -> ${threw.message}`);
+      if (out === "reject") return checkReject(label, r, e.expect);
+      return fail(`corpus ${label}: unsupported outcome ${out} for verifyAnnounce`);
+    }
+    case "canonicalDirectoryBytes": {
+      let threw = null, eq = false;
+      try { eq = canonicalDirectoryBytes(e.inputA).equals(canonicalDirectoryBytes(e.inputB)); } catch (err) { threw = err; }
+      if (threw) return fail(`corpus ${label}: canonicalDirectoryBytes threw -> ${threw.message}`);
+      if (out === "equal-bytes") return eq ? ok(`corpus ${label} (equal-bytes)`) : fail(`corpus ${label}: canonical bytes diverged`);
+      return fail(`corpus ${label}: unsupported outcome ${out} for canonicalDirectoryBytes`);
+    }
+    default:
+      return fail(`corpus ${label}: unknown surface ${e.surface}`);
+  }
+}
+
+async function replayCorpus() {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(CORPUS_PATH, "utf8"));
+  } catch (e) {
+    return fail(`corpus load failed (${CORPUS_PATH}): ${e.message}`);
+  }
+  const entries = manifest.entries || [];
+  if (entries.length === 0) return fail("corpus is empty -- expected curated regression entries");
+  console.log(`corpus: replaying ${entries.length} curated regression${entries.length === 1 ? "" : "s"} (deterministic, runs first)`);
+  for (const e of entries) await replayEntry(e);
+  console.log("");
+}
+
 async function main() {
   console.log(`fuzz seed=${SEED} iters=${N}\n`);
+
+  // 0. CORPUS phase (T-TEST-15): replay the curated known-tricky inputs FIRST and FAST,
+  //    so a regression is caught immediately and deterministically before the random walk.
+  await replayCorpus();
 
   // 1. onionToPubkey: hostile strings must throw (rejected) or return a 64-hex key. Never hang,
   //    never return anything else. A throw is FINE (that is rejection); an escape is not.

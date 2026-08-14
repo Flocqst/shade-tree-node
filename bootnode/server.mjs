@@ -52,6 +52,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const M = {
   announces: metrics.counter("rgoe_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
   directoryFetches: metrics.counter("rgoe_bootnode_directory_fetches_total", "GET /directory requests served."),
+  deltaFetches: metrics.counter("rgoe_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
 };
 
 // ---- signer key (mint + persist if absent) ----------------------------------
@@ -93,6 +94,10 @@ const MAX_WEIGHT = 1000;
 export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, now = () => Math.floor(Date.now() / 1000),
     maxEntries = Number(process.env.RGOE_BOOTNODE_MAX_ENTRIES || 10000),
     minReannounceSec = Number(process.env.RGOE_BOOTNODE_MIN_REANNOUNCE || 5),
+    // How many recent directory versions the delta protocol (T-FEAT-6) remembers. A client
+    // whose last etag has aged past this window is told full:true and re-fetches. This is a
+    // bounded, recent history — memory is O(deltaHistoryMax * live-set-size of onion strings).
+    deltaHistoryMax = Number(process.env.RGOE_BOOTNODE_DELTA_HISTORY || 64),
     // OPTIONAL persistence: a JSON store the live set is mirrored to. Off (null) by default, so
     // unset behavior — and every existing test — is byte-for-byte unchanged.
     persistPath = process.env.RGOE_BOOTNODE_STORE || null }) {
@@ -219,9 +224,76 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     return signDirectory(dir, signer.priv);
   }
 
+  // ---- directory delta protocol (T-FEAT-6) ----------------------------------
+  // For large or frequently-polled fleets, a client can fetch only what CHANGED since its
+  // last view instead of the whole signed directory each poll. We keep a bounded history of
+  // recent versions, keyed by the SAME strong ETag /directory emits (sha256 of the signed
+  // bytes), each mapping to the set of onions that version listed. Given a client's last etag
+  // we diff that remembered set against the current live set.
+  //
+  // TRUST (see docs/adr/0003-bootnode-is-a-cache-not-a-trust-root.md). A delta is a diff, not
+  // a signed list, so the delta is NOT independently signature-verifiable on its own. We take
+  // option (a) from the design: the delta ships the CURRENT directory's signer + signature +
+  // exact gateway ORDER, and full bodies for every `added` entry. The client RECONSTRUCTS the
+  // new directory from its cached base (unchanged entries) plus `added`, laid out in `order`,
+  // then runs the ordinary verifyDirectory(reconstructed, pinnedSigner). This closes forgery
+  // on both axes the bootnode might attack:
+  //   - a forged `added` entry fails verifyDirectory's onion<->pubkey binding (the v3 .onion IS
+  //     its ed25519 key; the client re-derives it), so an injected gateway under a key the
+  //     bootnode does not control is rejected by the client's own check; and
+  //   - any lie in `added`/`removed`/`order` changes the reconstructed canonical bytes, so the
+  //     pinned signer's signature over them no longer verifies -- the bootnode cannot present a
+  //     gateway list the pinned signer never signed.
+  // Worst case is therefore identical to the full-directory path (ADR 0003): a hostile bootnode
+  // can OMIT a gateway or answer full:true (a re-fetch), never INJECT one it does not control.
+  const etagKey = (e) => String(e || "").trim().replace(/^"|"$/g, "").toLowerCase();
+  const versionHistory = new Map(); // etagKey -> Set(onion) present in that served version
+
+  function recordVersion(etag, gateways) {
+    const key = etagKey(etag);
+    if (versionHistory.has(key)) versionHistory.delete(key); // refresh recency (move to newest)
+    versionHistory.set(key, new Set(gateways.map((g) => g.onion)));
+    while (versionHistory.size > deltaHistoryMax) versionHistory.delete(versionHistory.keys().next().value);
+  }
+
+  // The signed directory plus its serialized bytes and strong ETag, computed once. Also records
+  // the version into the delta history so a client that just fetched /directory (or a delta) can
+  // ask for a delta since the etag it just received. Byte-identical to the old inline path.
+  function directoryWithEtag() {
+    const dir = directory();
+    const bytes = Buffer.from(JSON.stringify(dir), "utf8");
+    const etag = `"${createHash("sha256").update(bytes).digest("hex")}"`;
+    recordVersion(etag, dir.gateways);
+    return { dir, bytes, etag };
+  }
+
+  // Everything a client needs to RECONSTRUCT + verify the current directory from its cached
+  // base and the `added` bodies: signer, signature, and the exact gateway order.
+  function reconstructMeta(dir) {
+    return { version: dir.version, issued: dir.issued, signer: dir.signer, signature: dir.signature,
+             order: dir.gateways.map((g) => g.onion) };
+  }
+
+  // Compute a delta against the client's last etag. Returns either
+  //   { full: true, base } .............. when `since` is missing/unknown/aged out (fetch /directory), or
+  //   { base, since, added, removed, unchanged, directory: reconstructMeta } .. a verifiable delta.
+  function delta(sinceEtag) {
+    const { dir, etag: base } = directoryWithEtag();
+    const currentSet = new Set(dir.gateways.map((g) => g.onion));
+    const sinceKey = etagKey(sinceEtag);
+    if (!sinceKey) return { full: true, base };
+    const oldSet = versionHistory.get(sinceKey);
+    // `base` was just recorded, so `since === current` resolves here to an empty delta.
+    if (!oldSet) return { full: true, base };
+    const added = dir.gateways.filter((g) => !oldSet.has(g.onion));
+    const removed = [...oldSet].filter((o) => !currentSet.has(o));
+    return { base, since: sinceEtag, added, removed, unchanged: currentSet.size - added.length,
+             directory: reconstructMeta(dir) };
+  }
+
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
-  return { announce, directory, sweep, record, loadPersisted, size: () => live.size, admission, ttlSec };
+  return { announce, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size, admission, ttlSec };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
@@ -256,6 +328,23 @@ export function makeServer(registry, { signerPub } = {}) {
         res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
         return res.end(body);
       }
+      // GET /directory/delta?since=<etag> -> only what CHANGED since the client's last view
+      // (T-FEAT-6). Additive to /directory: the response carries the current signer + signature
+      // + gateway order so the client reconstructs the new directory from its cached base + the
+      // `added` bodies and verifies it with the ordinary verifyDirectory (the delta cannot smuggle
+      // a forged gateway -- see registry.delta above and docs/adr/0003). An unknown/aged-out
+      // `since` returns { full: true } telling the client to fetch the whole /directory.
+      if (req.method === "GET" && url.pathname === "/directory/delta") {
+        const d = registry.delta(url.searchParams.get("since"));
+        M.deltaFetches.inc({ result: d.full ? "full" : "delta" });
+        const body = Buffer.from(JSON.stringify(d), "utf8");
+        const wantsGzip = /(^|[,\s])gzip($|[,;\s])/i.test(req.headers["accept-encoding"] || "");
+        const out = wantsGzip ? gzipSync(body) : body;
+        const headers = { "content-type": "application/json", "content-length": out.length };
+        if (wantsGzip) headers["content-encoding"] = "gzip";
+        res.writeHead(200, headers);
+        return res.end(out);
+      }
       if (req.method === "GET" && url.pathname === "/directory") {
         M.directoryFetches.inc();
         // Transport-only scale features (T-DEV-11): ETag + conditional GET + gzip. NEITHER
@@ -263,10 +352,9 @@ export function makeServer(registry, { signerPub } = {}) {
         // receives the identical signed bytes and verifies the decompressed JSON exactly as
         // before. (The registry already caps entry count via maxEntries, so no pagination is
         // needed now; pagination is a later step if a single fleet ever exceeds that cap.)
-        const body = Buffer.from(JSON.stringify(registry.directory()), "utf8");
-        // Strong ETag = sha256 of the signed directory bytes, so a client can skip re-downloading
-        // an unchanged directory (the common case between changes).
-        const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+        // directoryWithEtag() returns the identical signed bytes and the same strong sha256 ETag
+        // as before, and additionally records this version into the delta history (T-FEAT-6).
+        const { bytes: body, etag } = registry.directoryWithEtag();
         const inm = req.headers["if-none-match"];
         if (inm && inm.split(",").some((t) => t.trim() === etag)) {
           res.writeHead(304, { etag });
@@ -368,7 +456,7 @@ async function main() {
     log.info(`bootnode up on 127.0.0.1:${port}`, { admission, stake: stake.mode, ttlSec });
     log.info("pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):");
     log.info(`  ${signer.pub}`);
-    log.info("endpoints: POST /announce  GET /directory  GET /gateway/<onion>  GET /health");
+    log.info("endpoints: POST /announce  GET /directory  GET /directory/delta?since=<etag>  GET /gateway/<onion>  GET /health");
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);
