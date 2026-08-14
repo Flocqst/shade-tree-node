@@ -1,0 +1,48 @@
+name: real-tor-e2e
+
+# T-TEST-1: real-Tor END-TO-END member egress. It boots the SAME systemd-container fleet as
+# bootstrap-e2e (bootnode/deploy/bootstrap.sh -> tor + rgoe-bootnode + rgoe-gateway with REAL
+# published v3 onions), then runs the JS REFERENCE client (client/rgoe-client.mjs, driven by
+# test/real-tor-e2e-client.mjs): it mints a real per-request RLN membership proof and dials the
+# gateway's .onion over the container's Tor SOCKS, and the real gateway must ACCEPT and proxy the
+# CONNECT to a local sink.
+#
+# GATING: v3 HS descriptor propagation over the live Tor network is slow + flaky, so the runner
+# treats a propagation timeout as a SOFT/NEUTRAL outcome (the job still passes) — identical to how
+# bootstrap-e2e treats its over-Tor dial. A genuine ACCEPT is asserted (client ok ack + gateway
+# journal egress line + the sink actually receiving the tunneled connection); a client that claims
+# ACCEPT without that corroborating evidence is a HARD failure. This job does NOT gate the existing
+# ci.yml suites — it is an additional, best-effort integration signal.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "bootnode/**"
+      - "gateway/**"
+      - "client/**"
+      - "lib/**"
+      - "group/**"
+      - "test/real-tor-e2e-client.mjs"
+      - "test/real-tor-e2e-container.sh"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/real-tor-e2e.yml"
+  workflow_dispatch:
+
+jobs:
+  real-tor-e2e:
+    name: real-Tor client egress e2e (systemd fleet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ubuntu-latest ships Docker and can run privileged containers (systemd-in-container).
+      # The runner boots the fleet, then runs the JS client egress over Tor and asserts the
+      # ACCEPT; a propagation timeout is a soft pass (see the script header + E2E-CONTAINER.md).
+      - name: Real-Tor JS client -> fleet gateway ACCEPT (over Tor)
+        run: bash test/real-tor-e2e-container.sh

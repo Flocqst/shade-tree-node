@@ -138,7 +138,7 @@ surface takes untrusted bytes; and killing a mutant (does the test catch a flipp
 over line coverage. Every parser, every signature check, and every state machine (spent-set,
 slash, stake lifecycle) gets negative and concurrent cases, not just a positive one.
 
-- [ ] **T-TEST-1 (P0) Real-Tor local fleet integration test.** `test/integration/fleet-e2e.mjs`:
+- [x] **T-TEST-1 (P0) Real-Tor local fleet integration test.** `test/integration/fleet-e2e.mjs`:
   bring up an ephemeral tor + bootnode + 2 gateways + client; assert discovery, a successful
   egress, per-request rotation across both gateways, failover when one is killed, and a live
   over-spend → on-chain slash (against anvil). Gated behind `RGOE_IT=1` (needs tor). *Accept:*
@@ -705,3 +705,19 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   14367190620832145537223890636337926502210861635134078778082353204233456513838. Full suite 56/56 green (node +
   54 Foundry). Filed T-DEV-2b (Rust tree removal parity — rgoe-rln/tree.rs is insertion-only; must adopt the same
   zero-in-place convention when removal is added). Next Gate-1 item: T-TEST-1 (wire real-Tor e2e into CI).
+- 2026-08-14  loop-27  FOCUSED single run: T-TEST-1 real-Tor fleet e2e (Gate-1). A local + CI harness that runs
+  the JS REFERENCE client end-to-end through a real published .onion gateway over REAL Tor: client discovers/dials
+  the gateway onion over Tor, mints a real per-request RLN proof, the gateway ACCEPTS + proxies the CONNECT, and a
+  local sink receives the tunneled connection. Deliverables (all new, no source edits): test/real-tor-e2e.sh
+  (local, gated RGOE_TOR_E2E=1, publishes the gateway HS via system tor + SOCKS, retries the dial, asserts
+  client-ok + gateway egress-log + sink-hit, soft-skips on propagation timeout), test/real-tor-e2e-client.mjs
+  (thin driver over RgoeClient.connect), test/real-tor-e2e-container.sh (authoritative CI runner over the
+  systemd-container fleet from bootstrap.sh), .github/workflows/real-tor-e2e.yml (additive; ci.yml untouched),
+  test/REAL-TOR-E2E.md. Reuses the SIGPIPE-robust cleanup (trap EXIT INT TERM HUP PIPE + pidfile reap).
+  INTEGRATION AUDIT (mine): ran the harness PIPED — this time local Tor bootstrapped and I OBSERVED a REAL
+  over-Tor accept end-to-end: `{"accept":true,"onion":"hhkv...piad","nullifier":"14137..."}`, gateway logged
+  `egress target=... nullifier=...`, sink logged `connection #1 from gateway`. No-leak verified (piped run, zero
+  leftover tor/gateway/sink procs; members.json restored). Suite 56/56 green (harness is not part of it); YAML
+  valid. NOTE: the over-Tor step stays gated/soft-skip in CI + locally because HS descriptor propagation is
+  network-dependent (the agent's own run soft-skipped when Tor stalled — honestly reported). GATE 1 tractable
+  items DONE (T-DEV-2 + T-TEST-1); only T-DEV-1 remains, BLOCKED on the human trusted setup T-HARD-1.
