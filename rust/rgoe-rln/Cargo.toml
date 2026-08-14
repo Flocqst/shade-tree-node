@@ -12,14 +12,30 @@ publish = false
 # rgoe-proto + rgoe-client stay fast and never compile wasmer. Build this crate
 # explicitly with `cargo build -p rgoe-rln`.
 
+[lib]
+name = "rgoe_rln"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rgoe-rln-probe"
 path = "src/main.rs"
+
+# T-RUST-2c: native Rust merkle root/path emitter (rlnjs Semaphore-v3 parity), so the
+# harness can feed a RUST-computed root+path into the prover instead of the JS fixture.
+[[bin]]
+name = "rgoe-rln-tree"
+path = "src/bin/tree.rs"
 
 [dependencies]
 # Reuse the trust-critical, conformance-gated request-signal + signal-hash from the
 # JS-reference port so the Rust side OWNS the target binding (x = H(signal)).
 rgoe-proto = { path = "../rgoe-proto" }
+
+# T-RUST-2c native merkle tree (rlnjs Semaphore-v3 parity):
+#   - light-poseidon: circomlib-compatible Poseidon (BN254, arity 2) == poseidon-lite.
+#   - sha3: Keccak256 for the Semaphore group zero value (keccak(be32(id)) >> 8).
+light-poseidon = "0.4"
+sha3 = "0.10"
 
 # ark-circom 0.5 == ark 0.5 (same as zerokit rln 3.0.0). It gives us exactly what we
 # need for byte-compatible interop against the REPO's own artifacts:

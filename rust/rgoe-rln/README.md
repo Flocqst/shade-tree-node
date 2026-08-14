@@ -59,21 +59,50 @@ still open but requires converting the repo's snarkjs zkey → `arkzkey` (e.g. v
 `ark-circom` `read_zkey` + re-serialize) and validating zerokit's `graph.bin` against
 this exact circuit; not needed for the Gate-2 interop proof.
 
+## Native Rust merkle tree (T-RUST-2c — root/path parity, DONE)
+
+The membership merkle **root + path** are now computed natively in Rust (`src/tree.rs`),
+matching the rlnjs Semaphore-v3 group byte-for-byte, so the client is self-contained
+(no JS fixture for the tree). The convention — **read out of the pinned deps, not
+guessed** — is: `lib/rln.mjs` `newGroup` → rlnjs's nested Semaphore **v3**
+`@semaphore-protocol/group@3.15.2` → `@zk-kit/incremental-merkle-tree@1.1.0`:
+
+- **hash** `poseidon2` (BN254, arity 2, circomlib / poseidon-lite; ported with
+  `light-poseidon`), **arity** 2, **fixed depth** 20 (NOT a v4 LeanIMT),
+- **zero value** `zeroes[0] = keccak256(be32(id)) >> 8` (the group's keccak-into-field
+  `hash(id)`, `id = RLN_IDENTIFIER = 1` — **not** `0`, **not** Poseidon),
+  `zeroes[l+1] = poseidon2(zeroes[l], zeroes[l])`,
+- **insertion order** members left-to-right at increasing leaf index.
+
+`tests/tree_parity.rs` pins the Rust root/zeroes/path to golden rlnjs values (poseidon2,
+zeroes chain, empty/single/3-member roots, real-sibling path). `interop/tree-run.sh`
+proves it **live** end-to-end: Rust root == rlnjs `group.root` over several member lists,
+and a **Rust-computed** root+path (single-member *and* a member at a non-zero index with
+real leaf/internal-node siblings) drives the prover and `verifyEnvelope` **ACCEPTS** it.
+
 ## Files
 
 - `src/main.rs` — `rgoe-rln-probe <fixture.json> <out.json> <circuits-dir>`: witness →
   prove → in-process verify → emit snarkjs-shaped envelope JSON.
+- `src/tree.rs` — native depth-20 Poseidon (BN254) incremental Merkle tree matching the
+  rlnjs Semaphore-v3 group (root + `create_proof`); exposed via `src/lib.rs`.
+- `src/bin/tree.rs` — `rgoe-rln-tree {root|proof}`: emits the Rust root / root+path JSON
+  for an ordered member list, for the harness to feed the prover instead of a JS fixture.
 - `interop/fixture-gen.mjs` — emits circuit inputs + the `rlnjs` reference public
   signals for a fixed identity/epoch/slot/target and a CLI-overridable nonce.
 - `interop/verify-envelope.mjs` — assembles the wire envelope and asserts
   `verifyEnvelope` accepts it.
 - `interop/overspend.mjs` — cross-impl slash: two Rust shares → `reconstructSecret`.
-- `interop/run.sh` — builds the probe and runs the whole chain.
+- `interop/run.sh` — builds the probe and runs the whole chain (JS-fixture tree path).
+- `interop/tree-run.sh` — the T-RUST-2c counterpart: RUST-computed root+path → prover →
+  `verifyEnvelope` accepts (root parity + single- and multi-member envelopes).
 
 ## Scope / honesty
 
 Testnet-only artifacts (untrusted circom-rln ceremony; see `circuits/rln/ARTIFACTS.md`).
 The `wasmer`-based witness calculator needs a Tokio reactor in context (probe wraps it
-in a runtime guard). The merkle path is supplied by the JS fixture generator here; a
-native Rust depth-20 Poseidon tree (matching the rlnjs Semaphore-v3 group root) is
-T-RUST-3 parity work, not required to prove envelope interop.
+in a runtime guard). The merkle root + path are now computed natively in Rust
+(`src/tree.rs`, T-RUST-2c) and proven to match the rlnjs Semaphore-v3 group; the JS
+fixture path (`run.sh`) is retained as the original T-RUST-2b interop proof. Still open:
+wiring the prover + tree into `rgoe-client` behind a feature (T-RUST-2d) and the `arti`
+Tor dial (T-RUST-2e).

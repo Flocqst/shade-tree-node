@@ -269,7 +269,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   (native Rust depth-20 Poseidon merkle tree — the root is currently supplied by a JS fixture), T-RUST-2d (wire
   proving into `rgoe-client` behind a feature), T-RUST-2e (the `arti` Tor dial + real proxy). Gate 2 stays open
   until egress runs end-to-end. Artifacts remain testnet-only (untrusted ceremony — T-HARD-1).
-- [ ] **T-RUST-2c (P1, added loop-20) Native Rust RLN merkle tree parity.** The interop slice took the membership
+- [x] **T-RUST-2c (P1, added loop-20) Native Rust RLN merkle tree parity.** The interop slice took the membership
   merkle root + path from a JS fixture. Build the depth-20 Poseidon (BN254) incremental tree in Rust matching the
   rlnjs Semaphore-v3 group so the Rust client computes its own root/path from the member set. *Accept:* Rust tree
   root == rlnjs group root over the same member list; a Rust-computed path proves in the envelope and verifyEnvelope
@@ -580,3 +580,14 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   envelope, and a cross-impl over-spend recovers the exact identitySecret. Guardrails held (rgoe-proto 9+20 green,
   default build 0.29s, clippy/fmt clean, only rust/ touched). T-RUST-2b marked [~]; filed T-RUST-2c (native
   merkle tree), T-RUST-2d (wire into rgoe-client), T-RUST-2e (arti Tor dial) as the remaining Gate-2 slices.
+- 2026-08-14  loop-21  FOCUSED single run: T-RUST-2c native Rust RLN merkle tree parity. The Rust side now
+  computes its OWN depth-20 Poseidon root+path (was borrowing a JS fixture root). TREE CONVENTION (read from the
+  pinned deps, not guessed): lib/rln.mjs newGroup → rlnjs's nested Semaphore v3 @semaphore-protocol/group@3.15.2
+  → @zk-kit/incremental-merkle-tree — binary poseidon2(BN254), fixed depth 20, zero value =
+  keccak256(be32(RLN_IDENTIFIER=1))>>8 (NOT 0, NOT Poseidon), left-to-right insertion. Key finding: the app's
+  top-level Semaphore v4 LeanIMT does NOT match — rlnjs reaches into the nested v3 group. Built src/tree.rs (via
+  light-poseidon 0.4 on the crate's ark 0.5, byte-matches poseidon-lite) + a tree emitter bin + tree_parity tests
+  + interop/tree-run.sh. INTEGRATION AUDIT (mine): reran the harness — Rust root == rlnjs group root over 4 member
+  sets, and a Rust-computed root+path (single-member AND member-at-index-1 with real internal-node siblings) drives
+  the prover to a verifyEnvelope ok:true. Guardrails: rgoe-proto 9+20 green, tree_parity 5/5, default build 0.07s,
+  clippy/fmt clean, only rust/ touched, no regression in the loop-20 run.sh. T-RUST-2c done; T-RUST-2d/2e remain.
