@@ -1,0 +1,45 @@
+[package]
+name = "rgoe-rln"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "RGOE RLN interop probe (T-RUST-2b RLN-INTEROP): generate an RLN Groth16 envelope proof in Rust against the repo's circom-rln artifacts, cross-verified by the rlnjs reference (lib/rln.mjs verifyEnvelope)."
+publish = false
+
+# NOTE: this crate has a heavy dep tree (ark-circom pulls wasmer). It is a parent-
+# workspace MEMBER but is deliberately excluded from `default-members` (see
+# rust/Cargo.toml), so the everyday `cargo build` / `cargo test` over
+# rgoe-proto + rgoe-client stay fast and never compile wasmer. Build this crate
+# explicitly with `cargo build -p rgoe-rln`.
+
+[[bin]]
+name = "rgoe-rln-probe"
+path = "src/main.rs"
+
+[dependencies]
+# Reuse the trust-critical, conformance-gated request-signal + signal-hash from the
+# JS-reference port so the Rust side OWNS the target binding (x = H(signal)).
+rgoe-proto = { path = "../rgoe-proto" }
+
+# ark-circom 0.5 == ark 0.5 (same as zerokit rln 3.0.0). It gives us exactly what we
+# need for byte-compatible interop against the REPO's own artifacts:
+#   - read_zkey(rln_final.zkey) -> (ProvingKey<Bn254>, ConstraintMatrices<Fr>)
+#   - WitnessCalculator(rln.wasm) -> full witness (SAME circom compile as the zkey,
+#     so no witness-graph / wire-order mismatch risk),
+#   - CircomReduction (the snarkjs-compatible QAP reduction).
+ark-circom = "0.5"
+ark-groth16 = { version = "0.5", default-features = false }
+ark-bn254 = "0.5"
+ark-ff = "0.5"
+ark-ec = "0.5"
+ark-serialize = "0.5"
+ark-std = "0.5"
+ark-relations = "0.5"
+wasmer = "4"
+# ark-circom's WitnessCalculator runs on wasmer-wasix, whose virtual-fs needs a
+# Tokio reactor in context to open the wasm's host FS. A runtime guard around the
+# witness call satisfies it (probe-only; the release client would embed its own).
+tokio = { version = "1", features = ["full"] }
+num-bigint = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

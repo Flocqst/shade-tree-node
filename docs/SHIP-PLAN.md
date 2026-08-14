@@ -253,14 +253,36 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   smoke against a JS-signed directory (accepts pinned signer, rejects wrong = `signer-not-pinned`). *Remaining
   (T-RUST-2b):* the LIVE egress — `arti`-dialed onion connect + `zerokit` RLN Groth16 proving + real proxy —
   stubbed behind `live_egress()` (returns an honest not-implemented error). Gate 2 is not closed until 2b lands.
-- [ ] **T-RUST-2b (P1, added loop-19) Rust client live egress.** Wire the two heavy deferred pieces into the
-  T-RUST-2 deterministic core: `zerokit` (PSE canonical Rust RLN) to generate the per-request Groth16 envelope
-  proof (nullifier + Shamir share + target-bound signal), and `arti-client` (embedded Tor, no system daemon) to
-  dial the selected gateway onion and proxy the CONNECT. Add `tokio` (async), and `serde` for the envelope. The
-  RLN proof is non-deterministic so it can't be byte-pinned; instead prove equivalence by having a JS gateway
-  ACCEPT the Rust-built envelope (and vice-versa) in an integration test. *Accept:* the Rust client egresses
-  through a live gateway byte-for-byte-compatibly with the JS client (a JS gateway accepts its envelope + target
-  binding); pairs with T-TEST-1 real-Tor. *Depends on:* the container/real-Tor harness (T-TEST-8/T-TEST-1).
+- [~] **T-RUST-2b (P1, added loop-19) Rust client live egress — RLN-INTEROP SLICE DONE (loop-20).**
+  Done (focused single run): the Gate-2 CRUX — a Rust-generated RLN Groth16 envelope proof is ACCEPTED by the
+  JS reference `lib/rln.mjs` verifyEnvelope (ok:true), against the repo's OWN `circuits/rln/*` artifacts. New
+  crate `rust/rgoe-rln` (excluded from `default-members` so the everyday build stays 0.29s; build with
+  `cargo build -p rgoe-rln`; harness `bash rust/rgoe-rln/interop/run.sh`). FORK RESOLVED: `rln = "3"` is zerokit
+  3.0, which CANNOT consume this repo's snarkjs `rln_final.zkey` (it only reads its own arkzkey format + bundles
+  its own trusted setup), so its proofs verify against zerokit's VK, not ours. Resolved via option (b) `ark-circom`:
+  `read_zkey` loads the repo's `rln_final.zkey`, `WitnessCalculator` runs the repo's `rln.wasm` (same circom
+  compile → no witness/wire mismatch), `ark-groth16`+`CircomReduction` proves, serialized snarkjs-shaped so rlnjs
+  reads it. VERIFIED (mine, reran the harness): target binding via conformance-gated `rgoe-proto`
+  calculate_signal_hash; public signals `[y,root,nullifier,x,externalNullifier]` == rlnjs; Rust proof verifies vs
+  the repo `verification_key.json`; verifyEnvelope accepts; and a cross-impl over-spend (two Rust shares) recovers
+  the exact identitySecret via JS reconstructSecret. *Remaining for T-RUST-2b (own items below):* T-RUST-2c
+  (native Rust depth-20 Poseidon merkle tree — the root is currently supplied by a JS fixture), T-RUST-2d (wire
+  proving into `rgoe-client` behind a feature), T-RUST-2e (the `arti` Tor dial + real proxy). Gate 2 stays open
+  until egress runs end-to-end. Artifacts remain testnet-only (untrusted ceremony — T-HARD-1).
+- [ ] **T-RUST-2c (P1, added loop-20) Native Rust RLN merkle tree parity.** The interop slice took the membership
+  merkle root + path from a JS fixture. Build the depth-20 Poseidon (BN254) incremental tree in Rust matching the
+  rlnjs Semaphore-v3 group so the Rust client computes its own root/path from the member set. *Accept:* Rust tree
+  root == rlnjs group root over the same member list; a Rust-computed path proves in the envelope and verifyEnvelope
+  accepts. Cross-refs T-DEV-2 (leaf-removal parity) and T-RUST-3 (client parity).
+- [ ] **T-RUST-2d (P1, added loop-20) Wire RLN proving into rgoe-client.** Move the `rgoe-rln` prover behind a
+  cargo feature on `rgoe-client` so `rgoe egress` can build a real envelope (still no Tor yet — send over a local
+  socket to a JS gateway in an integration test). *Accept:* `rgoe egress` produces an envelope a JS gateway accepts,
+  without the standalone harness.
+- [ ] **T-RUST-2e (P1, added loop-20) arti Tor dial + real proxy.** Add `arti-client` (default-features=false,
+  features=["tokio","rustls"] — the compression feature MUST stay off: it links native zstd and collides with
+  rln's sled; confirmed) + tokio to dial the selected gateway onion and proxy the CONNECT. *Accept:* the Rust
+  client egresses through a LIVE gateway over Tor byte-for-byte-compatibly with the JS client; pairs with T-TEST-1
+  real-Tor / T-TEST-8 container e2e. Closes Gate 2.
 - [ ] **T-RUST-3 (P2) Rust client parity.** Per-request slot + gateway rotation, failover,
   last-known-good caching, bootnode discovery — full parity with `client/rgoe-client.mjs`. *Accept:*
   the real-Tor integration test (T-TEST-1) passes with the Rust client swapped in.
@@ -546,3 +568,15 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   valid/wrong-onion/tampered-flag/tampered-sig across 12 fresh identities) and an end-to-end verify→select smoke
   against a JS-signed directory (pinned signer accepted, wrong signer rejected `signer-not-pinned`). Only rust/
   files touched. Added T-RUST-2b (live egress) to the backlog.
+- 2026-08-14  loop-20  FOCUSED single run (not fan-out): T-RUST-2b RLN-INTEROP slice — the Gate-2 CRUX. A
+  Rust-generated RLN Groth16 envelope proof is ACCEPTED by the JS reference verifyEnvelope (ok:true), against
+  the repo's own circuits/rln/* artifacts. FEASIBILITY (probed before building): the rln+arti dep graph hit a
+  native-zstd `links` collision (sled vs async-compression), cleared by feature surgery; cold compile 45s, no
+  toolchain wall. FORK (as predicted): zerokit 3.0 can't read the repo's snarkjs .zkey (own arkzkey format +
+  bundled setup), resolved via ark-circom loading the repo's own rln_final.zkey + rln.wasm (same circom compile,
+  zero witness-mismatch risk). New crate rust/rgoe-rln, excluded from default-members so the everyday build stays
+  0.29s. INTEGRATION AUDIT (mine): reran `bash rust/rgoe-rln/interop/run.sh` — target binding, public-signal
+  equivalence with rlnjs, Rust proof verifies vs the repo verification_key.json, verifyEnvelope accepts the Rust
+  envelope, and a cross-impl over-spend recovers the exact identitySecret. Guardrails held (rgoe-proto 9+20 green,
+  default build 0.29s, clippy/fmt clean, only rust/ touched). T-RUST-2b marked [~]; filed T-RUST-2c (native
+  merkle tree), T-RUST-2d (wire into rgoe-client), T-RUST-2e (arti Tor dial) as the remaining Gate-2 slices.
