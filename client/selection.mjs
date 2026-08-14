@@ -19,7 +19,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDirectory, selectionOrder, reportHealth, verifyDirectory } from "../lib/directory.mjs";
+import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGHT } from "../lib/directory.mjs";
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
@@ -295,6 +295,101 @@ export function reportReceipt(onion, { valid } = {}) {
   saveReceiptCache(_receiptCache, RECEIPT_CACHE_PATH);
 }
 
+// ---- quality-aware rotation / load spread (T-FEAT-4) ----------------------------
+// Today slot-0 (the gateway the shim actually dials) is a fresh independent weighted-random draw
+// each CONNECT. Over the long run that honors weight, but request-to-request it is memoryless: the
+// single top-weight gateway keeps winning the draw and gets hammered back-to-back, and equal-weight
+// peers see bursty, clumped load instead of an even spread — the opposite of what a rotation policy
+// wants for load balancing (and traffic concentration is a deanonymization lever this system already
+// clamps weight to fight).
+//
+// With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by a SMOOTH weighted round-robin (SWRR, the
+// nginx/`ngx_http_upstream` scheduler) over the SAME healthy, weight-clamped, receipt-adjusted pool
+// selectionOrder already selects from. SWRR keeps a per-gateway "current deficit" that advances every
+// CONNECT: each step adds the gateway's effective weight to its deficit, picks the max, then subtracts
+// the pool total from the winner. Two properties fall out for free:
+//   1. ANTI-STICKINESS / SPREAD: a gateway that just won drops far below its peers, so it is not
+//      re-picked until the others have had their proportional turn — no back-to-back hammering, and
+//      load is spread evenly across the healthy fleet (equal weights => strict round-robin, zero
+//      immediate repeats), which is exactly the T-FEAT-4 goal.
+//   2. LONG-RUN WEIGHT IS PRESERVED EXACTLY: over each full cycle a gateway is selected a number of
+//      times exactly proportional to its effective weight (the -total decrement conserves the
+//      deficit sum), so the marginal slot-0 distribution is still weight- (and receipt-) proportional
+//      — spread changes the ORDER, never the long-run share.
+// The deficits are seeded with a small rng jitter so two clients loading the same fleet don't emit an
+// identical, cross-linkable sequence; the jitter only offsets the phase and washes out of the marginal.
+//
+// The failover TAIL (slots 1..n, only consulted on a dial timeout) stays weighted-random via the
+// existing selectionOrder over the remaining fleet — spread only needs to govern the gateway actually
+// used. OFF BY DEFAULT: unset => selectCandidates takes the byte-identical `selectionOrder(view)` path
+// and behaves exactly as today. Reuses the health ("down") + receipt-adjusted weight signals already in
+// this module; adds no persistence store (the SWRR deficits are in-memory session state, like health).
+//
+// RGOE_ROTATION_SPREAD : "1"/"on"/"true"/"yes" to arm smooth spread. Unset/anything else => OFF (default).
+function parseRotationSpread(raw) {
+  if (raw === undefined) return false;
+  const v = String(raw).trim().toLowerCase();
+  return v === "1" || v === "on" || v === "true" || v === "yes";
+}
+const ROTATION_SPREAD = parseRotationSpread(process.env.RGOE_ROTATION_SPREAD);
+export function rotationSpreadEnabled() { return ROTATION_SPREAD; }
+
+// Injectable rng for the spread path (jitter seed + failover-tail weighting), so distribution tests
+// are deterministic and don't flake. Only the RGOE_ROTATION_SPREAD path reads it; the default
+// weight-only path stays on selectionOrder's own Math.random, untouched. Test seam, additive.
+let _rng = Math.random;
+export function _setRng(fn) { _rng = typeof fn === "function" ? fn : Math.random; }
+
+// Per-gateway SWRR "current deficit", keyed by onion, persisted across selectCandidates() calls so
+// successive CONNECTs advance the schedule (that persistence is what spreads load instead of
+// re-rolling the dice each time). In-memory session state — NOT a new persistence store. Test seam.
+let _swrr = new Map();
+export function _resetRotationState() { _swrr = new Map(); }
+
+// Effective selection weight: mirror lib/directory.mjs clampWeight (undefined/NaN => 1, negative => 0,
+// huge => MAX_WEIGHT) so the spread path bounds gateway-attested weight exactly as pickGateway does.
+function effWeight(g) {
+  const w = Number(g?.weight);
+  return Number.isFinite(w) ? Math.max(0, Math.min(MAX_WEIGHT, w)) : 1;
+}
+
+// One smooth-weighted-round-robin step over `pool` (advances + mutates _swrr). Returns the winner.
+function swrrPick(pool) {
+  const total = pool.reduce((s, g) => s + effWeight(g), 0);
+  if (total <= 0) return pool[Math.floor(_rng() * pool.length)]; // all-zero weights: uniform random
+  let best = null, bestCur = -Infinity;
+  for (const g of pool) {
+    const w = effWeight(g);
+    let cur = _swrr.get(g.onion);
+    if (cur === undefined) cur = _rng() * w; // phase jitter in [0,w) so clients diverge
+    cur += w;
+    _swrr.set(g.onion, cur);
+    if (cur > bestCur) { bestCur = cur; best = g; }
+  }
+  _swrr.set(best.onion, _swrr.get(best.onion) - total);
+  return best;
+}
+
+// The RGOE_ROTATION_SPREAD ordering: SWRR chooses slot-0 over the healthy, positive-weight pool
+// (same "healthy unless all down" / "positive unless all zero" fallbacks as pickGateway), then the
+// existing weighted selectionOrder fills the failover tail over the remaining fleet. Falls back to
+// plain selectionOrder when there is nothing to spread across (< 2 candidates).
+function spreadSelectionOrder(view) {
+  const all = (view.gateways || []).slice();
+  const healthy = all.filter((g) => g.health !== "down");
+  const pool = healthy.length ? healthy : all; // last resort: spread over "down" ones
+  const positive = pool.filter((g) => effWeight(g) > 0);
+  const spreadPool = positive.length ? positive : pool;
+  if (spreadPool.length < 2) return selectionOrder(view, { rng: _rng });
+  // Prune deficits for onions no longer in the fleet so the map can't grow unboundedly across
+  // directory refreshes; a temporarily-"down" gateway keeps its deficit (it is still in `all`).
+  const live = new Set(all.map((g) => g.onion));
+  for (const k of _swrr.keys()) if (!live.has(k)) _swrr.delete(k);
+  const first = swrrPick(spreadPool);
+  const rest = { ...view, gateways: all.filter((g) => g.onion !== first.onion) };
+  return [first, ...selectionOrder(rest, { rng: _rng })];
+}
+
 // The pinned directory signer(s). In a real bundle this is a hardcoded constant set
 // at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
 // NO default: an unpinned directory is trust-on-first-use, which is exactly the
@@ -551,7 +646,12 @@ export async function selectCandidates() {
   // Run selection over the (possibly filtered/adjusted) fleet. Reuse the SAME entry objects so
   // reportHealth's in-place mutation (keyed by onion on dir.gateways) still lands on them.
   const view = gateways === dir.gateways ? dir : { ...dir, gateways };
-  return selectionOrder(view).map((g) => ({ onion: g.onion.replace(/\.onion$/, "") }));
+  // Rotation/spread policy (T-FEAT-4). OFF by default: selectionOrder(view) is the byte-identical
+  // weight-only path from before. With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by smooth
+  // weighted round-robin so load spreads evenly across the healthy fleet (no back-to-back hammering
+  // of the top gateway) while the long-run weighted share is preserved exactly.
+  const order = ROTATION_SPREAD ? spreadSelectionOrder(view) : selectionOrder(view);
+  return order.map((g) => ({ onion: g.onion.replace(/\.onion$/, "") }));
 }
 
 // Health/latency feedback from the shim after a dial attempt.

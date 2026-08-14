@@ -366,6 +366,20 @@ export class RgoeClient {
     // for a quality-aware selection layer (T-FEAT-4) to weigh.
     const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);
 
+    // Fold this verified-or-bogus receipt outcome into the LOCAL, per-gateway quality tally
+    // (T-FEAT-22's accumulation engine; wired here by T-FEAT-23). Gate on receipt.present so a
+    // legacy gateway running with receipts OFF sends none, is never reported, and is never
+    // entered into (or penalized in) the tally — keeping this fully ADDITIVE. reportReceipt is
+    // itself a no-op unless RGOE_RECEIPT_SCORING is armed, so this stays byte-identical to today
+    // when the flag is off (no tally file is ever written). It is pulled from the SAME lazily
+    // imported selection.mjs the client already uses (config captured at import; see _sel + the
+    // constructor) rather than a static top-level import that would evaluate selection.mjs before
+    // the constructor could set its directory/signer env.
+    if (receipt.present) {
+      const { reportReceipt } = await this._sel();
+      reportReceipt(usedOnion, { valid: receipt.valid === true });
+    }
+
     const tunnel = tunnelStream(sock, rest);
     tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt };
     return tunnel;

@@ -154,9 +154,25 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-TEST-7 (P1) Load/soak tests.** Bootnode announce storm (K onions × M heartbeats),
   gateway request throughput, concurrent directory fetch; assert bounded memory (no leak over a
   soak) and stable latency. *Accept:* a `test/load/` harness + a recorded baseline.
-- [ ] **T-TEST-8 (P1) Deploy bootstrap e2e in a container.** Run `bootnode/deploy/bootstrap.sh`
+- [x] **T-TEST-8 (P1) Deploy bootstrap e2e in a container.** Run `bootnode/deploy/bootstrap.sh`
   inside an Ubuntu container in CI (or a documented local job); assert services start and onions
   publish. *Accept:* the bootstrap is tested, not just hand-run once.
+- [x] **T-TEST-21 (P1, added+done loop-18) Adversarial hardening of the receipt + version-negotiation surfaces.**
+  The two freshest wire surfaces (loop-16/17) had only their authors' tests. `test/protocol-adversarial.selftest.mjs`
+  adds 209 assertions driving the REAL `lib/receipt.mjs` + `gateway.mjs`/`rgoe-client.mjs` version code: receipt
+  tamper/wrong-key/wrong-gateway, cross-protocol confusion both directions (announce sig ↔ receipt sig never
+  interchange), epoch canonicalization, totality (~20 garbage inputs never throw), version out-of-range/non-integer
+  rejection with value-safe repr, disjoint-range fail-closed, and proof a downgraded/garbage version can't strip
+  the target binding. *Result:* no defect found — the surfaces hold.
+- [x] **T-TEST-22 (P2, added+done loop-18) Golden cross-impl vectors for the receipt surface.** Extended
+  `testdata/vectors.json` + `test/vectors.selftest.mjs` (additively — no existing vector changed) to byte-pin the
+  RECEIPT_DOMAIN, canonical receipt bytes, and the ed25519 receipt signature from a fixed seed, plus the stable
+  version-negotiation reason-label literals. Hex derived by running `lib/receipt.mjs`, not hand-written. This is
+  the anti-drift contract the coming Rust client (rust/rgoe-proto) will be checked against for receipts.
+- [x] **T-DOC-7 (P1, added+done loop-18) Consolidated auditor threat model.** `docs/THREAT-MODEL.md`: assets,
+  6 adversary classes, trust assumptions (trusted-for vs NOT), 15 security properties each cited to
+  `file:function`, an honest residual-risks/out-of-scope list, and a "where to start" audit checklist. One
+  property (per-dial onion-control challenge) marked "claimed, unverified" rather than overstated.
 - [x] **T-TEST-9 (P1) CI matrix + lint + audit.** DONE (loop-11): ci.yml -> Node 20/22/24 matrix (full suite + forge) + lint job + audit job; `eslint.config.js` (pragmatic bug-net, passes clean); `npm run lint` / `npm run audit:ci`. Subsumes T-HARD-2 (dependabot for npm/cargo/actions; audit gate at critical-blocking + high-informational, with the unavoidable-transitive-advisory rationale documented).
 - [x] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
   the tests actually catch regressions. *Accept:* mutation score reported; obvious survivors killed.
@@ -250,10 +266,18 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   single-point-of-availability the fleet added; this closes it.
 - [x] **T-FEAT-2 (P1) `rgoe join` guided onboarding.** DONE (loop-10): `group/join.mjs` -- `rgoe join [member]` composes self-enrollment (secret to stderr, commitment + next commands to stdout) and `rgoe join gateway` mints an onion + prints the gateway/heartbeat commands. `group/join.selftest.mjs`.
 - [x] **T-FEAT-3 (P2) Client SDK packaging.** DONE (loop-13): package.json `exports` (`./client`) + conservative `files` allowlist (stays `private:true` until the gates) + `docs/SDK.md` (constructor opts, fetch/connect, env, example). bin/entrypoints unaffected (internal relative imports not gated by exports).
-- [ ] **T-FEAT-4 (P2) Quality-aware rotation.** Clients report anonymized latency/success back; the
+- [x] **T-FEAT-4 (P2) Quality-aware rotation.** Clients report anonymized latency/success back; the
   bootnode aggregates it into the advertised `weight`/`health` (never per-member), so rotation
   favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
   a slow gateway loses weight fleet-wide; a privacy note proving no member is fingerprinted.
+- [ ] **T-FEAT-24 (P3, added loop-18) Bound the SWRR rotation state map.** T-FEAT-4's smooth-weighted-round-robin
+  keeps per-gateway deficits in a module-level `_swrr` Map in `client/selection.mjs`, keyed by onion, that is
+  never pruned — a gateway that leaves the fleet leaves a stale entry behind. It is effectively bounded (the
+  directory is size-capped and gateways are fairly stable) so this is not a leak in practice, but over a very
+  long-lived client with heavy directory churn the map grows with distinct onions ever seen. Prune `_swrr`
+  entries for onions no longer in the current fleet on each `selectCandidates` (mirror how the health cache is
+  bounded via `boundHealthCache`). *Accept:* after a fleet fully rotates its onions, `_swrr` retains only
+  current-fleet keys; rotation behavior/distribution unchanged.
 - [x] **T-FEAT-5 (P2) Deterministic member subkeys.** DONE (loop-11): `lib/subkeys.mjs` -- HMAC-SHA512(master, `rgoe-subkey:v1\n{context}\n{index}`) mod FIELD -> a valid RLN secret; `deriveIdentity` composes it to a registerable rateCommitment. Determinism, unlinkability across 80 context/index pairs, field-range, RLN composition, master isolation, + a pinned golden vector. `lib/subkeys.selftest.mjs`.
 - [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
@@ -287,7 +311,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   by default / fully additive. Feeds the broader T-FEAT-4 quality-aware rotation. *Accept:* a gateway with
   a strong recent receipt record is preferred over an equal-weight silent one; disabling the feature
   restores today's weight-only selection exactly; the tally is bounded and privacy-preserving.
-- [ ] **T-FEAT-23 (P1, added loop-17) Wire receipt scoring into the client — close T-FEAT-22's seam.** T-FEAT-22
+- [x] **T-FEAT-23 (P1, added loop-17) Wire receipt scoring into the client — close T-FEAT-22's seam.** T-FEAT-22
   shipped the accumulation engine (`reportReceipt`) and scoring in `client/selection.mjs` but deliberately did
   NOT edit `client/rgoe-client.mjs` (to stay disjoint from the loop-17 version-negotiation work), so the ONE
   line that folds a verified receipt into the tally is documented-but-unwired: after the existing
@@ -474,3 +498,19 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   Foundry tests green; lint clean; receipt cache gitignored. Added T-TEST-20 (directory version-range
   advertisement + negotiation e2e) + T-FEAT-23 (wire receipt scoring into rgoe-client — close T-FEAT-22's
   one-line integration seam).
+- 2026-08-14  loop-18  Fan-out batch of 6 (disjoint files): T-FEAT-23 (closed T-FEAT-22's seam — wired
+  reportReceipt into rgoe-client's connect() via the existing LAZY _sel() import [a static import would fire
+  before the constructor sets directory/signer env]; full connect()-path integration selftest), T-TEST-8
+  (containerized bootstrap e2e — new bootstrap-e2e.yml + e2e-container.sh running bootstrap.sh under real
+  systemd in a privileged ubuntu:24.04; the agent launched Docker and ran it to a PASS on arm64 — units
+  active, onions published, /health ok — and fixed a real harness bug), T-TEST-21 (209-assertion adversarial
+  hardening of the receipt + version surfaces, no defect found), T-DOC-7 (auditor THREAT-MODEL.md, 15
+  properties cited to file:function, honest residuals), T-TEST-22 (additive golden vectors byte-pinning the
+  receipt canonical bytes + sig for the coming Rust conformance), T-FEAT-4 (quality-aware rotation — smooth
+  weighted round-robin slot-0 for anti-stickiness/spread, flag-gated off by default, long-run weighted
+  distribution preserved exactly, all exports intact). AUDIT (riskiest = T-FEAT-4's SWRR ordering): verified
+  the scheduler is the canonical nginx SWRR (total recomputed per pick, winner deficit -= total, all-zero →
+  uniform, phase jitter so clients don't emit linkable sequences); the flag-off path is byte-identical (proven)
+  and the T-FEAT-23×T-FEAT-4 interaction on selection.mjs is covered by receipt-integration passing green.
+  55 node selftests + 53 Foundry tests green; lint clean. Added T-FEAT-24 (bound the SWRR `_swrr` state map)
+  + T-DEV-9 flagged for a focused on-chain run (not fan-out).

@@ -1,0 +1,38 @@
+name: bootstrap-e2e
+
+# T-TEST-8: prove bootnode/deploy/bootstrap.sh actually brings a fleet up, instead of
+# being hand-run once. It runs the SAME local runner a developer uses
+# (bootnode/deploy/e2e-container.sh): boot ubuntu:24.04 with real systemd as PID 1,
+# run bootstrap.sh against this checkout, and assert tor + the rgoe units are active,
+# both onion hostname files were written, and the bootnode answers /health on loopback.
+# Reaching the onion over the live Tor network is attempted best-effort (non-fatal).
+# See bootnode/deploy/E2E-CONTAINER.md for the systemd-in-container rationale + honest
+# coverage notes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "bootnode/**"
+      - "gateway/**"
+      - "lib/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/bootstrap-e2e.yml"
+  workflow_dispatch:
+
+jobs:
+  bootstrap-e2e:
+    name: deploy bootstrap e2e (systemd container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ubuntu-latest ships Docker and can run privileged containers, which is what
+      # systemd-in-container needs. The runner script does everything else.
+      - name: Run bootstrap.sh e2e in a systemd container
+        run: bash bootnode/deploy/e2e-container.sh

@@ -18,6 +18,9 @@ import { createPublicKey } from "node:crypto";
 import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, verifyDirectory } from "../lib/directory.mjs";
 import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "../bootnode/announce.mjs";
 import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
+import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
+import { acceptEnvelopeVersion } from "../gateway/gateway.mjs";
+import { selectProtoVersion } from "../client/rgoe-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(HERE, "..", "testdata", "vectors.json"), "utf8"));
@@ -73,6 +76,27 @@ async function main() {
     await verifyOperatorSig(V.onion, oa.operator, oa.operatorSig),
     "verifyOperatorSig(onion, operator, operatorSig) === true against the pinned sig"
   );
+
+  console.log("\negress success receipt (deterministic domain-tagged canonical bytes + onion ed25519 sig):");
+  // Signed by the SAME onion key as the announce above; RFC 8032 determinism => byte-pinned (T-RUST-1).
+  const rc = V.receipt;
+  ok(RECEIPT_DOMAIN === rc.receiptDomain, "RECEIPT_DOMAIN matches the pinned vector");
+  const rcInput = { v: rc.v, onion: rc.onion, epoch: rc.epoch, ok: rc.ok };
+  ok(
+    canonicalReceiptBytes(rcInput).toString("hex") === rc.canonicalReceiptBytesHex,
+    "canonical receipt bytes match the pinned vector"
+  );
+  const builtReceipt = buildReceipt({ onion: rc.onion, epoch: rc.epoch, onionSeedHex: V.onionSeed, ok: rc.ok });
+  ok(builtReceipt.sig === rc.receiptOnionSig, "receipt onion signature matches the pinned vector (ed25519 determinism)");
+
+  console.log("\nversion-negotiation reason labels (stable public literals; runtime suffixes not pinned):");
+  const pr = V.protoReasons;
+  const badRej = acceptEnvelopeVersion("3");        // garbage/non-integer => bad-version
+  ok(badRej.label === pr.badVersion, "acceptEnvelopeVersion label matches the pinned bad-version literal");
+  const unsRej = acceptEnvelopeVersion(4);          // out-of-range integer => unsupported-version
+  ok(unsRej.label === pr.unsupportedVersion, "acceptEnvelopeVersion label matches the pinned unsupported-version literal");
+  const nmRej = selectProtoVersion({ min: 5, max: 6 }, { min: 1, max: 2 }); // disjoint ranges => no-mutual-version
+  ok(nmRej.reason.startsWith(pr.noMutualVersion + ":"), "selectProtoVersion reason prefix matches the pinned no-mutual-version literal");
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: vectors selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

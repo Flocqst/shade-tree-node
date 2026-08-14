@@ -31,5 +31,21 @@
     "operator": "0x7564105E977516C53bE337314c7E53838967bDaC",
     "operatorSig": "0x41eaf67398d3f3adac0d34b535f44559e04048091c2d90f23244a52779ac55c23df91b0204fcd7132f78dacc195b6c0ba1106b6eb987fb04b6f483329b71f1291c",
     "operatorAuthMessage": "RGOE gateway operator authorization\nonion=ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\noperator=0x7564105e977516c53be337314c7e53838967bdac"
+  },
+  "receipt": {
+    "_note": "Signed egress success receipt (T-FEAT-13, lib/receipt.mjs). Reuses the SAME onion key as `onion`/`onionSeed`/`onionPub` above (the gateway's onion-control key signs its own receipts), so it is deterministic and cross-referable. Fixed fields {v,onion,epoch,ok}: canonicalReceiptBytes = utf8(RECEIPT_DOMAIN) || utf8(JSON with field order v,onion,epoch,ok) — epoch normalized to a decimal string. receiptOnionSig = ed25519Sign(canonicalReceiptBytes, onionSeed) (RFC 8032 deterministic, so byte-pinned). epoch=8333 is a coarse bucket, floor(1000000/120) of the announce ts, chosen only to stay cross-referable. The Rust client (T-RUST-1) MUST reproduce receiptDomain, canonicalReceiptBytesHex, and receiptOnionSig.",
+    "receiptDomain": "RGOE egress success receipt v1\n",
+    "v": 1,
+    "onion": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+    "epoch": "8333",
+    "ok": true,
+    "canonicalReceiptBytesHex": "52474f4520656772657373207375636365737320726563656970742076310a7b2276223a312c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2265706f6368223a2238333333222c226f6b223a747275657d",
+    "receiptOnionSig": "c1d246c1fcff963bb8d5e28c57826d736a8481a38447ba3d7e05101a0b8d93a41fb260ea6e7d6693ae07f3ecfee86760e222e7a19510cc9288c5883a2276c401"
+  },
+  "protoReasons": {
+    "_note": "Stable public reason LABELS for wire version-negotiation rejects. Only the fixed literal prefixes are pinned — the full runtime reason strings additionally carry the offending/observed version numbers and ranges (e.g. `unsupported-version:4`, `no-mutual-version:client=1-2,gateway=5-6`), which are context-dependent and NOT pinned. badVersion/unsupportedVersion are the `label` field returned by acceptEnvelopeVersion (gateway/gateway.mjs); noMutualVersion is the reason prefix from selectProtoVersion (client/rgoe-client.mjs). The Rust client MUST emit these same literal labels/prefixes.",
+    "badVersion": "bad-version",
+    "unsupportedVersion": "unsupported-version",
+    "noMutualVersion": "no-mutual-version"
   }
 }

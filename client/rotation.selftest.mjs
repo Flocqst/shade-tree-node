@@ -1,0 +1,249 @@
+// Selftest for quality-aware ROTATION / load spread (T-FEAT-4).
+//
+// Today slot-0 (the gateway the shim actually dials) is a fresh independent weighted-random draw per
+// CONNECT: memoryless, so the top-weight gateway keeps winning back-to-back and equal-weight peers get
+// bursty, clumped load. With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by a smooth weighted
+// round-robin (SWRR) over the SAME healthy, weight-clamped, receipt-adjusted pool, which (1) spreads
+// load evenly / avoids re-hammering the just-used gateway (anti-stickiness) while (2) preserving the
+// long-run weighted share EXACTLY. The whole feature is OFF by default, and when off selection is
+// byte-identical to today's weight-only behavior.
+//
+// This drives the real client/selection.mjs over a STATIC signed-directory source (no Tor, no chain):
+// mint a signer + gateways, sign a directory, pin the signer, seed a deterministic rng, and count how
+// often each gateway lands in slot-0 across many draws — the same statistical style the other selection
+// selftests use. Env is set BEFORE importing selection.mjs because its config is read at module load;
+// the default-OFF proof runs in its own child process with the flag unset (config is captured at import).
+//
+//   node client/rotation.selftest.mjs
+//
+// Exit 0 = all invariants held (spread/anti-stickiness, long-run weight preserved, default-off
+// byte-identical). Nonzero = a check failed (prints which).
+
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+
+let failures = 0;
+const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SELECTION_PATH = join(HERE, "selection.mjs");
+
+function newKey() {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const priv = privateKey.export({ format: "der", type: "pkcs8" });
+  const pub = publicKey.export({ format: "der", type: "spki" });
+  return { priv: priv.subarray(priv.length - 32).toString("hex"), pub: pub.subarray(pub.length - 32).toString("hex") };
+}
+
+// A small deterministic PRNG (mulberry32) so distribution assertions never flake.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Count slot-0 landings over `n` draws, and how often slot-0 immediately REPEATS the previous slot-0
+// (the anti-stickiness signal). Returns { counts, repeats }.
+async function slotZeroStats(sel, n) {
+  const counts = {};
+  let repeats = 0, prev = null;
+  for (let i = 0; i < n; i++) {
+    const o = (await sel.selectCandidates())[0].onion;
+    counts[o] = (counts[o] || 0) + 1;
+    if (o === prev) repeats++;
+    prev = o;
+  }
+  return { counts, repeats };
+}
+
+async function main() {
+  const { pubkeyToOnion, signDirectory } = await import("../lib/directory.mjs");
+  const signer = newKey();
+
+  // Four EQUAL-weight gateways: the cleanest anti-stickiness case (spread => strict round-robin, zero
+  // immediate repeats; weighted-random => ~1/4 repeat rate + clumping).
+  const eq = [newKey(), newKey(), newKey(), newKey()];
+  const eqOnions = eq.map((k) => pubkeyToOnion(k.pub));
+  const bareEq = eqOnions.map((o) => o.replace(/\.onion$/, ""));
+  const eqDir = signDirectory({
+    version: 1,
+    issued: Math.floor(Date.now() / 1000),
+    gateways: eq.map((k, i) => ({ onion: eqOnions[i], pubkey: k.pub, weight: 100, health: "up" })),
+    signer: signer.pub,
+  }, signer.priv);
+
+  // Two UNEQUAL-weight gateways (300 vs 100): the long-run-share case — spread must still hand out
+  // slot-0 in a 3:1 ratio, exactly like weighted-random does.
+  const uw = [newKey(), newKey()];
+  const uwOnions = uw.map((k) => pubkeyToOnion(k.pub));
+  const bareUw = uwOnions.map((o) => o.replace(/\.onion$/, ""));
+  const uwWeights = [300, 100];
+  const uwDir = signDirectory({
+    version: 1,
+    issued: Math.floor(Date.now() / 1000),
+    gateways: uw.map((k, i) => ({ onion: uwOnions[i], pubkey: k.pub, weight: uwWeights[i], health: "up" })),
+    signer: signer.pub,
+  }, signer.priv);
+
+  const work = mkdtempSync(join(tmpdir(), "rgoe-rotation-"));
+  const eqPath = join(work, "eq.json");
+  const uwPath = join(work, "uw.json");
+  writeFileSync(eqPath, JSON.stringify(eqDir) + "\n");
+  writeFileSync(uwPath, JSON.stringify(uwDir) + "\n");
+
+  // ---- default OFF: byte-identical weighted-random (separate process, flag unset) -----------------
+  // Config is captured at import, so the OFF proof runs in its own process with the flag UNSET. It must
+  // reproduce today's behavior: weighted-random slot-0 — proportional share AND a memoryless immediate-
+  // repeat rate (~1/K for equal weights), i.e. NOT spread.
+  console.log("default OFF (RGOE_ROTATION_SPREAD unset), separate process — today's weighted-random:");
+  const offScript = `
+import { pathToFileURL } from "node:url";
+const sel = await import(${JSON.stringify(pathToFileURL(SELECTION_PATH).href)});
+if (sel.rotationSpreadEnabled() !== false) { console.error("SPREAD-ON-UNEXPECTED"); process.exit(3); }
+const bare = ${JSON.stringify(bareEq)};
+const N = 8000;
+const counts = {}; let repeats = 0, prev = null;
+for (let i = 0; i < N; i++) {
+  const o = (await sel.selectCandidates())[0].onion;
+  counts[o] = (counts[o] || 0) + 1;
+  if (o === prev) repeats++;
+  prev = o;
+}
+// Weighted-random over 4 equal gateways: each ~N/4, and immediate-repeat rate ~1/4 (memoryless).
+for (const b of bare) { const c = counts[b] || 0; if (Math.abs(c - N/4) > N*0.06) { console.error("OFF-NOT-PROPORTIONAL:" + b + "=" + c); process.exit(4); } }
+const rr = repeats / (N - 1);
+if (rr < 0.18) { console.error("OFF-TOO-SMOOTH(not weighted-random):" + rr.toFixed(3)); process.exit(5); }
+console.log("OFF-OK repeatRate=" + rr.toFixed(3));
+process.exit(0);`;
+  let offCode = 0, offOut = "";
+  try {
+    offOut = execFileSync(process.execPath, ["--input-type=module", "-e", offScript], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RGOE_DIRECTORY: eqPath,
+        RGOE_DIR_SIGNER: signer.pub,
+        RGOE_BOOTNODE_ONION: "",
+        RGOE_HEALTH_CACHE: join(work, "health-off.json"),
+        RGOE_DIRECTORY_REFRESH_MS: "0",
+        RGOE_ROTATION_SPREAD: "", // explicitly OFF
+      },
+    });
+  } catch (e) { offCode = e.status ?? 1; offOut = (e.stdout || "") + (e.stderr || ""); }
+  ok(offCode === 0, `flag off: weighted-random slot-0 (proportional + memoryless repeats), unchanged (${offOut.trim()})`);
+
+  // ---- flag ON: arm spread for the in-process checks ---------------------------------------------
+  process.env.RGOE_DIRECTORY = eqPath;
+  process.env.RGOE_DIR_SIGNER = signer.pub;
+  process.env.RGOE_ROTATION_SPREAD = "1";
+  process.env.RGOE_HEALTH_CACHE = join(work, "health.json");
+  process.env.RGOE_DIRECTORY_REFRESH_MS = "0";
+  delete process.env.RGOE_BOOTNODE_ONION;
+  delete process.env.RGOE_VERIFY_STAKE;
+  delete process.env.RGOE_RECEIPT_SCORING;
+
+  const sel = await import(pathToFileURL(SELECTION_PATH).href);
+  console.log("\nflag ON (RGOE_ROTATION_SPREAD=1):");
+  ok(sel.rotationSpreadEnabled() === true, "rotationSpreadEnabled() is true with the flag armed");
+  sel._setRng(mulberry32(0x1234abcd)); // deterministic jitter + failover weighting
+
+  // ---- anti-stickiness: equal-weight fleet spreads evenly, no back-to-back hammering --------------
+  console.log("\nequal-weight fleet: smooth spread, no immediate re-selection of the just-used gateway:");
+  sel._resetRotationState();
+  await sel.selectCandidates(); // warm the fleet load
+  {
+    const N = 8000;
+    const { counts, repeats } = await slotZeroStats(sel, N);
+    for (const b of bareEq) {
+      const c = counts[b] || 0;
+      ok(Math.abs(c - N / 4) < N * 0.03, `gateway gets ~N/4 of slot-0 (${b.slice(0, 8)}.. = ${c}, want ~${N / 4})`);
+    }
+    ok(repeats === 0, `zero immediate repeats over ${N} draws — the just-used gateway is never re-picked while peers are due (repeats=${repeats})`);
+  }
+
+  // ---- long-run weight preserved: unequal fleet still hands out slot-0 in weight ratio ------------
+  console.log("\nunequal-weight fleet: spread preserves the long-run weighted share (3:1), not just evens it:");
+  const sel2Env = { ...process.env, RGOE_DIRECTORY: uwPath };
+  // Re-point at the unequal directory in-process: RGOE_DIRECTORY is read at import, so drive the
+  // unequal case in a child process with the flag ON and a fixed rng via RGOE-independent seeding.
+  const uwScript = `
+import { pathToFileURL } from "node:url";
+const sel = await import(${JSON.stringify(pathToFileURL(SELECTION_PATH).href)});
+if (sel.rotationSpreadEnabled() !== true) { console.error("SPREAD-OFF-UNEXPECTED"); process.exit(3); }
+// Deterministic rng (mulberry32) inlined so the child matches the parent's determinism discipline.
+function mulberry32(seed){let a=seed>>>0;return()=>{a|=0;a=(a+0x6d2b79f5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+sel._setRng(mulberry32(0x51ed));
+sel._resetRotationState();
+const bare = ${JSON.stringify(bareUw)};
+const N = 8000;
+const counts = {}; let repeats = 0, prev = null;
+for (let i = 0; i < N; i++) {
+  const o = (await sel.selectCandidates())[0].onion;
+  counts[o] = (counts[o] || 0) + 1;
+  if (o === prev) repeats++;
+  prev = o;
+}
+const hi = counts[bare[0]] || 0, lo = counts[bare[1]] || 0;
+// weight 300 vs 100 => 3:1 share, i.e. hi ~ 0.75*N, lo ~ 0.25*N.
+if (Math.abs(hi - 0.75*N) > N*0.03) { console.error("HI-SHARE-OFF:" + hi); process.exit(4); }
+if (Math.abs(lo - 0.25*N) > N*0.03) { console.error("LO-SHARE-OFF:" + lo); process.exit(5); }
+// Even with an over-half-weight gateway, the low-weight one is interleaved, never starved: it should
+// appear regularly (every ~4th draw), and hi should not be a solid run (some non-repeats).
+const rr = repeats / (N - 1);
+if (rr > 0.55) { console.error("NOT-INTERLEAVED(too sticky):" + rr.toFixed(3)); process.exit(6); }
+console.log("UW-OK hi=" + hi + " lo=" + lo + " repeatRate=" + rr.toFixed(3));
+process.exit(0);`;
+  let uwCode = 0, uwOut = "";
+  try {
+    uwOut = execFileSync(process.execPath, ["--input-type=module", "-e", uwScript], {
+      encoding: "utf8",
+      env: {
+        ...sel2Env,
+        RGOE_DIRECTORY: uwPath,
+        RGOE_DIR_SIGNER: signer.pub,
+        RGOE_BOOTNODE_ONION: "",
+        RGOE_HEALTH_CACHE: join(work, "health-uw.json"),
+        RGOE_DIRECTORY_REFRESH_MS: "0",
+        RGOE_ROTATION_SPREAD: "1",
+      },
+    });
+  } catch (e) { uwCode = e.status ?? 1; uwOut = (e.stdout || "") + (e.stderr || ""); }
+  ok(uwCode === 0, `spread keeps the 3:1 weighted share while interleaving (never starving) the low-weight gateway (${uwOut.trim()})`);
+
+  // ---- honors health: a "down" gateway is excluded from the spread pool --------------------------
+  // (back on the equal-weight in-process fleet). Mark one down via reportResult and confirm slot-0
+  // spreads over the remaining 3 only, still with no immediate repeats.
+  console.log("\nhealth signal honored: a downed gateway drops out of the spread, the rest keep spreading:");
+  sel._resetRotationState();
+  sel.reportResult(bareEq[0], { ok: false });
+  sel.reportResult(bareEq[0], { ok: false }); // 2 fails => "down"
+  await sel.selectCandidates();
+  {
+    const N = 6000;
+    const { counts, repeats } = await slotZeroStats(sel, N);
+    ok(!counts[bareEq[0]], "the downed gateway is never chosen for slot-0 while healthy peers remain");
+    for (const b of bareEq.slice(1)) {
+      const c = counts[b] || 0;
+      ok(Math.abs(c - N / 3) < N * 0.04, `each remaining healthy gateway gets ~N/3 of slot-0 (${b.slice(0, 8)}.. = ${c})`);
+    }
+    ok(repeats === 0, `still zero immediate repeats across the 3-gateway spread (repeats=${repeats})`);
+    // ...but the downed gateway is still offered as a last-resort FAILOVER (fleet never dead-ends).
+    const order = await sel.selectCandidates();
+    ok(order.some((c) => c.onion === bareEq[0]), "the downed gateway is still present as a failover (does not vanish from the order)");
+    ok(new Set(order.map((c) => c.onion)).size === 4, "the full failover order still covers all 4 gateways with no duplicates");
+  }
+
+  rmSync(work, { recursive: true, force: true });
+  console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: rotation selftest (${failures} failure${failures === 1 ? "" : "s"})`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

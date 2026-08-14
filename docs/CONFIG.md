@@ -204,3 +204,28 @@ Integration seam: `client/selection.mjs` exposes `reportReceipt(onion, { valid }
 `reportResult(onion, { ok, latencyMs })`). The one-line call site — added later in
 `client/rgoe-client.mjs`, immediately after `_verifyReceipt` — is
 `if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });`.
+
+## Client rotation / load spread (T-FEAT-4)
+
+Read by `client/selection.mjs`. OPTIONAL, OFF by default — leave `RGOE_ROTATION_SPREAD` unset and
+slot-0 selection is byte-for-byte today's independent weighted-random draw per CONNECT.
+
+By default each CONNECT re-rolls slot-0 (the gateway the shim actually dials) as a fresh weighted-random
+draw: memoryless, so the top-weight gateway keeps winning back-to-back and equal-weight peers see bursty,
+clumped load. With spread armed, slot-0 is chosen by a smooth weighted round-robin (SWRR) over the SAME
+healthy, weight-clamped, receipt-adjusted pool the failover order already selects from. SWRR keeps a
+per-gateway in-memory "current deficit" that advances every CONNECT, giving two properties: (1) the
+just-used gateway drops below its peers and is not re-picked until they have had their proportional turn
+— load spreads evenly across the healthy fleet, no back-to-back hammering (equal weights => strict
+round-robin, zero immediate repeats); and (2) over each full cycle a gateway is selected exactly in
+proportion to its effective weight, so the long-run weighted (and receipt-adjusted) share is preserved —
+spread changes the ORDER, never the marginal distribution. Deficits are seeded with a small rng jitter so
+two clients loading the same fleet don't emit an identical, cross-linkable sequence.
+
+No new persistence store: the SWRR deficits are in-memory session state (like the live health signal),
+and the failover TAIL (only consulted on a dial timeout) stays weighted-random via the existing
+selection order. Reuses the health (`"down"`) + receipt-adjusted weight signals already in the module.
+
+| Env var | Default | Controls | Component | Flag |
+|---|---|---|---|---|
+| `RGOE_ROTATION_SPREAD` | (unset → OFF) | Arm smooth weighted round-robin slot-0 spread: `1`/`on`/`true`/`yes` enables it; anything else (or unset) is OFF (today's weighted-random). | client selection | (none) |
