@@ -1,0 +1,24 @@
+[package]
+name = "rgoe-client"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "RGOE distributable client: single static binary with embedded Tor. Rust port of client/rgoe-client.mjs."
+publish = false
+
+[[bin]]
+name = "rgoe"
+path = "src/main.rs"
+
+[dependencies]
+rgoe-proto = { path = "../rgoe-proto" }
+
+# NOTE (T-RUST-2/3): heavy runtime deps intentionally deferred so the scaffold
+# builds fast in CI. When implementing the client, add:
+#   arti-client / tor-rtcompat -- embedded Tor, dial gateway/bootnode onions (no
+#                                 system tor daemon, no SOCKS, no torrc)
+#   zerokit (rln)              -- PSE canonical Rust RLN prover (envelope proofs)
+#   alloy                      -- chain reads (GatewayRegistry.isStaked, operator sig)
+#   tokio                      -- async runtime
+#   hyper                      -- bootnode HTTP (/directory, /announce)
+#   serde / serde_json         -- parse untrusted directory/announce/envelope JSON

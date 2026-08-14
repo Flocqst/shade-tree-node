@@ -143,7 +143,8 @@ async function makeSlasher() {
   if (!key || !address) {
     console.log("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)");
     return async (commitment, secret) => {
-      console.log(`SLASH (dry-run) commitment=${String(commitment).slice(0, 18)}.. secret=${String(secret).slice(0, 10)}..`);
+      // Log the (public) commitment leaf only; never any bytes of the reconstructed secret.
+      console.log(`SLASH (dry-run) commitment=${String(commitment).slice(0, 18)}..`);
     };
   }
 

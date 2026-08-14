@@ -1,0 +1,20 @@
+[package]
+name = "rgoe-proto"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "Trust-critical RGOE wire-format checks (onion<->ed25519 binding, canonical byte encodings, ed25519 verify, request-signal). Rust port of the JS reference (lib/directory.mjs, bootnode/announce.mjs, lib/rln.mjs)."
+publish = false
+
+[dependencies]
+# NOTE (T-RUST-1): crypto deps intentionally NOT added yet so the scaffold builds
+# fast in CI. When implementing the stubs below, add:
+#   ed25519-dalek  -- RFC 8032 ed25519 sign/verify (null-digest, raw 32-byte seed/pubkey)
+#   sha3           -- SHA3-256 onion checksum + keccak256 signal hash
+#   data-encoding  -- base32 no-pad lowercase (alphabet abcdefghijklmnopqrstuvwxyz234567)
+#   serde/serde_json -- ONLY for parsing untrusted input; canonical bytes are hand-built
+#                       in fixed key order (see canonical_*_bytes), NEVER via a serializer.
+
+[dev-dependencies]
+# NOTE (T-RUST-1): the conformance runner reads testdata/vectors.json and asserts
+# byte-equality. Add serde_json + hex here when wiring it up.

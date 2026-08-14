@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "rgoe-proto",
+    "rgoe-client",
+]
+
+# Shared release profile for the distributable binary (T-RUST-4).
+# A single static binary is the whole point of the Rust client (see
+# docs/adr/0001-client-language.md), so optimize for size + strip by default.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+// Fuzz tests for StakedReputationSet. Commitments are the real Poseidon rate commitments of
+// a fuzzed identity secret (via RateCommitmentHasher), and the MockWithdrawVerifier accepts
+// abi.encode(secret) as the demo proof — so we can drive register / exit / withdraw / slash
+// over random secrets and timings and assert the state-machine invariants per call.
+
+import {FuzzBase} from "./FuzzHelpers.sol";
+import {StakedReputationSet, IWithdrawVerifier, ICommitmentHasher} from "../contracts/StakedReputationSet.sol";
+import {RateCommitmentHasher} from "../contracts/RateCommitmentHasher.sol";
+import {MockWithdrawVerifier} from "../contracts/MockWithdrawVerifier.sol";
+
+contract StakedReputationSetFuzzTest is FuzzBase {
+    uint256 constant BOND = 0.01 ether;
+    uint256 constant UNBONDING = 300;
+    uint256 constant MIN_UNBONDING = 270;
+
+    StakedReputationSet set;
+    RateCommitmentHasher hasher;
+    MockWithdrawVerifier verifier;
+
+    address constant RECIPIENT = address(0xBEEF);
+    address constant RECEIVER = address(0xCAFE);
+
+    function setUp() public {
+        hasher = new RateCommitmentHasher();
+        verifier = new MockWithdrawVerifier(ICommitmentHasher(address(hasher)));
+        set = new StakedReputationSet(
+            BOND,
+            UNBONDING,
+            MIN_UNBONDING,
+            IWithdrawVerifier(address(verifier)),
+            ICommitmentHasher(address(hasher))
+        );
+        vm.deal(address(this), 1_000 ether);
+    }
+
+    function _proof(uint256 secret) internal pure returns (bytes memory) {
+        return abi.encode(secret);
+    }
+
+    // Keep secrets well inside [1, F) so distinct fuzzed secrets give distinct commitments
+    // (the hasher reduces mod F; staying small avoids the aliasing corner).
+    function _secret(uint256 raw) internal pure returns (uint256) {
+        return _bound(raw, 1, 1e30);
+    }
+
+    // ---- register: only the exact BOND is admitted ---------------------------
+
+    function testFuzz_register_exactBondAdmits(uint256 rawSecret) public {
+        uint256 secret = _secret(rawSecret);
+        uint256 commit = hasher.commitmentOf(secret);
+
+        set.register{value: BOND}(commit);
+
+        assertTrue(set.isActive(commit), "exact bond admits the leaf");
+        assertEq(set.activeCount(), 1);
+        (uint256 bond, uint64 index, uint64 exitAt) = set.members(commit);
+        assertEq(bond, BOND, "bond recorded");
+        assertEq(uint256(index), 0);
+        assertEq(uint256(exitAt), 0);
+        assertEq(address(set).balance, BOND, "one live bond held");
+    }
+
+    function testFuzz_register_wrongBondReverts(uint256 rawSecret, uint96 value) public {
+        vmf.assume(value != BOND);
+        uint256 commit = hasher.commitmentOf(_secret(rawSecret));
+
+        vm.deal(address(this), value); // fund the exact (wrong) amount so the call can carry it
+        vm.expectRevert(StakedReputationSet.BadBond.selector);
+        set.register{value: value}(commit);
+
+        assertFalse(set.isActive(commit));
+        assertEq(set.activeCount(), 0);
+        assertEq(address(set).balance, 0);
+    }
+
+    // ---- exit + withdraw honour the unbonding clock for any timing -----------
+
+    function testFuzz_exitWithdraw_timing(uint256 rawSecret, uint256 wait) public {
+        uint256 secret = _secret(rawSecret);
+        uint256 commit = hasher.commitmentOf(secret);
+        wait = _bound(wait, 0, 3 * UNBONDING);
+
+        set.register{value: BOND}(commit);
+        set.initiateExit(commit, _proof(secret));
+
+        assertFalse(set.isActive(commit), "exit leaves admission set");
+        assertEq(set.activeCount(), 0);
+        uint256 unlock = set.withdrawableAt(commit);
+
+        vm.warp(block.timestamp + wait);
+
+        if (block.timestamp < unlock) {
+            vm.expectRevert(StakedReputationSet.StillBonded.selector);
+            set.withdraw(commit, RECIPIENT, _proof(secret));
+            assertEq(address(set).balance, BOND, "bond held while still bonded");
+        } else {
+            uint256 before = RECIPIENT.balance;
+            set.withdraw(commit, RECIPIENT, _proof(secret));
+            assertEq(RECIPIENT.balance - before, BOND, "recipient paid after unbonding");
+            assertEq(address(set).balance, 0, "contract emptied");
+        }
+    }
+
+    // ---- withdraw needs the matching secret even after unbonding -------------
+
+    function testFuzz_withdraw_wrongProofReverts(uint256 rawSecret, uint256 rawWrong) public {
+        uint256 secret = _secret(rawSecret);
+        uint256 commit = hasher.commitmentOf(secret);
+        uint256 wrong = _secret(rawWrong);
+        vmf.assume(hasher.commitmentOf(wrong) != commit);
+
+        set.register{value: BOND}(commit);
+        set.initiateExit(commit, _proof(secret));
+        vm.warp(block.timestamp + UNBONDING);
+
+        vm.expectRevert(StakedReputationSet.BadProof.selector);
+        set.withdraw(commit, RECIPIENT, _proof(wrong));
+        assertEq(address(set).balance, BOND, "bad proof keeps the bond");
+    }
+
+    // ---- slash: a revealed matching secret always pays -----------------------
+
+    function testFuzz_slash_revealedSecretPays(uint256 rawSecret, bool exiting) public {
+        uint256 secret = _secret(rawSecret);
+        uint256 commit = hasher.commitmentOf(secret);
+
+        set.register{value: BOND}(commit);
+        if (exiting) set.initiateExit(commit, _proof(secret));
+
+        uint256 before = RECEIVER.balance;
+        set.slash(commit, secret, RECEIVER);
+
+        assertEq(RECEIVER.balance - before, BOND, "revealed secret pays out");
+        (uint256 bond,,) = set.members(commit);
+        assertEq(bond, 0, "slashed leaf deleted");
+        assertEq(set.activeCount(), 0);
+        assertEq(address(set).balance, 0, "no bond left behind");
+    }
+
+    function testFuzz_slash_wrongSecretReverts(uint256 rawSecret, uint256 rawWrong) public {
+        uint256 secret = _secret(rawSecret);
+        uint256 commit = hasher.commitmentOf(secret);
+        uint256 wrong = _secret(rawWrong);
+        vmf.assume(hasher.commitmentOf(wrong) != commit);
+
+        set.register{value: BOND}(commit);
+        vm.expectRevert(StakedReputationSet.BadSecret.selector);
+        set.slash(commit, wrong, RECEIVER);
+
+        assertTrue(set.isActive(commit), "wrong secret is a no-op");
+        assertEq(address(set).balance, BOND);
+    }
+
+    receive() external payable {}
+}
