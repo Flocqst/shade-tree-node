@@ -40,8 +40,17 @@ import { dirname, join } from "node:path";
 import { signDirectory, verifyDirectory } from "../lib/directory.mjs";
 import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
+import { registry as metrics } from "../lib/metrics.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// ---- metrics (T-MON-2) ------------------------------------------------------
+// Registered against the process-wide registry at import time; this only populates
+// in-memory state — it binds no port and starts no server (see lib/metrics.mjs).
+const M = {
+  announces: metrics.counter("rgoe_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
+  directoryFetches: metrics.counter("rgoe_bootnode_directory_fetches_total", "GET /directory requests served."),
+};
 
 // ---- signer key (mint + persist if absent) ----------------------------------
 function rawSeedHex(privKey) {
@@ -229,13 +238,24 @@ function readBody(req, max = 64 * 1024) {
 }
 
 export function makeServer(registry, { signerPub } = {}) {
+  // Current live-gateway count as a gauge, evaluated at scrape time from this registry.
+  metrics.gauge("rgoe_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
+
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://bootnode");
       if (req.method === "GET" && url.pathname === "/health") {
         return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub });
       }
+      // Loopback Prometheus exposition. The bootnode already binds 127.0.0.1 only, so
+      // /metrics inherits that loopback scope (no separate port needed).
+      if (req.method === "GET" && url.pathname === "/metrics") {
+        const body = metrics.render();
+        res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
+        return res.end(body);
+      }
       if (req.method === "GET" && url.pathname === "/directory") {
+        M.directoryFetches.inc();
         return send(res, 200, registry.directory());
       }
       // GET /gateway/<onion> -> the stored signed announce, for zero-trust re-verification.
@@ -248,6 +268,8 @@ export function makeServer(registry, { signerPub } = {}) {
         let rec;
         try { rec = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { ok: false, err: "bad-json:" + e.message }); }
         const r = await registry.announce(rec);
+        if (r.ok) M.announces.inc({ result: "accepted" });
+        else M.announces.inc({ result: "rejected", reason: r.reason });
         return send(res, r.ok ? 200 : 400, r.ok ? { ok: true, onion: r.onion, staked: r.staked, ttl: registry.ttlSec } : { ok: false, err: r.reason });
       }
       return send(res, 404, { ok: false, err: "no-route" });

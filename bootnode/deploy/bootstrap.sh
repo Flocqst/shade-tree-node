@@ -98,6 +98,26 @@ systemctl enable tor >/dev/null 2>&1 || true
 systemctl restart tor
 
 log "systemd units"
+# Sandbox rationale (applied identically to all three units below). Each is a plain Node
+# process that needs: outbound network (bootnode/heartbeat over Tor SOCKS on loopback, Node
+# fetch), read access to the repo, and write access ONLY to ${RGOE_DIR}/deploy-state (the
+# bootnode mints its signer key there at runtime; the gateway/heartbeat read the minted onion
+# identities from there; persistence writes there too) plus a private /tmp.
+#   NoNewPrivileges       no setuid/capability escalation ever
+#   ProtectSystem=strict  whole FS read-only; ReadWritePaths re-opens deploy-state (see above)
+#   ProtectHome           /home,/root,/run/user hidden (service user is --system, no $HOME use)
+#   PrivateTmp            private /tmp,/var/tmp, unshared from the host
+#   ProtectKernel*/CGroups block /proc/sys, /sys, kmod, and cgroup writes (none needed)
+#   RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX  IPv4/IPv6 + AF_UNIX for the Tor SOCKS
+#                          path/DNS resolver sockets; everything exotic (AF_PACKET, AF_NETLINK…) denied
+#   RestrictNamespaces/LockPersonality  no new namespaces, no persona (ASLR) downgrades
+#   SystemCallFilter=@system-service  vetted allowlist for normal services; implicitly EXCLUDES
+#                          @privileged/@mount/@reboot/@swap/@module etc. (~=EPERM below)
+#   CapabilityBoundingSet= (empty) drop ALL capabilities — the services bind only loopback high
+#                          ports (>1024), so no CAP_NET_BIND_SERVICE or anything else is required
+#   MemoryMax=512M/TasksMax=256  contain runaway RSS/fork storms; Node + these workloads sit well under
+# MemoryDenyWriteExecute is deliberately NOT set: V8's JIT maps writable-then-executable pages,
+# so W^X enforcement would crash the Node runtime. Left off on purpose.
 cat > /etc/systemd/system/rgoe-bootnode.service <<EOF
 [Unit]
 Description=rgoe bootnode (gateway discovery)
@@ -113,6 +133,22 @@ Environment=RGOE_BOOTNODE_STORE=${RGOE_DIR}/deploy-state/bootnode-state.json
 ExecStart=$(command -v node) ${RGOE_DIR}/bootnode/server.mjs
 Restart=always
 RestartSec=3
+# --- sandbox (see rationale above) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${RGOE_DIR}/deploy-state
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=256
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -127,6 +163,22 @@ WorkingDirectory=${RGOE_DIR}
 ExecStart=$(command -v node) ${RGOE_DIR}/gateway/gateway.mjs
 Restart=always
 RestartSec=3
+# --- sandbox (see rationale above the bootnode unit) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${RGOE_DIR}/deploy-state
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=256
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -151,6 +203,22 @@ Environment=RGOE_TOR_PORT=9050
 ExecStart=$(command -v node) ${RGOE_DIR}/bootnode/heartbeat.mjs
 Restart=always
 RestartSec=10
+# --- sandbox (see rationale above the bootnode unit) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${RGOE_DIR}/deploy-state
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=256
 [Install]
 WantedBy=multi-user.target
 EOF

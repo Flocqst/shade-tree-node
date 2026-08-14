@@ -31,11 +31,24 @@ import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH } from "../lib/semaphore.mjs";
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
+import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LISTEN_HOST = "127.0.0.1";
 const LISTEN_PORT = 8443;
 const MAX_ENVELOPE = 64 * 1024;
+
+// ---- metrics (T-MON-2) ------------------------------------------------------
+// Registered against the process-wide registry at import time: this only fills in-memory
+// state and binds NO port. The gateway speaks raw TCP, so /metrics is exposed by a SEPARATE
+// loopback http server started only when RGOE_METRICS_PORT is set (see main()). Off by
+// default => existing behavior and every selftest are byte-for-byte unchanged. All
+// increments below sit on cold branches / the connect callback, never the per-byte pipe.
+const M = {
+  requests: metrics.counter("rgoe_gateway_requests_total", "Requests by result=pass|drop (+ reason on drop)."),
+  slashes: metrics.counter("rgoe_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
+  verify: metrics.histogram("rgoe_gateway_verify_seconds", "verifyEnvelope() latency in seconds (cheap-first checks + Groth16)."),
+};
 
 // ---- recent-roots: the accepted admission roots, refreshed on change --------
 // A proof against any root inside the freshness window verifies. On-chain: fed by
@@ -95,6 +108,7 @@ export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveC
 
     // Distinct public x under the same nullifier: the L+1-th point. Over-spend.
     e.slashed = true; // slash exactly once for this nullifier
+    M.slashes.inc(); // one over-spend detected (counted at the point we decide to slash)
     let commitment = null;
     try {
       const secret = reconstruct(e.first, share); // identitySecret
@@ -237,15 +251,19 @@ function makeHandler(spentSet) {
       // Steps 1-3, cheap-first, inside the lib: fresh externalNullifier -> share.x binding
       // -> root ∈ recent-roots -> RLN Groth16 verify. Returns the authoritative
       // nullifier/externalNullifier/share (read from the proof's public signals) to act on.
+      const t0 = performance.now();
       const v = await verifyEnvelope(env, recentRoots);
+      M.verify.observe((performance.now() - t0) / 1000);
       if (!v.ok) {
         console.log(`DROP  ${v.reason}  target=${env.target}`);
+        M.requests.inc({ result: "drop", reason: v.reason });
         reply(socket, { ok: false, err: "gate:" + v.reason });
         return socket.destroy();
       }
 
       const tgt = validTarget(env.target);
       if (!tgt) {
+        M.requests.inc({ result: "drop", reason: "bad-target" });
         reply(socket, { ok: false, err: "bad-target" });
         return socket.destroy();
       }
@@ -254,6 +272,7 @@ function makeHandler(spentSet) {
       const res = await spentSet.admit(v.nullifier, v.share);
       if (!res.ok) {
         console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}..`);
+        M.requests.inc({ result: "drop", reason: res.reason });
         reply(socket, { ok: false, err: res.reason });
         return socket.destroy();
       }
@@ -261,6 +280,7 @@ function makeHandler(spentSet) {
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
       const upstream = net.connect(tgt.port, tgt.host, () => {
         console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. extNull=${String(v.externalNullifier).slice(0, 10)}..`);
+        M.requests.inc({ result: "pass" });
         reply(socket, { ok: true });
         if (env.__rest && env.__rest.length) upstream.write(env.__rest);
         socket.pipe(upstream);
@@ -331,6 +351,19 @@ async function main() {
   // Track live tunnels for draining (add/delete only — no per-byte work).
   const openSockets = new Set();
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
+
+  // Active-tunnels gauge reads openSockets.size at scrape time (the same set draining uses).
+  metrics.gauge("rgoe_gateway_active_tunnels", "Open egress tunnels right now.").setCollect(() => openSockets.size);
+
+  // Loopback /metrics on a SEPARATE http server, ONLY when RGOE_METRICS_PORT is set.
+  // Default OFF keeps the gateway a pure TCP server (existing behavior + tests unchanged).
+  const metricsPort = Number(process.env.RGOE_METRICS_PORT || 0);
+  let metricsServer = null;
+  if (metricsPort > 0) {
+    const metricsHost = process.env.RGOE_METRICS_HOST || "127.0.0.1";
+    metricsServer = makeMetricsServer(metrics);
+    metricsServer.listen(metricsPort, metricsHost, () => console.log(`metrics on http://${metricsHost}:${metricsPort}/metrics (loopback)`));
+  }
 
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     console.log(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}  (epoch ${currentEpoch()}, ${EPOCH_SECONDS}s)`);

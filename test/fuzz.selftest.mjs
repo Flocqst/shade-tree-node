@@ -96,7 +96,7 @@ async function main() {
   //    and never ok:true (only a genuinely valid signed+bound directory can be true, which random
   //    input effectively never is).
   fuzz("verifyDirectory total on arbitrary objects (garbage => ok:false, never throws)", () => {
-    const dir = rnd() < 0.5 ? randVal() : { version: randInt(3), issued: randInt(1e9), gateways: Array.from({ length: randInt(3) }, () => ({ onion: randStr(62), pubkey: randBytes(32).toString("hex"), weight: randInt(200), health: "up" })), signer: randBytes(32).toString("hex"), signature: randBytes(64).toString("hex") };
+    const dir = rnd() < 0.5 ? randVal() : { version: randInt(3), issued: randInt(1e9), gateways: Array.from({ length: randInt(3) }, () => ({ onion: randStr(62), pubkey: randBytes(32).toString("hex"), weight: randInt(200), health: "up" })), signer: rnd() < 0.2 ? randVal() : randBytes(32).toString("hex"), signature: rnd() < 0.2 ? randVal() : randBytes(64).toString("hex") };
     const r = verifyDirectory(dir, randBytes(32).toString("hex"));
     if (typeof r !== "object" || typeof r.ok !== "boolean") throw new Error(`non-{ok} result: ${JSON.stringify(r)}`);
     if (r.ok) throw new Error(`random directory verified as OK (should be impossible): ${JSON.stringify(dir).slice(0, 120)}`);

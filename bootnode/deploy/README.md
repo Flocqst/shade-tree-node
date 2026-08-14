@@ -31,6 +31,22 @@ the exact `rgoe client …` command to hand out. Re-running is safe (keys and un
 - A `torrc` include publishing two onions (bootnode → `:8877`, gateway → `:8443`) with
   `HiddenServicePoWDefensesEnabled 1`.
 
+## Systemd hardening
+
+All three units run under a sandboxed `[Service]` section: `NoNewPrivileges`,
+`ProtectSystem=strict` (with `ReadWritePaths=/opt/rgoe/deploy-state` so the minted signer key,
+persistence store, and onion identities stay writable), `ProtectHome`, `PrivateTmp`,
+`ProtectKernel{Tunables,Modules}`, `ProtectControlGroups`,
+`RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` (Node + the Tor SOCKS socket),
+`RestrictNamespaces`, `LockPersonality`, `SystemCallFilter=@system-service` (a vetted allowlist
+that excludes `@privileged`/`@mount`/`@module`/etc.), an empty `CapabilityBoundingSet=` (all caps
+dropped — the services bind only loopback high ports), and `MemoryMax=512M` / `TasksMax=256`
+resource caps. `MemoryDenyWriteExecute` is intentionally omitted because it breaks V8's JIT.
+
+Verify after deploy with e.g. `systemd-analyze security rgoe-bootnode` (same for `rgoe-gateway`
+and `rgoe-heartbeat`) — expect an "OK"/hardened exposure score around ~2.x, down from the ~9.6
+"UNSAFE" default of an unsandboxed unit.
+
 ## Firewall
 
 The gateway and bootnode are onion services — they take **no inbound clearnet ports**. A
