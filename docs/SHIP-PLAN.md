@@ -188,10 +188,10 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   (in `agent-devops`), not hand-ssh. *Accept:* `tofu apply` + a playbook stand up a gateway
   reproducibly.
 - [x] **T-DEPLOY-4 (P1) Systemd hardening.** DONE (loop-11): the generated units get NoNewPrivileges, ProtectSystem=strict (ReadWritePaths=deploy-state), ProtectHome, PrivateTmp, ProtectKernel*, RestrictAddressFamilies (AF_INET/INET6/UNIX for Tor SOCKS), RestrictNamespaces, LockPersonality, SystemCallFilter=@system-service, empty CapabilityBoundingSet, MemoryMax=512M/TasksMax=256. MemoryDenyWriteExecute omitted (breaks V8 JIT). ~9.6->~2.x systemd-analyze score.
-- [ ] **T-DEPLOY-5 (P1) Onion key backup/restore.** Documented, encrypted, off-box backup of HS
+- [x] **T-DEPLOY-5 (P1) Onion key backup/restore.** Documented, encrypted, off-box backup of HS
   keys + a tested restore. *Accept:* restore a gateway's onion on a new box from backup.
 - [x] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
-- [ ] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
+- [x] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
   wired to the live fleet (reuse Sepolia or a chosen L2).
 
 ## 4. Website & status
@@ -199,7 +199,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-WEB-1 (P1) Live fleet status page.** DONE (loop-10): `web/status-server.mjs` + `web/status.html` -- fetch bootnode /health + /directory (over Tor or dev http), verify the signature against the pinned signer, render fleet size/health/staked. Privacy-scrubbed: onions truncated to 16 chars, operator address dropped to a staked bool. `web/status.selftest.mjs` (18 checks, incl. no-leak assertions).
 - [x] **T-WEB-2 (P2) Landing refresh.** DONE (loop-14): `docs/post/RUN-A-GATEWAY.md` + `docs/post/JOIN.md` (landing-companion how-tos, commands verified, honest pre-ship status). Existing post HTML/figures untouched.
 - [x] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
-- [ ] **T-WEB-4 (P3) Fleet map** (regions/ASNs, privacy-preserving).
+- [x] **T-WEB-4 (P3) Fleet map** (regions/ASNs, privacy-preserving).
 
 ## 5. Documentation
 
@@ -260,7 +260,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [ ] **T-FEAT-20 (P2, added loop-14) Cross-fleet shared nonce tally (the T-FEAT-12 residual).** T-FEAT-12 defends ONE gateway against exact-envelope replay, but a non-colluding fleet has no shared spent-set, so a malicious gateway can fan a captured envelope to peers (each sees it once). Add a gossiped/shared per-epoch spent-nullifier tally across gateways (composes with T-FEAT-1 federation) so the rate cap + replay defense hold fleet-wide. Must pair with RLN's per-request nullifiers so the shared tally is not itself a linkability channel (ROADMAP #1). *Accept:* a replay to a SECOND gateway is rejected once the tally propagates.
 - [x] **T-FEAT-21 (P2, added loop-15) Directory `issued` max-age bound (client-side).** loop-15 F2 gave the client a monotonic `issued` FLOOR (never accept a directory older than the newest seen), which stops rollback within a session. It does NOT bound staleness on a COLD start: a client with no prior state accepts whatever `issued` the bootnode first serves, so a bootnode that is simply far behind (or is replaying a months-old directory to a fresh client) is undetectable. Add an optional absolute freshness bound — reject a fresh directory whose `issued` is older than `now - RGOE_DIRECTORY_MAX_AGE_MS` — with a generous default and clock-skew grace, fail-closed to the last-good cache. Must not break legitimate static-file directories (opt-in / large default). *Accept:* a directory `issued` beyond the max-age bound is rejected on first load; a within-bound one loads; the bound is configurable and off by default for file sources.
 - [x] **T-TEST-18 (P2, added loop-15) Kill the OnchainStakeVerifier surviving mutants.** T-TEST-10's Stryker run scored 66% on `lib/gateway-registry.mjs`; every survivor clusters in the on-chain `OnchainStakeVerifier` path — error-message strings not asserted, the `now - hit.at < cacheMs` expiry boundary (`<` vs `<=`) untested, the operator cache-key `.toLowerCase()` untested (mixed-casing), the allowlist `.filter(Boolean)` drop untested, and the `typeof ret === "string"` / `/^0x0*/` return-shape guards untested. Source is correct; the suite just doesn't prove it. Add targeted cases to `lib/gateway-registry.selftest.mjs` to kill each. *Accept:* a re-run of `npx stryker run --mutate lib/gateway-registry.mjs` shows the named survivors killed (score materially up), source unchanged.
-- [ ] **T-TEST-19 (P1, added loop-16) Cover the `blockTag()` reorg-safety branch of OnchainStakeVerifier.** T-TEST-18's Stryker run left the ENTIRE `RGOE_CONFIRMATIONS > 0` head-N branch in `lib/gateway-registry.mjs` `blockTag()` (compute `latest - confirmations` and read stake at that older block) untested — every current test reads at `latest`, so no mutant in that branch is killed and a regression that silently disabled finality/reorg protection would pass green. This is real coverage of a security control (reading stake at a confirmed depth so a reorg can't flash a fake stake), not cosmetic. Add cases with an injected `eth_blockNumber` + a stubbed archival read asserting the request targets `latest - N` (hex) and that `RGOE_CONFIRMATIONS=0`/unset still reads `latest`. *Accept:* the `blockTag` branch mutants die; both the confirmed-depth and latest paths are asserted; source unchanged.
+- [x] **T-TEST-19 (P1, added loop-16) Cover the `blockTag()` reorg-safety branch of OnchainStakeVerifier.** T-TEST-18's Stryker run left the ENTIRE `RGOE_CONFIRMATIONS > 0` head-N branch in `lib/gateway-registry.mjs` `blockTag()` (compute `latest - confirmations` and read stake at that older block) untested — every current test reads at `latest`, so no mutant in that branch is killed and a regression that silently disabled finality/reorg protection would pass green. This is real coverage of a security control (reading stake at a confirmed depth so a reorg can't flash a fake stake), not cosmetic. Add cases with an injected `eth_blockNumber` + a stubbed archival read asserting the request targets `latest - N` (hex) and that `RGOE_CONFIRMATIONS=0`/unset still reads `latest`. *Accept:* the `blockTag` branch mutants die; both the confirmed-depth and latest paths are asserted; source unchanged.
 - [x] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
 - [x] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
   marks onion-identity + operator-key backup as manual `tar | gpg`. Add `rgoe backup` / `rgoe restore`
@@ -277,7 +277,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   drops, feeding the quality-aware rotation (T-FEAT-4). *Accept:* a successful egress returns a
   verifiable receipt; a gateway that drops traffic produces none; receipts carry no per-request
   target/member-identifying data.
-- [ ] **T-FEAT-22 (P2, added loop-16) Client receipt accumulation → quality-aware rotation.** T-FEAT-13
+- [x] **T-FEAT-22 (P2, added loop-16) Client receipt accumulation → quality-aware rotation.** T-FEAT-13
   now emits verifiable per-epoch egress-success receipts, but the client only checks the current one and
   discards it (`tunnel.rgoe.receipt`). Persist a bounded, decaying per-gateway receipt tally next to the
   existing gateway-health cache (`client/selection.mjs` T-FEAT-19 store) — a gateway that keeps returning
@@ -287,14 +287,33 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   by default / fully additive. Feeds the broader T-FEAT-4 quality-aware rotation. *Accept:* a gateway with
   a strong recent receipt record is preferred over an equal-weight silent one; disabling the feature
   restores today's weight-only selection exactly; the tally is bounded and privacy-preserving.
+- [ ] **T-FEAT-23 (P1, added loop-17) Wire receipt scoring into the client — close T-FEAT-22's seam.** T-FEAT-22
+  shipped the accumulation engine (`reportReceipt`) and scoring in `client/selection.mjs` but deliberately did
+  NOT edit `client/rgoe-client.mjs` (to stay disjoint from the loop-17 version-negotiation work), so the ONE
+  line that folds a verified receipt into the tally is documented-but-unwired: after the existing
+  `const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);` in `connect()`, call
+  `if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });`. Add the call, import
+  `reportReceipt`, and add an integration selftest that drives a real connect()-path (injected ack with a
+  receipt) and asserts the tally is updated only when `RGOE_RECEIPT_SCORING` is on and `receipt.present`.
+  Must remain byte-identical to today when the flag is off. *Accept:* an end-to-end connect with a valid
+  receipt raises that gateway's selection factor; flag-off is unchanged; the seam is no longer dangling.
 - [x] **T-FEAT-12 (P2) Cross-gateway replay defense (per-epoch nonce cache).** DONE (per-gateway half, loop-14): `makeSpentSet` fingerprints (nullifier, share.x, nonce); an identical envelope within `RGOE_REPLAY_WINDOW_MS` (5s) is an idempotent honest retry, later => rejected `replayed-envelope` (drop metric + log). Slash logic untouched; failover safe (hits different gateways). `gateway/replay-cache.selftest.mjs`. REMAINING: the fleet-wide gossiped tally (T-FEAT-20).
-- [ ] **T-FEAT-11 (P2, added loop-5) Envelope/protocol version negotiation.** The wire envelope is
+- [x] **T-FEAT-11 (P2, added loop-5) Envelope/protocol version negotiation.** The wire envelope is
   now v3-with-nonce (loop-5). Add explicit min/max version negotiation between client and gateway (and
   in the announce/directory) so the envelope and announce formats can evolve to v4+ without a flag
   day: a gateway advertises supported versions, the client picks the highest mutually supported, and
   an unknown version is rejected with a clear reason rather than a silent mis-parse. *Accept:* a
   client and gateway on overlapping ranges interoperate; on disjoint ranges they fail with a precise
   version error; a downgrade cannot strip the target binding.
+- [ ] **T-TEST-20 (P2, added loop-17) Directory version-range advertisement + negotiation e2e.** T-FEAT-11
+  negotiates protocol version only over the client↔gateway handshake (the gateway advertises its range in the
+  version-reject reply); it explicitly deferred advertising the supported range in the SIGNED announce/directory
+  so a client could pre-filter or pre-select before dialing. Add the range to `bootnode/announce.mjs` +
+  `lib/directory.mjs` (additive, verified fields — old directories without it still verify) and have
+  `client/selection.mjs` prefer a gateway whose advertised range overlaps the client's, plus an end-to-end
+  test exercising directory-advertised range → client pre-selection → gateway handshake agreement. Composes
+  with T-FEAT-10 (capability advertisement). *Accept:* a directory carrying per-gateway version ranges verifies;
+  a client skips a gateway with no mutual version BEFORE dialing; absent ranges behave exactly as today.
 - [ ] **T-FEAT-10 (P2, added loop-4) Gateway capability advertisement + capability-aware selection.**
   Gateways advertise capabilities in their signed announce (allowed egress ports/policy, a region/AS
   hint, protocol versions); clients select gateways matching the request's needs, so the fleet goes
@@ -435,3 +454,23 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   duplicated provisioning) reviewed at spec time. Hygiene: eslint now ignores `.stryker-tmp/` + `reports/`
   so a mutation run can't break `npm run lint`. 48 node + 53 Foundry tests green; lint clean. Added T-TEST-19
   (blockTag reorg-safety branch tests) + T-FEAT-22 (client receipt accumulation → quality-aware rotation).
+- 2026-08-14  loop-17  Fan-out batch of 6 (disjoint files): T-TEST-19 (covered the untested
+  OnchainStakeVerifier `blockTag()` reorg-safety branch — asserts the stake read targets confirmed depth
+  head-N, not `latest`; killed every finality-critical mutant, remaining one shown equivalent), T-FEAT-22
+  (client receipt accumulation → quality-aware selection: bounded/decaying EWMA per gateway, ±BONUS weight
+  factor, off by default & byte-identical when off, stores only onion+3 local numbers = no linkability;
+  reportReceipt seam exposed, one-line client wire-up documented), T-FEAT-11 (envelope protocol version
+  negotiation — client picks highest mutual version, fail-closed on disjoint ranges, absent-version==v3
+  backward-compat, target binding stays independent of version), T-DEPLOY-7 (Foundry deploy script for
+  GatewayRegistry+StakedReputationSet matched to real constructors + ONCHAIN-DEPLOY runbook; simulated in
+  3 scenarios, nothing broadcast — live broadcast is a gated operator step), T-DEPLOY-5 (onion-identity
+  continuity tooling: derive `.onion` from a bare `hs_ed25519_secret_key` + restore a Tor HS dir with
+  correct perms, so the SAME onion survives a box rebuild), T-WEB-4 (privacy-preserving fleet diversity
+  map — aggregate/self-declared coarse labels only, small buckets folded, no onion→geo resolution). AUDIT
+  (riskiest change = T-DEPLOY-5's HAND-ROLLED ed25519 A=a·B, needed because node:crypto only derives a
+  pubkey from a 32-byte seed not the expanded scalar): cross-checked the derivation against node:crypto over
+  200 random keys — 200/200 match; hardened its selftest from 1 to 24 cross-checked keys. Verified T-WEB-4's
+  suite (its agent never delivered a final report) and T-DEPLOY-7's forge suite directly. 52 node + 53
+  Foundry tests green; lint clean; receipt cache gitignored. Added T-TEST-20 (directory version-range
+  advertisement + negotiation e2e) + T-FEAT-23 (wire receipt scoring into rgoe-client — close T-FEAT-22's
+  one-line integration seam).

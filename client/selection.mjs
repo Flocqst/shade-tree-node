@@ -85,13 +85,14 @@ export function loadHealthCache(path = HEALTH_CACHE_PATH) {
   return {};
 }
 
-// Cap the cache in place: evict the oldest-lastSeen entries down to HEALTH_MAX_ENTRIES so it can
-// never grow unboundedly. Mutates and returns the same object.
-function boundHealthCache(cache) {
+// Cap the cache in place: evict the oldest-lastSeen entries down to `max` so it can never grow
+// unboundedly. Mutates and returns the same object. Generalized (T-FEAT-22) so the receipt tally
+// reuses the exact same oldest-first eviction; the health cache keeps its HEALTH_MAX_ENTRIES default.
+function boundHealthCache(cache, max = HEALTH_MAX_ENTRIES) {
   const keys = Object.keys(cache);
-  if (keys.length <= HEALTH_MAX_ENTRIES) return cache;
+  if (keys.length <= max) return cache;
   keys.sort((a, b) => (cache[a]?.lastSeen || 0) - (cache[b]?.lastSeen || 0));
-  for (const k of keys.slice(0, keys.length - HEALTH_MAX_ENTRIES)) delete cache[k];
+  for (const k of keys.slice(0, keys.length - max)) delete cache[k];
   return cache;
 }
 
@@ -153,6 +154,146 @@ function updateHealthCache(dir, onion, { ok, latencyMs } = {}) {
 
 // Loaded once at module init (best-effort). Env is read at import, same as the rest of this module.
 let _healthCache = loadHealthCache(HEALTH_CACHE_PATH);
+
+// ---- client-side receipt reputation → quality-aware selection (T-FEAT-22) --------
+// The client verifies each gateway's signed egress-success receipt (lib/receipt.mjs, T-FEAT-13) and
+// today throws it away. This folds the outcome into a SMALL, LOCAL, per-gateway quality tally sitting
+// NEXT TO the health cache (a sibling file in the same cache dir), so a gateway that keeps returning
+// VALID receipts earns a MODEST selection bonus, and one that sends BAD receipts (present but bogus —
+// the gate-then-drop signal a receipt can attest) is deprioritized.
+//
+// OFF BY DEFAULT / FULLY ADDITIVE. This whole feature is gated behind RGOE_RECEIPT_SCORING. With it
+// disabled (the default): reportReceipt is a no-op, NO tally file is ever written, and selectCandidates
+// takes the byte-identical weight-only path — selection is exactly today's behavior. Even with the flag
+// ARMED, a fleet with no receipt evidence yet produces an identity adjustment (same gateway objects,
+// same weights), so enabling it changes nothing until real receipts arrive.
+//
+// PRIVACY (the whole point). We store ONLY the gateway .onion (already learned from the SIGNED
+// directory) plus three locally-computed numbers: a decaying quality EWMA in [0,1], a bounded sample
+// count, and a lastSeen wall-clock for decay/eviction. We NEVER store receipt bytes, the receipt's
+// epoch, or anything tied to a specific request — same never-sent, local-only discipline as the health
+// cache. Two receipts from a gateway in one epoch are byte-identical by design, so there is nothing
+// request-linkable to store even if we wanted to. The tally is never transmitted anywhere.
+//
+//   onion -> { score, samples, lastSeen }   // score: EWMA of (valid?1:0); samples: capped confidence
+//
+// RGOE_RECEIPT_SCORING   : "1"/"on"/"true" to arm. Unset/anything else => OFF (default).
+// RGOE_RECEIPT_CACHE     : tally file path (default cache/gateway-receipts.json, gitignored). ""/"off"/"0" => no persistence.
+// RGOE_RECEIPT_MAX       : max distinct gateways retained (oldest-lastSeen evicted first). Default 512.
+// RGOE_RECEIPT_DECAY_MS  : a tally not updated for this long is treated as decayed → neutral (no bonus, no penalty). Default 14d.
+// RGOE_RECEIPT_ALPHA     : EWMA weight on the newest outcome (0..1). Default 0.3 (mirrors the health latency EWMA).
+// RGOE_RECEIPT_BONUS     : max fractional weight swing at full confidence + extreme score. Default 0.5 (±50%).
+// RGOE_RECEIPT_CONFIDENCE_N: samples needed for full confidence (one good receipt is not decisive). Default 4.
+const clamp01 = (x) => (Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0);
+function parseReceiptScoring(raw) {
+  if (raw === undefined) return false;
+  const v = String(raw).trim().toLowerCase();
+  return v === "1" || v === "on" || v === "true" || v === "yes";
+}
+const RECEIPT_SCORING = parseReceiptScoring(process.env.RGOE_RECEIPT_SCORING);
+export function receiptScoringEnabled() { return RECEIPT_SCORING; }
+
+function resolveReceiptCachePath() {
+  const raw = process.env.RGOE_RECEIPT_CACHE;
+  if (raw === undefined) return join(HERE, "..", "cache", "gateway-receipts.json");
+  const v = raw.trim();
+  if (v === "" || v === "0" || v.toLowerCase() === "off") return null; // explicit OFF
+  return v;
+}
+const RECEIPT_CACHE_PATH = resolveReceiptCachePath();
+const RECEIPT_MAX_ENTRIES = Math.max(1, Number(process.env.RGOE_RECEIPT_MAX || 512));
+const RECEIPT_DECAY_MS = Number(process.env.RGOE_RECEIPT_DECAY_MS || 14 * 24 * 60 * 60 * 1000);
+const RECEIPT_ALPHA = clamp01(Number(process.env.RGOE_RECEIPT_ALPHA ?? 0.3));
+const RECEIPT_BONUS = Math.max(0, Number(process.env.RGOE_RECEIPT_BONUS ?? 0.5));
+const RECEIPT_CONFIDENCE_N = Math.max(1, Number(process.env.RGOE_RECEIPT_CONFIDENCE_N || 4));
+
+// Read the persisted tally. Best-effort and total, exactly like loadHealthCache: any error yields {}
+// so a broken tally can never break selection. Tolerates the versioned envelope and a bare map.
+export function loadReceiptCache(path = RECEIPT_CACHE_PATH) {
+  if (!path) return {};
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (raw && typeof raw === "object") {
+      if (raw.entries && typeof raw.entries === "object") return raw.entries;
+      if (!raw.version) return raw; // bare map
+    }
+  } catch { /* fail soft */ }
+  return {};
+}
+
+// Write-through, bounded (reuses boundHealthCache's oldest-first eviction with the receipt cap),
+// best-effort. Returns true iff written; any failure is swallowed so persistence-off never affects
+// selection.
+export function saveReceiptCache(cache = _receiptCache, path = RECEIPT_CACHE_PATH) {
+  if (!path) return false;
+  try {
+    boundHealthCache(cache, RECEIPT_MAX_ENTRIES);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, entries: cache }, null, 2) + "\n");
+    return true;
+  } catch { return false; }
+}
+
+// Loaded once at module init — but ONLY when scoring is armed, so the default path never touches disk.
+let _receiptCache = RECEIPT_SCORING ? loadReceiptCache(RECEIPT_CACHE_PATH) : {};
+export function _setReceiptCache(next) { _receiptCache = next || {}; } // test seam
+
+// The bounded, decaying weight MULTIPLIER a gateway's receipt record earns, in
+//   [1 - RECEIPT_BONUS, 1 + RECEIPT_BONUS].
+// score in [0,1] maps to a centered pull (2*score-1) in [-1,1]; confidence ramps from one sample to
+// full at RECEIPT_CONFIDENCE_N so a single receipt is not decisive; a decayed (stale) or absent tally
+// returns exactly 1 (neutral) so it neither helps nor hurts — a gateway is never punished forever.
+function receiptFactor(onion, now = Date.now()) {
+  const e = _receiptCache[onion];
+  if (!e) return 1;
+  if (now - (e.lastSeen || 0) >= RECEIPT_DECAY_MS) return 1; // decayed → neutral
+  const confidence = Math.min(1, (e.samples || 0) / RECEIPT_CONFIDENCE_N);
+  const centered = 2 * clamp01(e.score) - 1; // valid-heavy → +, bad-heavy → -
+  return 1 + RECEIPT_BONUS * centered * confidence;
+}
+
+// Produce a selection view of `gateways` with receipt-adjusted weights. Returns the SAME array
+// reference when nothing is adjusted (flag off, or no live tally) so the caller stays on the exact
+// byte-identical weight-only path. Otherwise returns NEW shallow copies with a scaled `weight`, never
+// mutating the signed weight or the live objects reportHealth/reportResult key on. selectionOrder only
+// reads {onion, weight, health}, all of which the copies preserve.
+function applyReceiptWeights(gateways, now = Date.now()) {
+  if (!RECEIPT_SCORING) return gateways;
+  let touched = false;
+  const out = gateways.map((g) => {
+    const f = receiptFactor(g.onion, now);
+    if (f === 1) return g;
+    touched = true;
+    const w = Number(g.weight);
+    const base = Number.isFinite(w) ? w : 1;
+    return { ...g, weight: Math.max(0, base * f) };
+  });
+  return touched ? out : gateways;
+}
+
+// Fold one verified-or-not receipt outcome for a dialed gateway into the persisted tally (T-FEAT-22).
+// SEAM mirroring reportResult(onion, {ok,latencyMs}). No-op unless scoring is armed (keeps the default
+// byte-identical and writes nothing). Privacy guard: only persist an onion already in the SIGNED
+// directory (never arbitrary caller input). `valid:true` = a receipt that verified against this onion +
+// current epoch; `valid:false` = a bad/bogus receipt (the gate-then-drop evidence a receipt can carry).
+// The RECEIPT-ABSENT legacy case (a gateway simply running with receipts off) is NOT a report — the
+// caller does not call here for it — so opting a gateway out of receipts is never penalized (additive).
+export function reportReceipt(onion, { valid } = {}) {
+  if (!RECEIPT_SCORING) return;         // OFF by default: no-op, nothing persisted, selection unchanged
+  if (!loaded) return;                  // no fleet loaded yet — nothing to attribute this to
+  const full = onion.endsWith(".onion") ? onion : onion + ".onion";
+  if (!(loaded.dir.gateways || []).some((x) => x.onion === full)) return; // unknown onion: don't persist
+  const now = Date.now();
+  const signal = valid === true ? 1 : 0;
+  let e = _receiptCache[full];
+  // A brand-new or fully-decayed record starts fresh from this observation (not punished forever).
+  if (!e || now - (e.lastSeen || 0) >= RECEIPT_DECAY_MS) e = { score: signal, samples: 0, lastSeen: 0 };
+  e.score = RECEIPT_ALPHA * signal + (1 - RECEIPT_ALPHA) * clamp01(e.score);
+  e.samples = Math.min(RECEIPT_CONFIDENCE_N, (e.samples || 0) + 1); // capped: bounded + caps confidence
+  e.lastSeen = now;
+  _receiptCache[full] = e;
+  saveReceiptCache(_receiptCache, RECEIPT_CACHE_PATH);
+}
 
 // The pinned directory signer(s). In a real bundle this is a hardcoded constant set
 // at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
@@ -401,7 +542,13 @@ export async function selectCandidates() {
   const { dir } = await ensureLoaded();
   let gateways = dir.gateways;
   if (VERIFY_STAKE) gateways = await filterReverified(gateways);
-  // Run selection over the (possibly filtered) fleet. Reuse the SAME entry objects so
+  // Receipt-quality weight adjustment (T-FEAT-22). OFF by default and identity when no gateway has a
+  // live tally: applyReceiptWeights returns the SAME array reference, so we fall through to the exact
+  // weight-only path below (byte-identical to pre-feature behavior). When it does adjust, it returns
+  // NEW weight-scaled COPIES, leaving the signed weight and the live reportHealth/reportResult targets
+  // untouched.
+  gateways = applyReceiptWeights(gateways);
+  // Run selection over the (possibly filtered/adjusted) fleet. Reuse the SAME entry objects so
   // reportHealth's in-place mutation (keyed by onion on dir.gateways) still lands on them.
   const view = gateways === dir.gateways ? dir : { ...dir, gateways };
   return selectionOrder(view).map((g) => ({ onion: g.onion.replace(/\.onion$/, "") }));
@@ -415,3 +562,16 @@ export function reportResult(onion, { ok, latencyMs } = {}) {
   // Write-through to the local cross-session cache (best-effort; no-op if persistence is off).
   updateHealthCache(loaded.dir, full, { ok, latencyMs });
 }
+
+// INTEGRATION SEAM (T-FEAT-22). The client (client/rgoe-client.mjs) already verifies the optional
+// egress receipt in `_verifyReceipt`, yielding an evidence record `{ present, valid, ... }`, and then
+// discards it. To feed quality-aware selection, add exactly ONE line right after that call
+// (rgoe-client.mjs, immediately after `const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);`):
+//
+//     if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });
+//
+// Gating on `receipt.present` keeps this fully additive: a legacy gateway running with receipts OFF
+// sends no receipt (present:false) and is never entered into the tally or penalized. A gateway that
+// opts into receipts and returns a VALID one earns the bonus; one that returns a bogus receipt
+// (present but invalid) is deprioritized. rgoe-client.mjs is intentionally NOT edited here — this is
+// the seam it would call.

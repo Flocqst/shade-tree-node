@@ -169,3 +169,38 @@ than `now - RGOE_DIRECTORY_MAX_AGE_MS`, failing closed to the last-good in-memor
 Note: directory `issued` is in SECONDS (the bootnode signs `Math.floor(Date.now()/1000)`); the bound is
 in MILLISECONDS. `client/selection.mjs` scales `issued` by 1000 before comparing, matching the unit the
 rollback floor uses.
+
+## Client receipt reputation → quality-aware selection (T-FEAT-22)
+
+Read by `client/selection.mjs`. OPTIONAL, OFF by default — leave `RGOE_RECEIPT_SCORING` unset and
+selection is byte-for-byte today's weight-only behavior (no tally file is written, `reportReceipt` is a
+no-op). Even with the flag armed, a fleet with no receipt evidence yet produces an identity adjustment,
+so arming it alone changes nothing until real receipts arrive.
+
+T-FEAT-13 gives the client a verifiable per-epoch egress-success receipt from each gateway. With scoring
+armed, the client folds each verified-or-bogus receipt outcome into a SMALL, LOCAL, per-gateway quality
+tally sitting next to the gateway-health cache: a gateway that keeps returning VALID receipts earns a
+modest weight bonus; one that returns BAD receipts (present but bogus — the gate-then-drop signal) is
+deprioritized. A gateway simply running with receipts OFF sends none and is never entered into the tally
+or penalized (fully additive).
+
+Privacy: the tally stores ONLY the gateway `.onion` (already learned from the SIGNED directory) plus
+three locally-computed numbers — a decaying quality EWMA in `[0,1]`, a bounded sample count, and a
+`lastSeen` wall-clock. It NEVER stores receipt bytes, the receipt's epoch, or anything tied to a specific
+request, and is never transmitted anywhere — the same never-sent, local-only discipline as the health
+cache. Schema: `onion -> { score, samples, lastSeen }`.
+
+| Env var | Default | Controls |
+|---|---|---|
+| `RGOE_RECEIPT_SCORING` | (unset → OFF) | Arm the feature: `1`/`on`/`true`/`yes` enables it; anything else (or unset) is OFF. |
+| `RGOE_RECEIPT_CACHE` | `cache/gateway-receipts.json` (gitignored) | Tally file path. `""`/`off`/`0` disables persistence (in-memory only). |
+| `RGOE_RECEIPT_MAX` | `512` | Max distinct gateways retained; oldest-`lastSeen` evicted first (bounded). |
+| `RGOE_RECEIPT_DECAY_MS` | `1209600000` (14 days) | A tally not updated for this long is treated as decayed → neutral (no bonus, no penalty): a gateway is never punished forever. |
+| `RGOE_RECEIPT_ALPHA` | `0.3` | EWMA weight on the newest outcome (mirrors the health latency EWMA). |
+| `RGOE_RECEIPT_BONUS` | `0.5` | Max fractional weight swing at full confidence + extreme score (±50%). |
+| `RGOE_RECEIPT_CONFIDENCE_N` | `4` | Samples needed for full confidence, so one good receipt is not decisive. |
+
+Integration seam: `client/selection.mjs` exposes `reportReceipt(onion, { valid })` (mirroring
+`reportResult(onion, { ok, latencyMs })`). The one-line call site — added later in
+`client/rgoe-client.mjs`, immediately after `_verifyReceipt` — is
+`if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });`.

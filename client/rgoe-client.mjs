@@ -77,10 +77,40 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
   return { ensureEpoch, ensureGroup, nextSlot, state: () => ({ epoch, cursor }) };
 }
 
-// Build the envelope-v3 for one logical request. `signal` is deterministic per request
+// ---- protocol version negotiation (T-FEAT-11) -------------------------------
+// The range of wire-envelope versions THIS client can emit/parse. Single source of truth on the
+// client side (the gateway keeps its own PROTO_MIN/PROTO_MAX). Today both sides are exactly {3}.
+// Bump CLIENT_PROTO_MAX (and teach buildEnvelope the new shape) to speak a v4; raise
+// CLIENT_PROTO_MIN only to drop an old one.
+export const CLIENT_PROTO_MIN = 3;
+export const CLIENT_PROTO_MAX = 3;
+export const CLIENT_PROTO_RANGE = { min: CLIENT_PROTO_MIN, max: CLIENT_PROTO_MAX };
+
+// Pick the HIGHEST version both sides support. `gatewayRange` is {min,max} the client has learned
+// for this gateway — from a version-reject advertisement (ack.proto), or later from the signed
+// directory (deliberate follow-up, T-FEAT-10). When it is unknown (null), we optimistically send
+// our own max: a true mismatch then surfaces as an explicit `unsupported-version` reject carrying
+// the gateway's real range, which the caller can feed back here to re-select or fail closed.
+// Returns { ok:true, version } or { ok:false, reason } — never silently downgrades to a bad guess.
+export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANGE) {
+  const cMin = clientRange.min, cMax = clientRange.max;
+  if (!gatewayRange || gatewayRange.min == null || gatewayRange.max == null) {
+    return { ok: true, version: cMax }; // no advertisement yet: emit our best supported version
+  }
+  const gMin = gatewayRange.min, gMax = gatewayRange.max;
+  const hi = Math.min(cMax, gMax); // highest either side will go
+  const lo = Math.max(cMin, gMin); // lowest both sides still accept
+  if (hi < lo) {
+    return { ok: false, reason: `no-mutual-version:client=${cMin}-${cMax},gateway=${gMin}-${gMax}` };
+  }
+  return { ok: true, version: hi }; // highest mutually supported
+}
+
+// Build the envelope for one logical request. `signal` is deterministic per request
 // (H(target, nonce)); the caller reuses the SAME envelope across failover so a retry
-// reproduces the SAME share (deterministic-retry invariant).
-export async function buildEnvelope({ secret, target, pool, prove = proveForSlot }) {
+// reproduces the SAME share (deterministic-retry invariant). `version` is the negotiated
+// wire version (default = our max, 3 today, so the emitted envelope is byte-for-byte the v3 wire).
+export async function buildEnvelope({ secret, target, pool, prove = proveForSlot, version = CLIENT_PROTO_MAX }) {
   const nonce = randomBytes(16).toString("hex");
   const signal = requestSignal(target, nonce);
   const { epoch, slot } = pool.nextSlot();
@@ -88,8 +118,9 @@ export async function buildEnvelope({ secret, target, pool, prove = proveForSlot
   const { proof, nullifier, externalNullifier, share } = await prove(secret, epoch, slot, signal, { group });
   // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
   // this target (verifyEnvelope check 2b). It reveals nothing (it is random per request) and it is
-  // what stops a captured proof from being redirected to a different target.
-  return { envelope: { v: 3, target, nonce, proof, nullifier, externalNullifier, share }, signal, slot };
+  // what stops a captured proof from being redirected to a different target. `v` is FIRST so the
+  // gateway's version gate reads it without parsing the rest.
+  return { envelope: { v: version, target, nonce, proof, nullifier, externalNullifier, share }, signal, slot };
 }
 
 // Read one newline-terminated line, never waiting forever (a gateway that accepts but
@@ -194,6 +225,10 @@ export class RgoeClient {
     if (dir) process.env.RGOE_DIRECTORY = dir;
     if (signer) process.env.RGOE_DIR_SIGNER = signer;
     this._selection = null;
+    // Known gateway protocol range (T-FEAT-11), if the caller learned one out-of-band. null =>
+    // unknown; the client optimistically sends its max and reacts to any version-reject. A future
+    // directory that carries the range (follow-up) would populate this per candidate.
+    this.gatewayRange = opts.gatewayRange || null;
     this.pool = makeSlotPool({ secret: this.secret });
     this.pool.ensureEpoch(); // warm the current epoch in the background
   }
@@ -255,8 +290,17 @@ export class RgoeClient {
     // opts.onion pins a specific gateway for this request (else directory/pin/local order).
     const onions = onion ? [String(onion).replace(/\.onion$/, "")] : await this._candidateOnions();
 
+    // Negotiate the wire version (T-FEAT-11): pick the highest version this client and the gateway
+    // both support. With no known gateway range this is just our max (v3 today); if the ranges are
+    // disjoint we fail closed HERE with a precise reason, before proving or dialing.
+    const pv = selectProtoVersion(this.gatewayRange);
+    if (!pv.ok) {
+      emit({ phase: "prove", status: "error", error: pv.reason });
+      throw new Error("version negotiation failed: " + pv.reason);
+    }
+
     emit({ phase: "prove", status: "start" });
-    const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool });
+    const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool, version: pv.version });
     // Surface the real proof material for anyone who wants the cryptographic detail: the
     // Groth16 public signals (what the gateway verifies) + the proof points.
     const sp = envelope.proof.snarkProof;
@@ -298,7 +342,19 @@ export class RgoeClient {
     const { line, rest } = await readLine(sock);
     let ack;
     try { ack = JSON.parse(line); } catch { sock.destroy(); throw new Error("bad gateway ack: " + line.slice(0, 80)); }
-    if (!ack.ok) { emit({ phase: "gate", status: "refused", error: ack.err }); sock.destroy(); throw new Error("gate refused: " + ack.err); }
+    if (!ack.ok) {
+      emit({ phase: "gate", status: "refused", error: ack.err, proto: ack.proto });
+      sock.destroy();
+      // A version reject advertises the gateway's real range in ack.proto (T-FEAT-11). Surface the
+      // precise mutual-range failure so a caller can widen support or pin a compatible gateway, and
+      // remember the range for the next attempt to this client.
+      if (ack.proto && typeof ack.err === "string" && /^(unsupported|bad)-version/.test(ack.err)) {
+        this.gatewayRange = ack.proto;
+        const re = selectProtoVersion(ack.proto);
+        throw new Error(`gate refused: ${ack.err} (gateway speaks ${ack.proto.min}-${ack.proto.max}; ${re.ok ? "retry as v" + re.version : re.reason})`);
+      }
+      throw new Error("gate refused: " + ack.err);
+    }
     emit({ phase: "gate", status: "done", onion: usedOnion });
 
     // Optional signed egress success receipt (T-FEAT-13). Purely ADDITIVE: a receipt is present

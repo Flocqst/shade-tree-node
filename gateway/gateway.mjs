@@ -247,6 +247,58 @@ async function makeSlasher() {
 
 // ---- wire protocol ----------------------------------------------------------
 
+// ---- protocol version negotiation (T-FEAT-11) -------------------------------
+// The wire envelope is v3-with-nonce today. To let the format evolve to v4+ without a flag
+// day, the gateway declares the INCLUSIVE range of envelope versions it can parse, checks the
+// incoming envelope's `v` against it BEFORE any field is read, and — on a mismatch — advertises
+// its range back to the client so the client can re-select (or fail closed with a precise error).
+//
+// PROTO_MIN/PROTO_MAX are the SINGLE source of truth for the gateway's supported range. Bump
+// PROTO_MAX (and add a v4 parser) to ship a new format; raise PROTO_MIN only to DROP an old one.
+// Today both are 3, so the range is exactly {3}. Directory/announce advertisement of this range
+// is a deliberate FOLLOW-UP (T-FEAT-10 capability advertisement) — this task keeps negotiation to
+// the client<->gateway handshake and does not touch bootnode/announce or lib/directory.
+export const PROTO_MIN = 3;
+export const PROTO_MAX = 3;
+export const PROTO_RANGE = { min: PROTO_MIN, max: PROTO_MAX };
+
+// An envelope with NO `v` is the pre-negotiation v3 wire (older clients / the shim before this
+// change). Backward-compat rule: absent version == v3, then checked against the range like any
+// other. So a legacy client keeps working while the range includes 3, and is cleanly rejected
+// (unsupported-version:3) once a future gateway raises PROTO_MIN past 3 — never a silent mis-parse.
+const LEGACY_ENVELOPE_VERSION = 3;
+
+// Decide whether we can parse an envelope of version `v`, WITHOUT reading any other field. Pure +
+// exported so the selftest drives every branch directly. Returns:
+//   { ok:true,  version }                              — in range; hand off to verifyEnvelope
+//   { ok:false, reason:"bad-version:<repr>", proto }   — not an integer (garbage / string / float)
+//   { ok:false, reason:"unsupported-version:<v>", proto } — a well-formed integer out of range
+// `proto` (our advertised range) rides on BOTH rejections so the client learns what we speak.
+// `reason` carries the specific value for logs/replies; `label` is a bounded coarse key for metrics.
+export function acceptEnvelopeVersion(v, range = PROTO_RANGE) {
+  const { min, max } = range;
+  const ver = v === undefined || v === null ? LEGACY_ENVELOPE_VERSION : v;
+  if (typeof ver !== "number" || !Number.isInteger(ver)) {
+    // Reject BEFORE any mis-parse. A string "3", a float, NaN, or an object never reaches
+    // verifyEnvelope (which does not inspect `v` at all — this gate is the sole version authority).
+    return { ok: false, reason: `bad-version:${versionRepr(v)}`, label: "bad-version", proto: range };
+  }
+  if (ver < min || ver > max) {
+    return { ok: false, reason: `unsupported-version:${ver}`, label: "unsupported-version", proto: range };
+  }
+  return { ok: true, version: ver, proto: range };
+}
+
+// A short, safe repr of an out-of-range/garbage version for the reason string (never dumps a
+// large or nested value into a log line or wire reply).
+function versionRepr(v) {
+  if (v === undefined) return "undefined";
+  if (v === null) return "null";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return JSON.stringify(v.slice(0, 16));
+  return typeof v;
+}
+
 function readEnvelope(socket) {
   return new Promise((resolve, reject) => {
     let buf = Buffer.alloc(0);
@@ -490,6 +542,18 @@ function makeHandler(spentSet, { makeReceipt = null } = {}) {
     // Everything after the envelope parse is guarded: any throw must REPLY, never hang
     // the client (a silent throw here is exactly the bug that left clients waiting).
     try {
+      // Step 0: protocol version gate (T-FEAT-11). Run FIRST, before any field is trusted, so an
+      // out-of-range/garbage `v` is rejected with a precise reason (and our advertised range) rather
+      // than being fed to a parser expecting a different shape. This never bypasses target binding:
+      // an accepted version still flows through verifyEnvelope's checks below unchanged.
+      const vv = acceptEnvelopeVersion(env.v);
+      if (!vv.ok) {
+        log.warn("drop", { reason: vv.reason, target: env.target });
+        M.requests.inc({ result: "drop", reason: vv.label });
+        reply(socket, { ok: false, err: vv.reason, proto: vv.proto });
+        return socket.destroy();
+      }
+
       // Steps 1-3, cheap-first, inside the lib: fresh externalNullifier -> share.x binding
       // -> root ∈ recent-roots -> RLN Groth16 verify. Returns the authoritative
       // nullifier/externalNullifier/share (read from the proof's public signals) to act on.
