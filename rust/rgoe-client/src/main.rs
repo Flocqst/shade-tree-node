@@ -104,29 +104,28 @@ impl ReceiptDto {
 }
 
 // --------------------------------------------------------------------------
-// Deferred: LIVE egress (T-RUST-2b) — RLN proof + Tor dial, honestly stubbed
+// LIVE egress
 // --------------------------------------------------------------------------
+//
+// T-RUST-2d wired the RLN prover + native tree into `rgoe egress` behind the `live`
+// cargo feature. WITH the feature (`--features live`), `egress` builds a REAL envelope in
+// Rust and sends it to a gateway over a PLAIN TCP socket (see the `live` module below).
+// The `arti` Tor dial that replaces the plain-TCP hop is the remaining T-RUST-2e slice.
+//
+// WITHOUT the feature (the default fast build), `egress` returns this honest error — the
+// heavy native deps (ark-circom -> wasmer) are only compiled under the feature so the
+// deterministic client stays sub-second to build.
 
-/// Perform a LIVE egress through a gateway: build the RLN Groth16 membership proof,
-/// dial the gateway's v3 onion over embedded Tor, send the envelope, and stream the
-/// tunnel. **Not implemented in this run (T-RUST-2).**
-///
-/// The two pieces this needs are the non-deterministic, heavy-native-dep half that
-/// this MVP deliberately defers to **T-RUST-2b**:
-///
-/// - **RLN proving** via `zerokit` (PSE's canonical Rust RLN) — produces the envelope's
-///   Groth16 proof committing to `x = calculate_signal_hash(request_signal(target, nonce))`.
-/// - **Tor dial** via `arti-client` (embedded Tor: no system `tor` daemon, no SOCKS,
-///   no `torrc`) — connects to the gateway onion and carries the CONNECT tunnel.
-///
-/// See docs/adr/0001-client-language.md (stack) and rgoe-client/Cargo.toml (the deferred
-/// deps NOTE). The deterministic pieces an egress also needs — directory verify, gateway
-/// selection, envelope/target binding, receipt verify — ARE implemented in `rgoe-proto`
-/// and exercised by the subcommands below.
+/// The `egress` path when the `live` feature is OFF (default): the RLN prover is not
+/// compiled in. Kept as an honest, non-hanging error.
+#[cfg(not(feature = "live"))]
 fn live_egress(_target: &str) -> Result<(), String> {
-    Err("live egress is T-RUST-2b, not yet implemented \
-         (needs zerokit RLN proving + arti Tor dial; see docs/adr/0001-client-language.md)"
-        .to_string())
+    Err(
+        "live egress needs the `live` cargo feature (RLN prover + native tree). \
+         Rebuild with `cargo build -p rgoe-client --features live`. \
+         The arti Tor dial is T-RUST-2e; see docs/adr/0001-client-language.md"
+            .to_string(),
+    )
 }
 
 // --------------------------------------------------------------------------
@@ -178,9 +177,23 @@ SUBCOMMANDS:
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
-    egress <host:port>
-        LIVE egress through the fleet. NOT IMPLEMENTED in this build — the RLN
-        proof + Tor dial are deferred to T-RUST-2b. Prints the honest error.
+    egress <gw-host:port> --identity <f> --members <f> --target <host:port>
+           --circuits <dir> [--epoch <n>] [--slot <i>] [--rln-identifier <n>]
+           [--k <n>] [--directory <f> --signer <hex>]
+        LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
+        in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
+        circuits) binding <target>, opens a PLAIN TCP socket to <gw-host:port>, sends
+        the envelope exactly as client/rgoe-client.mjs does, and reports the gateway's
+        accept/reject. With --directory/--signer it also runs the deterministic select
+        path and prints the chosen gateway (the plain-TCP dial still uses <gw-host:port>;
+        the Tor dial is T-RUST-2e). Without the feature: prints an honest not-built error.
+          --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf)
+          --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
+          --target    host:port bound into the proof (the egress destination)
+          --circuits  dir with rln.wasm + rln_final.zkey + verification_key.json
+          --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
+          --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
+          --rln-identifier  group id (default 1)
 
     help, --help, -h        Show this help.
     version, --version, -V  Show the version.
@@ -331,15 +344,288 @@ fn cmd_verify_receipt(args: &[String]) -> ExitCode {
 }
 
 fn cmd_egress(args: &[String]) -> ExitCode {
-    let Some(target) = args.first() else {
-        eprintln!("egress: missing <host:port>");
+    let Some(dial) = args.first() else {
+        eprintln!("egress: missing <gw-host:port>\n\n{HELP}");
         return ExitCode::from(2);
     };
-    match live_egress(target) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("not-implemented: {e}");
-            ExitCode::from(3)
+    #[cfg(feature = "live")]
+    {
+        live::run_egress(dial, &args[1..])
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        match live_egress(dial) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("not-implemented: {e}");
+                ExitCode::from(3)
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// LIVE egress implementation (feature = "live"): RLN prover + native tree +
+// plain-TCP socket to a JS gateway. T-RUST-2d.
+// --------------------------------------------------------------------------
+//
+// The wire framing here is byte-matched to the JS reference so the real JS gateway
+// (gateway/gateway.mjs) accepts the Rust envelope:
+//   - SEND: `JSON.stringify(envelope) + "\n"` — client/rgoe-client.mjs:313,341.
+//     envelope = { v, target, nonce, proof, nullifier, externalNullifier, share }
+//     (buildEnvelope, client/rgoe-client.mjs:123); the nested `proof` is the wire-safe
+//     RLNFullProof { snarkProof:{proof,publicSignals}, epoch, rlnIdentifier } assembled
+//     exactly as rust/rgoe-rln/interop/verify-envelope.mjs:13-25.
+//   - RECV: the gateway replies `JSON.stringify(ack) + "\n"` (gateway.mjs reply(),
+//     :333-335; successAck `{ ok: true }` at :594) once verifyEnvelope passes, the target
+//     policy admits, the spent-set admits, and the upstream :target connects. So `ok:true`
+//     is a full end-to-end ACCEPT (version gate + Groth16 verify + proxy established).
+#[cfg(feature = "live")]
+mod live {
+    use std::collections::HashSet;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::process::ExitCode;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use serde::Deserialize;
+
+    use super::{default_seed, mulberry32, read_file, take_flag, DirectoryDto};
+
+    #[derive(Deserialize)]
+    struct IdentityFile {
+        #[serde(rename = "identitySecret")]
+        identity_secret: String,
+        leaf: String,
+    }
+
+    #[derive(Deserialize)]
+    struct MembersFile {
+        members: Vec<String>,
+    }
+
+    // lib/rln.mjs EPOCH_SECONDS default is 120s; RGOE_EPOCH_SECONDS overrides to match a
+    // gateway configured otherwise. verifyEnvelope accepts this-or-previous epoch, so a
+    // wall-clock-derived epoch has a full window of slack against the gateway's own clock.
+    fn epoch_seconds() -> u64 {
+        std::env::var("RGOE_EPOCH_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n: &u64| n > 0)
+            .unwrap_or(120)
+    }
+
+    fn current_epoch() -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now / epoch_seconds()
+    }
+
+    // A 16-byte random nonce -> 32 hex chars, matching client/rgoe-client.mjs
+    // `randomBytes(16).toString("hex")`. No `rand` runtime dep: splitmix64 over a
+    // clock+pid seed is ample for a per-request nonce (uniqueness, not secrecy). A
+    // `--nonce` flag overrides it for reproducible runs.
+    fn gen_nonce() -> String {
+        let mut seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ (u64::from(std::process::id())).rotate_left(32);
+        let mut out = [0u8; 16];
+        for chunk in out.chunks_mut(8) {
+            seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = seed;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            chunk.copy_from_slice(&z.to_le_bytes());
+        }
+        hex::encode(out)
+    }
+
+    fn load_json<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, String> {
+        let raw = read_file(path)?;
+        serde_json::from_str(&raw).map_err(|e| format!("parse {path}: {e}"))
+    }
+
+    // Optional: reuse the deterministic select path so `egress` also exercises directory
+    // verify + weighted pick, printing the gateway it WOULD dial over Tor. The plain-TCP
+    // dial still goes to <gw-host:port> (the arti onion dial is T-RUST-2e).
+    fn select_and_report(dir_file: &str, signer: &str) {
+        use rgoe_proto::{pick_gateway, verify_directory};
+        let dto: DirectoryDto = match load_json(dir_file) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("select: {e}");
+                return;
+            }
+        };
+        let dir = dto.into_proto();
+        if let Err(e) = verify_directory(&dir, signer) {
+            println!("select: directory rejected: {e}");
+            return;
+        }
+        let mut rng = mulberry32(default_seed());
+        let empty: HashSet<String> = HashSet::new();
+        match pick_gateway(&dir, &empty, &mut rng) {
+            Some(g) => println!("selected-gateway: {}", g.onion),
+            None => println!("select: no gateways in directory"),
+        }
+    }
+
+    // Dial plain TCP, send the framed envelope, read one newline-terminated ack, parse it.
+    fn send_envelope(dial: &str, wire: &str) -> Result<serde_json::Value, String> {
+        let mut stream = TcpStream::connect(dial).map_err(|e| format!("connect {dial}: {e}"))?;
+        stream.set_nodelay(true).ok();
+        stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
+        stream
+            .write_all(wire.as_bytes())
+            .map_err(|e| format!("write envelope: {e}"))?;
+        let mut buf: Vec<u8> = Vec::with_capacity(256);
+        let mut chunk = [0u8; 512];
+        loop {
+            let n = stream
+                .read(&mut chunk)
+                .map_err(|e| format!("read ack: {e}"))?;
+            if n == 0 {
+                return Err("gateway closed the connection before an ack".into());
+            }
+            if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
+                buf.extend_from_slice(&chunk[..nl]);
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.len() > 64 * 1024 {
+                return Err("ack exceeded 64KiB without a newline".into());
+            }
+        }
+        let line = String::from_utf8_lossy(&buf);
+        serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
+            format!(
+                "bad ack json ({e}): {}",
+                line.chars().take(160).collect::<String>()
+            )
+        })
+    }
+
+    pub fn run_egress(dial: &str, rest: &[String]) -> ExitCode {
+        let (identity_path, members_path, target, circuits) = match (
+            take_flag(rest, "--identity"),
+            take_flag(rest, "--members"),
+            take_flag(rest, "--target"),
+            take_flag(rest, "--circuits"),
+        ) {
+            (Some(i), Some(m), Some(t), Some(c)) => (i, m, t, c),
+            _ => {
+                eprintln!("egress (live): need --identity <f> --members <f> --target <host:port> --circuits <dir>\n\n{}", super::HELP);
+                return ExitCode::from(2);
+            }
+        };
+        let epoch = take_flag(rest, "--epoch")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(current_epoch);
+        let slot = take_flag(rest, "--slot")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let k = take_flag(rest, "--k")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(8);
+        let rln_identifier = take_flag(rest, "--rln-identifier").unwrap_or_else(|| "1".to_string());
+        let nonce = take_flag(rest, "--nonce").unwrap_or_else(gen_nonce);
+
+        let identity: IdentityFile = match load_json(&identity_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(2);
+            }
+        };
+        let members: MembersFile = match load_json(&members_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(2);
+            }
+        };
+
+        // Optional deterministic select path reuse.
+        if let (Some(dirf), Some(signer)) =
+            (take_flag(rest, "--directory"), take_flag(rest, "--signer"))
+        {
+            select_and_report(&dirf, &signer);
+        }
+
+        // Build the REAL envelope in Rust (native tree + Groth16 prover).
+        eprintln!(
+            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}) ..."
+        );
+        let input = rgoe_rln::prover::EnvelopeInput {
+            identity_secret: identity.identity_secret,
+            member_leaf: identity.leaf,
+            members: members.members,
+            target: target.clone(),
+            nonce,
+            epoch,
+            rln_identifier,
+            user_message_limit: k,
+            message_id: slot,
+            circuits_dir: circuits,
+        };
+        let built = match rgoe_rln::prover::build_envelope(&input) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("egress: build envelope failed: {e}");
+                return ExitCode::from(3);
+            }
+        };
+
+        // Frame the wire envelope byte-for-byte like client/rgoe-client.mjs buildEnvelope.
+        let envelope = serde_json::json!({
+            "v": 3,
+            "target": built.target,
+            "nonce": built.nonce,
+            "proof": {
+                "snarkProof": { "proof": built.proof, "publicSignals": built.public_signals },
+                "epoch": built.epoch,
+                "rlnIdentifier": built.rln_identifier,
+            },
+            "nullifier": built.nullifier,
+            "externalNullifier": built.external_nullifier,
+            "share": { "x": built.share_x, "y": built.share_y },
+        });
+        let wire = serde_json::to_string(&envelope).expect("serialize envelope") + "\n";
+
+        eprintln!("egress: dialing gateway {dial} (plain TCP) ...");
+        match send_envelope(dial, &wire) {
+            Ok(ack) => {
+                let ok = ack
+                    .get("ok")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                if ok {
+                    println!("ok");
+                    println!("gateway: {dial}");
+                    println!("target: {}", built.target);
+                    println!("nullifier: {}", built.nullifier);
+                    if let Some(r) = ack.get("receipt") {
+                        println!("receipt: {r}");
+                    }
+                    ExitCode::SUCCESS
+                } else {
+                    let err = ack
+                        .get("err")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("(no err field)");
+                    println!("not-ok: gate-refused: {err}");
+                    ExitCode::from(1)
+                }
+            }
+            Err(e) => {
+                eprintln!("egress: {e}");
+                ExitCode::from(3)
+            }
         }
     }
 }

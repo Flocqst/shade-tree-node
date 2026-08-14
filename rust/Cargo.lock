@@ -3166,6 +3166,7 @@ version = "0.0.0"
 dependencies = [
  "hex",
  "rgoe-proto",
+ "rgoe-rln",
  "serde",
  "serde_json",
 ]

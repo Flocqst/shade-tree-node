@@ -59,6 +59,14 @@ pub fn keccak_hash_to_field(m: &BigUint) -> Fr {
     Fr::from(shifted)
 }
 
+/// `externalNullifier = poseidon2(epoch, rlnIdentifier)` — the per-EPOCH binding the
+/// gateway checks cheap (`lib/rln.mjs` `externalNullifierFor` /
+/// rlnjs `calculateExternalNullifier`). `epoch` is `< field` for any realistic value,
+/// so it maps straight to `Fr`; `rln_identifier` is the group id.
+pub fn external_nullifier(epoch: u64, rln_identifier: &BigUint) -> Fr {
+    poseidon2(Fr::from(epoch), Fr::from(rln_identifier.clone()))
+}
+
 /// Render a field element as its canonical base-10 string (big-endian), matching
 /// how the JS side stringifies `group.root` / sibling elements.
 pub fn fr_to_dec(f: &Fr) -> String {

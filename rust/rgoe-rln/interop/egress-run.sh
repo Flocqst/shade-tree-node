@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# T-RUST-2d integration harness: the Rust `rgoe egress` (feature build) mints a REAL RLN
+# envelope (native depth-20 Poseidon tree + Groth16 proof over the repo's circom-rln
+# artifacts) and sends it over a PLAIN TCP socket to a running JS reference. Two layers:
+#
+#   Layer 2 (framing + verify): a minimal socket server (verify-socket.mjs) reads the
+#     envelope and runs the REAL lib/rln.mjs verifyEnvelope. Isolates wire framing +
+#     target-binding ACCEPT from the gateway's proxy path.
+#
+#   Layer 3 (full gateway proxy): the REAL gateway/gateway.mjs, with the derived member set
+#     as its PoC root source and a local :port egress sink, ACCEPTS the Rust envelope end to
+#     end (version gate -> verifyEnvelope Groth16 -> target policy -> spent-set -> upstream
+#     connect -> `{ ok: true }`). No Tor (that is T-RUST-2e); the client dials plain TCP.
+#
+# Prereqs: `npm install` at the repo root (rlnjs) + a Rust toolchain.
+# Run from anywhere: bash rust/rgoe-rln/interop/egress-run.sh
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../../.." && pwd)"
+CIRCUITS="$REPO/circuits/rln"
+WORK="$(mktemp -d)"
+
+# Ports: gateway is HARDCODED to 127.0.0.1:8443 (gateway.mjs LISTEN_PORT). The layer-2
+# verify server + the egress sink use fixed loopback ports.
+GW_PORT=8443
+VS_PORT=8571
+SINK_PORT=9443
+TARGET="127.0.0.1:${SINK_PORT}"
+# The epoch is left to the Rust client's own clock (default: floor(now/120)); the JS side
+# checks this-or-previous epoch, so a boundary straddle during proving is still accepted.
+
+GW_PID="" ; VS_PID="" ; SINK_PID=""
+MEMBERS_BAK=""
+cleanup() {
+  [ -n "$GW_PID" ]   && kill "$GW_PID"   2>/dev/null || true
+  [ -n "$VS_PID" ]   && kill "$VS_PID"   2>/dev/null || true
+  [ -n "$SINK_PID" ] && kill "$SINK_PID" 2>/dev/null || true
+  # restore the repo's group/members.json (layer 3 overwrites it as the gateway root source)
+  [ -n "$MEMBERS_BAK" ] && [ -f "$MEMBERS_BAK" ] && mv -f "$MEMBERS_BAK" "$REPO/group/members.json" 2>/dev/null || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+echo "== building feature client (cargo build -p rgoe-client --features live) =="
+cargo build -p rgoe-client --features live --manifest-path "$REPO/rust/Cargo.toml"
+RGOE="$REPO/rust/target/debug/rgoe"
+
+echo "== deriving identity + member set (lib/rln.mjs) =="
+node "$HERE/egress-derive.mjs" "$WORK"
+IDENTITY="$WORK/identity.json"
+MEMBERS="$WORK/members.json"
+
+echo
+echo "== LAYER 2: framing + verifyEnvelope ACCEPT (verify-socket.mjs) =="
+node "$HERE/verify-socket.mjs" "$VS_PORT" "$MEMBERS" > "$WORK/vs.log" 2>&1 &
+VS_PID=$!
+disown "$VS_PID" 2>/dev/null || true
+node "$HERE/wait-log.mjs" "$WORK/vs.log" "listening on" 15000
+set +e
+"$RGOE" egress "127.0.0.1:${VS_PORT}" \
+  --identity "$IDENTITY" --members "$MEMBERS" --target "$TARGET" \
+  --circuits "$CIRCUITS"
+L2_RGOE_RC=$?
+set -e
+wait "$VS_PID" 2>/dev/null || true
+VS_PID=""
+echo "--- verify-socket log ---"; cat "$WORK/vs.log"
+if [ "$L2_RGOE_RC" -ne 0 ] || ! grep -q "PASS: verifyEnvelope ACCEPTED" "$WORK/vs.log"; then
+  echo "LAYER 2 FAILED (rgoe rc=$L2_RGOE_RC)"; exit 1
+fi
+echo "LAYER 2 OK"
+
+echo
+echo "== LAYER 3: full gateway proxy ACCEPT (gateway/gateway.mjs) =="
+# Point the gateway's PoC root source at our derived member set (backup + restore in trap).
+MEMBERS_BAK="$WORK/members.json.repo-bak"
+cp "$REPO/group/members.json" "$MEMBERS_BAK"
+cp "$MEMBERS" "$REPO/group/members.json"
+
+# A local egress sink = the :port the gateway proxies to (so `pass` fires without real net).
+node -e 'const net=require("net"); net.createServer(s=>s.resume()).listen('"$SINK_PORT"',"127.0.0.1",()=>console.error("[sink] up on 127.0.0.1:'"$SINK_PORT"'"));' > "$WORK/sink.log" 2>&1 &
+SINK_PID=$!
+disown "$SINK_PID" 2>/dev/null || true
+node "$HERE/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
+
+# Start the real gateway. Allow ONLY our local sink target; default epoch length.
+# Wait on the gateway's OWN "gateway up" log line (never a TCP connect-probe: the gateway
+# reads a full newline-terminated envelope, and a half-open probe would EPIPE-crash it).
+RGOE_EGRESS_ALLOW="$TARGET" RGOE_EPOCH_SECONDS=120 \
+  node "$REPO/gateway/gateway.mjs" > "$WORK/gw.log" 2>&1 &
+GW_PID=$!
+disown "$GW_PID" 2>/dev/null || true
+node "$HERE/wait-log.mjs" "$WORK/gw.log" "gateway up on" 20000
+
+set +e
+"$RGOE" egress "127.0.0.1:${GW_PORT}" \
+  --identity "$IDENTITY" --members "$MEMBERS" --target "$TARGET" \
+  --circuits "$CIRCUITS"
+L3_RGOE_RC=$?
+set -e
+# ensure the gateway's egress PASS line is flushed before we grep it
+node "$HERE/wait-log.mjs" "$WORK/gw.log" "egress target=${TARGET} " 5000 >/dev/null 2>&1 || true
+echo "--- gateway log ---"; cat "$WORK/gw.log"
+# The gateway's egress PASS log (text mode) is `egress target=<TARGET> nullifier=...`,
+# emitted only inside the upstream-connect callback AFTER verifyEnvelope + policy + admit.
+# The rgoe client also prints `ok` (rc 0) only on `ack.ok===true`, which the gateway sends
+# from that same callback — so both together are an end-to-end accept.
+if [ "$L3_RGOE_RC" -ne 0 ] || ! grep -q "egress target=${TARGET} " "$WORK/gw.log"; then
+  echo "LAYER 3 FAILED (rgoe rc=$L3_RGOE_RC)"; exit 1
+fi
+echo "LAYER 3 OK"
+
+echo
+echo "== T-RUST-2d EGRESS OK: JS gateway ACCEPTED the Rust rgoe egress envelope end-to-end =="

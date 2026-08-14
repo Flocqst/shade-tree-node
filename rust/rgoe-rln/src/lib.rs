@@ -6,4 +6,5 @@
 //! OWN membership root + path instead of taking them from a JS fixture. See
 //! `tree` for the exact convention (hash, arity, depth, zero value, order).
 
+pub mod prover;
 pub mod tree;

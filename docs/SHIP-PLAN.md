@@ -274,7 +274,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   rlnjs Semaphore-v3 group so the Rust client computes its own root/path from the member set. *Accept:* Rust tree
   root == rlnjs group root over the same member list; a Rust-computed path proves in the envelope and verifyEnvelope
   accepts. Cross-refs T-DEV-2 (leaf-removal parity) and T-RUST-3 (client parity).
-- [ ] **T-RUST-2d (P1, added loop-20) Wire RLN proving into rgoe-client.** Move the `rgoe-rln` prover behind a
+- [x] **T-RUST-2d (P1, added loop-20) Wire RLN proving into rgoe-client.** Move the `rgoe-rln` prover behind a
   cargo feature on `rgoe-client` so `rgoe egress` can build a real envelope (still no Tor yet — send over a local
   socket to a JS gateway in an integration test). *Accept:* `rgoe egress` produces an envelope a JS gateway accepts,
   without the standalone harness.
@@ -591,3 +591,17 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   sets, and a Rust-computed root+path (single-member AND member-at-index-1 with real internal-node siblings) drives
   the prover to a verifyEnvelope ok:true. Guardrails: rgoe-proto 9+20 green, tree_parity 5/5, default build 0.07s,
   clippy/fmt clean, only rust/ touched, no regression in the loop-20 run.sh. T-RUST-2c done; T-RUST-2d/2e remain.
+- 2026-08-14  loop-22  FOCUSED single run: T-RUST-2d — wire the RLN prover + native tree into rgoe-client. The
+  REAL JS gateway (gateway/gateway.mjs) now ACCEPTS the Rust `rgoe egress` envelope end-to-end over a plain TCP
+  socket (Tor deferred to T-RUST-2e). Prover promoted to a library `rgoe-rln/src/prover.rs` (build_envelope: native
+  tree root/path + target binding via rgoe-proto calculate_signal_hash + native externalNullifier + ark-circom
+  Groth16 over the repo zkey, self-verified before return); added native external_nullifier + a test pinning it to
+  4 JS reference values. rgoe-client gains an OPTIONAL `live` cargo feature (`dep:rgoe-rln`) so the DEFAULT build
+  stays fast (cargo tree confirms no ark/wasmer in the default graph; default build 0.19s). `rgoe egress` builds
+  the envelope and dials plain TCP, matching client/rgoe-client.mjs framing byte-for-byte (JSON+\n, ack read to
+  first \n). Fork hit + fixed: a TCP connect-probe half-opened the gateway's envelope read and EPIPE-crashed it —
+  readiness now waits on the `gateway up` log line. INTEGRATION AUDIT (mine): ran interop/egress-run.sh — Layer 2
+  (verify-socket) and Layer 3 (real gateway process) both ACCEPT the Rust envelope; the harness backs up/restores
+  group/members.json (confirmed clean via git status after). Guardrails: rgoe-proto 9+20 green, rgoe-rln 5 tree +
+  1 externalNullifier green, default build 0.19s, clippy/fmt clean (default AND --features live), only rust/
+  touched. T-RUST-2d done. ONLY T-RUST-2e (arti Tor dial) remains to close Gate 2.

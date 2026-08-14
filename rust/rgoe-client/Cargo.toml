@@ -10,8 +10,19 @@ publish = false
 name = "rgoe"
 path = "src/main.rs"
 
+[features]
+# `live` pulls the RLN prover (rgoe-rln -> ark-circom/wasmer) so `rgoe egress` can mint a
+# REAL envelope (T-RUST-2d). It is OFF by default: the everyday `cargo build`
+# (default-members) never compiles the heavy native tree, keeping the deterministic client
+# sub-second. Build the live path with `cargo build -p rgoe-client --features live`.
+live = ["dep:rgoe-rln"]
+
 [dependencies]
 rgoe-proto = { path = "../rgoe-proto" }
+# OPTIONAL, feature-gated (`live`): the RLN Groth16 prover + native depth-20 Poseidon tree
+# (T-RUST-2b/2c). Excluded from default-members and only compiled under `--features live`,
+# so the default build stays fast (no ark-circom / wasmer).
+rgoe-rln = { path = "../rgoe-rln", optional = true }
 # T-RUST-2 deterministic client: parse UNTRUSTED directory/announce/receipt JSON into
 # local DTOs, then hand the mapped rgoe-proto structs to the trust-critical checks.
 # serde/serde_json live ONLY here — rgoe-proto's canonical byte path stays serde-free.
