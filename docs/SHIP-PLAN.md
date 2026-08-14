@@ -78,9 +78,14 @@ and at scale."
   survivors (renumbering indices); an on-chain slash that zeroes a leaf in place would diverge
   (`lib/root-provider.mjs` COORDINATION note). Make JS and contract agree on removal semantics.
   *Accept:* register 3, slash the middle, both sides compute the identical root; test.
-- [ ] **T-DEV-3 (P0) Message-to-target binding.** Bind the RLN signal to the request target so a
-  captured envelope cannot be redirected to a different destination within the tunnel. *Accept:*
-  an envelope built for `a.com:443` is rejected if replayed against `b.com:443`; test.
+- [x] **T-DEV-3 (P0) Message-to-target binding.** DONE (loop-5). The client now sends the request
+  `nonce` in the envelope; the gateway recomputes `calculateSignalHash(requestSignal(target, nonce))`
+  and binds it to the proof's committed `x` (`verifyEnvelope` check 2b), failing closed if the nonce
+  is absent. A captured proof re-submitted with a swapped target (or nonce) is rejected
+  `target-not-bound`. Closes the redirect where a malicious gateway replays a member's proof to a
+  peer with a different destination. Tested in `lib/rln.selftest.mjs` (swapped target, swapped nonce,
+  missing nonce); wire change threaded through `client/rgoe-client.mjs`, the gateway, and
+  `scripts/demo-e2e.mjs`.
 - [ ] **T-DEV-4 (P1) Bootnode persistence.** The registry is in-memory, so a restart drops the
   whole fleet until every gateway re-announces. Write-through to a small store (JSON/sqlite) and
   reload verified entries on boot (re-checking freshness). *Accept:* announce, restart the
@@ -336,6 +341,13 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-11 (P2, added loop-5) Envelope/protocol version negotiation.** The wire envelope is
+  now v3-with-nonce (loop-5). Add explicit min/max version negotiation between client and gateway (and
+  in the announce/directory) so the envelope and announce formats can evolve to v4+ without a flag
+  day: a gateway advertises supported versions, the client picks the highest mutually supported, and
+  an unknown version is rejected with a clear reason rather than a silent mis-parse. *Accept:* a
+  client and gateway on overlapping ranges interoperate; on disjoint ranges they fail with a precise
+  version error; a downgrade cannot strip the target binding.
 - [ ] **T-FEAT-10 (P2, added loop-4) Gateway capability advertisement + capability-aware selection.**
   Gateways advertise capabilities in their signed announce (allowed egress ports/policy, a region/AS
   hint, protocol versions); clients select gateways matching the request's needs, so the fleet goes
@@ -383,3 +395,7 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
 - 2026-08-13  loop-4  T-TEST-11 (golden cross-impl vectors: testdata/vectors.json +
   test/vectors.selftest.mjs, 11 assertions; seeds T-RUST-1); audit self-review of loop-3 test (sound);
   added T-FEAT-10 (gateway capability advertisement). 14 suites green.
+- 2026-08-13  loop-5  audit found + fixed a P0: T-DEV-3 message-to-target binding (gateway recomputes
+  the signal hash from target+nonce and binds it to the proof's x; a swapped-target replay is now
+  rejected). Wire change threaded through client/gateway/demo-e2e; 3 new rln.selftest cases. Added
+  T-FEAT-11 (envelope version negotiation). 14 suites green.

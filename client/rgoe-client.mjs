@@ -85,7 +85,10 @@ export async function buildEnvelope({ secret, target, pool, prove = proveForSlot
   const { epoch, slot } = pool.nextSlot();
   const group = await pool.ensureGroup();
   const { proof, nullifier, externalNullifier, share } = await prove(secret, epoch, slot, signal, { group });
-  return { envelope: { v: 3, target, proof, nullifier, externalNullifier, share }, signal, slot };
+  // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
+  // this target (verifyEnvelope check 2b). It reveals nothing (it is random per request) and it is
+  // what stops a captured proof from being redirected to a different target.
+  return { envelope: { v: 3, target, nonce, proof, nullifier, externalNullifier, share }, signal, slot };
 }
 
 // Read one newline-terminated line, never waiting forever (a gateway that accepts but
