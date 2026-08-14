@@ -20,12 +20,14 @@ contract StakedReputationSetTest is Cheats {
     // commitment  = Poseidon(2)([ Poseidon(1)([identitySecret]), 8 ]).
     uint256 constant SECRET_A = 111;
     uint256 constant SECRET_B = 222;
+    uint256 constant SECRET_C = 333; // third demo member, for the removal-parity test
     // Hardcoded rate commitment for SECRET_A=111, from poseidon-lite:
     //   poseidon2([poseidon1([111n]), 8n]). Pins the leaf a demo member registers.
     uint256 constant COMMIT_A_EXPECTED =
         11302006078516901731073162965056551612114122314181142374993834332168998510316;
     uint256 commitA;
     uint256 commitB;
+    uint256 commitC;
 
     address constant RECIPIENT = address(0xBEEF);
     address constant RECEIVER = address(0xCAFE); // gateway/treasury slash receiver
@@ -42,6 +44,7 @@ contract StakedReputationSetTest is Cheats {
         );
         commitA = hasher.commitmentOf(SECRET_A);
         commitB = hasher.commitmentOf(SECRET_B);
+        commitC = hasher.commitmentOf(SECRET_C);
         vm.deal(address(this), 100 ether);
     }
 
@@ -259,6 +262,48 @@ contract StakedReputationSetTest is Cheats {
         vm.warp(block.timestamp + UNBONDING);
         vm.expectRevert(StakedReputationSet.NotMember.selector);
         set.withdraw(commitA, RECIPIENT, _proof(SECRET_A));
+    }
+
+    // ---- leaf-removal parity (T-DEV-2) ----------------------------------------
+
+    /// The on-chain half of the JS<->contract removal-parity proof
+    /// (lib/rln-removal-parity.selftest.mjs). Register 3 members, slash the MIDDLE one, and
+    /// assert the contract's leaf indexing is ZERO-IN-PLACE: the slashed member's index is
+    /// NOT reused and the survivors keep their ORIGINAL indices (nextIndex is append-only,
+    /// never renumbered). That immutable index assignment is exactly what the off-chain
+    /// reconstructRoot mirrors: it appends leaves 0,1,2 in register order and vacates leaf 1
+    /// on the middle slash, yielding GOLDEN_ROOT in the JS selftest. Because both sides use
+    /// the SAME leaves (rate commitments for secrets 111/222/333) at the SAME indices, the
+    /// JS root and the contract's membership state agree by construction.
+    function test_Slash_Middle_PreservesIndices() public {
+        set.register{value: BOND}(commitA); // index 0
+        set.register{value: BOND}(commitB); // index 1 (the middle)
+        set.register{value: BOND}(commitC); // index 2
+        assertEq(uint256(set.nextIndex()), 3, "three appends -> nextIndex 3");
+        assertEq(set.activeCount(), 3);
+
+        // slash the MIDDLE member (commitB / index 1)
+        set.slash(commitB, SECRET_B, RECEIVER);
+
+        // the middle leaf is deleted...
+        (uint256 bondB, , ) = set.members(commitB);
+        assertEq(bondB, 0, "middle member deleted");
+        assertFalse(set.isActive(commitB));
+        assertEq(set.activeCount(), 2, "one fewer active member");
+
+        // ...but the survivors KEEP their original indices (zero-in-place, no renumber)...
+        (uint256 bondA, uint64 idxA, ) = set.members(commitA);
+        (uint256 bondC, uint64 idxC, ) = set.members(commitC);
+        assertEq(bondA, BOND, "survivor A still bonded");
+        assertEq(bondC, BOND, "survivor C still bonded");
+        assertEq(uint256(idxA), 0, "survivor A keeps index 0");
+        assertEq(uint256(idxC), 2, "survivor C keeps index 2 (NOT renumbered to 1)");
+
+        // ...and the vacated index 1 is never reused: the next registration appends at 3.
+        assertEq(uint256(set.nextIndex()), 3, "slash does not decrement/reuse nextIndex");
+        set.register{value: BOND}(commitB); // re-register the same commitment
+        (, uint64 idxBnew, ) = set.members(commitB);
+        assertEq(uint256(idxBnew), 3, "re-registration appends at a FRESH index, not the vacated 1");
     }
 
     // ---- re-registration ------------------------------------------------------

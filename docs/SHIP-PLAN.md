@@ -80,10 +80,16 @@ and at scale."
   Groth16 verifier so `StakedReputationSet.initiateExit`/`withdraw` are genuinely ZK-authorized
   (prove knowledge of the identity secret) on chain. *Accept:* a withdrawal with a bogus proof
   reverts `BadProof`; a valid one succeeds; Foundry test with the real verifier.
-- [ ] **T-DEV-2 (P0) RLN leaf removal parity.** `reconstructRoot` rebuilds a fresh tree of
+- [x] **T-DEV-2 (P0) RLN leaf removal parity.** `reconstructRoot` rebuilds a fresh tree of
   survivors (renumbering indices); an on-chain slash that zeroes a leaf in place would diverge
   (`lib/root-provider.mjs` COORDINATION note). Make JS and contract agree on removal semantics.
-  *Accept:* register 3, slash the middle, both sides compute the identical root; test.
+  *Accept:* register 3, slash the middle, both sides compute the identical root; test. DONE (loop-26): JS aligned
+  to the contract's zero-in-place convention; three-way triangulated proof; full suite green.
+- [ ] **T-DEV-2b (P2, added loop-26) Rust RLN tree removal parity.** `rust/rgoe-rln/src/tree.rs` (T-RUST-2c) is
+  insertion-only — no removal path. To stay consistent with the loop-26 JS reconstruction and the contract's
+  immutable indices, add a `remove(index)` that zeroes the leaf at its ORIGINAL index (leaf → the tree zero value,
+  other indices/paths preserved) and recomputes the root. *Accept:* Rust tree root after register-3/remove-middle
+  == the JS `reconstructRoot` root == the contract root (extend the tree-parity harness with a removal case).
 - [x] **T-DEV-3 (P0) Message-to-target binding.** DONE (loop-5). The client now sends the request
   `nonce` in the envelope; the gateway recomputes `calculateSignalHash(requestSignal(target, nonce))`
   and binds it to the proof's committed `x` (`verifyEnvelope` check 2b), failing closed if the nonce
@@ -681,3 +687,21 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   green, clippy/fmt clean (default AND --features live), only rust/ + .github/workflows/release.yml touched, no git
   tag/release created (operator triggers). T-RUST-4 done. THE "MAKE IT A REAL DISTRIBUTABLE" GOAL IS COMPLETE
   (T-RUST-2/2b/2c/2d/2e/3/4 all done); T-RUST-3b (slot cursor) is the only minor client follow-up left.
+- 2026-08-14  loop-26  FOCUSED single run: T-DEV-2 RLN leaf-removal parity (Gate-1 correctness). Found the
+  contract (StakedReputationSet.sol) is the source of truth and uses ZERO-IN-PLACE (append-only immutable index
+  via nextIndex++, slash/exit deletes the member but preserves every other index — matches Semaphore v3
+  removeMember→delete→update(index, zeroes[0])). So the JS side was WRONG: reconstructRoot rebuilt a compacted
+  tree of survivors (renumbering), diverging from the contract root after any removal. FIX (JS only, contract
+  untouched): rewrote lib/root-provider.mjs reconstructRoot as an event-replay mirroring the contract —
+  register→addMember at the next index, slash/exit/withdraw→removeMember at the ORIGINAL index (zero-in-place),
+  tracking commitment→live-index. Also fixed a latent bug (the old commitment-keyed removed-Set permanently
+  dropped a slashed-then-re-registered commitment; the replay re-admits it at a fresh index, matching the
+  contract's test_ReRegister_AfterSlash). Corrected lib/root-provider.selftest.mjs cases #3/#4 which asserted the
+  WRONG renumber semantics (called out explicitly, justified against the contract) and added an independent
+  zero-in-place oracle. AUDIT (mine): the fix triangulates three INDEPENDENT ways — reconstructRoot (event-replay)
+  == direct oracle (addMember×3 then removeMember(1)) == pinned GOLDEN_ROOT, AND asserted ≠ the old renumber root
+  (regression guard), AND a new Foundry test_Slash_Middle_PreservesIndices proves the contract keeps indices 0/2
+  (vacated slot never reused). register-3/slash-middle root =
+  14367190620832145537223890636337926502210861635134078778082353204233456513838. Full suite 56/56 green (node +
+  54 Foundry). Filed T-DEV-2b (Rust tree removal parity — rgoe-rln/tree.rs is insertion-only; must adopt the same
+  zero-in-place convention when removal is added). Next Gate-1 item: T-TEST-1 (wire real-Tor e2e into CI).
