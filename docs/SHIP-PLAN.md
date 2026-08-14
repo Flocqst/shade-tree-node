@@ -119,7 +119,7 @@ and at scale."
   the light provider returns a root validated against a header; test.
 - [x] **T-DEV-10 (P2) Configurable egress policy.** DONE (loop-12): exported `makeEgressPolicy({allow,deny})` (default-deny; deny wins; `*`/`*.suffix`/exact host + `*`/exact port). `RGOE_EGRESS_ALLOW`/`RGOE_EGRESS_DENY`, default `*:443` = exactly the old behavior (byte-equivalence table proves it). A policy reject DROPs `bad-target-policy` + increments the metric. Startup warns when widened past :443 (no longer metadata-only). `gateway/egress-policy.selftest.mjs`.
 - [x] **T-DEV-11 (P2) Directory scale.** DONE (loop-12): GET /directory gains a strong sha256 ETag + If-None-Match (304 on unchanged) + gzip (Accept-Encoding), all transport-only (signature/content unchanged). Removed the dead verifyDirectory import. Pagination deferred (registry maxEntries caps count). `bootnode/directory-scale.selftest.mjs`.
-- [ ] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
+- [x] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
   reflect reachability in `health`, so a silently-dead gateway is demoted before a client hits it.
 
 ## 2. Testing  *(go hard here — this is Gate 1)*
@@ -158,7 +158,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   inside an Ubuntu container in CI (or a documented local job); assert services start and onions
   publish. *Accept:* the bootstrap is tested, not just hand-run once.
 - [x] **T-TEST-9 (P1) CI matrix + lint + audit.** DONE (loop-11): ci.yml -> Node 20/22/24 matrix (full suite + forge) + lint job + audit job; `eslint.config.js` (pragmatic bug-net, passes clean); `npm run lint` / `npm run audit:ci`. Subsumes T-HARD-2 (dependabot for npm/cargo/actions; audit gate at critical-blocking + high-informational, with the unavoidable-transitive-advisory rationale documented).
-- [ ] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
+- [x] **T-TEST-10 (P2) Mutation testing.** Stryker over the verify/slash/directory paths to prove
   the tests actually catch regressions. *Accept:* mutation score reported; obvious survivors killed.
 - [x] **T-TEST-11 (P0) Golden crypto fixtures (shared with Rust).** DONE (loop-4):
   `testdata/vectors.json` (fixed test seeds) + `test/vectors.selftest.mjs` re-derive and byte-pin
@@ -190,7 +190,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DEPLOY-4 (P1) Systemd hardening.** DONE (loop-11): the generated units get NoNewPrivileges, ProtectSystem=strict (ReadWritePaths=deploy-state), ProtectHome, PrivateTmp, ProtectKernel*, RestrictAddressFamilies (AF_INET/INET6/UNIX for Tor SOCKS), RestrictNamespaces, LockPersonality, SystemCallFilter=@system-service, empty CapabilityBoundingSet, MemoryMax=512M/TasksMax=256. MemoryDenyWriteExecute omitted (breaks V8 JIT). ~9.6->~2.x systemd-analyze score.
 - [ ] **T-DEPLOY-5 (P1) Onion key backup/restore.** Documented, encrypted, off-box backup of HS
   keys + a tested restore. *Accept:* restore a gateway's onion on a new box from backup.
-- [ ] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
+- [x] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
 - [ ] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
   wired to the live fleet (reuse Sepolia or a chosen L2).
 
@@ -198,7 +198,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 
 - [x] **T-WEB-1 (P1) Live fleet status page.** DONE (loop-10): `web/status-server.mjs` + `web/status.html` -- fetch bootnode /health + /directory (over Tor or dev http), verify the signature against the pinned signer, render fleet size/health/staked. Privacy-scrubbed: onions truncated to 16 chars, operator address dropped to a staked bool. `web/status.selftest.mjs` (18 checks, incl. no-leak assertions).
 - [x] **T-WEB-2 (P2) Landing refresh.** DONE (loop-14): `docs/post/RUN-A-GATEWAY.md` + `docs/post/JOIN.md` (landing-companion how-tos, commands verified, honest pre-ship status). Existing post HTML/figures untouched.
-- [ ] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
+- [x] **T-WEB-3 (P2) Docs site.** Render `docs/` as a browsable site.
 - [ ] **T-WEB-4 (P3) Fleet map** (regions/ASNs, privacy-preserving).
 
 ## 5. Documentation
@@ -258,8 +258,10 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-FEAT-6 (P2) Directory delta protocol.** DONE (loop-14): `GET /directory/delta?since=<etag>` -> {added, removed, unchanged, + the signed directory's signer/signature/order} or {full:true}. Client reconstructs base+delta and runs verifyDirectory, so a forged delta fails the signature/onion-binding (worst case: omit or refetch, per ADR 0003). Bounded version history. `bootnode/directory-delta.selftest.mjs` (incl. an adversarial forged-delta case).
 - [x] **T-FEAT-17 (P2) Per-request SOCKS circuit isolation.** DONE (loop-12): `socksAuthForRequest(seed)` -> the client sends a unique SOCKS userId/password per REQUEST (seeded from the request nonce, so retries/failover of one request reuse its circuit while different requests get distinct circuits), so Tor `IsolateSOCKSAuth` gives each request its own circuit. Harmless against a no-auth SOCKS (verified vs node_modules/socks). Default-on (`RGOE_SOCKS_ISOLATION=0` to disable). `client/socks-isolation.selftest.mjs`.
 - [ ] **T-FEAT-20 (P2, added loop-14) Cross-fleet shared nonce tally (the T-FEAT-12 residual).** T-FEAT-12 defends ONE gateway against exact-envelope replay, but a non-colluding fleet has no shared spent-set, so a malicious gateway can fan a captured envelope to peers (each sees it once). Add a gossiped/shared per-epoch spent-nullifier tally across gateways (composes with T-FEAT-1 federation) so the rate cap + replay defense hold fleet-wide. Must pair with RLN's per-request nullifiers so the shared tally is not itself a linkability channel (ROADMAP #1). *Accept:* a replay to a SECOND gateway is rejected once the tally propagates.
-- [ ] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
-- [ ] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
+- [ ] **T-FEAT-21 (P2, added loop-15) Directory `issued` max-age bound (client-side).** loop-15 F2 gave the client a monotonic `issued` FLOOR (never accept a directory older than the newest seen), which stops rollback within a session. It does NOT bound staleness on a COLD start: a client with no prior state accepts whatever `issued` the bootnode first serves, so a bootnode that is simply far behind (or is replaying a months-old directory to a fresh client) is undetectable. Add an optional absolute freshness bound — reject a fresh directory whose `issued` is older than `now - RGOE_DIRECTORY_MAX_AGE_MS` — with a generous default and clock-skew grace, fail-closed to the last-good cache. Must not break legitimate static-file directories (opt-in / large default). *Accept:* a directory `issued` beyond the max-age bound is rejected on first load; a within-bound one loads; the bound is configurable and off by default for file sources.
+- [ ] **T-TEST-18 (P2, added loop-15) Kill the OnchainStakeVerifier surviving mutants.** T-TEST-10's Stryker run scored 66% on `lib/gateway-registry.mjs`; every survivor clusters in the on-chain `OnchainStakeVerifier` path — error-message strings not asserted, the `now - hit.at < cacheMs` expiry boundary (`<` vs `<=`) untested, the operator cache-key `.toLowerCase()` untested (mixed-casing), the allowlist `.filter(Boolean)` drop untested, and the `typeof ret === "string"` / `/^0x0*/` return-shape guards untested. Source is correct; the suite just doesn't prove it. Add targeted cases to `lib/gateway-registry.selftest.mjs` to kill each. *Accept:* a re-run of `npx stryker run --mutate lib/gateway-registry.mjs` shows the named survivors killed (score materially up), source unchanged.
+- [x] **T-FEAT-16 (P2, added loop-10) Gateway egress self-check before announce.** A gateway with broken clearnet egress (bad routing, firewall) would still announce and then DROP every member it gets routed. Have the gateway verify it can actually reach a :443 target on startup (and periodically) before it heartbeats to the bootnode, and stop announcing if egress fails, so a broken gateway removes itself from the fleet. *Accept:* a gateway with a blocked egress does not appear in /directory; a healthy one does; the check is metadata-only (no member traffic).
+- [x] **T-FEAT-15 (P2, added loop-9) Automated encrypted key backup/restore.** The operator runbook
   marks onion-identity + operator-key backup as manual `tar | gpg`. Add `rgoe backup` / `rgoe restore`
   that GPG-encrypts the onion identity seed(s) + (optionally) the operator key to an off-box target
   and restores them on a fresh box, so key loss is recoverable and the procedure is not ad hoc.
@@ -391,3 +393,17 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   clean (unpinned signer can never verify; empty fails closed; single-string backward-compat exact). Fixed
   the one LOW footgun it found (0x-prefixed pin silently rejected -> now accepted) + regression test.
   40 node+forge suites green; lint clean. Added T-FEAT-20 (cross-fleet shared nonce tally).
+- 2026-08-13  loop-15  Fan-out batch of 6 (disjoint files): T-FEAT-16 (gateway egress self-check before
+  announce — metadata-only TCP connect probe, skips the heartbeat when clearnet egress is down so a broken
+  gateway ages out of /directory), T-DEV-12 (bootnode active health probing — per-onion consecutive-fail
+  demote to health:"down", off by default via RGOE_BOOTNODE_PROBE), T-FEAT-15 (encrypted key backup/restore —
+  scrypt+AES-256-GCM, no plaintext to disk, `rgoe backup`/`restore`), T-TEST-10 (Stryker mutation testing
+  over the verify/slash/directory paths, diagnostic not gate), T-WEB-3 (zero-dep docs-site generator, 43
+  pages), T-DEPLOY-6 (health-gated rolling update + multi-box drain sequencing). AUDIT of the directory
+  /delta protocol: clean (adds no forgery power — onion↔pubkey binding + reconstruct-and-verify hold, every
+  mismatch fails closed to a full refetch). Fixed the F2 it surfaced (directory ROLLBACK/stale-replay: the
+  bootnode signs its own directory and ed25519 sigs never expire, so a hostile/replaying bootnode could serve
+  an OLD signed directory to resurrect a dropped/slashed gateway — client now enforces a monotonic `issued`
+  floor in selection.mjs, fail-closed to the last-good fleet; client/directory-rollback.selftest.mjs). Fixed
+  test-all discovery walking `.stryker-tmp` (phantom mutated-source failures). 43 node selftests green; lint
+  clean. Added T-FEAT-21 (directory issued max-age bound) + T-TEST-18 (OnchainStakeVerifier mutant-gap tests).

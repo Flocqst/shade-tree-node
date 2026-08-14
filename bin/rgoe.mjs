@@ -72,6 +72,10 @@ const COMMANDS = {
   client:            { script: "client/shim.mjs",           help: "run the local HTTP-CONNECT proxy (fleet client)", long: true },
   shim:              { script: "client/shim.mjs",           help: "alias for `client`", long: true },
   doctor:            { script: "scripts/doctor.mjs",        help: "check the local setup (node, tor, keys, deps)" },
+  // backup/restore share one script (scripts/backup.mjs); `prepend` selects the mode. The
+  // passphrase is passed only via RGOE_BACKUP_PASSPHRASE (never on argv), inherited into the child.
+  backup:            { script: "scripts/backup.mjs", prepend: ["backup"],  help: "encrypt & back up secret key material (onion seeds + signer key): rgoe backup <srcDir> <outFile> (RGOE_BACKUP_PASSPHRASE)" },
+  restore:           { script: "scripts/backup.mjs", prepend: ["restore"], help: "restore an encrypted key backup: rgoe restore <inFile> <destDir> [--force] (RGOE_BACKUP_PASSPHRASE)" },
 };
 
 // command -> config ROLE (lib/config.mjs). Before spawning a service we validate the effective
@@ -110,7 +114,7 @@ function parse(argv) {
 function topHelp() {
   console.log(`rgoe ${pkg.version} — reputation-gated onion egress\n`);
   console.log("usage: rgoe <command> [--flags] [args]\n");
-  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor"];
+  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor", "backup", "restore"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);
@@ -152,7 +156,7 @@ function main() {
     }
   }
 
-  const child = spawn(process.execPath, [join(ROOT, entry.script), ...positionals, ...passthrough], { stdio: "inherit", env });
+  const child = spawn(process.execPath, [join(ROOT, entry.script), ...(entry.prepend || []), ...positionals, ...passthrough], { stdio: "inherit", env });
   child.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 0); });
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { try { child.kill(sig); } catch {} });
 }

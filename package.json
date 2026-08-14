@@ -37,7 +37,8 @@
     "test:contracts": "forge test",
     "lint": "eslint .",
     "audit:ci": "npm audit --audit-level=critical",
-    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts"
+    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts",
+    "mutation:test": "stryker run"
   },
   "dependencies": {
     "@semaphore-protocol/group": "^4.0.0",
@@ -50,6 +51,7 @@
     "socks": "^2.8.3"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
     "c8": "^12.0.0",
     "eslint": "^9.39.5",
     "globals": "^15.15.0"

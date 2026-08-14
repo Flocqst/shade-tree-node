@@ -29,7 +29,7 @@ const SLOW_SUITES = new Set([
 // Recursively find *.selftest.mjs, skipping node_modules / out / build dirs.
 function findSelftests(dir, acc = []) {
   for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "out" || name === ".git" || name === "cache") continue;
+    if (name === "node_modules" || name === "out" || name === ".git" || name === "cache" || name === ".stryker-tmp") continue;
     const p = join(dir, name);
     const st = statSync(p);
     if (st.isDirectory()) findSelftests(p, acc);

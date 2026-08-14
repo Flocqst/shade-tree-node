@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildAnnounce, operatorAuthMessage } from "./announce.mjs";
 import { postOverTor } from "./fetch.mjs";
+import { checkEgress, EGRESS_CHECK_TARGET } from "../gateway/gateway.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +52,33 @@ export async function announceOnce({ id, bootnode, op, weight, torHost, torPort 
   return postOverTor(bootnode, "/announce", rec, { torHost, torPort });
 }
 
+// ---- egress-gated announce (T-FEAT-16) --------------------------------------
+// Before EACH announce, probe this host's clearnet egress (a metadata-only TCP connect to a
+// well-known :443 host — see checkEgress in gateway/gateway.mjs). If egress is DOWN, SKIP the
+// announce: a broken gateway then ages out of the bootnode /directory via its TTL instead of
+// staying listed and DROPping every member routed to it. When egress recovers, the next beat
+// finds it healthy and announcing resumes — no state to reset. The probe runs once per beat
+// (throttling is unnecessary at heartbeat cadence, default 300s).
+//
+// Off-switch: RGOE_EGRESS_CHECK=0 disables the check and announces UNCONDITIONALLY (today's
+// behavior), so a fresh/offline env (no working egress yet, or a test box) is never blocked.
+//
+// Factored out and fully injectable (announce + egress + enabled) so the selftest asserts the
+// gating with a fake checkEgress and a fake announce — no Tor, no real network.
+export function egressCheckEnabled() {
+  return String(process.env.RGOE_EGRESS_CHECK ?? "1") !== "0";
+}
+
+export async function announceIfHealthy({ announce, egress, enabled = egressCheckEnabled() }) {
+  if (!enabled) return announce(); // check disabled: announce unconditionally (current behavior)
+  const r = await egress();
+  if (!r.healthy) {
+    console.log(`egress DOWN (${r.target} ${r.reason}); SKIP announce — gateway ages out of the bootnode via TTL`);
+    return { skipped: true, egress: r };
+  }
+  return announce();
+}
+
 async function main() {
   const bootnode = process.env.RGOE_BOOTNODE_ONION;
   if (!bootnode) { console.error("set RGOE_BOOTNODE_ONION (the bootnode to announce to)"); process.exit(1); }
@@ -62,10 +90,17 @@ async function main() {
   const id = await loadIdentity();
   const op = await resolveOperator(id.onion);
   console.log(`heartbeat: ${id.onion.slice(0, 16)}..onion -> ${bootnode.slice(0, 16)}..onion every ${intervalSec}s${op.operator ? ` (operator ${op.operator.slice(0, 10)}..)` : " (onion-only)"}`);
+  console.log(egressCheckEnabled()
+    ? `egress self-check: ON (metadata-only TCP connect to ${EGRESS_CHECK_TARGET} before each announce; SKIP announce if DOWN). Disable with RGOE_EGRESS_CHECK=0`
+    : "egress self-check: OFF (RGOE_EGRESS_CHECK=0) — announcing unconditionally");
 
   const beat = async () => {
     try {
-      const r = await announceOnce({ id, bootnode, op, weight, torHost, torPort });
+      const r = await announceIfHealthy({
+        announce: () => announceOnce({ id, bootnode, op, weight, torHost, torPort }),
+        egress: () => checkEgress(),
+      });
+      if (r && r.skipped) return; // egress DOWN: announce already logged + skipped
       console.log(r.ok ? `announced (staked=${r.staked ?? false}, ttl=${r.ttl}s)` : `announce rejected: ${r.err}`);
     } catch (e) {
       console.log(`announce failed: ${e.message} (will retry next interval)`);

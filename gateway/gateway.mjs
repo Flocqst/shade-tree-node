@@ -364,6 +364,57 @@ function validTarget(target) {
   return { ok: true, host: m[1], port };
 }
 
+// ---- egress self-check (T-FEAT-16) ------------------------------------------
+// A METADATA-ONLY liveness probe of THIS host's clearnet egress, used by the heartbeat
+// (bootnode/heartbeat.mjs) to keep a broken gateway out of the fleet. Problem: a gateway
+// whose clearnet egress is dead (bad routing, firewall, dead upstream) still ANNOUNCES to
+// the bootnode and then DROPs every member routed to it. This probe lets it self-eject:
+// the heartbeat runs it before each announce and SKIPS announcing when egress is DOWN, so a
+// dead gateway ages out of the bootnode /directory via its TTL while a healthy one keeps
+// announcing.
+//
+// It opens a PLAIN TCP connection to a well-known :443 host and closes it the instant it
+// connects. It writes NO bytes, carries NO member traffic, and reads NO data — a pure
+// connect()/close liveness check, exactly as metadata-only as the :443 tunnel it guards.
+// It touches nothing else: request handling, metrics, the spent-set/replay cache, policy,
+// and shutdown are all untouched (this is off the hot path and never runs per-request).
+//
+// Default target 1.1.1.1:443 (Cloudflare — an always-up anycast host reachable from anywhere
+// with working egress). Override with RGOE_EGRESS_CHECK_TARGET (host:port). Timeout is short
+// (RGOE_EGRESS_CHECK_TIMEOUT_MS, default 5000ms) so a beat is never blocked for long. The
+// connector is injected so the selftest drives it with a fake — no real network in the test.
+export const EGRESS_CHECK_TARGET = process.env.RGOE_EGRESS_CHECK_TARGET || "1.1.1.1:443";
+
+export function checkEgress({
+  target = EGRESS_CHECK_TARGET,
+  timeoutMs = Number(process.env.RGOE_EGRESS_CHECK_TIMEOUT_MS) || 5000,
+  connect = net.connect,
+} = {}) {
+  return new Promise((resolve) => {
+    const s = String(target);
+    const i = s.lastIndexOf(":");
+    const host = i > 0 ? s.slice(0, i) : s;
+    const port = i > 0 ? Number(s.slice(i + 1)) : 443;
+    const label = `${host}:${port}`;
+    let done = false;
+    let socket = null;
+    const finish = (healthy, reason) => {
+      if (done) return;
+      done = true;
+      try { clearTimeout(timer); } catch {}
+      try { socket && socket.destroy(); } catch {} // close immediately — no bytes ever sent/read
+      resolve({ healthy, target: label, reason });
+    };
+    const timer = setTimeout(() => finish(false, "timeout"), timeoutMs);
+    try {
+      socket = connect(port, host, () => finish(true, "connected"));
+    } catch (e) {
+      return finish(false, "connect-threw:" + (e && e.message || e));
+    }
+    socket?.on?.("error", (e) => finish(false, "connect-error:" + ((e && e.code) || (e && e.message) || e)));
+  });
+}
+
 function makeHandler(spentSet) {
   return async function handle(socket) {
     socket.setNoDelay(true);

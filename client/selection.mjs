@@ -300,6 +300,10 @@ async function loadFromBootnode() {
 // Loaded once and refreshed lazily; health is mutated in place across requests.
 let loaded = null; // { dir, source }
 let loadedAt = 0;
+// High-water mark of every directory `issued` we've accepted this session. Used to refuse a
+// directory whose timestamp moves BACKWARD (audit loop-15 F2). Exported reset for tests.
+let lastAcceptedIssued = 0;
+export function _resetIssuedFloor() { lastAcceptedIssued = 0; }
 const REFRESH_MS = Number(process.env.RGOE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000);
 
 async function ensureLoaded() {
@@ -309,6 +313,20 @@ async function ensureLoaded() {
     const next = BOOTNODE_ONION
       ? await loadFromBootnode()
       : await loadDirectory({ path: DIRECTORY_PATH, pinnedSigner: PINNED_SIGNER, cachePath: CACHE_PATH });
+    // Rollback / stale-directory replay guard (audit loop-15 F2): a directory's `issued` must
+    // never move BACKWARD. The bootnode signs its own directory and an ed25519 signature is
+    // valid forever, so a hostile or replaying bootnode could serve an OLD signed directory to
+    // resurrect a gateway that was since dropped or slashed — and verifyDirectory, being
+    // stateless, would accept it clean. We refuse any FRESH directory whose issued predates the
+    // newest one we've already accepted (a same-issued refetch is idempotent and fine). Our own
+    // last-known-good CACHE is trusted so it never trips the guard, but it still raises the floor
+    // so a subsequent fresh fetch can't roll us back behind the cache. A thrown rejection is
+    // caught below and we keep the good in-memory fleet — fail-closed.
+    const nextIssued = Number(next.dir && next.dir.issued) || 0;
+    if (next.source !== "cache" && nextIssued < lastAcceptedIssued) {
+      throw new Error(`directory rollback rejected: issued ${nextIssued} < last accepted ${lastAcceptedIssued}`);
+    }
+    if (nextIssued > lastAcceptedIssued) lastAcceptedIssued = nextIssued;
     // Carry forward live health across a refresh so a reload doesn't forget which
     // gateways just failed.
     if (loaded) {

@@ -30,3 +30,7 @@ hs_ed25519_secret_key
 bootnode/bootnode-state.json
 **/bootnode-state.json
 coverage/
+
+# Mutation testing (T-TEST-10) — Stryker sandbox + HTML report are disposable
+.stryker-tmp/
+reports/mutation/

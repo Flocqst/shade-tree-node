@@ -29,6 +29,15 @@
 //                            re-announces. Reload re-runs each stored record through the real
 //                            announce path, so persistence can never admit anything a live
 //                            announce would reject (see loadPersisted below).
+//   RGOE_BOOTNODE_PROBE      1 => ACTIVELY probe live gateways (needs Tor); default off (0).
+//                            When off, behavior is byte-for-byte today's: every live entry == up.
+//                            When on, the bootnode periodically dials each live gateway's onion
+//                            (a cheap SOCKS connect on port 80) and demotes one that fails the
+//                            last N probes to health:"down" in /directory (still LISTED — TTL, not
+//                            the probe, governs removal — just deprioritized by the client). A
+//                            false-negative probe is therefore a soft failure, never an outage.
+//   RGOE_BOOTNODE_PROBE_INTERVAL  seconds between probe cycles                 (default 120)
+//   RGOE_BOOTNODE_PROBE_FAILS     consecutive failed probes before demote      (default 3)
 //   RGOE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
 
 import http from "node:http";
@@ -83,6 +92,98 @@ function makeNonceGuard(ttlMs) {
   };
 }
 
+// ---- active health probing (T-DEV-12) ---------------------------------------
+// directory() defaults every announced-within-TTL gateway to health:"up" -- liveness there means
+// "announced recently", not "onion still reachable". A gateway that announced then silently died
+// (host gone, onion no longer published) keeps showing up:"up" until its TTL lapses; a client only
+// learns it is dead by failing a dial. OPTIONAL active probing closes that gap: the bootnode itself
+// dials each live onion and DEMOTES a silently-dead one to health:"down" sooner. It never REMOVES
+// an entry (TTL still governs that) and never touches verify/admission/announce -- it only changes
+// the health LABEL in directory(). A demoted gateway is still served, just deprioritized by the
+// client's pickGateway (lib/directory.mjs skips health:"down" when a healthy one exists), so a
+// false-negative probe is a soft failure, not an outage.
+//
+// Two pieces, deliberately separate so the health logic is unit-testable WITHOUT Tor:
+//   makeProbeHealth -- a PURE per-onion consecutive-fail tracker (demote after N fails, any
+//                      success recovers). No I/O, injected clock, bounded (swept with the live set).
+//   makeProber      -- the dialer loop, taking an INJECTED probe(onion)->Promise<bool> (default: a
+//                      real SOCKS connect over Tor). A probe that throws counts as a fail
+//                      (fail-closed to down), never crashing the cycle.
+
+// Pure, testable health-tracking unit: per-onion consecutive-fail counter. `failThreshold`
+// consecutive failed probes => isDown() true; ANY success resets (and drops the entry, so a
+// perpetually-healthy fleet holds no state). Bounded via retain(), driven from the registry sweep.
+export function makeProbeHealth({ failThreshold = Number(process.env.RGOE_BOOTNODE_PROBE_FAILS || 3),
+    now = () => Date.now() } = {}) {
+  const state = new Map(); // onion -> { fails, lastAt }  (present only while failing)
+  return {
+    failThreshold,
+    // Record one probe outcome. ok=true recovers immediately (clear the counter); ok=false
+    // increments the consecutive-fail counter for this onion.
+    record(onion, ok) {
+      if (ok) { state.delete(onion); return; }
+      const e = state.get(onion) || { fails: 0, lastAt: 0 };
+      e.fails += 1;
+      e.lastAt = now();
+      state.set(onion, e);
+    },
+    // Demoted iff it has failed the last failThreshold-or-more probes in a row.
+    isDown: (onion) => (state.get(onion)?.fails || 0) >= failThreshold,
+    // Bound the map: drop counters for onions no longer live. Called from registry.sweep(), so
+    // probe state can never outlive the gateway it tracks.
+    retain(keep) { for (const k of state.keys()) if (!keep.has(k)) state.delete(k); },
+    fails: (onion) => state.get(onion)?.fails || 0,
+    size: () => state.size,
+  };
+}
+
+// The real onion dialer: a cheap SOCKS connect to <onion>:80 over the local Tor daemon. A
+// successful connect == the onion is reachable. `socks` is dynamically imported so merely importing
+// this module (every selftest does) pulls in no SOCKS dependency unless probing is actually used.
+async function defaultProbe(onion) {
+  const { SocksClient } = await import("socks");
+  const host = String(onion).replace(/\.onion$/, "") + ".onion";
+  const torHost = process.env.RGOE_TOR_HOST || "127.0.0.1";
+  const torPort = Number(process.env.RGOE_TOR_PORT || 9250);
+  const timeoutMs = Number(process.env.RGOE_BOOTNODE_PROBE_TIMEOUT_MS || 20000);
+  return await new Promise((resolve) => {
+    let done = false, socket;
+    const finish = (v) => { if (done) return; done = true; try { socket?.destroy(); } catch {} resolve(v); };
+    const timer = setTimeout(() => finish(false), timeoutMs); // never hang a cycle
+    timer.unref?.();
+    SocksClient.createConnection({ proxy: { host: torHost, port: torPort, type: 5 }, command: "connect", destination: { host, port: 80 } })
+      .then(({ socket: s }) => { socket = s; clearTimeout(timer); finish(true); })
+      .catch(() => { clearTimeout(timer); finish(false); });
+  });
+}
+
+// The prober: on each cycle, dial every currently-live onion (via the injected probe) and record
+// the outcome into the pure health tracker. OFF by default -- nothing dials until start() is called
+// (main() only calls it under RGOE_BOOTNODE_PROBE=1). The test drives runCycle() directly with an
+// injected probe + injected clock and never arms the timer.
+export function makeProber({ probe = defaultProbe, health = makeProbeHealth(),
+    listOnions = () => [],
+    intervalMs = Number(process.env.RGOE_BOOTNODE_PROBE_INTERVAL || 120) * 1000,
+    setTimer = setInterval, clearTimer = clearInterval } = {}) {
+  let timer = null;
+  // One probe pass over the whole live set. Each dial is independent and fail-closed: a probe that
+  // returns non-true OR throws counts as a failure, so one bad onion can't abort the cycle.
+  async function runCycle() {
+    const onions = listOnions() || [];
+    await Promise.all(onions.map(async (onion) => {
+      let ok = false;
+      try { ok = (await probe(onion)) === true; } catch { ok = false; }
+      health.record(onion, ok);
+    }));
+    return onions.length;
+  }
+  return {
+    health, runCycle, intervalMs, listOnions,
+    start() { if (!timer) { timer = setTimer(() => { runCycle().catch(() => {}); }, intervalMs); timer.unref?.(); } return timer; },
+    stop() { if (timer) { clearTimer(timer); timer = null; } },
+  };
+}
+
 // ---- the registry (transport-independent; the selftest drives it directly) --
 // DoS controls for the default `admission=open` mode, where anyone can mint onions and announce:
 //   maxEntries      caps resident memory (a new onion is refused when full; existing ones still
@@ -100,7 +201,11 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     deltaHistoryMax = Number(process.env.RGOE_BOOTNODE_DELTA_HISTORY || 64),
     // OPTIONAL persistence: a JSON store the live set is mirrored to. Off (null) by default, so
     // unset behavior — and every existing test — is byte-for-byte unchanged.
-    persistPath = process.env.RGOE_BOOTNODE_STORE || null }) {
+    persistPath = process.env.RGOE_BOOTNODE_STORE || null,
+    // OPTIONAL active prober (T-DEV-12). Off (null) by default => directory() marks every live
+    // entry up, exactly as before. When supplied, directory() consults prober.health.isDown() to
+    // demote a silently-dead gateway to health:"down" (still listed, just deprioritized).
+    prober = null }) {
   const live = new Map(); // onion -> { pubkey, weight, operator, staked, rec, expiresAt, lastAt }
   const nonces = makeNonceGuard(ttlSec * 1000);
   const requireStake = admission === "stake";
@@ -206,6 +311,9 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     let evicted = false;
     for (const [onion, e] of live) if (e.expiresAt <= t) { live.delete(onion); evicted = true; }
     nonces.sweep();
+    // Bound the prober's per-onion fail state to the (post-eviction) live set, so a demoted
+    // gateway that TTLs out drops its counter too -- probe state never outlives the gateway.
+    if (prober) prober.health.retain(new Set(live.keys()));
     if (evicted && !reloading) persist(); // keep the store from retaining aged-out gateways
   }
 
@@ -217,7 +325,10 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       onion,
       pubkey: e.pubkey,
       weight: e.weight,
-      health: "up", // liveness here == announced within TTL; clients still probe + fail over
+      // Liveness here == announced within TTL (=> up). With active probing on (T-DEV-12), a live
+      // entry the prober has found unreachable for the last N cycles is DEMOTED to down (still
+      // listed; clients deprioritize it). Off => every live entry is up, exactly as before.
+      health: prober && prober.health.isDown(onion) ? "down" : "up",
       ...(e.operator ? { operator: e.operator, staked: e.staked } : {}),
     }));
     const dir = { version: 1, issued: now(), gateways, signer: signer.pub };
@@ -293,7 +404,8 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
-  return { announce, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size, admission, ttlSec };
+  return { announce, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size,
+    liveOnions: () => [...live.keys()], prober, admission, ttlSec };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
@@ -435,7 +547,14 @@ async function main() {
   const signer = await loadOrMintSigner(signerPath);
   const stake = makeStakeVerifier();
   const persistPath = process.env.RGOE_BOOTNODE_STORE || null;
-  const registry = makeRegistry({ signer, stake, admission, ttlSec, persistPath });
+  // OPTIONAL active health probing (T-DEV-12). Off unless RGOE_BOOTNODE_PROBE=1 (needs Tor). The
+  // prober lists onions from the registry, so it's built first with a getter that closes over the
+  // registry declared just below, then handed in.
+  let registry;
+  const prober = process.env.RGOE_BOOTNODE_PROBE === "1"
+    ? makeProber({ health: makeProbeHealth(), listOnions: () => registry.liveOnions() })
+    : null;
+  registry = makeRegistry({ signer, stake, admission, ttlSec, persistPath, prober });
   registry.ttlSec = ttlSec;
   // Reload-on-boot: re-announce any persisted fleet so a restart doesn't blank the directory
   // until every gateway re-announces. Each record is re-verified (stale/tampered ones drop).
@@ -444,6 +563,12 @@ async function main() {
     log.info("persistence: reloaded gateways", { loaded, dropped, store: persistPath });
   }
   setInterval(() => registry.sweep(), Math.min(ttlSec, 60) * 1000).unref();
+
+  // Arm the active prober only when enabled. It self-unrefs, so it never keeps the process alive.
+  if (prober) {
+    prober.start();
+    log.info("active health probing on", { intervalSec: prober.intervalMs / 1000, failThreshold: prober.health.failThreshold });
+  }
 
   const server = makeServer(registry, { signerPub: signer.pub });
 
