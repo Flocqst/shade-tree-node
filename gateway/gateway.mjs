@@ -31,6 +31,7 @@ import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH } from "../lib/semaphore.mjs";
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
+import { buildReceipt } from "../lib/receipt.mjs";
 import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
 import { log } from "../lib/log.mjs";
 
@@ -415,7 +416,65 @@ export function checkEgress({
   });
 }
 
-function makeHandler(spentSet) {
+// ---- signed egress success receipts (T-FEAT-13) -----------------------------
+// OPTIONAL and ADDITIVE. When enabled, a SUCCESSFUL egress reply carries an extra `receipt`
+// field: a small object signed by THIS gateway's onion-control key attesting "I (this onion)
+// served a request at epoch E" (lib/receipt.mjs). A client holding the gateway's directory
+// pubkey verifies it and accumulates it as gateway liveness/quality evidence (feeds T-FEAT-4).
+//
+// PRIVACY: the receipt carries NO member identity, NO nullifier (not even a prefix), NO share,
+// NO target, NO request nonce, NO fine timestamp/counter — only { v, onion, coarse-epoch, ok }.
+// So it can be verified by anyone yet links to neither the member nor the target. See the field
+// table in lib/receipt.mjs and docs/RECEIPTS.md.
+//
+// DEFAULT OFF. With RGOE_RECEIPTS unset the success reply is EXACTLY `{ ok: true }` — byte-for-
+// byte today's path. The receipt signer + identity load happen ONLY when enabled, so an env
+// without an onion identity file is never affected. `makeReceipt` is injected into makeHandler
+// so the selftest drives it without a real onion or process.
+export function receiptsEnabled() {
+  return String(process.env.RGOE_RECEIPTS ?? "0") === "1";
+}
+
+// The connect-success reply. With no receipt signer this returns the ORIGINAL `{ ok: true }`
+// object unchanged (proved byte-identical in gateway/receipt.selftest.mjs); with one it adds a
+// freshly signed `receipt`. Signing failure never breaks egress — the ack degrades to `{ ok:
+// true }` (the tunnel still opens; receipts are best-effort evidence, never a gate).
+export function successAck(makeReceipt) {
+  if (!makeReceipt) return { ok: true };
+  try {
+    const receipt = makeReceipt();
+    return receipt ? { ok: true, receipt } : { ok: true };
+  } catch {
+    return { ok: true };
+  }
+}
+
+// Load the gateway's onion identity ({ onion, seed }) — the SAME file the heartbeat announces
+// with (RGOE_GW_IDENTITY, default tor/hs/identity.local.json). Only called when receipts are on.
+async function loadReceiptIdentity() {
+  const path = process.env.RGOE_GW_IDENTITY || join(HERE, "..", "tor", "hs", "identity.local.json");
+  const id = JSON.parse(await readFile(path, "utf8"));
+  if (!id.onion || !id.seed) throw new Error(`identity file ${path} missing onion/seed (run bootnode/keygen.mjs)`);
+  return id;
+}
+
+// Build the `makeReceipt` closure for main(): signs { onion, currentEpoch(), ok:true } with the
+// onion seed on each call. Returns null when receipts are disabled OR the identity can't load
+// (fail-open: a missing identity disables receipts, it never blocks egress).
+async function makeReceiptSigner() {
+  if (!receiptsEnabled()) return null;
+  let id;
+  try {
+    id = await loadReceiptIdentity();
+  } catch (e) {
+    log.warn("receipts requested (RGOE_RECEIPTS=1) but identity unavailable; receipts DISABLED", { err: e.message });
+    return null;
+  }
+  log.info("egress receipts: ON — signing success receipts with onion-control key", { onion: id.onion.slice(0, 16) + "..onion" });
+  return () => buildReceipt({ onion: id.onion, epoch: currentEpoch(), onionSeedHex: id.seed });
+}
+
+function makeHandler(spentSet, { makeReceipt = null } = {}) {
   return async function handle(socket) {
     socket.setNoDelay(true);
     let env;
@@ -466,7 +525,9 @@ function makeHandler(spentSet) {
       const upstream = net.connect(tgt.port, tgt.host, () => {
         log.info("egress", { target: `${tgt.host}:${tgt.port}`, nullifier: String(v.nullifier).slice(0, 10) + "..", externalNullifier: String(v.externalNullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "pass" });
-        reply(socket, { ok: true });
+        // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
+        // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
+        reply(socket, successAck(makeReceipt));
         if (env.__rest && env.__rest.length) upstream.write(env.__rest);
         socket.pipe(upstream);
         upstream.pipe(socket);
@@ -531,7 +592,10 @@ async function main() {
   const spentSet = makeSpentSet({ slash });
   setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000).unref();
 
-  const server = net.createServer(makeHandler(spentSet));
+  // Optional signed success receipts (T-FEAT-13); null unless RGOE_RECEIPTS=1.
+  const makeReceipt = await makeReceiptSigner();
+
+  const server = net.createServer(makeHandler(spentSet, { makeReceipt }));
 
   // Track live tunnels for draining (add/delete only — no per-byte work).
   const openSockets = new Set();

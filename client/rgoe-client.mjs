@@ -26,6 +26,7 @@ import tls from "node:tls";
 import https from "node:https";
 import { SocksClient } from "socks";
 import { currentEpoch, K_SLOTS, requestSignal, proveForSlot, loadGroup, cleanUp } from "../lib/semaphore.mjs";
+import { verifyReceipt } from "../lib/receipt.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -300,9 +301,39 @@ export class RgoeClient {
     if (!ack.ok) { emit({ phase: "gate", status: "refused", error: ack.err }); sock.destroy(); throw new Error("gate refused: " + ack.err); }
     emit({ phase: "gate", status: "done", onion: usedOnion });
 
+    // Optional signed egress success receipt (T-FEAT-13). Purely ADDITIVE: a receipt is present
+    // only when the gateway runs with RGOE_RECEIPTS=1, and its absence never affects the tunnel
+    // (today's gateways send `{ ok: true }` with no `receipt` — nothing here fires). When present,
+    // verify it against the ONION WE DIALED (self-authenticating pubkey) and the CURRENT epoch, so
+    // it counts only as fresh liveness/quality evidence for THIS gateway. A bad receipt is NOT
+    // fatal (the egress already succeeded) — it is surfaced as evidence via onEvent + tunnel.rgoe
+    // for a quality-aware selection layer (T-FEAT-4) to weigh.
+    const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);
+
     const tunnel = tunnelStream(sock, rest);
-    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier };
+    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt };
     return tunnel;
+  }
+
+  // Verify an optional gateway success receipt (T-FEAT-13). Returns a small evidence record
+  //   { present, valid, reason?, epoch?, onion? }
+  // and emits a "receipt" progress event. `present:false` is the normal legacy case (a gateway
+  // with receipts off), NOT a failure. Verification binds the receipt to the dialed onion and the
+  // current epoch; a bad receipt is reported (valid:false + reason) but never throws, because the
+  // egress already succeeded and a receipt is best-effort quality evidence, not a gate.
+  _verifyReceipt(receipt, usedOnion, emit = () => {}) {
+    if (!receipt) { const ev = { present: false }; emit({ phase: "receipt", status: "absent", onion: usedOnion }); return ev; }
+    let v;
+    try {
+      v = verifyReceipt(receipt, { onion: usedOnion, epoch: currentEpoch() });
+    } catch (e) {
+      v = { ok: false, reason: "verify-threw:" + e.message };
+    }
+    const ev = v.ok
+      ? { present: true, valid: true, onion: v.onion, epoch: v.epoch }
+      : { present: true, valid: false, reason: v.reason };
+    emit({ phase: "receipt", status: v.ok ? "verified" : "invalid", onion: usedOnion, reason: v.ok ? undefined : v.reason, epoch: v.ok ? v.epoch : undefined });
+    return ev;
   }
 
   // fetch(url, opts) -> { status, headers, body }. HTTPS over the tunnel (end-to-end TLS

@@ -18,6 +18,8 @@ export default [
       "out/**",
       "coverage/**",
       "cache/**",
+      ".stryker-tmp/**",
+      "reports/**",
       "rust/target/**",
       "experiments/**",
       "demo/**",

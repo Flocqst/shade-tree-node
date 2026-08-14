@@ -149,3 +149,23 @@ export RGOE_BOOTNODE_ONION=<bootnode-onion>
 export RGOE_DIR_SIGNER=<bootnode-signer-pubkey>
 # rgoe client
 ```
+
+## Client directory freshness bound (T-FEAT-21)
+
+Read by `client/selection.mjs`. OPTIONAL, OFF by default — leave unset and directory loading behaves
+exactly as before (legitimate long-lived static-file directories are unaffected).
+
+The monotonic issued FLOOR (loop-15) refuses a directory whose `issued` moves BACKWARD within a
+session, but on a COLD start a fresh client accepts whatever `issued` the bootnode first serves — so a
+bootnode replaying a months-old (but validly signed) directory to a new client is undetectable. Arming
+the max-age bound rejects a FRESH directory (not the last-known-good cache) whose `issued` is older
+than `now - RGOE_DIRECTORY_MAX_AGE_MS`, failing closed to the last-good in-memory fleet / cache.
+
+| Env var | Default | Controls | Component | Flag |
+|---|---|---|---|---|
+| `RGOE_DIRECTORY_MAX_AGE_MS` | (unset → no bound) | Max age (ms) a FRESH directory's `issued` may be before it is rejected as stale. Unset / non-positive => check disabled. | client selection | (none) |
+| `RGOE_DIRECTORY_MAX_AGE_SKEW_MS` | `300000` (5 min) | Clock-skew grace added on top of the bound so a lagging client clock doesn't spuriously reject a just-issued directory. Only consulted when the bound is armed. | client selection | (none) |
+
+Note: directory `issued` is in SECONDS (the bootnode signs `Math.floor(Date.now()/1000)`); the bound is
+in MILLISECONDS. `client/selection.mjs` scales `issued` by 1000 before comparing, matching the unit the
+rollback floor uses.

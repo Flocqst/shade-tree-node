@@ -306,6 +306,33 @@ let lastAcceptedIssued = 0;
 export function _resetIssuedFloor() { lastAcceptedIssued = 0; }
 const REFRESH_MS = Number(process.env.RGOE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000);
 
+// ---- optional absolute directory freshness bound (T-FEAT-21) --------------------
+// The monotonic issued FLOOR above only stops rollback WITHIN a session: it refuses a directory
+// older than the newest one already accepted. It does NOT bound staleness on a COLD start — a fresh
+// client with no prior state accepts whatever `issued` the bootnode first serves, so a bootnode that
+// is simply far behind (or is replaying a months-old but validly signed directory to a new client)
+// is undetectable. This OPTIONAL bound closes that gap: it rejects a FRESH directory (source !==
+// "cache") whose `issued` is older than now - RGOE_DIRECTORY_MAX_AGE_MS, failing closed to the
+// last-good in-memory fleet / cache via the same catch path as the rollback guard.
+//
+// OFF by default: unset => no max-age check at all, so legitimate long-lived static-file directories
+// and every existing behavior/test are byte-for-byte unaffected. Our own last-known-good CACHE is
+// exempt (source === "cache") — a stale-but-verified cache is still better than going dark, exactly
+// as the rollback guard treats it.
+//
+// UNIT: directory `issued` is in SECONDS (bootnode makeRegistry: now = () => Math.floor(Date.now()/
+// 1000)), matching the rollback floor's comparison. The env bound is in MILLISECONDS, so we scale
+// `issued` to ms (× 1000) before comparing — no unit mismatch with the floor, which stays unitless.
+function parseMaxAgeMs(raw) {
+  if (raw === undefined) return null; // unset => bound disabled
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : null; // non-positive / non-numeric => disabled (fail open to off)
+}
+const DIRECTORY_MAX_AGE_MS = parseMaxAgeMs(process.env.RGOE_DIRECTORY_MAX_AGE_MS);
+// Clock-skew grace added on top of the bound so a client whose clock lags the signer's doesn't
+// spuriously reject a just-issued directory. Only consulted when the bound is armed.
+const DIRECTORY_MAX_AGE_SKEW_MS = Math.max(0, Number(process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS || 5 * 60 * 1000));
+
 async function ensureLoaded() {
   const now = Date.now();
   if (loaded && now - loadedAt < REFRESH_MS) return loaded;
@@ -325,6 +352,19 @@ async function ensureLoaded() {
     const nextIssued = Number(next.dir && next.dir.issued) || 0;
     if (next.source !== "cache" && nextIssued < lastAcceptedIssued) {
       throw new Error(`directory rollback rejected: issued ${nextIssued} < last accepted ${lastAcceptedIssued}`);
+    }
+    // Absolute freshness bound (T-FEAT-21): reject a FRESH directory whose issued is beyond the
+    // configured max age + skew grace. `issued` is in SECONDS, the bound in MS, so scale × 1000.
+    // OFF unless RGOE_DIRECTORY_MAX_AGE_MS is set; cache source is exempt. Thrown => caught below =>
+    // keep the last-good in-memory fleet (fail-closed), same as the rollback guard.
+    if (DIRECTORY_MAX_AGE_MS != null && next.source !== "cache") {
+      const ageMs = now - nextIssued * 1000;
+      if (ageMs > DIRECTORY_MAX_AGE_MS + DIRECTORY_MAX_AGE_SKEW_MS) {
+        throw new Error(
+          `directory too stale: issued ${nextIssued}s is ${Math.round(ageMs / 1000)}s old > max-age ` +
+          `${Math.round((DIRECTORY_MAX_AGE_MS + DIRECTORY_MAX_AGE_SKEW_MS) / 1000)}s (bound + skew)`
+        );
+      }
     }
     if (nextIssued > lastAcceptedIssued) lastAcceptedIssued = nextIssued;
     // Carry forward live health across a refresh so a reload doesn't forget which

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# cloud-init user_data for a fresh Ubuntu 24.04 droplet. Rendered by OpenTofu/
+# Terraform (bootnode/deploy/terraform) and run ONCE, as root, at first boot.
+#
+# This is a THIN WRAPPER, not a reimplementation: it exports the same env
+# tunables bootnode/deploy/bootstrap.sh reads, fetches bootstrap.sh at the pinned
+# ref, and hands off. bootstrap.sh does all the real work (clone repo, install
+# Node + Tor, mint onions, write + start the three systemd units).
+set -euo pipefail
+
+# --- tunables passed straight through to bootstrap.sh ---
+export RGOE_REPO="${git_repo}"
+export RGOE_REF="${git_ref}"
+export RGOE_ADMISSION="${admission}"
+export RGOE_BOOTNODE_PORT="${bootnode_port}"
+export RGOE_GATEWAY_PORT="${gateway_port}"
+
+LOG=/var/log/rgoe-bootstrap.log
+exec > >(tee -a "$LOG") 2>&1
+
+echo "[rgoe] $(date -u) first-boot provisioning: ref=${git_ref} admission=${admission}"
+
+# On first boot cloud-init and unattended-upgrades can hold the apt lock; wait it
+# out so bootstrap.sh's own apt-get calls don't race.
+for i in $(seq 1 30); do
+  if apt-get update -qq >/dev/null 2>&1; then
+    break
+  fi
+  echo "[rgoe] waiting for apt lock (attempt $i)..."
+  sleep 5
+done
+
+# Fetch bootstrap.sh at the SAME pinned ref the box will clone, then delegate.
+RAW_URL="https://raw.githubusercontent.com/${repo_slug}/${git_ref}/bootnode/deploy/bootstrap.sh"
+echo "[rgoe] fetching bootstrap.sh: $RAW_URL"
+curl -fsSL --retry 5 --retry-delay 5 "$RAW_URL" -o /root/rgoe-bootstrap.sh
+
+echo "[rgoe] handing off to bootstrap.sh"
+bash /root/rgoe-bootstrap.sh
+
+echo "[rgoe] $(date -u) provisioning complete."
+echo "[rgoe] onions + signer were printed above; also: journalctl -u rgoe-bootnode -u rgoe-gateway -u rgoe-heartbeat"
