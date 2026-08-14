@@ -151,6 +151,33 @@ test("bad host/port arguments never throw and return false", () => {
   assert.equal(p("example.com", 44.3), false, "non-integer port rejected");
 });
 
+console.log("\negress policy — host canonicalization (trailing-dot bypass, audit loop-13):");
+
+test("a trailing-dot FQDN cannot evade a host-specific deny", () => {
+  // `sub.evil.com.` resolves to the SAME server as `sub.evil.com`, so appending a dot must NOT
+  // slip past a `*.evil.com` deny (the HIGH finding). With a broad :443 allow, the deny must win.
+  const p = makeEgressPolicy({ allow: "*:443", deny: "*.evil.com:*" });
+  assert.equal(p("sub.evil.com", 443), false, "plain host denied");
+  assert.equal(p("sub.evil.com.", 443), false, "trailing-dot host STILL denied (no bypass)");
+  assert.equal(p("a.b.evil.com.", 443), false, "deeper dotted subdomain still denied");
+});
+
+test("trailing dot on an exact deny is still denied; exact allow still permits the dotted form", () => {
+  const d = makeEgressPolicy({ allow: "*:443", deny: "bad.example.com:443" });
+  assert.equal(d("bad.example.com", 443), false);
+  assert.equal(d("bad.example.com.", 443), false, "dotted exact-deny host still denied");
+  const a = makeEgressPolicy({ allow: "only.example.com:443" });
+  assert.equal(a("only.example.com", 443), true);
+  assert.equal(a("only.example.com.", 443), true, "dotted host of an exact allow is still permitted (no false deny)");
+});
+
+test("invalid empty-label hosts are dropped (default-deny)", () => {
+  const p = makeEgressPolicy({ allow: "*:443" });
+  assert.equal(p(".evil.com", 443), false, "leading-dot host dropped");
+  assert.equal(p("sub..evil.com", 443), false, "double-dot host dropped");
+  assert.equal(p(".", 443), false, "lone dot dropped");
+});
+
 console.log("");
 if (failures) {
   console.log(`SELFTEST FAILED: ${failures} failing case(s)`);

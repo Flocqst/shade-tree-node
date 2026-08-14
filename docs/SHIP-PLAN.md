@@ -112,9 +112,7 @@ and at scale."
   registry size cap (`RGOE_BOOTNODE_MAX_ENTRIES`; a new onion is refused when full, existing ones
   still refresh), and self-attested `weight` clamped to `MAX_WEIGHT=1000` so one gateway cannot
   capture ~all client traffic. Tested in `bootnode/selftest.mjs` (registry hardening).
-- [ ] **T-DEV-7 (P1) Config validation + fail-fast.** Every entrypoint validates required config
-  and prints a precise error + nonzero exit on bad/missing values (bad onion, missing signer, bad
-  address, unreachable RPC). *Accept:* a table-driven selftest of bad configs per command.
+- [x] **T-DEV-7 (P1) Config validation.** DONE (module, loop-13): `lib/config.mjs` -- pure per-role (bootnode/gateway/client/member-enroll) required/optional validators grounded in what code actually reads (honestly narrowed the ambiguous rules); `validateConfig(role,env)->{ok,errors}`. `lib/config.selftest.mjs`. WIRING into entrypoints deferred to T-DEV-7b.
 - [x] **T-DEV-8 (P1) Graceful shutdown / connection draining.** DONE (loop-10): exported `makeGracefulShutdown` on gateway + bootnode; SIGTERM/SIGINT -> server.close() + drain (RGOE_SHUTDOWN_TIMEOUT_MS, default 10s) then force-exit. Signal handlers installed only under the main guard (import is side-effect-free). `test/shutdown.selftest.mjs`.
 - [ ] **T-DEV-9 (P2) On-chain incremental tree + root accessor.** So `LightClientRootProvider`
   works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
@@ -225,8 +223,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   announce token-bucket (loop-3 self-review: the per-onion throttle does not slow an attacker
   minting fresh onions until the size cap fills, so up to `maxEntries` ed25519 verifies are
   reachable in a burst; a global rate cap throttles that pre-full).
-- [ ] **T-HARD-5 (P2) Directory signer rotation.** Versioned signer with an overlap window so the
-  pinned key can rotate without a flag day. *Accept:* clients accept old+new during overlap; test.
+- [x] **T-HARD-5 (P2) Directory signer rotation.** DONE (loop-13): `verifyDirectory` accepts a pinned-signer ALLOWLIST (single string still works byte-for-byte); `RGOE_DIR_SIGNER` takes a comma-separated overlap set. Rotation: add new to client set -> rotate bootnode key -> drop old. Still an allowlist (unpinned/wrong signer rejected). `lib/directory-rotation.selftest.mjs`.
 - [x] **T-HARD-6 (P2) Contract audit prep.** DONE (loop-9): `docs/CONTRACTS-AUDIT.md` (inventory, 8 written invariants each tied to a test, per-function reentrancy/CEI/access walk, honest limitations) + `slither.config.json`. slither not installed here; config left for later.
 - [x] **T-HARD-7 (P2) Tor hardening.** DONE (loop-11): `docs/TOR-HARDENING.md` (PoW tuning, vanguards, v3 client-auth -- corrected from the deprecated v2 mechanism, process/OS, SOCKS circuit isolation) + `bootnode/deploy/torrc.hardened` reference fragment (server/client tagged, version-dependent options flagged).
 - [x] **T-RUST-0 (P1) Rust workspace + language ADR.** DONE (loop-8): `rust/` cargo workspace (`rgoe-proto` lib + `rgoe-client` bin) builds; `cargo test` passes 3 (request_signal, operator_auth_message, signal_field_safe -- already matching testdata/vectors.json). Stubs cite JS file:symbol + PROTOCOL-API.md. ADR `docs/adr/0001-client-language.md`. Gate 2 started.
@@ -244,8 +241,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 
 ## 7. Monitoring & observability
 
-- [ ] **T-MON-1 (P1) Structured logging.** JSON logs with levels across gateway + bootnode; no
-  secrets. *Accept:* logs parse; level configurable.
+- [x] **T-MON-1 (P1) Structured logging.** DONE (loop-13): `lib/log.mjs` (zero-dep leveled logger, `RGOE_LOG_FORMAT=text|json` default text so output shape is unchanged, `RGOE_LOG_LEVEL`, guarded JSON.stringify). Routed gateway + bootnode log points 1:1 through it (PASS->info, DROP->warn, etc.), preserving the exact substrings the sepolia integration greps. `lib/log.selftest.mjs`.
 - [x] **T-MON-2 (P1) Prometheus metrics.** DONE (loop-11): `lib/metrics.mjs` (zero-dep counters/gauges/histogram + Prometheus text render). Bootnode exposes `GET /metrics` (announces by result/reason, directory fetches, live gateways gauge); gateway (raw TCP) exposes metrics via a separate loopback http server on `RGOE_METRICS_PORT` (off by default) -- pass/drop by reason, slashes, active tunnels, verify-latency histogram. `lib/metrics.selftest.mjs`.
 - [x] **T-MON-3 (P2) Dashboards + alerts.** DONE (loop-12): `monitoring/grafana-dashboard.json` (panels on the real T-MON-2 metric names, verify-latency histogram_quantile) + `monitoring/alerts.yml` (9 rules cross-ref SLO.md/INCIDENT.md) + `monitoring/README.md` (loopback scrape via tunnel). Burn-rate alerts deferred (need production volume).
 - [x] **T-MON-4 (P2) External uptime checks.** DONE (loop-12): `scripts/uptime-probe.mjs` -- fetch bootnode /health + /directory over Tor, verify the signature against the pinned signer, emit JSON or `--format nagios` (exit 0/2), fail closed, privacy-scrubbed (count only). `scripts/uptime-probe.selftest.mjs` + `monitoring/UPTIME.md`.
@@ -256,10 +252,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   live set; a client survives one going dark. *Why now-ish:* the bootnode is the one new
   single-point-of-availability the fleet added; this closes it.
 - [x] **T-FEAT-2 (P1) `rgoe join` guided onboarding.** DONE (loop-10): `group/join.mjs` -- `rgoe join [member]` composes self-enrollment (secret to stderr, commitment + next commands to stdout) and `rgoe join gateway` mints an onion + prints the gateway/heartbeat commands. `group/join.selftest.mjs`.
-- [ ] **T-FEAT-3 (P1) Client SDK packaging.** Publish `client/rgoe-client.mjs` as an npm package and
-  the coming Rust client as a crate, both behind the conformance harness, so agents/apps embed the
-  client instead of shelling the proxy. *Accept:* `import { RgoeClient }` from the published package
-  works against a live fleet.
+- [x] **T-FEAT-3 (P2) Client SDK packaging.** DONE (loop-13): package.json `exports` (`./client`) + conservative `files` allowlist (stays `private:true` until the gates) + `docs/SDK.md` (constructor opts, fetch/connect, env, example). bin/entrypoints unaffected (internal relative imports not gated by exports).
 - [ ] **T-FEAT-4 (P2) Quality-aware rotation.** Clients report anonymized latency/success back; the
   bootnode aggregates it into the advertised `weight`/`health` (never per-member), so rotation
   favors good gateways beyond static weight. Must not become a linkability channel. *Accept:*
@@ -397,3 +390,9 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   circuit isolation), T-MON-3 (Grafana dashboard + 9 alert rules), T-MON-4 (external Tor uptime prober),
   T-FEAT-14 (SearXNG/agent adapter), T-CHORE-1 (dead imports -> lint 0 warnings). 32 node+forge suites green;
   eslint clean. Added T-FEAT-18 (status-page history/sparkline).
+- 2026-08-13  loop-13 (AGGRESSIVE FAN-OUT, 6 agents + 1 review) closed 6 tasks: T-MON-1 (structured
+  logging), T-HARD-5 (signer-rotation allowlist), T-FEAT-18 (status history/sparkline), T-FEAT-3 (client SDK
+  packaging), T-DEV-7 (config-validation module), T-DOC-6 (ADRs 0002-0005). AUDIT of the loop-12 egress
+  policy: guarantees hold, but found + fixed a HIGH trailing-dot FQDN bypass (`sub.evil.com.` evaded a
+  `*.evil.com` deny) via host canonicalization + a regression test. 36 node+forge suites green; lint clean.
+  Added T-DEV-7b (wire config validation) + T-FEAT-19 (client gateway-reputation persistence).

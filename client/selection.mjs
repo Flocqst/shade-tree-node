@@ -39,11 +39,30 @@ const CACHE_PATH =
 const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
 const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
 
-// The pinned directory signer. In a real bundle this is a hardcoded constant set
+// The pinned directory signer(s). In a real bundle this is a hardcoded constant set
 // at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
 // NO default: an unpinned directory is trust-on-first-use, which is exactly the
 // poisoning surface the signature exists to close. Set it, or directory mode is off.
-const PINNED_SIGNER = process.env.RGOE_DIR_SIGNER || null;
+//
+// RGOE_DIR_SIGNER accepts a COMMA-SEPARATED list of pubkeys — the signer-rotation
+// OVERLAP SET. This is an allowlist (verifyDirectory accepts a directory signed by ANY
+// listed signer, and requires the declared `dir.signer` to be one of them), NOT
+// "trust any signer": an unpinned/wrong key is still rejected. A single value behaves
+// exactly as before. Rotating the directory signer without a flag day:
+//   1. Add the NEW signer pubkey to the client set (now {old,new}); ship it. Clients
+//      still accept the old-signed directory, so nothing breaks during rollout.
+//   2. Once the {old,new} clients have propagated, rotate the bootnode's signing key
+//      to NEW (bootnode now signs with, and declares, the new key). Old clients that
+//      already have {old,new} accept it; not-yet-updated {old} clients still work
+//      until they update, because the overlap window covers both.
+//   3. After everyone has the new set, drop OLD from the client set (now {new} only),
+//      retiring the old key.
+function parsePinnedSigners(raw) {
+  if (!raw) return null;
+  const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : null;
+}
+const PINNED_SIGNER = parsePinnedSigners(process.env.RGOE_DIR_SIGNER);
 
 export function directoryEnabled() {
   return Boolean((BOOTNODE_ONION || DIRECTORY_PATH) && PINNED_SIGNER);

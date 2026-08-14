@@ -48,6 +48,7 @@ unverified.
 ## Endpoints
 
 - `GET /` — the HTML status page (self-contained, no external assets/CDN; polls the API every ~15s).
+  Renders a fleet-size **sparkline** + a bootnode-**reachability strip** from `/api/history`.
 - `GET /api/status` — the JSON summary:
 
   ```jsonc
@@ -58,9 +59,25 @@ unverified.
     "signerOk": true,
     "admission": "stake",
     "signerPinned": "…",
-    "lastFetch": "2026-08-13T…Z"
+    "lastFetch": "2026-08-13T…Z",
+    "history": { "count": 12, "cap": 120, "oldest": "…Z", "newest": "…Z", "reachableCount": 12 }
   }
   ```
+
+- `GET /api/history` — a bounded, in-memory **trend buffer** (a ring of the last `cap` samples,
+  default **120** ≈ 30 min at the 15s poll). One sample is appended each time `/api/status` is
+  computed; the buffer never grows past `cap` and is never persisted:
+
+  ```jsonc
+  {
+    "cap": 120,
+    "count": 12,
+    "samples": [{ "ts": "2026-08-13T…Z", "bootnodeReachable": true, "signerOk": true, "fleetSize": 3 }]
+  }
+  ```
+
+  History is **counts + booleans only** — no gateway, onion, or operator field ever enters it, so
+  the trend endpoint is exactly as privacy-scrubbed as `/api/status`.
 
 ## Privacy
 
@@ -84,10 +101,16 @@ only in signed announces, never on chain). So this page never emits an operator 
 ## Test
 
 ```bash
-node web/status.selftest.mjs
+node web/status.selftest.mjs          # /api/status + privacy scrub
+node web/status-history.selftest.mjs  # /api/history trend buffer: bounded + scrubbed
 ```
 
-Stands up a mock bootnode (real `/health` + `signDirectory`'d `/directory`), runs the status
-server against it, and asserts the right `fleetSize`, `signerOk` true for the pinned signer and
-false for a wrong one, and that no full onion or operator address appears in the output. Also
-auto-discovered by `node scripts/test-all.mjs`.
+`status.selftest.mjs` stands up a mock bootnode (real `/health` + `signDirectory`'d `/directory`),
+runs the status server against it, and asserts the right `fleetSize`, `signerOk` true for the pinned
+signer and false for a wrong one, and that no full onion or operator address appears in the output.
+
+`status-history.selftest.mjs` drives `/api/status` past the ring cap and asserts the trend buffer
+stays bounded, that each sample is `{ ts, bootnodeReachable, signerOk, fleetSize }` (counts +
+booleans only), and that no full onion or operator address leaks into `/api/history`.
+
+Both are auto-discovered by `node scripts/test-all.mjs`.

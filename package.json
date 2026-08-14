@@ -7,6 +7,21 @@
   "bin": {
     "rgoe": "bin/rgoe.mjs"
   },
+  "//exports": "Public SDK surface (T-FEAT-3). Subpath imports resolve by package name once published; internal relative imports (./…) are unaffected. See docs/SDK.md.",
+  "exports": {
+    "./client": "./client/rgoe-client.mjs",
+    "./package.json": "./package.json"
+  },
+  "//files": "Conservative publish allowlist. Publishing is GATED (private:true stays until Gate 1+2 clear); this documents the intended npm payload only. The Rust client ships separately as a crate (T-RUST-4).",
+  "files": [
+    "bin/",
+    "client/",
+    "lib/",
+    "circuits/",
+    "contracts/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "enroll": "node group/enroll.mjs",
     "gateway": "node gateway/gateway.mjs",

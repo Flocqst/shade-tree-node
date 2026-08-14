@@ -32,6 +32,7 @@ import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECOND
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
+import { log } from "../lib/log.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LISTEN_HOST = "127.0.0.1";
@@ -63,8 +64,8 @@ async function initRoots() {
       recentRoots = new Set((roots || []).map(String));
     };
     await refresh();
-    provider.onChange?.(() => refresh().catch((e) => console.log(`root refresh failed (${e.message}); keeping recent-roots`)));
-    console.log(`root source: on-chain RootProvider (${process.env.RGOE_ROOT_PROVIDER || "node"}), ${recentRoots.size} recent root(s)`);
+    provider.onChange?.(() => refresh().catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
+    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", recentRoots: recentRoots.size });
     return { count: null };
   }
   // PoC fallback: members.json is the root source; refresh on file change.
@@ -77,7 +78,7 @@ async function initRoots() {
   try {
     watch(MEMBERS_PATH, { persistent: false }, () => load().then((c) => { count = c; }).catch(() => {}));
   } catch { /* watch is best-effort */ }
-  console.log(`root source: members.json (PoC fallback), ${count} members`);
+  log.info("root source: members.json (PoC fallback)", { members: count });
   return { count };
 }
 
@@ -115,7 +116,7 @@ export function makeSpentSet({ reconstruct = reconstructSecret, derive = deriveC
       commitment = derive(secret);                // rateCommitment leaf
       if (slash) await slash(commitment, secret);
     } catch (err) {
-      console.log(`slash failed for null=${String(nullifier).slice(0, 10)}..: ${err.message}`);
+      log.error("slash failed", { nullifier: String(nullifier).slice(0, 10) + "..", err: err.message });
     }
     return { ok: false, action: "slash", reason: "over-spend-slashed", commitment };
   }
@@ -155,10 +156,10 @@ async function makeSlasher() {
   const receiver = process.env.RGOE_SLASH_RECEIVER || null;
 
   if (!key || !address) {
-    console.log("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)");
+    log.info("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)");
     return async (commitment, secret) => {
       // Log the (public) commitment leaf only; never any bytes of the reconstructed secret.
-      console.log(`SLASH (dry-run) commitment=${String(commitment).slice(0, 18)}..`);
+      log.info("SLASH (dry-run)", { commitment: String(commitment).slice(0, 18) + ".." });
     };
   }
 
@@ -166,20 +167,22 @@ async function makeSlasher() {
   try {
     ({ ethers } = await import("ethers"));
   } catch {
-    console.log("slash: ethers not installed; DRY-RUN only (add `ethers` to package.json)");
-    return async (commitment) => console.log(`SLASH (dry-run, no ethers) commitment=${String(commitment).slice(0, 18)}..`);
+    log.info("slash: ethers not installed; DRY-RUN only (add `ethers` to package.json)");
+    return async (commitment) => log.info("SLASH (dry-run, no ethers)", { commitment: String(commitment).slice(0, 18) + ".." });
   }
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   const contract = new ethers.Contract(address, ["function slash(uint256 commitment, uint256 secret, address receiver)"], wallet);
   const rcv = receiver || wallet.address;
-  console.log(`slash: on-chain via ${address} (receiver ${rcv})`);
+  log.info("slash: on-chain", { via: address, receiver: rcv });
   return async (commitment, secret) => {
     const tx = await contract.slash(commitment, secret, rcv);
-    console.log(`SLASH tx ${tx.hash} commitment=${String(commitment).slice(0, 18)}.. (waiting)`);
+    // "SLASH tx <hash>" substring preserved for scripts/integration-sepolia.mjs's regex.
+    log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(commitment).slice(0, 18) + ".." });
     const rcpt = await tx.wait();
-    console.log(`SLASH mined block ${rcpt.blockNumber} commitment=${String(commitment).slice(0, 18)}..`);
+    // "SLASH mined block <n>" substring preserved for scripts/integration-sepolia.mjs's regex.
+    log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(commitment).slice(0, 18) + ".." });
   };
 }
 
@@ -251,7 +254,12 @@ export function makeEgressPolicy({ allow = "*:443", deny = "" } = {}) {
     if (typeof host !== "string" || host.length === 0) return false;
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) return false;
-    const h = host.toLowerCase();
+    // Canonicalize the host before matching. A trailing dot is a FQDN that DNS resolves to the
+    // exact same server (so `sub.evil.com.` must be treated as `sub.evil.com`, or an appended dot
+    // would evade a host-specific deny), and empty labels (leading/double dot) are invalid hosts.
+    // Without this, a gated member could bypass an operator's deny list by appending one dot.
+    const h = host.toLowerCase().replace(/\.$/, "");
+    if (h.length === 0 || h.startsWith(".") || h.includes("..")) return false; // invalid labels -> drop
     if (denies.some((pat) => matchEgressPattern(pat, h, p))) return false; // deny wins
     return allows.some((pat) => matchEgressPattern(pat, h, p)); // else default-DENY
   };
@@ -321,7 +329,7 @@ function makeHandler(spentSet) {
       const v = await verifyEnvelope(env, recentRoots);
       M.verify.observe((performance.now() - t0) / 1000);
       if (!v.ok) {
-        console.log(`DROP  ${v.reason}  target=${env.target}`);
+        log.warn("drop", { reason: v.reason, target: env.target });
         M.requests.inc({ result: "drop", reason: v.reason });
         reply(socket, { ok: false, err: "gate:" + v.reason });
         return socket.destroy();
@@ -337,7 +345,7 @@ function makeHandler(spentSet) {
       // Step 4: nullifier dedup + share collection; slashes on 2nd distinct signal.
       const res = await spentSet.admit(v.nullifier, v.share);
       if (!res.ok) {
-        console.log(`DROP  ${res.reason}  null=${String(v.nullifier).slice(0, 10)}..`);
+        log.warn("drop", { reason: res.reason, nullifier: String(v.nullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "drop", reason: res.reason });
         reply(socket, { ok: false, err: res.reason });
         return socket.destroy();
@@ -345,7 +353,7 @@ function makeHandler(spentSet) {
 
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
       const upstream = net.connect(tgt.port, tgt.host, () => {
-        console.log(`PASS  egress->${tgt.host}:${tgt.port}  null=${String(v.nullifier).slice(0, 10)}.. extNull=${String(v.externalNullifier).slice(0, 10)}..`);
+        log.info("egress", { target: `${tgt.host}:${tgt.port}`, nullifier: String(v.nullifier).slice(0, 10) + "..", externalNullifier: String(v.externalNullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "pass" });
         reply(socket, { ok: true });
         if (env.__rest && env.__rest.length) upstream.write(env.__rest);
@@ -359,7 +367,7 @@ function makeHandler(spentSet) {
       });
       socket.on("error", () => upstream.destroy());
     } catch (e) {
-      console.log(`ERROR  ${e.message}  target=${env.target}`);
+      log.error("gateway-error", { err: e.message, target: env.target });
       reply(socket, { ok: false, err: "gateway-error" });
       return socket.destroy();
     }
@@ -428,16 +436,17 @@ async function main() {
   if (metricsPort > 0) {
     const metricsHost = process.env.RGOE_METRICS_HOST || "127.0.0.1";
     metricsServer = makeMetricsServer(metrics);
-    metricsServer.listen(metricsPort, metricsHost, () => console.log(`metrics on http://${metricsHost}:${metricsPort}/metrics (loopback)`));
+    metricsServer.listen(metricsPort, metricsHost, () => log.info("metrics endpoint up", { url: `http://${metricsHost}:${metricsPort}/metrics`, scope: "loopback" }));
   }
 
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-    console.log(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}  (epoch ${currentEpoch()}, ${EPOCH_SECONDS}s)`);
+    // "gateway up on <host>:<port>" substring preserved for scripts/integration-sepolia.mjs.
+    log.info(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}`, { epoch: currentEpoch(), epochSeconds: EPOCH_SECONDS });
     const allowDesc = process.env.RGOE_EGRESS_ALLOW || "*:443";
     const denyDesc = process.env.RGOE_EGRESS_DENY || "";
     const dflt = allowDesc === "*:443" && !denyDesc;
-    console.log(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
-    console.log(`rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash`);
+    log.info(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
+    log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

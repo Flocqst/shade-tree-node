@@ -42,6 +42,7 @@ import { signDirectory } from "../lib/directory.mjs";
 import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
 import { registry as metrics } from "../lib/metrics.mjs";
+import { log } from "../lib/log.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -117,7 +118,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       writeFileSync(tmp, JSON.stringify({ version: 1, entries }));
       renameSync(tmp, persistPath);
     } catch (e) {
-      console.error(`[bootnode] persist write failed (continuing): ${e.message}`);
+      log.error("persist write failed (continuing)", { err: e.message });
     }
   }
 
@@ -141,7 +142,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     try {
       stored = JSON.parse(readFileSync(persistPath, "utf8"));
     } catch (e) {
-      console.error(`[bootnode] persist read failed, ignoring store: ${e.message}`);
+      log.error("persist read failed, ignoring store", { err: e.message });
       return { loaded: 0, dropped: 0 };
     }
     const entries = Array.isArray(stored?.entries) ? stored.entries : [];
@@ -352,7 +353,7 @@ async function main() {
   // until every gateway re-announces. Each record is re-verified (stale/tampered ones drop).
   if (persistPath) {
     const { loaded, dropped } = await registry.loadPersisted();
-    console.log(`persistence: reloaded ${loaded} gateway(s) from ${persistPath} (${dropped} dropped as stale/invalid)`);
+    log.info("persistence: reloaded gateways", { loaded, dropped, store: persistPath });
   }
   setInterval(() => registry.sweep(), Math.min(ttlSec, 60) * 1000).unref();
 
@@ -363,10 +364,11 @@ async function main() {
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
 
   server.listen(port, "127.0.0.1", () => {
-    console.log(`bootnode up on 127.0.0.1:${port}  (admission=${admission}, stake=${stake.mode}, ttl=${ttlSec}s)`);
-    console.log(`pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):`);
-    console.log(`  ${signer.pub}`);
-    console.log(`endpoints: POST /announce  GET /directory  GET /gateway/<onion>  GET /health`);
+    // "bootnode up on <host>:<port>" substring preserved for any startup-readiness grep.
+    log.info(`bootnode up on 127.0.0.1:${port}`, { admission, stake: stake.mode, ttlSec });
+    log.info("pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):");
+    log.info(`  ${signer.pub}`);
+    log.info("endpoints: POST /announce  GET /directory  GET /gateway/<onion>  GET /health");
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

@@ -38,6 +38,45 @@ const PAGE = readFileSync(join(HERE, "status.html"), "utf8");
 // gateways in the table, far short of the 56 chars that would make the fleet enumerable.
 const ONION_PREFIX = 16;
 
+// Bounded in-memory trend buffer. A status page is a point-in-time snapshot; this ring lets an
+// operator see the shape of the last window (fleet growing/shrinking, a bootnode flapping) with
+// no persistence and no growth beyond the cap. 120 samples ~= 30 min at the page's 15s poll.
+// Samples are COUNTS + BOOLEANS only -- never a gateway, onion, or operator -- so the history
+// endpoint stays exactly as privacy-scrubbed as /api/status.
+const HISTORY_CAP = 120;
+
+// A trivial fixed-size ring: push appends, and we trim from the front once we exceed the cap, so
+// memory is bounded by `cap` samples regardless of uptime.
+function makeHistoryRing(cap = HISTORY_CAP) {
+  const buf = [];
+  return {
+    cap,
+    // Reduce a full status to the privacy-safe trend sample: timestamp + two booleans + a count.
+    push(status) {
+      buf.push({
+        ts: status.lastFetch,
+        bootnodeReachable: status.bootnodeReachable === true,
+        signerOk: status.signerOk === true,
+        fleetSize: Number(status.fleetSize) || 0,
+      });
+      if (buf.length > cap) buf.splice(0, buf.length - cap);
+    },
+    samples() { return buf.slice(); },
+    // A compact summary for embedding in /api/status without shipping the whole ring twice.
+    summary() {
+      const first = buf[0];
+      const last = buf[buf.length - 1];
+      return {
+        count: buf.length,
+        cap,
+        oldest: first ? first.ts : null,
+        newest: last ? last.ts : null,
+        reachableCount: buf.reduce((n, s) => n + (s.bootnodeReachable ? 1 : 0), 0),
+      };
+    },
+  };
+}
+
 export function configFromEnv(env = process.env) {
   return {
     bootnodeUrl: env.RGOE_BOOTNODE_URL || null,
@@ -134,7 +173,10 @@ export async function buildStatus(cfg) {
   return out;
 }
 
-export function makeStatusServer(cfg) {
+export function makeStatusServer(cfg, { historyCap = HISTORY_CAP } = {}) {
+  // Per-server ring: history lives only as long as the process, and each server instance keeps its
+  // own trend (so tests are isolated and a restart simply starts a fresh window).
+  const history = makeHistoryRing(historyCap);
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://status");
@@ -144,7 +186,18 @@ export function makeStatusServer(cfg) {
       }
       if (req.method === "GET" && url.pathname === "/api/status") {
         const status = await buildStatus(cfg);
+        // The page only computes status on request, so we append one trend sample per /api/status
+        // hit -- the auto-refresh poll fills the ring naturally, no background timer needed.
+        history.push(status);
+        status.history = history.summary();
         const body = JSON.stringify(status);
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        return res.end(body);
+      }
+      if (req.method === "GET" && url.pathname === "/api/history") {
+        // Read-only trend buffer: counts + booleans only, same privacy posture as /api/status.
+        const samples = history.samples();
+        const body = JSON.stringify({ cap: history.cap, count: samples.length, samples });
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
         return res.end(body);
       }
@@ -170,6 +223,7 @@ async function main() {
     console.log(`status page up on http://127.0.0.1:${cfg.port}  (bootnode=${target})`);
     console.log(`  GET /            the HTML status page`);
     console.log(`  GET /api/status  the JSON summary`);
+    console.log(`  GET /api/history the bounded in-memory trend buffer (last ${HISTORY_CAP} samples)`);
   });
 }
 

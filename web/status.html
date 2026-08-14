@@ -58,6 +58,20 @@
   .empty { padding: 24px 14px; color: var(--muted); text-align: center; }
   footer { margin-top: 22px; color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   .note { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+  .trend { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .trend .thead { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .trend .tlabel { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .trend .tmeta { color: var(--muted); font-size: 11px; }
+  .spark-wrap { overflow-x: auto; margin-top: 10px; }
+  .spark { display: block; width: 100%; height: 56px; }
+  .spark path.area { fill: rgba(125,211,252,0.12); stroke: none; }
+  .spark path.line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .striplabel { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 12px; }
+  .strip { display: flex; gap: 2px; margin-top: 6px; flex-wrap: wrap; }
+  .strip .tick { width: 6px; height: 14px; border-radius: 2px; background: var(--line); }
+  .strip .tick.up { background: var(--up); }
+  .strip .tick.down { background: var(--down); }
+  .strip-empty { color: var(--muted); font-size: 11px; margin-top: 6px; }
   code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
   .err { color: var(--warn); font-size: 12px; margin-top: 10px; min-height: 16px; }
 </style>
@@ -86,6 +100,21 @@
       <div class="label">Admission</div>
       <div class="value" id="admission" style="font-size:16px;">&mdash;</div>
     </div>
+  </div>
+
+  <div class="trend">
+    <div class="thead">
+      <span class="tlabel">Fleet size &middot; trend</span>
+      <span class="tmeta" id="trendMeta">&mdash;</span>
+    </div>
+    <div class="spark-wrap">
+      <svg class="spark" id="spark" viewBox="0 0 300 56" preserveAspectRatio="none" role="img" aria-label="fleet size over time">
+        <path class="area" id="sparkArea" d="" />
+        <path class="line" id="sparkLine" d="" />
+      </svg>
+    </div>
+    <div class="striplabel">Bootnode reachability &middot; per sample</div>
+    <div class="strip" id="strip"><span class="strip-empty">no samples yet</span></div>
   </div>
 
   <div class="table-wrap">
@@ -128,14 +157,58 @@ function esc(s) {
 async function poll() {
   const errEl = document.getElementById("err");
   try {
-    const res = await fetch("/api/status", { cache: "no-store" });
-    const s = await res.json();
+    // Poll status + trend together. History is a bounded, privacy-scrubbed ring (counts +
+    // booleans only); the server appends a sample on each /api/status hit, so both stay in step.
+    const [statusRes, histRes] = await Promise.all([
+      fetch("/api/status", { cache: "no-store" }),
+      fetch("/api/history", { cache: "no-store" }),
+    ]);
+    const s = await statusRes.json();
     render(s);
     errEl.textContent = s.error ? s.error : "";
+    try { renderTrend(await histRes.json()); } catch (_) { /* trend is best-effort */ }
   } catch (e) {
     errEl.textContent = "status fetch failed: " + e.message;
     document.getElementById("bootnode").innerHTML = '<span class="dot down"></span><span class="val-down">unreachable</span>';
   }
+}
+
+// Draw the fleetSize sparkline + a reachability strip from the /api/history ring buffer.
+function renderTrend(h) {
+  const samples = (h && h.samples) || [];
+  const meta = document.getElementById("trendMeta");
+  const strip = document.getElementById("strip");
+  const line = document.getElementById("sparkLine");
+  const area = document.getElementById("sparkArea");
+
+  if (!samples.length) {
+    meta.textContent = "0 samples";
+    line.setAttribute("d", "");
+    area.setAttribute("d", "");
+    strip.innerHTML = '<span class="strip-empty">no samples yet</span>';
+    return;
+  }
+
+  const cap = h.cap || samples.length;
+  meta.textContent = samples.length + "/" + cap + " samples";
+
+  // Sparkline over a fixed 300x56 viewBox (stretched to width via preserveAspectRatio="none").
+  const W = 300, H = 56, PAD = 3;
+  const sizes = samples.map((s) => Number(s.fleetSize) || 0);
+  const maxV = Math.max(1, ...sizes);
+  const n = sizes.length;
+  const x = (i) => n === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (n - 1);
+  const y = (v) => H - PAD - (v / maxV) * (H - 2 * PAD);
+  const pts = sizes.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1));
+  const linePath = "M" + pts.join(" L");
+  line.setAttribute("d", linePath);
+  area.setAttribute("d", linePath + " L" + x(n - 1).toFixed(1) + "," + (H - PAD) + " L" + x(0).toFixed(1) + "," + (H - PAD) + " Z");
+
+  // Reachability strip: one tick per sample, green=up / red=down.
+  strip.innerHTML = samples.map((s) =>
+    '<span class="tick ' + (s.bootnodeReachable ? "up" : "down") + '" title="'
+    + esc(s.ts || "") + " · fleet " + (Number(s.fleetSize) || 0) + '"></span>'
+  ).join("");
 }
 
 function render(s) {
