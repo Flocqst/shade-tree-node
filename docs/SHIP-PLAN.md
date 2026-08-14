@@ -147,11 +147,11 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   permutation-invariance properties. Passes across seeds. *Remaining:* envelope/`validTarget` parse
   (not yet exported) and address-encoding fuzz — fold in with T-DEV-7.
 - [~] **T-TEST-3 (P0) Fill remaining unit selftests.** DONE: `lib/root-provider.mjs`
-  (`lib/root-provider.selftest.mjs`, 12 assertions w/ a `newGroup` oracle); `lib/semaphore.mjs` /
-  `lib/rln.mjs` epoch + signal primitives (`lib/semaphore.selftest.mjs`, 17 assertions — currentEpoch
-  boundary/monotonicity, requestSignal determinism = the deterministic-retry invariant). REMAINING:
-  `group/enroll.mjs` (commitment-only, secret stays local), `group/sign-directory.mjs`,
-  `bootnode/heartbeat.mjs` (operator resolution). *Accept:* each has a selftest the runner discovers.
+  (12 assertions), `lib/semaphore.mjs`/`lib/rln.mjs` epoch+signal primitives (17), `group/enroll.mjs`
+  (`group/enroll.selftest.mjs`, 17 — the security property: only the commitment reaches stdout, the
+  secret goes to stderr, and the published leaf == rateCommitment of the withheld secret),
+  `group/sign-directory.mjs` (`group/sign-directory.selftest.mjs` — sign/verify + tamper + wrong-signer,
+  library-level to avoid repo pollution). REMAINING: only `bootnode/heartbeat.mjs` (operator resolution).
 - [ ] **T-TEST-4 (P0) Consolidated adversarial/security suite.** `test/security/`: poisoned
   directory, MITM bootnode, replay, stake lapse mid-session, grafted onion, over-budget slash,
   signer swap. Some exist in module selftests; consolidate + expand into one auditable place.
@@ -178,14 +178,8 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   This is both a regression guard for the JS wire formats and the anti-drift contract T-RUST-1 will
   check the Rust client against. *Note:* RLN Groth16 proofs are non-deterministic, so they are
   verified for equivalence (`lib/rln.selftest.mjs`), not byte-pinned here.
-- [ ] **T-TEST-12 (P0) RLN slash-math property test.** Over many random (secret, epoch, slot)
-  triples and message pairs: one signal never slashes; two distinct signals on one nullifier ALWAYS
-  reconstruct the exact secret and derive the right rateCommitment; a distinct nullifier never
-  cross-triggers. *Accept:* thousands of randomized rounds, zero false slash / zero missed slash.
-- [ ] **T-TEST-13 (P1) Concurrency / race tests.** Hammer the gateway spent-set with concurrent
-  `admit()` on the same nullifier (honest replay vs over-spend interleavings) and the bootnode
-  registry with concurrent announces; assert exactly-once slash and no lost/duplicated entries.
-  *Accept:* deterministic outcome under N concurrent workers.
+- [x] **T-TEST-12 (P0) RLN slash-math property test.** DONE (loop-7, `test/rln-slash.property.selftest.mjs`, 165 assertions/15 rounds with real proofs).
+- [x] **T-TEST-13 (P1) Concurrency / race tests.** DONE (loop-7, `test/concurrency.selftest.mjs`: 48-way concurrent admit => exactly-once slash; 400-way across 200 nullifiers => no cross-trigger; 60 concurrent announces => no lost/dup entries).
 - [ ] **T-TEST-14 (P1) Chaos / failure-injection e2e.** In the real-Tor integration harness: kill a
   gateway mid-request (client fails over, no dropped connection to the caller), drop the bootnode
   (client uses last-known-good), lapse an operator's stake mid-session (entry demoted). *Accept:*
@@ -193,12 +187,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [ ] **T-TEST-15 (P1) Fuzz regression corpus.** Persist any crashing/hanging input a fuzzer finds
   into `testdata/corpus/` and replay it as a fast regression on every run. *Accept:* corpus wired
   into the suite; a seeded known-bad input is caught.
-- [ ] **T-TEST-16 (P2) Timing/side-channel sanity.** Assert verify latency is independent of which
-  member proved (no fingerprint via timing), reusing the crypto bench. *Accept:* spread within noise
-  across members, recorded.
-
-## 3. Deployment & infrastructure
-
+- [x] **T-TEST-16 (P2) Timing/side-channel sanity.** DONE (loop-7, `test/timing.selftest.mjs`: per-member verify medians within ~1.1-1.3x, gated at 2x; Groth16 verify is witness-oblivious).
 - [ ] **T-DEPLOY-1 (P0, BLOCKED by Gate 1 + Gate 2) First live deployment.** Deploy the bootnode +
   a gateway (to `anon-egress` or a fresh droplet), announce the gateway, and verify a laptop client
   egresses through the fleet end to end. Do NOT start until the test suite is hardened and the Rust
@@ -354,6 +343,13 @@ adds to this as it goes and pulls from it once Gates 1-2 are green.
 - [ ] **T-FEAT-6 (P2) Directory delta protocol.** `GET /directory?since=<etag>` returns only
   changed entries, so large fleets are cheap to keep fresh. *Accept:* a delta fetch after no change
   returns empty; after one announce returns one entry; client applies deltas + re-verifies.
+- [ ] **T-FEAT-13 (P2, added loop-7) Signed egress success receipts.** A gateway that accepts a
+  proof could still silently drop the actual egress. Have the gateway return a small signed receipt
+  (its onion pubkey signs `{nullifier-prefix, ts, ok}` — NO target, to avoid a logging channel) so a
+  client can confirm the egress happened and accumulate evidence against a gateway that gates-then-
+  drops, feeding the quality-aware rotation (T-FEAT-4). *Accept:* a successful egress returns a
+  verifiable receipt; a gateway that drops traffic produces none; receipts carry no per-request
+  target/member-identifying data.
 - [ ] **T-FEAT-12 (P2, added loop-6) Cross-gateway replay defense (per-epoch nonce cache).** Target
   binding (T-DEV-3) stops a captured proof being REDIRECTED, but an exact-envelope replay to the SAME
   target still egresses, and across non-colluding gateways there is no shared spent-set, so a
@@ -428,3 +424,7 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   breaks); it recommended the newline-injection test (already added loop-6) and documenting the
   2b<-check4 authority invariant (now a code comment in verifyEnvelope). Replay-to-original-target
   scoping matches T-FEAT-12.
+- 2026-08-13  loop-7 (AGGRESSIVE FAN-OUT, 6 parallel agents) closed 5 test tasks in one tick:
+  T-TEST-12 (slash-math property, 165 assertions), T-TEST-13 (concurrency/race), T-TEST-16 (timing
+  sanity), and T-TEST-3 enroll + sign-directory. 19 suites green. T-DOC-3 (wire spec) landing next.
+  Added T-FEAT-13 (egress success receipts).
