@@ -414,5 +414,8 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   T-FEAT-11 (envelope version negotiation). 14 suites green.
 - 2026-08-13  loop-6  audited the loop-5 P0 fix; hardened it (signalFieldSafe: reject delimiter in
   target/nonce + over-long nonce before hashing, keeping the signal encoding injective); 3 new
-  rln.selftest cases. Independent adversarial review of the binding in flight. Added T-FEAT-12
-  (cross-gateway replay defense). 14 suites green.
+  rln.selftest cases. Added T-FEAT-12 (cross-gateway replay defense). 14 suites green.
+- 2026-08-13  loop-6b independent adversarial review of the target binding CONFIRMED it holds (no
+  breaks); it recommended the newline-injection test (already added loop-6) and documenting the
+  2b<-check4 authority invariant (now a code comment in verifyEnvelope). Replay-to-original-target
+  scoping matches T-FEAT-12.
