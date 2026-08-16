@@ -208,6 +208,7 @@ Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | The forward roadmap: protocol properties, fleet gaps, discovery, payments, zkAPI; with a status map of what PR #5 built |
 | [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md) | The original milestone designs (1–5), all built |
 | [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) | The shipping backlog and the release gates (test → Rust client → deploy) |
+| [`docs/CEREMONY.md`](docs/CEREMONY.md), [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | The two human-gated runbooks: production trusted setup (artifact hashes are pinned in `testdata/zk-artifacts.lock.json` and CI-verified) and the first live deployment |
 | [`docs/STATUS.md`](docs/STATUS.md), [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Live results; per-party worst case; the benchmark |
 | [`docs/post/`](docs/post/) | The published write-up (HTML + figures) |
 
