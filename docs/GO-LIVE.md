@@ -1,0 +1,205 @@
+# GO-LIVE runbook: T-DEPLOY-1 + T-DEPLOY-2
+
+The single ordered checklist for the first live deployment. It composes the existing docs; it
+does not replace them. Every command below exists in this repo (`bin/rgoe.mjs`,
+`bootnode/deploy/*`, `scripts/*`) or in the cited doc. Where the repo lacks something the
+runbook needs, the line is marked `GAP:` and repeated in the "Gaps found" section at the end.
+
+**Targets (from `docs/SHIP-PLAN.md` section 3):**
+
+- **T-DEPLOY-1** — bootnode + one gateway on a **fresh** droplet, gateway announced, laptop
+  client egresses through the fleet. Accept: `curl -x` through the client returns the
+  gateway's IP; `GET /directory` lists the gateway. The existing live gateway fleet is **not**
+  touched.
+- **T-DEPLOY-2** — at least two gateways on different providers/regions/ASNs. Accept:
+  `/directory` shows >= 2, the client rotates across them.
+
+**Machines:** `laptop` (operator workstation with this repo + an enrolled `RGOE_SECRET`),
+`droplet-1` (fresh box: bootnode + gateway-1), `droplet-2` (fresh box, different provider/ASN:
+gateway-2), `chain` (Sepolia, via `RGOE_RPC_URL`).
+
+**Markers:** `[HUMAN]` = a human decision, not something an agent runs unattended.
+`[FUNDS]` = spends real (testnet) funds or requires a funded key. `[RECEIPT]` = what to
+capture as evidence that the step is done.
+
+**Placeholders used throughout:** `<D1_IP>` `<D2_IP>` (droplet public IPs, SSH only),
+`<BN_ONION>` (bootnode onion), `<SIGNER>` (bootnode pinned signer pubkey, hex),
+`<GW1_ONION>` `<GW2_ONION>` (gateway onions), `<GW_REGISTRY>` (`GatewayRegistry` address).
+Never substitute the address/onion of the existing fleet for any of these.
+
+---
+
+## Phase 0 — Preconditions (laptop; nothing is deployed in this phase)
+
+| # | Check | Command (laptop) | Receipt / gate | Rollback |
+|---|---|---|---|---|
+| 0.1 | Gates 1+2 green | `npm test` and `npm run test:contracts` on this branch (`feat/bootnode-and-productionize`) | Both exit 0. SHIP-PLAN section "Sequencing and release gates" says T-DEPLOY-* is BLOCKED until Gate 1 + Gate 2 are green; SHIP-PLAN loop-23 records Gate 2 code path closed. | n/a |
+| 0.2 | Ceremony status `[HUMAN]` | Read `docs/CEREMONY.md` (T-HARD-1; being authored separately) | Decide: (a) go live with the **testnet-only, untrusted** RLN artifacts pinned in `circuits/rln/ARTIFACTS.md` and label the fleet testnet, or (b) wait for the ceremony. Record the decision + date at the top of the go-live log. The `-live` Rust binary embeds these artifacts (`.github/workflows/release.yml` header). | n/a |
+| 0.3 | Artifact hashes | `shasum -a 256 circuits/rln/rln.wasm circuits/rln/rln_final.zkey circuits/rln/verification_key.json` vs the table in `circuits/rln/ARTIFACTS.md` | All three match. | n/a |
+| 0.4 | Existing fleet inventory (read-only) | Read `network/sepolia/README.md`, `network/sepolia/directory.json`, `docs/DEPLOYMENT.md`; in `~/agent-devops`: `FLEET.md`, `ansible/inventory/group_vars/egress.yml`, `tofu/environments/dev/generated/fleet-ledger.md` | Write down the names of the boxes you must NOT touch (agent-devops `egress` group: `egress-01`, `egress-02`, `rgoe-03`; firewall class `anon_egress`). No host literally named `anon-egress` exists in either repo — see GAP-1. | n/a |
+| 0.5 | Sepolia contract addresses | `cat network/sepolia/contracts.json` | `stakedReputationSet = 0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC` (rln-v3, block 11279842), `hasher = 0x08F9a754…`, `withdrawVerifier = 0x5A6FD01d…`, `rpcUrl = https://ethereum-sepolia-rpc.publicnode.com`. **There is no `gatewayRegistry` entry** — `GatewayRegistry` is not yet deployed on Sepolia (see Phase 3 / GAP-2). Note that `network/sepolia/README.md` still lists the superseded `0x35719A47…98EC` (see Contradictions). | n/a |
+| 0.6 | Deployer / operator keys `[HUMAN]` `[FUNDS]` | `cast wallet list` (Foundry) — expect `rgoe-deployer` (per `docs/ONCHAIN-DEPLOY.md` section 3); `cast balance <deployer> --rpc-url https://ethereum-sepolia-rpc.publicnode.com` | Deployer `0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7` (per `network/sepolia/contracts.json`) has > 0.05 Sepolia ETH if Phase 3 is in scope. Operator EOA for `register-gateway` funded with >= `RGOE_BOND_WEI` + gas. Keys are never pasted inline; keystore or env only. | n/a |
+| 0.7 | Member secret | `test -f demo-keys.local.md` (gitignored, laptop only) or `rgoe enroll --commitment-only` | You hold an `RGOE_SECRET` whose rateCommitment leaf is in the committed `group/members.json` (`{"version":2,"members":[...]}`). A **new** enrollment via `rgoe enroll` appends to the local `group/members.json`; that change must reach droplets (commit + `rolling-update.sh`) or every proof drops `wrong-group-root`. Prefer an existing enrolled secret for go-live. | n/a |
+| 0.8 | Laptop Tor | `tor --version; tor --list-modules` | Note `pow: yes|no`. Homebrew tor reports `pow: no`. `docs/DEPLOYMENT.md` ("PoW capability mismatch") records that such a client **could not** reach a PoW-enabled onion, while `bootnode/deploy/bootstrap.sh` writes `HiddenServicePoWDefensesEnabled 1` for both onions. See Phase 4.0 for the mitigation and Contradictions. | n/a |
+| 0.9 | Rust client `[HUMAN]` | Either download a Release asset per `rust/INSTALL.md` (needs a `v*` tag pushed → `.github/workflows/release.yml`), or `cd rust && cargo build --release -p rgoe-client --features live` | `./rust/target/release/rgoe --version` prints. Decide whether to cut a release tag now (a tag push is a human git action, not part of this runbook). | n/a |
+| 0.10 | Provider accounts `[HUMAN]` `[FUNDS]` | DO: `export TF_VAR_do_token=...` (droplet-1). Second provider account (droplet-2) chosen and funded. | Two providers with **different ASNs**. Verify after creation with `curl -s https://ipinfo.io/<IP>/org`. DO is AS14061; pick a non-DO second provider (e.g. Hetzner AS24940, Vultr AS20473, OVH AS16276 — verify at creation). | n/a |
+| 0.11 | Bootstrap ref pinned `[HUMAN]` | Decide the git ref droplets clone: `feat/bootnode-and-productionize` (bootstrap default) or a tag/sha. | Record it; pass as `RGOE_REF` / `git_ref`. `docs/post/RUN-A-GATEWAY.md:28` points at `main` — do not use that URL for this branch's bootstrap (see Contradictions). | n/a |
+| 0.12 | Go/no-go `[HUMAN]` | — | Someone with authority writes "GO <date>" in the go-live log with the Phase 0.2 decision attached. | — |
+
+---
+
+## Phase 1 — Bootnode (droplet-1)
+
+Bootstrap brings up **bootnode + gateway-1 + heartbeat** on the same box in one shot
+(`bootnode/deploy/bootstrap.sh`), so Phases 1 and 2 are one provisioning action followed by
+two separate verifications.
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 1.1 | Create droplet-1 (IaC) `[FUNDS]` | laptop | `cd bootnode/deploy/terraform && cp terraform.tfvars.example terraform.tfvars` (set `ssh_public_key`, `droplet_name="rgoe-bn1"`, `region`, `git_ref=<0.11>`, `ssh_allowed_cidrs=["<your-ip>/32"]`) then `export TF_VAR_do_token=...; tofu init && tofu plan && tofu apply` | `tofu output ipv4_address` → `<D1_IP>`. Firewall = SSH-in only, all-out (`main.tf`). **This is the repo's own module, a fresh state dir; it does not touch `~/agent-devops` state** (never run a blanket `tofu apply` in `~/agent-devops/tofu/environments/dev` — `docs/DEPLOYMENT.md` "SAFETY: targeted applies only"). | `tofu destroy` in `bootnode/deploy/terraform` (destroys only this module's droplet/key/firewall). |
+| 1.2 | Watch first-boot bootstrap | laptop | `ssh root@<D1_IP> 'tail -f /var/log/rgoe-bootstrap.log'` (`tofu output provisioning_log_command`) | Final banner prints `bootnode onion`, `bootnode signer`, `gateway onion`, `admission open`. Record `<BN_ONION>`, `<SIGNER>`, `<GW1_ONION>` in the go-live log (these are the NEW fleet's; safe to publish). | If bootstrap failed mid-way: `ssh root@<D1_IP> 'sudo bash /opt/rgoe/bootnode/deploy/bootstrap.sh'` (idempotent, reuses keys/units). |
+| 1.3 | Units + tor | droplet-1 | `systemctl status tor rgoe-bootnode rgoe-gateway rgoe-heartbeat`; `tor --list-modules \| grep pow`; `systemd-analyze security rgoe-bootnode` | All 4 active; `pow: yes`; exposure ~2.x (`bootnode/deploy/README.md` "Systemd hardening"). | `journalctl -u rgoe-bootnode -n 100`; fix env in `/etc/systemd/system/rgoe-*.service`, `systemctl daemon-reload && systemctl restart <unit>`. |
+| 1.4 | Bootnode health, loopback | droplet-1 | `curl -s http://127.0.0.1:8877/health` | JSON with liveness, gateway count, `admission: open`. | as 1.3 |
+| 1.5 | Bootnode health, over Tor | droplet-1 | wait ~30–120 s for descriptor upload, then `BN=$(cat /opt/rgoe/deploy-state/bootnode-hs/hostname); curl --socks5-hostname 127.0.0.1:9050 http://$BN/health` | 200 + same JSON. | Descriptor cold-start is expected (`docs/DEPLOYMENT.md` item 3); retry for up to ~5 min before treating as failure. |
+| 1.6 | Signer pinned | droplet-1 | `node -e "console.log(JSON.parse(require('fs').readFileSync('/opt/rgoe/deploy-state/bootnode-signer.key')).pub)"` | Equals `<SIGNER>` from 1.2. `RGOE_BOOTNODE_SIGNER_KEY` + `RGOE_BOOTNODE_STORE` are set on the unit by bootstrap (persistence across restart is on). | Never regenerate the signer after clients pin it (`docs/INCIDENT.md` #2). |
+| 1.7 | Firewall sanity | laptop | `nc -zv <D1_IP> 8877; nc -zv <D1_IP> 8443` | Both refused/timeout. Only 22 open. | Fix `ssh_allowed_cidrs`/firewall in tofu; `tofu apply`. |
+
+---
+
+## Phase 2 — Gateway-1 (droplet-1, same box)
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 2.1 | Gateway up | droplet-1 | `journalctl -u rgoe-gateway -n 50` | Lines `gateway up on 127.0.0.1:8443 (epoch <n>, 120s)`, `egress policy: :443 only`, `root source: members.json (PoC fallback), <n> members` (`docs/OPERATOR.md` "Normal log lines"). `<n>` equals `jq '.members\|length' group/members.json` on the laptop at the same ref. | `systemctl restart rgoe-gateway`. |
+| 2.2 | Heartbeat announcing | droplet-1 | `journalctl -u rgoe-heartbeat -n 20` | `announced (staked=false, ttl=900s)`; `capabilities: none` (unless 2.4). | `systemctl restart rgoe-heartbeat`; check `RGOE_BOOTNODE_ONION`, `RGOE_GW_IDENTITY`, `RGOE_TOR_PORT=9050` in the unit. |
+| 2.3 | Directory lists gateway-1 `[RECEIPT T-DEPLOY-1 half]` | droplet-1 | `curl -s --socks5-hostname 127.0.0.1:9050 http://<BN_ONION>/directory` | `gateways[]` contains `{onion:"<GW1_ONION>", weight:100, ...}`; save the JSON body as `golive/directory-1gw.json` (laptop copy). | If empty: TTL is 900 s / heartbeat 300 s; wait one interval; check 2.2. |
+| 2.4 | (Optional) region cap | droplet-1 | Add `Environment=RGOE_GATEWAY_REGION=na` (or `eu`, per box) to `/etc/systemd/system/rgoe-heartbeat.service`; `systemctl daemon-reload && systemctl restart rgoe-heartbeat` | Heartbeat logs `capabilities advertised (signed): …region…`. Continent bucket only (`docs/OPERATOR.md` section 7). | Remove the line, reload, restart. |
+| 2.5 | Enable gateway metrics (for Phase 6) | droplet-1 | Add `Environment=RGOE_METRICS_PORT=9101` to `rgoe-gateway.service`; `systemctl daemon-reload && systemctl restart rgoe-gateway`; `curl -s 127.0.0.1:9101/metrics \| head` | `rgoe_gateway_requests_total` etc. present, loopback only (`monitoring/README.md`). | Remove line, reload, restart. |
+| 2.6 | Egress IP of gateway-1 (for Phase 4 comparison) | droplet-1 | `curl -s https://api.ipify.org` | Equals `<D1_IP>`. | — |
+
+---
+
+## Phase 3 — On-chain registration / stake (chain) `[HUMAN]` `[FUNDS]` — optional for T-DEPLOY-1 acceptance
+
+T-DEPLOY-1/2 acceptance is met with `--admission open` (bootstrap default). Do Phase 3 only if
+the go/no-go (0.12) includes "staked admission". It follows `docs/ONCHAIN-DEPLOY.md` exactly.
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 3.1 | Dry run (no funds) | laptop | `RGOE_DEPLOY_OUT=cache/deployed.sim.json forge script contracts/script/DeployRegistry.s.sol:DeployRegistry` then again with real env (`RGOE_RPC_URL`, `RGOE_BOND_WEI=1000000000000000`, `RGOE_UNBONDING=300 RGOE_MIN_UNBONDING=270`, `RGOE_GATEWAY_OWNER`, `RGOE_DEPLOY_STAKED=0`) still without `--broadcast` | `== Logs ==` shows chainid 11155111, bond/unbonding, no unintended `WARNING: deployed Mock…` (`RGOE_DEPLOY_STAKED=0` deploys `GatewayRegistry` only, since `StakedReputationSet` already exists at 0xdAE242…). | n/a |
+| 3.2 | Broadcast `GatewayRegistry` `[FUNDS]` | laptop→chain | `forge script contracts/script/DeployRegistry.s.sol:DeployRegistry --rpc-url "$RGOE_RPC_URL" --account rgoe-deployer --broadcast` (with the 3.1 env, `RGOE_DEPLOY_OUT` unset) | `contracts/deployed.local.json` gains `gatewayRegistry`; `broadcast/DeployRegistry.s.sol/11155111/run-latest.json`; `cast call <GW_REGISTRY> "BOND()(uint256)" --rpc-url $RGOE_RPC_URL` = 1000000000000000. Record `<GW_REGISTRY>` in the go-live log **and** add it to `network/sepolia/contracts.json` (GAP-2: schema has no `gatewayRegistry` key yet; add one). | Contracts are immutable; a bad deploy is abandoned and re-deployed. Do not wire a bad address into units. |
+| 3.3 | Verify source (optional) | laptop | `forge verify-contract <GW_REGISTRY> contracts/GatewayRegistry.sol:GatewayRegistry --chain sepolia --etherscan-api-key <key> --constructor-args $(cast abi-encode "c(uint256,uint256,uint256,address)" "$RGOE_BOND_WEI" "$RGOE_UNBONDING" "$RGOE_MIN_UNBONDING" "$RGOE_GATEWAY_OWNER")` | Etherscan shows verified. | — |
+| 3.4 | Stake operator `[FUNDS]` | laptop→chain | `RGOE_REGISTER_KEY=<operator-key-via-env> rgoe register-gateway --gateway-registry <GW_REGISTRY> --rpc-url $RGOE_RPC_URL` | Prints tx; `cast call <GW_REGISTRY> "isStaked(address)(bool)" <operator> --rpc-url $RGOE_RPC_URL` = true. Idempotent (`group/register-gateway.mjs:51`). | Exit path is manual `cast send … "initiateExit()"` then `withdraw(address)` after `UNBONDING` (`docs/OPERATOR.md` section 6). |
+| 3.5 | Switch bootnode to stake admission | droplet-1 | In `/etc/systemd/system/rgoe-bootnode.service` set `Environment=RGOE_BOOTNODE_ADMISSION=stake`, add `Environment=RGOE_STAKE_MODE=onchain`, `Environment=RGOE_GATEWAY_REGISTRY=<GW_REGISTRY>`, `Environment=RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com` (optionally `RGOE_CONFIRMATIONS=6`); `systemctl daemon-reload && systemctl restart rgoe-bootnode` | `/health` shows `admission: stake`. Bootnode reloads its store and re-verifies entries (`docs/BOOTNODE.md` "Surviving a restart"). | Set `RGOE_BOOTNODE_ADMISSION=open`, remove the three vars, reload, restart. |
+| 3.6 | Heartbeat signs operator auth | droplet-1 | Add `Environment=RGOE_GW_OPERATOR_KEY=<operator-key>` to `rgoe-heartbeat.service` (or `RGOE_GW_OPERATOR` + precomputed `RGOE_GW_OPERATOR_SIG` to keep the key off-box); `systemctl daemon-reload && systemctl restart rgoe-heartbeat` | Heartbeat logs `announced (staked=true, …)`; `/directory` entry shows staked. | Remove var, restart; bootnode back to `open` (3.5 rollback). |
+| 3.7 | (Optional) gateway slashing on-chain | droplet-1 | Add `RGOE_SLASH_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`, `RGOE_RPC_URL`, `RGOE_SLASH_KEY=<hot-key>` to `rgoe-gateway.service` | Gateway startup no longer logs `slash: DRY-RUN`. This is the config the existing fleet already runs (`~/agent-devops/ansible/inventory/group_vars/egress.yml`). Do NOT reuse the existing fleet's slash key on the new box unless the human decides so. | Remove vars, restart (returns to dry-run). |
+
+---
+
+## Phase 4 — First laptop client egress (JS and Rust) `[RECEIPT T-DEPLOY-1]`
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 4.0 | PoW compatibility check | laptop | If Phase 0.8 said `pow: no`, first try 4.2 anyway. If the dial fails `HostUnreachable`/timeout while 1.5 passes on-box, on droplet-1 set `HiddenServicePoWDefensesEnabled 0` for both blocks in `/etc/tor/torrc.d-rgoe`, `systemctl reload tor` (onions unchanged; keys persist). | Documented decision in the go-live log. GAP-3: bootstrap.sh has no `RGOE_ENABLE_POW` toggle; the agent-devops role defaults `rgoe_enable_pow: false` for exactly this reason. | Re-enable, `systemctl reload tor`. |
+| 4.1 | Laptop Tor | laptop | `bash scripts/start-tor-client.sh` (SOCKS 9260, `tor/torrc.client`) or use system tor and `export RGOE_TOR_PORT=9050` | `curl --socks5-hostname 127.0.0.1:9260 http://<BN_ONION>/health` returns the same JSON as 1.5. | `pkill -f torrc.client`. |
+| 4.2 | JS client (fleet mode via bootnode) | laptop | `export RGOE_SECRET=<enrolled>; rgoe client --bootnode <BN_ONION> --dir-signer <SIGNER> --tor-port 9260` (`npm link` once, or `node bin/rgoe.mjs client …`) | Log shows directory fetched + verified against `<SIGNER>`, `source: fresh`, shim on `127.0.0.1:8888`. `RGOE_DIR_SIGNER` **must** be set in fleet mode (`docs/CLIENTS.md` gotcha). | Ctrl-C. |
+| 4.3 | **T-DEPLOY-1 acceptance A** | laptop | `curl -sx http://127.0.0.1:8888 "https://api.ipify.org?format=json"` | Returns `{"ip":"<D1_IP>"}` — the gateway's IP, not the laptop's, not a Tor exit. On droplet-1 `journalctl -u rgoe-gateway` shows a `PASS egress->api.ipify.org:443 …` line. Save both to `golive/accept-1a.txt`. | See `docs/INCIDENT.md` #6 (mass-DROP): `root-not-recent`/`wrong-group-root` = members.json/epoch/slots mismatch — confirm `RGOE_EPOCH_SECONDS=120`, `RGOE_SLOTS=8`, `RGOE_RLN_IDENTIFIER=1` on both sides and identical `group/members.json`. |
+| 4.4 | **T-DEPLOY-1 acceptance B** | laptop | `curl -s --socks5-hostname 127.0.0.1:9260 http://<BN_ONION>/directory \| jq '.gateways[].onion'` and `rgoe verify-directory <saved.json> --signer <SIGNER>` (Rust default binary) | Lists `<GW1_ONION>`; verify prints ok. Save to `golive/accept-1b.json`. | — |
+| 4.5 | Privacy check | droplet-1 | `journalctl -u rgoe-gateway --no-pager \| grep -c "<laptop-public-ip>"` | `0`. | If non-zero: STOP, treat as incident; the rendezvous path is not being used. |
+| 4.6 | Rust client — derive inputs | laptop | `mkdir -p golive/rust && node rust/rgoe-rln/interop/egress-derive.mjs golive/rust "$RGOE_SECRET"` | Writes `golive/rust/identity.json` (`{identitySecret, leaf}`). **Ignore** the single-leaf `golive/rust/members.json` it also writes; use the committed `group/members.json` (same `{version,members[]}` shape). GAP-4: no first-class `rgoe` command exports the Rust identity file; the harness helper is the only path. `identity.json` is secret material — keep it in gitignored/local space and delete after. | `rm -rf golive/rust`. |
+| 4.7 | Rust client — live egress over embedded Tor | laptop | `./rust/target/release/rgoe egress --bootnode-onion <BN_ONION> --signer <SIGNER> --identity golive/rust/identity.json --members group/members.json --target api.ipify.org:443 --slot-cursor golive/rust/slot.cursor` (needs the `--features live` build) | Reports gateway ACCEPT; droplet-1 logs a second `PASS egress->api.ipify.org:443`. Save output as `golive/accept-1c.txt`. (The Rust `egress` reports accept/reject of the envelope; it is not an HTTP proxy — see `rust/INSTALL.md`.) | Retry with `--directory <saved-directory.json> --signer <SIGNER>` (file transport) to separate discovery from dial problems. |
+| 4.8 | Negative check | laptop | Run 4.2 with a secret from `rgoe enroll --commitment-only` that was never added to `members.json` | Client cannot build a proof / gateway DROPs; nothing egresses (verification matrix row 2, `docs/DEPLOY.md`). | — |
+| 4.9 | Uptime probe (external view) | laptop | `RGOE_BOOTNODE_ONION=<BN_ONION> RGOE_DIR_SIGNER=<SIGNER> RGOE_TOR_PORT=9260 node scripts/uptime-probe.mjs; echo $?` | Exit 0, `signerOk` (`monitoring/UPTIME.md`). | — |
+
+---
+
+## Phase 5 — Gateway-2, different provider / region / ASN (droplet-2) `[RECEIPT T-DEPLOY-2]`
+
+The repo's tofu module is DigitalOcean-only (`bootnode/deploy/terraform/main.tf`); for a
+non-DO provider create the box by hand/that provider's tooling and run `bootstrap.sh` directly
+(it is provider-agnostic; needs fresh Ubuntu 24.04, root, outbound internet). GAP-5.
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 5.1 | Create droplet-2 `[HUMAN]` `[FUNDS]` | laptop | Provider console/CLI: Ubuntu 24.04, 1 vCPU/1 GB is enough, SSH key only, firewall inbound 22 only, different region than droplet-1. | `<D2_IP>`; `curl -s https://ipinfo.io/<D2_IP>/org` shows a **different AS** than `curl -s https://ipinfo.io/<D1_IP>/org`. Save both to `golive/asn.txt`. | Destroy the box at the provider. |
+| 5.2 | Bootstrap (gateway role) | droplet-2 | `ssh root@<D2_IP>`; `curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/<REF>/bootnode/deploy/bootstrap.sh \| sudo RGOE_REF=<REF> bash` | Banner prints a local bootnode onion (unused below), signer, and `<GW2_ONION>`. Record `<GW2_ONION>`. | Re-run (idempotent). |
+| 5.3 | Point heartbeat at bootnode-1 | droplet-2 | Edit `/etc/systemd/system/rgoe-heartbeat.service`: `Environment=RGOE_BOOTNODE_ONION=<BN_ONION>` (bootnode-1's, replacing the local one); optionally `Environment=RGOE_GATEWAY_REGION=<eu\|na\|…>`; then `systemctl daemon-reload && systemctl restart rgoe-heartbeat` | `journalctl -u rgoe-heartbeat` shows `announced (…)`. GAP-6: `bootstrap.sh` has no "gateway-only / announce to a remote bootnode" tunable (`RGOE_BOOTNODE_ONION` is not one of its env inputs); this is the manual step `docs/OPERATOR.md` section 2 describes. | Restore the local onion in the unit, reload, restart. |
+| 5.4 | Local bootnode on droplet-2 `[HUMAN]` | droplet-2 | Either (a) `systemctl disable --now rgoe-bootnode` (single-bootnode fleet), or (b) keep it and federate: on **both** boxes add `Environment=RGOE_BOOTNODE_PEERS=<other-bootnode-onion>` + `Environment=RGOE_BOOTNODE_ONION=<own-bootnode-onion>` to `rgoe-bootnode.service`, reload, restart (`docs/BOOTNODE.md` "Federation"). | (a) unit inactive; (b) both `/directory` converge on the same 2 gateways within `RGOE_BOOTNODE_FED_INTERVAL` (60 s). Prefer (a) for the first go-live; (b) is the SLO 2.2 path to redundancy. | (a) `systemctl enable --now rgoe-bootnode`; (b) remove the two vars. |
+| 5.5 | Metrics on gateway-2 | droplet-2 | Same as 2.5 (`RGOE_METRICS_PORT=9101`). | `/metrics` on loopback. | as 2.5 |
+| 5.6 | If Phase 3 was done: stake/authorize gateway-2 `[FUNDS]` | laptop→chain / droplet-2 | Either reuse the same operator (one stake backs many onions — `docs/BOOTNODE.md` "The onion is never on chain"): add `RGOE_GW_OPERATOR_KEY` (or `RGOE_GW_OPERATOR`+`RGOE_GW_OPERATOR_SIG`) to droplet-2's heartbeat unit; or stake a second operator via 3.4. | `announced (staked=true…)`. | Remove var; entry TTLs out of a stake-admission bootnode. |
+| 5.7 | **T-DEPLOY-2 acceptance A** | laptop | `curl -s --socks5-hostname 127.0.0.1:9260 http://<BN_ONION>/directory \| jq '.gateways \| length'` | `2` (`<GW1_ONION>` and `<GW2_ONION>`). Save as `golive/directory-2gw.json`. `FleetTooSmall` (`monitoring/alerts.yml`) clears. | — |
+| 5.8 | **T-DEPLOY-2 acceptance B (rotation)** | laptop | With the 4.2 client running (optionally `RGOE_ROTATION_SPREAD=1` for strict round-robin, `docs/CONFIG.md` T-FEAT-4): `for i in $(seq 1 8); do curl -sx http://127.0.0.1:8888 https://api.ipify.org; echo; done \| sort \| uniq -c` | Both `<D1_IP>` and `<D2_IP>` appear (with `RGOE_ROTATION_SPREAD=1`, 4/4). Save as `golive/accept-2b.txt`. Note: 8 requests = one epoch's `RGOE_SLOTS=8` budget; wait 120 s before more. | If only one IP: check droplet-2's `journalctl -u rgoe-gateway` for `PASS`/`DROP`; check the client's health cache did not mark gw-2 `down` (2 dial failures). |
+| 5.9 | Rust rotation | laptop | Run 4.7 four times with the same `--slot-cursor` and `--health-cache golive/rust/health.json` | Accepts land on both gateways (see each box's gateway journal). | — |
+| 5.10 | Both-ends AS spread receipt | laptop | `golive/asn.txt` + `golive/accept-2b.txt` | Two ASNs, two egress IPs, one client. This is the T-DEPLOY-2 accept. | — |
+
+---
+
+## Phase 6 — Monitoring, SLO baseline, backup of onion identities
+
+| # | Step | Machine | Command | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 6.1 | Scrape via SSH tunnels | laptop (or a monitoring host) | `ssh -N -L 18877:127.0.0.1:8877 root@<D1_IP> & ssh -N -L 19101:127.0.0.1:9101 root@<D1_IP> & ssh -N -L 19102:127.0.0.1:9101 root@<D2_IP> &`; Prometheus `scrape_configs` per `monitoring/README.md`; `rule_files: monitoring/alerts.yml`; `promtool check rules monitoring/alerts.yml` | `up{job="rgoe-bootnode"}==1`, `up{job="rgoe-gateway"}==1` x2, `rgoe_bootnode_live_gateways == 2`. GAP-7: no Prometheus/Grafana host is provisioned by anything in this repo; the tunnels above are the documented path. | Kill the tunnels; nothing on the droplets changes. |
+| 6.2 | Dashboard | monitoring host | Import `monitoring/grafana-dashboard.json` (`monitoring/README.md` "Import the dashboard"). | Fleet-size, pass/drop, verify p95 panels populated. | — |
+| 6.3 | External uptime probe on a schedule `[HUMAN]` | any tor-capable runner | cron/hosted: `RGOE_BOOTNODE_ONION=<BN_ONION> RGOE_DIR_SIGNER=<SIGNER> node scripts/uptime-probe.mjs` every 5 min (`monitoring/UPTIME.md`) | Exit codes logged. This is the SLI source for SLO 2.2/2.3. GAP-8: no scheduler config ships; the runner is the operator's. | Remove the cron. |
+| 6.4 | SLO baseline snapshot | laptop | Record at go-live+1h and +24h: `rgoe_gateway_requests_total` by `result/reason`, `histogram_quantile(0.95, rate(rgoe_gateway_verify_seconds_bucket[5m]))`, `rgoe_bootnode_live_gateways`, uptime-probe success ratio | Write to `golive/slo-baseline-<date>.md`. `docs/SLO.md` targets are `[NEEDS DATA]`; this is the first data point for the 30-day recalibration (`docs/SLO.md` section 5, `monitoring/README.md` "Calibration note"). | — |
+| 6.5 | Status page (optional) | laptop | `web/status-server.mjs` (T-WEB-1) pointed at `<BN_ONION>` + `<SIGNER>` | Fleet size 2, onions truncated to 16 chars. | — |
+| 6.6 | **Backup onion identities + signer** | droplet-1 and droplet-2 | `export RGOE_BACKUP_PASSPHRASE='<long unique>'; sudo -E -u rgoe node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state /opt/rgoe/deploy-state/rgoe-keys-$(hostname)-$(date +%F).rgoebak` then `scp` the `.rgoebak` off-box; delete the on-box copy | One `.rgoebak` per box, stored encrypted-at-rest off-box; passphrase in the password manager, **separately** (`docs/BACKUP.md`). Covers `identity.local.json`, `hs_ed25519_secret_key` (bootnode-hs + gateway-hs), `bootnode-signer.key`. Operator EOA key is NOT included (wallet backup). | — |
+| 6.7 | Prove restore | laptop | `RGOE_BACKUP_PASSPHRASE=… rgoe restore <file>.rgoebak /tmp-scratch/restore-test && node scripts/onion-identity.mjs derive /tmp-scratch/restore-test/gateway-hs/hs_ed25519_secret_key` | Prints exactly `<GW1_ONION>` (resp. `<GW2_ONION>`); repeat for `bootnode-hs` → `<BN_ONION>` (`docs/ONION-IDENTITY.md` "verify-before-cutover"). Then `rm -rf` the scratch dir. | — |
+| 6.8 | Systemd security check | both droplets | `systemd-analyze security rgoe-gateway rgoe-heartbeat rgoe-bootnode` | Each ~2.x. | — |
+| 6.9 | (Recommended) vanguards add-on `[HUMAN]` | both droplets | Per `docs/TOR-HARDENING.md` section 2 — external tool, own unit, tor `ControlPort` + cookie auth | Running. GAP-9: not scripted anywhere in this repo. | Stop the unit. |
+
+---
+
+## Phase 7 — Announce to members / rotate docs `[HUMAN]`
+
+| # | Step | Machine | Command / action | Receipt | Rollback |
+|---|---|---|---|---|---|
+| 7.1 | Publish the fleet record | laptop (git) | Add a committed record of the NEW fleet's discovery inputs: `<BN_ONION>`, `<SIGNER>`, admission mode, `<GW_REGISTRY>` if any, ref deployed. Suggested home: `network/sepolia/README.md` "Bootnode" section + a `network/sepolia/bootnode.json {onion, signer, admission}` next to `contracts.json`/`directory.json` (`network/README.md` says `network/<name>/` is the canonical per-deployment record). GAP-10: no schema/file for a bootnode record exists yet. Also add `gatewayRegistry` to `contracts.json` if Phase 3 ran. Commit + push is a human git action. | PR merged. Never include the existing fleet's or laptop's IPs in the new record; onions of the NEW fleet are fine (they are the discovery handle). | Revert the commit. |
+| 7.2 | Static fallback directory (cold path) | laptop | `rgoe sign-directory <unsigned-list.json>` listing `<GW1_ONION>`,`<GW2_ONION>` with a **separate** static signer, or export the bootnode's signed `/directory` body as `network/sepolia/directory.bootnode.json` | Members can set `RGOE_DIRECTORY` + `RGOE_DIR_SIGNER` if the bootnode is dark (`docs/INCIDENT.md` #1 containment). | — |
+| 7.3 | Member instructions | laptop | Update the member-facing docs to the fleet command: `rgoe client --secret <hex> --bootnode <BN_ONION> --dir-signer <SIGNER>` (JS) and the Rust `-live` `egress --bootnode-onion <BN_ONION> --signer <SIGNER> …`. Files: `docs/JOIN.md`, `docs/post/JOIN.md`, `docs/QUICKSTART.md` "Path A", `docs/post/RUN-A-GATEWAY.md` (fix the `main` raw URL, see Contradictions). Also `scripts/run-client.sh` / `scripts/join.sh` default to the old PoC gateway onion + IP — decide whether to retarget them (owned by another agent under `scripts/`; do not edit here). | Docs name the new bootnode + signer only. | — |
+| 7.4 | Release tag (optional) `[HUMAN]` | laptop | `git tag v<version> && git push origin v<version>` → `.github/workflows/release.yml` publishes `rgoe-<version>-<target>` and `-live` assets | Release page has the assets + `.sha256`. Note the release header: artifacts are testnet-only until T-HARD-1. | Delete the tag/release. |
+| 7.5 | Announce `[HUMAN]` | — | Message to members: bootnode onion + signer, the two client commands, "testnet-only artifacts" caveat (per 0.2), rate budget (`RGOE_SLOTS=8` per 120 s epoch), incident contact. Do not include droplet IPs; do not mention the existing fleet's onions/IPs. | Sent. | — |
+| 7.6 | Backlog | laptop | Mark T-DEPLOY-1 / T-DEPLOY-2 done in `docs/SHIP-PLAN.md` with the receipt file names (owned by another agent — hand them this list). | — | — |
+
+---
+
+## Do-not list
+
+1. **Never print, commit, or announce the droplet IP or onion of the existing live gateways** (agent-devops `egress` group / `anon_egress` class: `egress-01`, `egress-02`, `rgoe-03`, and the older PoC gateway). This runbook deliberately contains none of them. Note: `network/sepolia/README.md`, `network/sepolia/directory.json` (`note` fields), `docs/DEPLOYMENT.md` "Live Tor round-trip", `docs/JOIN.md:26,34`, `scripts/run-client.sh:23-25`, `scripts/join.sh:28` already carry them — flagged under Contradictions for their owners; do not add more.
+2. **Do not touch the existing gateways.** No `task provision`, no `tofu apply`, no ssh, no unit edits on `egress-01`/`egress-02`/`rgoe-03`; do not re-sign or re-commit `network/sepolia/directory.json`'s gateway list; do not reuse their slash key/signer on the new boxes without an explicit human decision. Their `deploy/onchain-staked-fleet` branch + static signed directory stay live and independent.
+3. **Do not run a blanket `tofu apply` in `~/agent-devops/tofu/environments/dev`** (`docs/DEPLOYMENT.md` "SAFETY: targeted applies only"). Use the repo's own `bootnode/deploy/terraform` for droplet-1.
+4. **Do not paste private keys on a command line** (`docs/ONCHAIN-DEPLOY.md` section 3): keystore (`--account rgoe-deployer`) or env only; `RGOE_BACKUP_PASSPHRASE` env only.
+5. **Do not open 8877 / 8443 / 9101 to clearnet** — SSH-in only; metrics via SSH tunnel (`monitoring/README.md`).
+6. **Do not regenerate the bootnode signer or the onion keys** after clients pin them (`docs/INCIDENT.md` #2, #4). Restores go through `docs/ONION-IDENTITY.md` verify-before-cutover.
+7. **Do not clear an alert by weakening the gate** (`docs/SLO.md` section 5).
+8. **Do not use `--broadcast` or spend funds unattended**; Phase 3 and every `[FUNDS]` row is a human action.
+9. **Do not restart both gateways at once** once members are on the fleet (`bootnode/deploy/ROLLING-UPDATE.md`).
+
+---
+
+## Gaps found
+
+- **GAP-1** — No host named `anon-egress` exists in this repo or `~/agent-devops` (only the `anon_egress` firewall/role class covering `egress-01`, `egress-02`, `rgoe-03`, plus an older PoC gateway referenced by IP in `docs/JOIN.md`/`scripts/run-client.sh`). SHIP-PLAN T-DEPLOY-1 should name the box(es) explicitly.
+- **GAP-2** — `GatewayRegistry` is not deployed on Sepolia: `network/sepolia/contracts.json` has no `gatewayRegistry` key and `contracts/deployed.local.json` has none either. Phase 3 requires a live broadcast (`docs/ONCHAIN-DEPLOY.md` section 5) and a schema addition to `contracts.json`.
+- **GAP-3** — `bootnode/deploy/bootstrap.sh` hard-codes `HiddenServicePoWDefensesEnabled 1` with no `RGOE_ENABLE_POW` tunable, while `docs/DEPLOYMENT.md` records that a Homebrew (`pow: no`) client tor could not connect to a PoW-enabled onion and the agent-devops role defaults `rgoe_enable_pow: false`. Phase 4.0 is a manual torrc edit.
+- **GAP-4** — No first-class command exports the Rust `--identity` file (`{identitySecret, leaf}`); only the harness helper `rust/rgoe-rln/interop/egress-derive.mjs` does, and it also writes a single-leaf `members.json` that must be ignored.
+- **GAP-5** — `bootnode/deploy/terraform` is DigitalOcean-only; the second-provider box in Phase 5 has no IaC in this repo (bootstrap.sh by hand). The `~/agent-devops` `rgoe_gateway` role (T-DEPLOY-3) is the **legacy gateway-only** role (dedicated tor on 9250, HS dir `/var/lib/tor-rgoe/hs`, default `rgoe_git_ref: main`, no bootnode/heartbeat units), so it does not produce the bootnode-era topology this runbook needs.
+- **GAP-6** — `bootstrap.sh` has no gateway-only mode / no `RGOE_BOOTNODE_ONION` input; every box gets its own bootnode and heartbeat points at it. Joining a remote bootnode is a manual unit edit (Phase 5.3–5.4).
+- **GAP-7** — No Prometheus/Grafana host is provisioned by anything in the repo; scraping is via SSH tunnels per `monitoring/README.md`.
+- **GAP-8** — `scripts/uptime-probe.mjs` has no shipped scheduler/cron/hosted-runner config.
+- **GAP-9** — vanguards add-on (recommended in `docs/TOR-HARDENING.md` section 2) is not scripted.
+- **GAP-10** — `network/<name>/` has no bootnode record file/schema (`onion`, `signer`, `admission`); the canonical per-network record (`network/README.md`) only covers contracts + static directory.
+- **GAP-11** — `docs/CEREMONY.md` did not exist at authoring time (being written by another agent); Phase 0.2 links to it by name.
+- **GAP-12** — No `rgoe` wrapper for gateway exit/withdraw (manual `cast`, `docs/OPERATOR.md` section 6) — the rollback for Phase 3.4.
+
+## Contradictions in existing docs (for their owners; not fixed here)
+
+- `network/sepolia/README.md:10-15` lists `StakedReputationSet 0x35719A47…98EC` (block 11274471) as live, but `network/sepolia/contracts.json` (`release: rln-v3`, block 11279842) says `0xdAE242AE…20FC` **supersedes** it; `docs/DEPLOYMENT.md:125` also cites the old address; `~/agent-devops/ansible/inventory/group_vars/egress.yml` uses the new one.
+- `docs/DEPLOYMENT.md` "PoW capability mismatch" (client with `pow: no` cannot connect; fleet default `rgoe_enable_pow: false`) vs `bootnode/deploy/bootstrap.sh` (`HiddenServicePoWDefensesEnabled 1`, unconditional) and `bootnode/deploy/README.md` "PoW … available and enabled".
+- `docs/INCIDENT.md:40` and `:307-308` say bootnode persistence across restart is "not yet built (T-DEV-4)", but `docs/BOOTNODE.md` "Surviving a restart", `docs/CONFIG.md` (`RGOE_BOOTNODE_STORE`) and `bootstrap.sh` (sets `RGOE_BOOTNODE_STORE`) ship it. Same file `:104`, `:286`, `:309-310` says no cross-gateway replay defense (T-FEAT-12) while `docs/OPERATOR.md` section 5 documents T-FEAT-12 + T-FEAT-20.
+- `docs/OPERATOR.md:185` "Backup — Manual for now (no backup tooling is shipped)" and `docs/TOR-HARDENING.md:128-131` ("manual `tar | gpg` … tracked as T-FEAT-15") vs `docs/BACKUP.md` (`rgoe backup`/`rgoe restore` shipped, listed in `bin/rgoe.mjs`).
+- `docs/CLI.md` command table omits `join`, `backup`, `restore`, which `bin/rgoe.mjs` `COMMANDS` defines.
+- `docs/post/RUN-A-GATEWAY.md:28` fetches `bootstrap.sh` from the `main` ref; `docs/OPERATOR.md`, `docs/QUICKSTART.md`, `bootnode/deploy/README.md`, and `bootstrap.sh` itself pin `feat/bootnode-and-productionize`.
+- `docs/DEPLOYMENT.md` "Verification" (`RGOE_DIRECTORY` static-file client, `RGOE_TOR_PORT=9260`) vs `docs/QUICKSTART.md` (bootnode discovery, `--dir-signer`); both valid, but the member docs (`docs/JOIN.md`, `scripts/join.sh`) still describe the single-onion PoC path with a hard-coded gateway.
+- `docs/DEPLOYMENT.md` topology says "Membership gating uses `members.json`" and the on-chain set is only economic; `docs/CONFIG.md` profile (b) and `docs/OPERATOR.md` describe `RGOE_GROUP_CONTRACT` on-chain root mode as available. Not contradictory in code (both modes exist), but the runbook keeps the bootstrap default (`members.json`) and says so.
+- Public-IP / onion hygiene: `docs/JOIN.md:26,34`, `scripts/run-client.sh:23-25`, `scripts/join.sh:28`, `docs/DEPLOYMENT.md` "Live Tor round-trip" table, `network/sepolia/README.md` fleet table and `network/sepolia/directory.json` `note` fields all print existing-gateway IPs and/or onions, contrary to do-not item 1.

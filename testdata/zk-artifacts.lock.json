@@ -1,0 +1,145 @@
+{
+  "_note": "ZK artifact provenance lock (ship-plan T-HARD-1). sha256 + bytes are RECOMPUTED by test/zk-artifacts.selftest.mjs on every `npm test`; `provenance` is a DECLARATION, not a measurement. Regenerate with `node scripts/zk-artifacts-lock.mjs`; see docs/CEREMONY.md for how the ceremony output replaces these entries.",
+  "version": 1,
+  "trust": "UNTRUSTED-TESTNET",
+  "trustNote": "Every artifact below is circom-rln's DEV phase-2 output (2 hard-coded contributions + fixed beacon; circuits/rln/ARTIFACTS.md). Genuine Groth16, but whoever holds the toxic waste can forge membership / exit-auth proofs. NOT for real funds or real anonymity.",
+  "ptau": {
+    "file": "powersOfTau28_hez_final_14.ptau",
+    "power": 14,
+    "sha256": "489be9e5ac65d524f7b1685baac8a183c6e77924fdb73d2b8105e335f277895d",
+    "ceremony": "Hermez / Perpetual Powers of Tau (BN254), phase-1 only",
+    "note": "not stored in-repo; verify the fetched file's sha256 against this value before any phase-2 (docs/CEREMONY.md)"
+  },
+  "ceremony": {
+    "status": "not-run",
+    "note": "Filled in by hand after docs/CEREMONY.md phase 2: id, date, contributors[], transcriptSha256[], finalContributionHash, beacon, publishedAt."
+  },
+  "circuits": {
+    "rln": {
+      "family": "rate-limiting-nullifier/circom-rln",
+      "tag": "v1.0.0",
+      "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
+      "main": "RLN(20,16)",
+      "constraints": 12390,
+      "nPublic": 5
+    },
+    "withdraw": {
+      "family": "rate-limiting-nullifier/circom-rln",
+      "tag": "v1.0.0",
+      "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
+      "main": "Withdraw",
+      "nPublic": 2
+    }
+  },
+  "artifacts": {
+    "circuits/rln/rln.wasm": {
+      "circuit": "rln",
+      "role": "witness-calculator (circom wasm, RLN(20,16))",
+      "sha256": "d06035923ab4c7fefedf92e05c9903d059af583b8a92a95ce72466a389ac6ab0",
+      "bytes": 2448462,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "lib/rln.mjs proveForSlot (client)",
+        "rust/rgoe-rln/src/prover.rs (embedded, live binary)",
+        "rust/rgoe-rln/src/main.rs (probe)"
+      ]
+    },
+    "circuits/rln/rln_final.zkey": {
+      "circuit": "rln",
+      "role": "groth16 proving key (phase-2 output)",
+      "sha256": "3f87e9a1f30933587ccdbe45a602329a499b9cf011e7378eae7f78b2ec22e685",
+      "bytes": 5545817,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "lib/rln.mjs proveForSlot (client)",
+        "rust/rgoe-rln/src/prover.rs (embedded, live binary)"
+      ]
+    },
+    "circuits/rln/verification_key.json": {
+      "circuit": "rln",
+      "role": "groth16 verification key (exported from rln_final.zkey)",
+      "sha256": "0b25f824a04da3a85f128baa6fdaa33d10baa7dd18c5e6f5935089661c68622c",
+      "bytes": 3657,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "lib/rln.mjs verifyEnvelope (gateway)",
+        "rust/rgoe-rln/src/prover.rs (embedded self-check)",
+        "rust/rgoe-rln/interop/verify-envelope.mjs"
+      ]
+    },
+    "circuits/rln/Verifier.sol": {
+      "circuit": "rln",
+      "role": "solidity groth16 verifier (snarkjs export of rln_final.zkey; provenance copy, not deployed)",
+      "sha256": "6c18de80c770babe2f1fe0db25ed88cbd1766275efcd98d3f9c5bfa62b18419d",
+      "bytes": 8688,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "contracts/RlnGroth16Verifier.sol is this file + a header comment"
+      ]
+    },
+    "contracts/RlnGroth16Verifier.sol": {
+      "circuit": "rln",
+      "role": "solidity groth16 verifier for the RLN membership circuit (VK == verification_key.json); NOT wired on-chain yet",
+      "sha256": "fd84c1d7e94e9bf54604ad6f1f1c19a8e120f415ffec2325855ab40d4029444b",
+      "bytes": 9375,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "forge build (compiles); no contract references it"
+      ]
+    },
+    "circuits/rln/withdraw.wasm": {
+      "circuit": "withdraw",
+      "role": "witness-calculator (circom wasm, withdraw / exit-auth)",
+      "sha256": "d0b6425f026a75a52fd2f324fac663b6f8986b8e4439b86a9e6d73ee03eef2bb",
+      "bytes": 1633988,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "testdata/gen-withdraw-proof.mjs",
+        "client-side exit-auth proving (not wired: no client command yet)"
+      ]
+    },
+    "circuits/rln/withdraw_final.zkey": {
+      "circuit": "withdraw",
+      "role": "groth16 proving key (phase-2 output)",
+      "sha256": "bd4750e62a753738d02cb1d3f04d959e9b01c60df1961c77f783072120a10d43",
+      "bytes": 188217,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "testdata/gen-withdraw-proof.mjs"
+      ]
+    },
+    "circuits/rln/withdraw_verification_key.json": {
+      "circuit": "withdraw",
+      "role": "groth16 verification key (exported from withdraw_final.zkey)",
+      "sha256": "dd6bfa937405972fdf2080ab82a0f11c80748a4b82c44e572502be6d1eb26fa7",
+      "bytes": 3103,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "testdata/gen-withdraw-proof.mjs (local verify)"
+      ]
+    },
+    "contracts/WithdrawGroth16Verifier.sol": {
+      "circuit": "withdraw",
+      "role": "solidity groth16 verifier for the withdraw circuit (VK == withdraw_verification_key.json); wrapped by contracts/WithdrawVerifier.sol, DEPLOYED (network/sepolia/contracts.json)",
+      "sha256": "b25e985e757dbb69fab15da63a740e83ad0b117d331d7675394544f3f2d77a2b",
+      "bytes": 8526,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "contracts/WithdrawVerifier.sol",
+        "contracts/script/DeployRegistry.s.sol",
+        "test/WithdrawVerifier.t.sol"
+      ]
+    },
+    "testdata/withdraw-proof.json": {
+      "circuit": "withdraw",
+      "role": "exit-auth proof fixture bound to withdraw_verification_key.json (regenerate: node testdata/gen-withdraw-proof.mjs)",
+      "sha256": "44048ca815045b3b99a4f85688f3c39a42e306fc2f2bc6c4316e83e011d0dffc",
+      "bytes": 2557,
+      "provenance": "dev-testnet-untrusted",
+      "loadedBy": [
+        "test/WithdrawVerifier.t.sol",
+        "test/StakedReputationSet*.t.sol"
+      ]
+    }
+  }
+}

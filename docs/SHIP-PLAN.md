@@ -223,6 +223,13 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
 - [x] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
   wired to the live fleet (reuse Sepolia or a chosen L2).
+- [ ] **T-DEPLOY-5 (P1, added loop-34) Close the go-live gaps.** `docs/GO-LIVE.md` (loop-34) is the ordered
+  runbook for T-DEPLOY-1/2; its "Gaps found" section lists what the repo lacks. Autonomous ones: deploy +
+  record `GatewayRegistry` on Sepolia in `network/sepolia/contracts.json` (GAP-2); `RGOE_ENABLE_POW` toggle in
+  `bootnode/deploy/bootstrap.sh` (GAP-3); a first-class `rgoe identity` command emitting the Rust
+  `--identity` file (GAP-4); gateway-only / remote-bootnode mode in `bootstrap.sh` (GAP-6); bootnode record
+  schema under `network/<name>/` (GAP-10); `rgoe` wrapper for gateway exit/withdraw (GAP-12); scheduler config
+  for the uptime probe (GAP-8). *Accept:* each GAP line in GO-LIVE.md flipped to DONE with the file:symbol.
 
 ## 4. Website & status
 
@@ -238,9 +245,31 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DOC-3 (P1) Wire-protocol + API spec.** DONE (loop-7): `docs/PROTOCOL-API.md` -- canonical byte encodings, onion<->key binding, announce + directory + envelope wire formats, bootnode HTTP API, every rejection reason, and a conformance map to testdata/vectors.json. Every claim cited to file:symbol. Unblocks the Rust conformance runner (T-RUST-1).
 - [x] **T-DOC-4 (P2) SECURITY.md** DONE (loop-9): `SECURITY.md` (unaudited/testnet status, in-scope vs known residuals, GitHub private-advisory reporting) + `CONTRIBUTING.md` (test commands, house conventions, the trust-model invariants a contributor must not break, gate ordering).
 - [x] **T-DOC-5 (P2) README polish pass.** DONE (loop-10): skimmable what/why/how lede, pruned the stale "deployed and verified live" overclaim to match pre-ship reality, reworked Run-it around the `rgoe` CLI, and a full Docs index linking every doc that now exists.
-- [ ] **T-HARD-1 (P0) Real trusted setup / artifact provenance.** Replace the untrusted testnet ZK
+- [ ] **T-DOC-8 (P1, added loop-34) Docs reconciliation pass.** The GO-LIVE audit found docs that
+  contradict the code or each other: `network/sepolia/README.md:10-15` + `docs/DEPLOYMENT.md:125` cite the
+  superseded StakedReputationSet address (`contracts.json` has the rln-v3 one); `docs/DEPLOYMENT.md` PoW
+  mismatch vs `bootstrap.sh` (PoW unconditional); `docs/INCIDENT.md:40,104,286,307-310` say bootnode
+  persistence (T-DEV-4) and T-FEAT-12 are unbuilt (both shipped); `docs/OPERATOR.md:185` + `docs/TOR-HARDENING.md:128-131`
+  say no backup tooling (`rgoe backup/restore` shipped); `docs/CLI.md` omits `join`/`backup`/`restore`;
+  `docs/post/RUN-A-GATEWAY.md:28` fetches bootstrap.sh from `main` while everything else pins the branch.
+  Also: `docs/JOIN.md:26,34`, `scripts/run-client.sh:23-25`, `scripts/join.sh:28`, `docs/DEPLOYMENT.md`
+  round-trip table, `network/sepolia/README.md` fleet table and `directory.json` notes print existing-gateway
+  IPs/onions — decide per file whether that is intended (member-facing) or should be scrubbed.
+  *Accept:* every line above fixed or explicitly kept with a reason; ROADMAP.md §0 "documentation
+  reconciliation is itself a P0" can then be checked.
+- [~] **T-HARD-1 (P0) Real trusted setup / artifact provenance.** Replace the untrusted testnet ZK
   artifacts; document the ceremony or pin audited artifacts; CI verifies hashes. *(Flag the ceremony
-  itself for the human.)*
+  itself for the human.)* DONE (loop-34, autonomous half): `docs/CEREMONY.md` (inventory of both circuits +
+  10 artifacts + every consumer; ptau reuse + verify; phase-2 multi-party contribute/beacon/verify protocol;
+  publish + independent verification; pin-into-repo incl. Solidity verifier regen + Rust `include_bytes!`;
+  rollout via PROTO_MIN/MAX; human checklist), `testdata/zk-artifacts.lock.json` (sha256/bytes/role/loadedBy,
+  `provenance:"dev-testnet-untrusted"`, `ceremony:{status:"not-run"}`), `scripts/zk-artifacts-lock.mjs`
+  (`--check`, `--provenance=`), `test/zk-artifacts.selftest.mjs` (36 assertions: hash recompute, coverage of
+  every circuit/verifier file, Solidity VK == JSON VK, contract verifier == circuit verifier, Rust embed paths,
+  ARTIFACTS.md table == lock; runs in `npm test` so ci.yml verifies hashes). REMAINING (human): run the ceremony
+  (CEREMONY.md §8), then swap artifacts + `--provenance=ceremony` + flip `EXPECTED_PROVENANCE`. Not wired
+  (filed as T-HARD-8): `verifyEnvelope` has a single VKEY (no dual-VK window), no wire artifact-version field,
+  `release.yml` does not run the lock selftest, Rust binary has no runtime hash check.
 - [x] **T-HARD-2 (P1) Supply chain.** DONE (loop-11, with T-TEST-9): `.github/dependabot.yml` (npm/cargo/actions weekly) + `npm audit` gate (critical blocking, high informational). Lockfile committed. Remaining polish: pin transitive advisories as Dependabot lands upstream fixes.
 - [x] **T-HARD-3 (P1) Log hygiene.** DONE (loop-8, `test/log-hygiene.selftest.mjs`, 25 assertions, mutation-verified): static scan of every log call across 9 files + dynamic capture (bootnode, gateway spent-set, enroll) => no secret/seed logged. Fixed the one note it found: the dry-run slasher no longer prints any bytes of the reconstructed secret (`gateway/gateway.mjs`).
 - [~] **T-HARD-4 (P1) Endpoint hardening.** DONE (loop-2): the client's response read from the
@@ -253,6 +282,12 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-HARD-5 (P2) Directory signer rotation.** DONE (loop-13): `verifyDirectory` accepts a pinned-signer ALLOWLIST (single string still works byte-for-byte); `RGOE_DIR_SIGNER` takes a comma-separated overlap set. Rotation: add new to client set -> rotate bootnode key -> drop old. Still an allowlist (unpinned/wrong signer rejected). `lib/directory-rotation.selftest.mjs`.
 - [x] **T-HARD-6 (P2) Contract audit prep.** DONE (loop-9): `docs/CONTRACTS-AUDIT.md` (inventory, 8 written invariants each tied to a test, per-function reentrancy/CEI/access walk, honest limitations) + `slither.config.json`. slither not installed here; config left for later.
 - [x] **T-HARD-7 (P2) Tor hardening.** DONE (loop-11): `docs/TOR-HARDENING.md` (PoW tuning, vanguards, v3 client-auth -- corrected from the deprecated v2 mechanism, process/OS, SOCKS circuit isolation) + `bootnode/deploy/torrc.hardened` reference fragment (server/client tagged, version-dependent options flagged).
+- [ ] **T-HARD-8 (P1, added loop-34) Artifact-version negotiation for the ceremony swap.** `verifyEnvelope`
+  accepts a set of `{artifactId → vkey}` and the envelope/caps carry an artifact id, so a fleet can run a
+  dual-VK window during the post-ceremony rollout instead of a flag-day; `release.yml` runs
+  `test/zk-artifacts.selftest.mjs`; Rust client checks embedded artifact hashes against the lock at startup.
+  *Accept:* old-artifact and new-artifact proofs both accepted inside the window; outside it the old is
+  rejected with a precise reason; selftest + Rust parity.
 - [x] **T-RUST-0 (P1) Rust workspace + language ADR.** DONE (loop-8): `rust/` cargo workspace (`rgoe-proto` lib + `rgoe-client` bin) builds; `cargo test` passes 3 (request_signal, operator_auth_message, signal_field_safe -- already matching testdata/vectors.json). Stubs cite JS file:symbol + PROTOCOL-API.md. ADR `docs/adr/0001-client-language.md`. Gate 2 started.
 - [x] **T-RUST-1 (P1) Wire-format conformance harness.** DONE (loop-9): `rust/rgoe-proto` implements onion<->key, canonical directory/announce bytes, ed25519 verify, and `verify_directory` (full ordered reasons); `rust/rgoe-proto/tests/conformance.rs` (13 tests) asserts byte-match vs `testdata/vectors.json` -- Rust proven to match the JS reference. Deferred for lack of a pinned vector: `calculate_signal_hash` + operator-ECDSA `verify_announce` (see T-RUST-1b).
 - [x] **T-RUST-2 (P1) Rust client MVP — DONE (loop-22/23): egresses over Tor, JS gateway accepts.** Gate-2's
@@ -872,3 +907,12 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   sync-committee / Helios sidecar through the trustedStateRoot hook — the last light-client trust anchor).
   AUTONOMOUS ROADMAP COMPLETE: 97/102 done; the 5 open items are all human-gated (T-HARD-1 trusted setup,
   T-DEPLOY-1/2 deploy), circuit-blocked (T-FEAT-8), or speculative P3 (T-FEAT-7).
+- 2026-08-15  loop-34  RESUMED (manual). Root-caused why PR #5 had NO CI: it was CONFLICTING with main
+  (main got the 2026-08-13 "roadmap for gateway discovery, payment interop, and zkAPI" rewrite of
+  docs/ROADMAP.md), and GitHub does not run pull_request workflows without a merge ref. Merged main: the new
+  network roadmap is canonical `docs/ROADMAP.md` (+ an "Implementation status" map of what this branch built
+  against its sections), the milestone design notes moved to `docs/ROADMAP-v1.md` (anchors intact; ADRs/docs
+  repointed). CI now runs on the PR. Fan-out (2 agents, disjoint files): T-HARD-1 autonomous half (CEREMONY.md
+  + zk-artifacts lock + selftest + regen script) and `docs/GO-LIVE.md` (phased T-DEPLOY-1/2 runbook with
+  [HUMAN]/[FUNDS] markers, 12 GAPs, doc contradictions). Filed T-HARD-8, T-DEPLOY-5, T-DOC-8. Retired the
+  throwaway `ci-probe` branch used to prove Actions worked.
