@@ -916,3 +916,9 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   + zk-artifacts lock + selftest + regen script) and `docs/GO-LIVE.md` (phased T-DEPLOY-1/2 runbook with
   [HUMAN]/[FUNDS] markers, 12 GAPs, doc contradictions). Filed T-HARD-8, T-DEPLOY-5, T-DOC-8. Retired the
   throwaway `ci-probe` branch used to prove Actions worked.
+- 2026-08-15  loop-34b  CI on PR #5 driven to fully green (7/7: lint, supply-chain audit, test node 20/22/24,
+  bootstrap e2e, real-Tor e2e; merge state CLEAN). Two real fixes: the systemd e2e containers clone
+  `file:///mnt/src` and git >= 2.35.2 refused the differently-owned bind mount ("dubious ownership") —
+  bootstrap.sh now marks a file:// source (and its .git dir) safe.directory. One transient: node-22 Foundry
+  download reset (passed on rerun). PR #5 is now merge-ready pending the human's review.
+
