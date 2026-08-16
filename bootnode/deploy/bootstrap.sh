@@ -59,6 +59,12 @@ tor --version | head -1
 
 log "service user + repo"
 id -u "$RUN_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "$RUN_USER"
+# A file:// source (the e2e containers bind-mount the checkout) is usually owned by a
+# different uid than root; git >= 2.35.2 refuses to read it ("dubious ownership") until
+# the path is marked safe. Scoped to that one path; a URL source is unaffected.
+case "$RGOE_REPO" in
+  file://*) git config --global --add safe.directory "${RGOE_REPO#file://}" ;;
+esac
 if [ -d "$RGOE_DIR/.git" ]; then
   git -C "$RGOE_DIR" fetch --depth 1 origin "$RGOE_REF" -q && git -C "$RGOE_DIR" checkout -q FETCH_HEAD
 else
