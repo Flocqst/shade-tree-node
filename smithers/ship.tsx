@@ -28,10 +28,10 @@ type Milestone = { id: string; title: string; status: "built" | "open"; validate
 const MILESTONES: Milestone[] = [
   { id: "staked-set", title: "On-chain staked reputation set (StakedReputationSet)", status: "built",
     validate: ["forge test --match-contract StakedReputationSetTest"],
-    notes: "docs/ROADMAP.md #2 + docs/ONCHAIN.md. Member commitment stake + ZK exit/withdraw + permissionless slash." },
+    notes: "docs/ROADMAP-v1.md #2 + docs/ONCHAIN.md. Member commitment stake + ZK exit/withdraw + permissionless slash." },
   { id: "rln", title: "Unlinkable per-request rate limiting (RLN)", status: "built",
     validate: ["node lib/rln.selftest.mjs"],
-    notes: "docs/ROADMAP.md #1 (shipped as RLN, not the slot scheme): fresh share per request; 2nd signal reconstructs + slashes." },
+    notes: "docs/ROADMAP-v1.md #1 (shipped as RLN, not the slot scheme): fresh share per request; 2nd signal reconstructs + slashes." },
   { id: "fleet-directory", title: "Signed fleet directory + client rotation", status: "built",
     validate: ["node group/sign-directory.mjs"],
     notes: "docs/FLEET.md. Static signed directory; each entry self-authenticating (onion IS its ed25519 key)." },

@@ -264,7 +264,7 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 
 **Residual (tracked, will change the security surface when built):**
 
-- **Cross-fleet replay / rate is not fleet-wide (T-FEAT-20, ROADMAP #1/#3).** §4.6 defends *one*
+- **Cross-fleet replay / rate is not fleet-wide (T-FEAT-20, ROADMAP-v1 #1/#3).** §4.6 defends *one*
   gateway. Non-colluding gateways share no spent-set, so a malicious gateway can fan a captured
   envelope to peers (each accepts it once), and a member spreading requests across `N` gateways gets
   up to `N`× its intended budget. The fix (a gossiped per-epoch nullifier tally) must be paired with

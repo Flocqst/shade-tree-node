@@ -138,7 +138,7 @@ section below._
 - **The circuit is the audit surface.** Unaudited circuit + real bonds = testnet-only until
   reviewed. Biggest single risk.
 - **Artifact size/latency.** RLN proving is heavier than Semaphore; re-check the hot path
-  (still one prove per slot at request time until the precompute split, ROADMAP #1).
+  (still one prove per slot at request time until the precompute split, ROADMAP-v1 #1).
 - **No mainnet until:** audited circuit, real (not mock) withdraw verifier, and the
   members-only directory (seam 4, separate — FLEET.md).
 

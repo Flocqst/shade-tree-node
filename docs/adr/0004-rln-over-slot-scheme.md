@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-13
-- Task: milestone 1 (docs/ROADMAP.md #1)
+- Task: milestone 1 (docs/ROADMAP-v1.md #1)
 
 ## Context
 
@@ -10,7 +10,7 @@ The goal is per-request unlinkable rate limiting: a member should get a fixed bu
 requests per epoch, each request should carry a distinct nullifier so even the gateway
 cannot tie a member's requests together, and an over-spender should be punished.
 
-ROADMAP #1 sketched this in two tiers. Tier 1 ("public slots, stock Semaphore") needs no
+ROADMAP-v1 #1 sketched this in two tiers. Tier 1 ("public slots, stock Semaphore") needs no
 custom circuit: publish `K` scope slots per epoch, `scope_i = H(epoch, i)`, and have the
 client generate one ordinary Semaphore proof per slot, the gateway accepting a proof only
 if its scope is in the published slot set. Tier 2 hides the slot with a custom circuit but
@@ -59,7 +59,7 @@ membership proof and asserted the binding with a cheap `signal == share.x` check
 
 ## Alternatives considered
 
-- **The slot scheme (ROADMAP #1 tier 1/2).** Simpler: tier 1 needs no custom circuit at
+- **The slot scheme (ROADMAP-v1 #1 tier 1/2).** Simpler: tier 1 needs no custom circuit at
   all, just a scope-set check on stock Semaphore. Rejected as the endpoint because tier 1
   leaks the slot-usage histogram (the gateway learns which slot index each request used),
   and both tiers give up slashing entirely (no public share to reconstruct in the
@@ -74,4 +74,4 @@ membership proof and asserted the binding with a cheap `signal == share.x` check
 - circuits/rln/ARTIFACTS.md (artifact provenance, untrusted ceremony)
 - contracts/StakedReputationSet.sol `slash` (cryptographic, permissionless)
 - docs/CONTRACTS-AUDIT.md invariant I8 (membership leaf == rate commitment)
-- docs/ROADMAP.md #1 (the slot scheme, superseded)
+- docs/ROADMAP-v1.md #1 (the slot scheme, superseded)

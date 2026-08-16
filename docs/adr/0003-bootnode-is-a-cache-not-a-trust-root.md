@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-13
-- Task: milestone 4 (docs/ROADMAP.md #4)
+- Task: milestone 4 (docs/ROADMAP-v1.md #4)
 
 ## Context
 
@@ -71,4 +71,4 @@ scratch (zero-trust re-verification).
 - bootnode/server.mjs (`GET /gateway/<onion>` zero-trust re-verification; `MAX_WEIGHT`)
 - bootnode/announce.mjs, bootnode/selftest.mjs (adversarial cases rejected)
 - docs/AUDIT.md ("The bootnode is a convenience cache, not a trust root")
-- docs/ROADMAP.md #4
+- docs/ROADMAP-v1.md #4

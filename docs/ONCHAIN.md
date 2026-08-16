@@ -1,9 +1,9 @@
 # On-chain staked reputation set: max-anonymous admission with slashing
 
-**Status: design, not built.** This is ROADMAP item #2 ("On-chain reputation
+**Status: design, not built.** This is ROADMAP-v1 item #2 ("On-chain reputation
 set") sharpened on two axes the roadmap deliberately left open:
 
-1. **Max anonymity of enrollment.** ROADMAP #2 parks enroller privacy as out of
+1. **Max anonymity of enrollment.** ROADMAP-v1 #2 parks enroller privacy as out of
    scope, noting that "enrollment is now publicly timestamped and linkable to the
    address that paid the gas." This doc closes that link.
 2. **Staking with slashing.** Admission is a bonded stake. It is refundable (unstake
@@ -12,7 +12,7 @@ set") sharpened on two axes the roadmap deliberately left open:
 
 ## Relationship to the other docs
 
-- **ROADMAP #2** is the baseline: move the set from `group/members.json` to an
+- **ROADMAP-v1 #2** is the baseline: move the set from `group/members.json` to an
   on-chain Semaphore group so the Merkle root is canonical, public, and
   tamper-evident, and the gateway reads it through a pluggable root provider (its own
   node, or a light client) instead of holding a synced file.
@@ -28,7 +28,7 @@ set") sharpened on two axes the roadmap deliberately left open:
   stop holding member secrets — self-enrollment), finding #2 and #10 (admission is
   the sybil boundary *and* the unblockability boundary; abuse needs a cost). Staking
   is the "cost" those findings ask for; slashing is the eviction path.
-- **ROADMAP #1** (unlinkable per-request nullifiers) and **FLEET.md** (the gateway
+- **ROADMAP-v1 #1** (unlinkable per-request nullifiers) and **FLEET.md** (the gateway
   fleet) compose with this doc. The slashing mechanism below is RLN; #1 is the same
   RLN machinery pointed at unlinkability, and the fleet is where slashing has to go
   from single-node to shared. Cross-references are called out inline.
@@ -72,7 +72,7 @@ to a person). This is the minimal, intended disclosure.
 public network so anyone can reconstruct. We do not need that: the gateway is a single
 verifier and it *already receives every signal directed at it* inside the Tor tunnel,
 so it holds the shares itself and reconstructs locally. This is strictly simpler than
-public RLN and it reconciles with ROADMAP #1's remark that "our proof never leaves the
+public RLN and it reconciles with ROADMAP-v1 #1's remark that "our proof never leaves the
 Tor-encrypted tunnel to a single verifier, so there is no public share to slash on."
 Correct — there is no *public* share. There is a **private** share, held by the one
 verifier, and it becomes reconstructable only on a provable rate violation. The single
@@ -149,7 +149,7 @@ Three clocks:
 - **`E` — epoch length.** Nullifier rotation and rate-budget window (today 86400s;
   shorter for tighter unlinkability).
 - **`F` — root freshness window.** The on-chain analog of today's "this-epoch or
-  last-epoch" skew tolerance (ROADMAP #2): the gateway accepts a proof built against
+  last-epoch" skew tolerance (ROADMAP-v1 #2): the gateway accepts a proof built against
   any root that was current within the last `F`. So a commitment removed from the root
   at time `T` can still authorize egress until `T + F`, using a proof against a
   pre-removal root.
@@ -295,7 +295,7 @@ Either way, on L1 the slash-confirmation margin `C` is cleanly "one finality per
 picked. L1 makes these margins *cleaner* than an L2 would, where finality is muddier.
 
 **Liveness.** Reading the root adds a chain-liveness assumption to a system that is
-otherwise fully local. Mitigate as ROADMAP #2 says — cache the last-known root and keep
+otherwise fully local. Mitigate as ROADMAP-v1 #2 says — cache the last-known root and keep
 gating against it if the provider is unreachable — with one caveat: *slashing* needs the
 chain live to land the transaction, so an extended outage degrades to "still gating,
 temporarily cannot slash." Both providers implement the same last-known-good cache, so
@@ -332,7 +332,7 @@ This ties directly to FLEET.md's "the rate limit does not compose across the fle
 section. The shared share-pool is the mechanism that makes both the fleet budget and
 fleet slashing work, and it is only safe to share because RLN shares carry no
 information until the abuse threshold is crossed. Rotation across the fleet (FLEET.md)
-plus per-request unlinkable nullifiers (ROADMAP #1) plus this shared share-pool is the
+plus per-request unlinkable nullifiers (ROADMAP-v1 #1) plus this shared share-pool is the
 combination that gives "no operator, even a colluding set, can profile a member, *and*
 a spammer is still slashable no matter how they spread the abuse."
 

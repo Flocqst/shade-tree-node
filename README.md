@@ -22,8 +22,8 @@ hardening and the distributable Rust client (see [Scope](#scope-what-it-is-and-i
 
 The write-up, with the exit-blocking benchmark and the gate protocol, is at
 [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app)
-(source: [`docs/post/`](docs/post/)). The design of each milestone is in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+(source: [`docs/post/`](docs/post/)). What comes next is in [`docs/ROADMAP.md`](docs/ROADMAP.md);
+the design of each shipped milestone is in [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md).
 
 ## The problem
 
@@ -205,7 +205,8 @@ Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-
 | [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |
 | [`SECURITY.md`](SECURITY.md) | Security policy: what is in scope, what is known, how to report |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to run the tests and the house rules a change must hold |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Protocol-design milestones and their status |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | The forward roadmap: protocol properties, fleet gaps, discovery, payments, zkAPI; with a status map of what PR #5 built |
+| [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md) | The original milestone designs (1–5), all built |
 | [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) | The shipping backlog and the release gates (test → Rust client → deploy) |
 | [`docs/STATUS.md`](docs/STATUS.md), [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Live results; per-party worst case; the benchmark |
 | [`docs/post/`](docs/post/) | The published write-up (HTML + figures) |
