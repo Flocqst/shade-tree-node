@@ -63,7 +63,12 @@ id -u "$RUN_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr
 # different uid than root; git >= 2.35.2 refuses to read it ("dubious ownership") until
 # the path is marked safe. Scoped to that one path; a URL source is unaffected.
 case "$RGOE_REPO" in
-  file://*) git config --global --add safe.directory "${RGOE_REPO#file://}" ;;
+  file://*)
+    _src="${RGOE_REPO#file://}"
+    # git resolves a file:// clone source to its .git dir and checks THAT path.
+    git config --global --add safe.directory "$_src"
+    git config --global --add safe.directory "$_src/.git"
+    ;;
 esac
 if [ -d "$RGOE_DIR/.git" ]; then
   git -C "$RGOE_DIR" fetch --depth 1 origin "$RGOE_REF" -q && git -C "$RGOE_DIR" checkout -q FETCH_HEAD
