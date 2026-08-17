@@ -131,6 +131,7 @@ mod tests {
             ports: Some(vec![80, 443]),
             region: Some("eu".to_string()),
             proto: Some(ProtoCaps { min: 3, max: 3 }),
+            artifacts: None,
         }
     }
 

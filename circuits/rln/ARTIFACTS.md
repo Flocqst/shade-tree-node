@@ -61,6 +61,19 @@ On a BREACH the recovered secret is that `identitySecret`, so
 | `withdraw_verification_key.json` | `dd6bfa937405972fdf2080ab82a0f11c80748a4b82c44e572502be6d1eb26fa7` |
 | `Verifier.sol` | `6c18de80c770babe2f1fe0db25ed88cbd1766275efcd98d3f9c5bfa62b18419d` |
 
+### Artifact ids (T-HARD-8 artifact-version negotiation)
+
+Each circuit's artifact SET is named on the wire by a content-derived id,
+`<circuit>-<sha256(verification_key.json)[0:16]>` — the vkey row above, first 16 hex chars
+(`lib/zk-artifacts.mjs` `artifactIdOf`; `testdata/zk-artifacts.lock.json` `circuits.<c>.artifactId`;
+Rust `rgoe_proto::artifact_id_of`). Envelopes carry the rln id in `artifact`; gateways accept a set
+of ids (`RGOE_ZK_ARTIFACTS`) so a ceremony swap runs as a dual-VK window (`docs/CEREMONY.md` §6).
+
+| Circuit | Artifact id | Previous id |
+|---|---|---|
+| `rln` | `rln-0b25f824a04da3a8` | (none — no ceremony has rotated the set) |
+| `withdraw` | `withdraw-dd6bfa937405972f` | (none) |
+
 `Verifier.sol` is `contract Groth16Verifier`, `pragma solidity >=0.7.0 <0.9.0`,
 `verifyProof(uint[2] _pA, uint[2][2] _pB, uint[2] _pC, uint[5] _pubSignals)`.
 Its embedded VK is derived from **this exact** `rln_final.zkey`; the on-chain side

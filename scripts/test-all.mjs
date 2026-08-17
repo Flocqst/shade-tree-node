@@ -24,6 +24,7 @@ const SLOW_SUITES = new Set([
   "rln.selftest.mjs",
   "rln-slash.property.selftest.mjs",
   "timing.selftest.mjs",
+  "zk-artifact-window.selftest.mjs", // real proofs under two artifact sets (T-HARD-8)
 ]);
 
 // Recursively find *.selftest.mjs, skipping node_modules / out / build dirs.

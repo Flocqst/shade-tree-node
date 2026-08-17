@@ -65,6 +65,9 @@ pub struct CapsDto {
     pub region: Option<String>,
     #[serde(default)]
     pub proto: Option<ProtoCapsDto>,
+    // T-HARD-8: accepted ZK artifact ids (canonicalized by rgoe-proto; junk dropped there).
+    #[serde(default)]
+    pub artifacts: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +118,7 @@ impl DirectoryDto {
                             min: p.min,
                             max: p.max,
                         }),
+                        artifacts: c.artifacts,
                     }),
                     caps_sig: g.caps_sig,
                 })

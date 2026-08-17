@@ -25,7 +25,7 @@ import { Duplex } from "node:stream";
 import tls from "node:tls";
 import https from "node:https";
 import { SocksClient } from "socks";
-import { currentEpoch, K_SLOTS, requestSignal, proveForSlot, loadGroup, cleanUp } from "../lib/semaphore.mjs";
+import { currentEpoch, K_SLOTS, requestSignal, proveForSlot, loadGroup, cleanUp, clientArtifactIds, selectArtifact } from "../lib/semaphore.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -106,21 +106,41 @@ export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANG
   return { ok: true, version: hi }; // highest mutually supported
 }
 
+// ---- ZK artifact-version negotiation (T-HARD-8) -----------------------------
+// The client proves with one of its prover artifact sets (lib/zk-artifacts.mjs
+// loadProverSets, RGOE_ZK_PROVER_ARTIFACTS, newest first; default = the shipped set) and STAMPS
+// the set's content-derived id into the envelope's `artifact` field so a gateway running a
+// dual-VK window verifies under the matching vkey. Which id: the newest of ours that the
+// gateway advertises in its signed caps (`caps.artifacts`); with no ad, optimistically our
+// newest — a real mismatch surfaces as a precise `artifact-unknown/retired` reject that
+// carries the gateway's accepted list (`ack.artifacts`), recorded on `this.gatewayArtifacts`
+// for the next attempt exactly like `gatewayRange`.
+
 // Build the envelope for one logical request. `signal` is deterministic per request
 // (H(target, nonce)); the caller reuses the SAME envelope across failover so a retry
 // reproduces the SAME share (deterministic-retry invariant). `version` is the negotiated
-// wire version (default = our max, 3 today, so the emitted envelope is byte-for-byte the v3 wire).
-export async function buildEnvelope({ secret, target, pool, prove = proveForSlot, version = CLIENT_PROTO_MAX }) {
+// wire version (default = our max, 3 today, so the emitted envelope is byte-for-byte the v3 wire
+// plus the `artifact` id — a field older gateways ignore). `artifact` is the negotiated artifact
+// id (default = the prover's newest set; `null` = prove with the default set but omit the field,
+// i.e. the exact pre-T-HARD-8 wire).
+export async function buildEnvelope({ secret, target, pool, prove = proveForSlot, version = CLIENT_PROTO_MAX, artifact }) {
   const nonce = randomBytes(16).toString("hex");
   const signal = requestSignal(target, nonce);
   const { epoch, slot } = pool.nextSlot();
   const group = await pool.ensureGroup();
-  const { proof, nullifier, externalNullifier, share } = await prove(secret, epoch, slot, signal, { group });
+  const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined });
+  const { proof, nullifier, externalNullifier, share } = proved;
   // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
   // this target (verifyEnvelope check 2b). It reveals nothing (it is random per request) and it is
   // what stops a captured proof from being redirected to a different target. `v` is FIRST so the
-  // gateway's version gate reads it without parsing the rest.
-  return { envelope: { v: version, target, nonce, proof, nullifier, externalNullifier, share }, signal, slot };
+  // gateway's version gate reads it without parsing the rest. `artifact` names the ZK artifact set
+  // the proof was made with (T-HARD-8): the id the prover actually used (echoed back by
+  // proveForSlot), or the requested one for a prover that does not echo; omitted when `null`.
+  const artifactId = artifact === null ? null : (proved.artifact ?? artifact ?? null);
+  const envelope = artifactId
+    ? { v: version, target, nonce, artifact: artifactId, proof, nullifier, externalNullifier, share }
+    : { v: version, target, nonce, proof, nullifier, externalNullifier, share };
+  return { envelope, signal, slot, artifact: artifactId };
 }
 
 // Read one newline-terminated line, never waiting forever (a gateway that accepts but
@@ -229,6 +249,13 @@ export class RgoeClient {
     // unknown; the client optimistically sends its max and reacts to any version-reject. A future
     // directory that carries the range (follow-up) would populate this per candidate.
     this.gatewayRange = opts.gatewayRange || null;
+    // ZK artifact ids (T-HARD-8): `artifacts` = the ORDERED (newest first) ids this client can
+    // prove with (default: the configured prover sets, RGOE_ZK_PROVER_ARTIFACTS or the shipped
+    // set); `gatewayArtifacts` = a gateway's accepted list learned out-of-band or from a reject.
+    this.artifacts = opts.artifacts || null; // null => clientArtifactIds() lazily (loads no circuit)
+    this.gatewayArtifacts = opts.gatewayArtifacts || null;
+    // Injectable prover (tests pass a fake); defaults to the real lib proveForSlot.
+    this._prove = opts.prove || proveForSlot;
     this.pool = makeSlotPool({ secret: this.secret });
     this.pool.ensureEpoch(); // warm the current epoch in the background
   }
@@ -238,21 +265,34 @@ export class RgoeClient {
     return this._selection;
   }
 
-  // Ordered candidate onions to try this request: pin, else the directory selection
-  // (weighted pick first, then failovers), else a local tor/hs/hostname (dev).
-  async _candidateOnions() {
-    if (this.onion) return [this.onion];
+  // Ordered candidates to try this request: pin, else the directory selection (weighted pick
+  // first, then failovers), else a local tor/hs/hostname (dev). Each is { onion, artifacts? }
+  // where `artifacts` is the gateway's SIGNED accepted-artifact ad from the directory (T-HARD-8),
+  // when it advertises one.
+  async _candidates() {
+    if (this.onion) return [{ onion: this.onion, artifacts: this.gatewayArtifacts }];
     const sel = await this._sel();
     if (sel.directoryEnabled()) {
       const cands = await sel.selectCandidates();
-      if (cands.length) return cands.map((c) => c.onion.replace(/\.onion$/, ""));
+      if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null }));
     }
     try {
       const host = (await readFile(join(HERE, "..", "tor", "hs", "hostname"), "utf8")).trim();
-      return [host.replace(/\.onion$/, "")];
+      return [{ onion: host.replace(/\.onion$/, ""), artifacts: null }];
     } catch {
       throw new Error("RgoeClient: no gateway — set { onion } or { directory, dirSigner }");
     }
+  }
+
+  // The artifact id to prove with for this request (T-HARD-8): the newest of OUR sets that the
+  // first candidate advertising an accepted set will verify (else, with no ad anywhere, our newest
+  // — falling back to a reject-learned `gatewayArtifacts`). ONE envelope is reused across failover,
+  // so the pick is made once, against the first advertising candidate; a later candidate that
+  // rejects it does so with a precise reason (terminal, like a version reject).
+  _pickArtifact(cands) {
+    const mine = this.artifacts || clientArtifactIds();
+    const ad = (cands.find((c) => Array.isArray(c.artifacts) && c.artifacts.length) || {}).artifacts || this.gatewayArtifacts;
+    return selectArtifact(ad, mine);
   }
 
   // Dial one gateway onion over Tor SOCKS, retrying through onion cold-start.
@@ -288,7 +328,8 @@ export class RgoeClient {
   async connect(target, { onEvent, onion } = {}) {
     const emit = (e) => { try { onEvent?.(e); } catch { /* progress is best-effort */ } };
     // opts.onion pins a specific gateway for this request (else directory/pin/local order).
-    const onions = onion ? [String(onion).replace(/\.onion$/, "")] : await this._candidateOnions();
+    const cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates();
+    const onions = cands.map((c) => c.onion);
 
     // Negotiate the wire version (T-FEAT-11): pick the highest version this client and the gateway
     // both support. With no known gateway range this is just our max (v3 today); if the ranges are
@@ -298,9 +339,16 @@ export class RgoeClient {
       emit({ phase: "prove", status: "error", error: pv.reason });
       throw new Error("version negotiation failed: " + pv.reason);
     }
+    // Negotiate the ZK artifact set (T-HARD-8): the newest of ours the gateway advertises it
+    // accepts; disjoint => fail closed HERE, before proving or dialing.
+    const pa = this._pickArtifact(cands);
+    if (!pa.ok) {
+      emit({ phase: "prove", status: "error", error: pa.reason });
+      throw new Error("artifact negotiation failed: " + pa.reason);
+    }
 
-    emit({ phase: "prove", status: "start" });
-    const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool, version: pv.version });
+    emit({ phase: "prove", status: "start", artifact: pa.id });
+    const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool, prove: this._prove, version: pv.version, artifact: pa.id });
     // Surface the real proof material for anyone who wants the cryptographic detail: the
     // Groth16 public signals (what the gateway verifies) + the proof points.
     const sp = envelope.proof.snarkProof;
@@ -309,6 +357,7 @@ export class RgoeClient {
       pub: sp.publicSignals,                         // { y, root, nullifier, x, externalNullifier }
       pi: { a: sp.proof.pi_a, b: sp.proof.pi_b, c: sp.proof.pi_c },
       epoch: String(envelope.proof.epoch), rlnIdentifier: String(envelope.proof.rlnIdentifier),
+      artifact: envelope.artifact,
     });
     const wire = JSON.stringify(envelope) + "\n";
     const sel = this.onion ? null : await this._sel();
@@ -353,6 +402,14 @@ export class RgoeClient {
         const re = selectProtoVersion(ack.proto);
         throw new Error(`gate refused: ${ack.err} (gateway speaks ${ack.proto.min}-${ack.proto.max}; ${re.ok ? "retry as v" + re.version : re.reason})`);
       }
+      // An artifact reject (T-HARD-8) advertises the gateway's accepted artifact ids in
+      // ack.artifacts. Remember them and surface whether we hold a mutual set (retry with it) or
+      // not (upgrade/downgrade the client's prover artifacts) — never a bare `invalid-proof` guess.
+      if (Array.isArray(ack.artifacts) && typeof ack.err === "string" && /^gate:(artifact-(unknown|retired)|bad-artifact)/.test(ack.err)) {
+        this.gatewayArtifacts = ack.artifacts;
+        const re = selectArtifact(ack.artifacts, this.artifacts || clientArtifactIds());
+        throw new Error(`gate refused: ${ack.err} (gateway accepts artifacts ${ack.artifacts.join(",") || "(none)"}; ${re.ok ? "retry with " + re.id : re.reason})`);
+      }
       throw new Error("gate refused: " + ack.err);
     }
     emit({ phase: "gate", status: "done", onion: usedOnion });
@@ -381,7 +438,7 @@ export class RgoeClient {
     }
 
     const tunnel = tunnelStream(sock, rest);
-    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt };
+    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt, artifact: envelope.artifact };
     return tunnel;
   }
 

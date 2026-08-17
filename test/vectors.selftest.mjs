@@ -21,6 +21,7 @@ import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
 import { acceptEnvelopeVersion } from "../gateway/gateway.mjs";
 import { selectProtoVersion } from "../client/rgoe-client.mjs";
+import { artifactIdOf, selectArtifact, resolveArtifact, ARTIFACT_ID_RE, isArtifactId } from "../lib/zk-artifacts.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(HERE, "..", "testdata", "vectors.json"), "utf8"));
@@ -129,6 +130,27 @@ async function main() {
   ok(unsRej.label === pr.unsupportedVersion, "acceptEnvelopeVersion label matches the pinned unsupported-version literal");
   const nmRej = selectProtoVersion({ min: 5, max: 6 }, { min: 1, max: 2 }); // disjoint ranges => no-mutual-version
   ok(nmRej.reason.startsWith(pr.noMutualVersion + ":"), "selectProtoVersion reason prefix matches the pinned no-mutual-version literal");
+
+  console.log("\nZK artifact-version negotiation (T-HARD-8; additive — the `capabilities` vectors above are UNCHANGED):");
+  const ar = V.artifacts;
+  ok(artifactIdOf(ar.sample.circuit, ar.sample.inputUtf8) === ar.sample.artifactId, "artifactIdOf(circuit, bytes) matches the pinned sample id (sha256 prefix)");
+  ok(ARTIFACT_ID_RE.source === ar.idGrammar, "ARTIFACT_ID_RE matches the pinned id grammar");
+  ok(isArtifactId(ar.sample.artifactId) && !isArtifactId("Not An Id") && !isArtifactId(""), "id grammar accepts the sample and rejects junk");
+  const sel = ar.selection;
+  ok(selectArtifact(sel.gatewayAd, sel.clientNewestFirst).id === sel.picked, "selectArtifact picks the pinned mutual id (newest client id the gateway lists)");
+  ok(selectArtifact(null, sel.clientNewestFirst).id === sel.noAdPicked, "selectArtifact with no gateway ad picks the client's newest");
+  ok(selectArtifact(["rln-ffffffffffffffff", "rln-aaaaaaaaaaaaaaaa"], sel.clientNewestFirst).reason === sel.disjointReason, "selectArtifact disjoint reason matches the pinned string byte-for-byte");
+  ok(sel.disjointReason.startsWith(ar.reasons.noMutualArtifact + ":"), "disjoint reason prefix == pinned no-mutual-artifact literal");
+  ok(selectArtifact(null, []).reason === ar.reasons.noClientArtifact, "no client artifact reason == pinned literal");
+  const fakeSet = { accepted: new Map([["rln-0b25f824a04da3a8", { vkey: {} }]]), ids: ["rln-0b25f824a04da3a8"], legacyId: "rln-2cf24dba5fb0a30e" };
+  ok(resolveArtifact("Not An Id", fakeSet).label === ar.reasons.badArtifact, "resolveArtifact garbage label == pinned bad-artifact literal");
+  ok(resolveArtifact(undefined, fakeSet).label === ar.reasons.artifactRetired && resolveArtifact(undefined, fakeSet).reason === `${ar.reasons.artifactRetired}:rln-2cf24dba5fb0a30e`, "resolveArtifact retired legacy label/reason == pinned literal + id");
+  ok(resolveArtifact("rln-ffffffffffffffff", fakeSet).label === ar.reasons.artifactUnknown, "resolveArtifact unknown label == pinned artifact-unknown literal");
+  const cwa = ar.capsWithArtifacts;
+  ok(JSON.stringify(canonicalCaps(cwa.caps)) === JSON.stringify(cwa.canonical), "canonicalCaps sorts artifacts and appends them after proto (pinned canonical form)");
+  ok(canonicalCapsBytes(V.onion, cwa.caps).toString("hex") === cwa.canonicalCapsBytesHex, "canonical caps-with-artifacts bytes match the pinned vector");
+  ok(signCaps(V.onion, cwa.caps, V.onionSeed) === cwa.capsSig, "caps-with-artifacts onion signature matches the pinned vector (ed25519 determinism)");
+  ok(canonicalCapsBytes(V.onion, cap.caps).toString("hex") === cap.canonicalCapsBytesHex, "caps WITHOUT artifacts still serialize byte-identically to the pre-T-HARD-8 vector");
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: vectors selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

@@ -59,6 +59,11 @@ export async function verifyEnvelope(env, recentRoots) {
 export async function loadGroup() { return { group: null, root: "ROOT", count: 1 }; }
 export async function loadGroupOnchain() { return { recentRoots: ["ROOT"] }; }
 export function cleanUp() {}
+
+// T-HARD-8 artifact negotiation surface (mocked: one artifact set, no lock/vkey reads).
+export function clientArtifactIds() { return ["rln-mock0000000000"]; }
+export function selectArtifact(gatewayIds, clientIds) { return { ok: true, id: clientIds[0] }; }
+export function getArtifactSet() { return { accepted: new Map(), ids: ["rln-mock0000000000"], legacyId: "rln-mock0000000000", legacyAccepted: true, explicit: false }; }
 `;
 
 const MOCK_RLN = `

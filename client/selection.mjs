@@ -726,7 +726,15 @@ export async function selectCandidates(req = null) {
   // weighted round-robin so load spreads evenly across the healthy fleet (no back-to-back hammering
   // of the top gateway) while the long-run weighted share is preserved exactly.
   const order = ROTATION_SPREAD ? spreadSelectionOrder(view) : selectionOrder(view);
-  return order.map((g) => ({ onion: g.onion.replace(/\.onion$/, "") }));
+  // Each candidate carries the gateway's SIGNED accepted-ZK-artifact ad when it has one
+  // (caps.artifacts, T-HARD-8) so the client can pick a mutual artifact set before proving.
+  // ADDITIVE: the field is present only when advertised (legacy candidates are `{ onion }` as before).
+  return order.map((g) => {
+    const c = { onion: g.onion.replace(/\.onion$/, "") };
+    const arts = canonicalCaps(g.caps).artifacts;
+    if (arts) c.artifacts = arts;
+    return c;
+  });
 }
 
 // Health/latency feedback from the shim after a dial attempt.
