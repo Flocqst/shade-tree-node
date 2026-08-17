@@ -197,20 +197,33 @@ Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-
 | [`docs/CLI.md`](docs/CLI.md), [`docs/CONFIG.md`](docs/CONFIG.md) | Every `rgoe` command and every `RGOE_*` variable + default |
 | [`docs/OPERATOR.md`](docs/OPERATOR.md) | Runbook for running a gateway or bootnode in production |
 | [`docs/INCIDENT.md`](docs/INCIDENT.md) | Incident-response playbook for the failure modes that matter |
+| [`docs/BACKUP.md`](docs/BACKUP.md), [`docs/ONION-IDENTITY.md`](docs/ONION-IDENTITY.md) | `rgoe backup` / `rgoe restore` (encrypted key material) and verify-before-cutover onion continuity |
+| [`docs/TOR-HARDENING.md`](docs/TOR-HARDENING.md), [`docs/SLO.md`](docs/SLO.md) | Hardening the Tor layer under the fleet; service-level objectives + error budget |
+| [`docs/ONCHAIN-DEPLOY.md`](docs/ONCHAIN-DEPLOY.md) | Runbook for a persistent on-chain deployment of the stake contracts |
 | [`docs/BOOTNODE.md`](docs/BOOTNODE.md) | The live-discovery design: announce, signed directory, trust boundary |
+| [`docs/FLEET.md`](docs/FLEET.md) | Fleet discovery + per-request selection design, and the fleet-wide budget analysis |
 | [`docs/ONCHAIN.md`](docs/ONCHAIN.md) | On-chain admission: staked set, gateway registry, root provider |
+| [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md) | Trust-minimized (light-client) reads of the reputation root |
 | [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Anonymous-payment design (designed, not built) |
-| [`docs/AUDIT.md`](docs/AUDIT.md) | Threat model, trust boundaries, test inventory, review order |
+| [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/AUDIT.md`](docs/AUDIT.md) | The consolidated threat model; trust boundaries, test inventory, review order |
 | [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md) | Auditor's guide + written invariants for the Solidity contracts |
 | [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |
+| [`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md), [`docs/RECEIPTS.md`](docs/RECEIPTS.md) | Envelope version negotiation; signed egress success receipts |
+| [`docs/CLIENTS.md`](docs/CLIENTS.md), [`docs/SDK.md`](docs/SDK.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Client modes (shim vs. library), the `RgoeClient` SDK, routing tools/agents through the fleet |
+| [`docs/MUTATION-TESTING.md`](docs/MUTATION-TESTING.md) | Mutation-testing setup and the surviving-mutant list |
+| [`docs/adr/`](docs/adr/) | Architecture decision records for the load-bearing decisions |
 | [`SECURITY.md`](SECURITY.md) | Security policy: what is in scope, what is known, how to report |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to run the tests and the house rules a change must hold |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | The forward roadmap: protocol properties, fleet gaps, discovery, payments, zkAPI; with a status map of what PR #5 built |
-| [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md) | The original milestone designs (1–5), all built |
+| [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md), [`docs/NEXT-VERSION.md`](docs/NEXT-VERSION.md), [`docs/RLN-MIGRATION.md`](docs/RLN-MIGRATION.md) | The original milestone designs (1–5), the next-version build spec, and the RLN migration plan (historical; what they specified is built) |
 | [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) | The shipping backlog and the release gates (test → Rust client → deploy) |
 | [`docs/CEREMONY.md`](docs/CEREMONY.md), [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | The two human-gated runbooks: production trusted setup (artifact hashes are pinned in `testdata/zk-artifacts.lock.json` and CI-verified) and the first live deployment |
-| [`docs/STATUS.md`](docs/STATUS.md), [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Live results; per-party worst case; the benchmark |
-| [`docs/post/`](docs/post/) | The published write-up (HTML + figures) |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) (+ `PROTOCOL.html`) | The protocol design write-up for anonymous paid access (access layer built; payment layer design) |
+| [`docs/STATUS.md`](docs/STATUS.md), [`docs/REPORT.md`](docs/REPORT.md), [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/JOIN.md`](docs/JOIN.md), [`docs/walkthrough.html`](docs/walkthrough.html) | Historical: the June 2026 single-gateway PoC status/report/deploy guides, the July fleet deployment record, and the PoC member page + request walkthrough |
+| [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Per-party worst case; the benchmark |
+| [`docs/residential-proxies.md`](docs/residential-proxies.md), [`docs/residential-proxy-providers.md`](docs/residential-proxy-providers.md) | Background research: what residential proxies do to your privacy, and a provider taxonomy |
+| [`docs/post/`](docs/post/) | The published write-up (HTML + figures), plus [`JOIN.md`](docs/post/JOIN.md) and [`RUN-A-GATEWAY.md`](docs/post/RUN-A-GATEWAY.md) for members and operators |
+| `network/sepolia/` | The live Sepolia record: `contracts.json` (addresses), `directory.json` (signed fleet), `README.md` |
 
 ## Layout
 

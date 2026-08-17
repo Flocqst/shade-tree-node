@@ -1,0 +1,119 @@
+name: uptime-probe
+
+# T-DEPLOY-5 / GAP-8 (docs/GO-LIVE.md row 6.3): a hosted, tor-capable runner for
+# scripts/uptime-probe.mjs — the SLI source for docs/SLO.md 2.2/2.3 (monitoring/UPTIME.md).
+#
+# It installs tor on the runner, waits for it to bootstrap, then runs the probe OVER TOR against
+# the bootnode onion, verifying the served directory against the pinned signer. Configuration
+# comes from repository VARIABLES (Settings -> Secrets and variables -> Actions -> Variables):
+#   RGOE_BOOTNODE_ONION   the fleet bootnode's v3 .onion
+#   RGOE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
+#   RGOE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
+#                         the two values above from network/<name>/bootnode.json (lib/network-record.mjs)
+# Neither value is secret (an onion and a public key), so plain variables are the right home; the
+# same names are also read from SECRETS as a fallback for repos that prefer that. Nothing else is
+# ever printed: the probe emits a fleet COUNT and scrubs onions from error text.
+#
+# NO-OP GUARD: if none of the variables/secrets is set, the job writes a ::notice:: and exits
+# green without installing anything, so an unconfigured fork/repo never red-flags. Only a real
+# CRITICAL probe (bootnode unreachable / signer mismatch) fails the run.
+#
+# Cadence: */15. GitHub's floor is */5, but scheduled runs are queued best-effort (often minutes
+# late, dropped under load), so this workflow is the coarse hosted signal; the 5-minute SLI cadence
+# is the systemd timer in monitoring/uptime/ on an operator-owned tor box.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: fleet uptime probe (over Tor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      RGOE_BOOTNODE_ONION: ${{ vars.RGOE_BOOTNODE_ONION || secrets.RGOE_BOOTNODE_ONION }}
+      RGOE_DIR_SIGNER: ${{ vars.RGOE_DIR_SIGNER || secrets.RGOE_DIR_SIGNER }}
+      RGOE_NETWORK: ${{ vars.RGOE_NETWORK || secrets.RGOE_NETWORK }}
+      RGOE_TOR_HOST: 127.0.0.1
+      RGOE_TOR_PORT: 9050
+    steps:
+      - name: check configuration (no-op when unset)
+        id: cfg
+        run: |
+          if [ -n "$RGOE_BOOTNODE_ONION" ] && [ -n "$RGOE_DIR_SIGNER" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "probe target: bootnode onion + pinned signer from repository variables"
+          elif [ -n "$RGOE_NETWORK" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "probe target: network/$RGOE_NETWORK/bootnode.json (RGOE_NETWORK)"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=uptime-probe skipped::RGOE_BOOTNODE_ONION + RGOE_DIR_SIGNER (or RGOE_NETWORK) are not set as repository variables; nothing to probe. See monitoring/UPTIME.md."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.configured == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: npm ci
+        if: steps.cfg.outputs.configured == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: resolve network record (RGOE_NETWORK)
+        if: steps.cfg.outputs.configured == 'true' && env.RGOE_NETWORK != ''
+        run: |
+          # A pending record (onion null) means there is nothing to probe yet: say so and stop green.
+          out="$(node -e '
+            import("./lib/network-record.mjs").then((m) => {
+              const d = m.networkEnvDefaults(process.env.RGOE_NETWORK);
+              const has = Boolean(process.env.RGOE_BOOTNODE_ONION || d.RGOE_BOOTNODE_ONION) && Boolean(process.env.RGOE_DIR_SIGNER || d.RGOE_DIR_SIGNER);
+              console.log(has ? "resolved" : "pending");
+            }).catch((e) => { console.error(e.message); process.exit(1); });
+          ')"
+          echo "record: $out"
+          if [ "$out" != "resolved" ]; then
+            echo "::notice title=uptime-probe skipped::network/$RGOE_NETWORK/bootnode.json has no live bootnode onion/signer yet (status pending); nothing to probe."
+            echo "RGOE_PROBE_SKIP=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: install + bootstrap tor
+        if: steps.cfg.outputs.configured == 'true' && env.RGOE_PROBE_SKIP != '1'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tor >/dev/null
+          sudo systemctl stop tor >/dev/null 2>&1 || true
+          mkdir -p "$RUNNER_TEMP/tor"
+          nohup tor --SocksPort 9050 --DataDirectory "$RUNNER_TEMP/tor" --Log "notice stdout" > "$RUNNER_TEMP/tor.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if grep -q "Bootstrapped 100%" "$RUNNER_TEMP/tor.log" 2>/dev/null; then echo "tor bootstrapped after ~${i}s"; exit 0; fi
+            sleep 1
+          done
+          echo "tor did not bootstrap in 90s"; tail -n 20 "$RUNNER_TEMP/tor.log"; exit 1
+
+      - name: probe (over Tor, signer-pinned)
+        if: steps.cfg.outputs.configured == 'true' && env.RGOE_PROBE_SKIP != '1'
+        run: |
+          set +e
+          line="$(node scripts/uptime-probe.mjs --format nagios)"
+          rc=$?
+          set -e
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=uptime-probe CRITICAL::$line"
+            exit "$rc"
+          fi

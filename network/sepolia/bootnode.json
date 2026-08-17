@@ -1,0 +1,14 @@
+{
+  "network": "sepolia",
+  "status": "pending",
+  "onion": null,
+  "signer": null,
+  "admission": "open",
+  "staticDirectory": {
+    "path": "directory.json",
+    "signer": "189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321"
+  },
+  "deployedRef": null,
+  "updated": "2026-08-17",
+  "note": "TEMPLATE, status pending: the existing Sepolia gateway fleet is discovered through the committed static directory.json (signer above, the value network/sepolia/README.md pins as RGOE_DIR_SIGNER); no bootnode onion for it is recorded in this repo. When the T-DEPLOY-1 bootnode is live (docs/GO-LIVE.md row 7.1) set onion + signer to the NEW fleet's values, admission to what its unit enforces, status to live. Onions and pubkeys only, never IPs."
+}

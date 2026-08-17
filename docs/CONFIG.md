@@ -20,6 +20,15 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). Must be 64 hex (0x optional); a malformed value fails the heartbeat at startup with a message that never echoes the key. | heartbeat | `--operator-key` |
 | `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key; the pair takes precedence over `RGOE_GW_OPERATOR_KEY`). Setting one without the other is a startup error, not a silent onion-only downgrade. | heartbeat | `--operator` |
 | `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. Verified locally at startup (same check the bootnode runs); a sig that does not recover `RGOE_GW_OPERATOR` for this onion fails fast. | heartbeat | `--operator-sig` |
+| `RGOE_BOOTNODE_MAX_ENTRIES` | `10000` | Registry size cap: a NEW onion is refused `registry-full` when full; resident onions still refresh. | bootnode server | (none) |
+| `RGOE_BOOTNODE_MIN_REANNOUNCE` | `5` | Per-onion re-announce throttle in seconds (`rate-limited`, before verify). | bootnode server | (none) |
+| `RGOE_BOOTNODE_ANNOUNCE_RATE` | `2 * maxEntries / RGOE_BOOTNODE_HEARTBEAT` (= `66.7`/s) | GLOBAL announce token-bucket refill (announces/second that may reach ed25519 verification, whoever sends them). Sized so a fleet at the registry cap heartbeating at the default cadence (`maxEntries/heartbeat` = 33.3/s) draws half the refill; see `docs/BOOTNODE.md` "Endpoint hardening". Overflow is `429 global-rate-limited` + `Retry-After`. `0` with burst `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_ANNOUNCE_BURST` | `max(100, maxEntries / 10)` (= `1000`) | The bucket's capacity: how many announces may reach verify in one instant. Covers a lockstep re-announce of a fleet up to this size; an attacker minting fresh onions gets at most this many verifies up front, then `RATE`/s. | bootnode server | (none) |
+| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` | `10000` | HTTP: complete request headers must arrive within this (slow-loris headers => `408` + close). `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_REQUEST_TIMEOUT_MS` | `30000` | HTTP: the whole request (headers + body) must complete within this (a dribbled body => `408` + close). Must be >= headers timeout (clamped). `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS` | `5000` | HTTP: an idle keep-alive connection is closed after this. | bootnode server | (none) |
+| `RGOE_BOOTNODE_MAX_HEADER_BYTES` | `8192` | HTTP: max total request-header bytes; over => `431`. | bootnode server | (none) |
+| `RGOE_BOOTNODE_CONN_CHECK_MS` | `1000` | HTTP: how often the timeouts above are enforced (Node's default 30 s would let a slow client linger that long past the deadline). | bootnode server | (none) |
 
 ## Gateway
 
@@ -28,10 +37,16 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `RGOE_GROUP_CONTRACT` | (unset; falls back to `contracts/deployed.local.json`, else `members.json`) | `StakedReputationSet` address. If set, the gateway reads roots on-chain via a RootProvider; if unset it uses the local `members.json` root (PoC fallback). | gateway root source, root-provider | `--group-contract` |
-| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (Helios light client; not yet wired). | root-provider factory | `--root-provider` |
+| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (EIP-1186 storage proof of `currentRoot` against the block header, `LightClientRootProvider`; the header's `stateRoot` is still taken from the RPC — beacon/Helios validation is T-DEV-9b). | root-provider factory | `--root-provider` |
 | `RGOE_SLASH_KEY` | (unset → dry-run) | Operational hot key that submits on-chain `slash()` txs. Without it (or without a slash contract) slashing logs a dry-run. | gateway slasher | `--slash-key` |
 | `RGOE_SLASH_CONTRACT` | (unset; falls back to `deployed.local.json`) | Slash contract address. Independent of the membership root source, so a gateway can slash on-chain while membership stays on `members.json`. | gateway slasher | `--slash-contract` |
 | `RGOE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |
+| `RGOE_ENVELOPE_TIMEOUT_MS` | `30000` | Absolute deadline (from connect, NOT re-armed by activity) for the newline-terminated envelope; a slow-loris client that never sends the newline or dribbles bytes is cut at the deadline (reply `bad-envelope:envelope timeout`, drop reason `envelope-timeout`). `0` disables. | gateway | (none) |
+| `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Also bounds a black-holed upstream connect (`upstream-timeout`). `0` disables. | gateway | (none) |
+| `RGOE_MAX_CONNS` | `1024` | Max concurrent client connections, decided at accept BEFORE any byte is read; over => reply `too-many-connections` + close. `0` = unlimited. | gateway | (none) |
+| `RGOE_MAX_CONNS_PER_NULLIFIER` | `8` | Max concurrent tunnels ONE nullifier may hold open (the RLN budget counts requests, not open tunnels; an in-window honest retry is admitted idempotently, so without this one proof could pin N idle tunnels). Over => `nullifier-conn-limit`. `0` = unlimited. | gateway | (none) |
+| `RGOE_REPLAY_WINDOW_MS` | `5000` | Honest-retry window of the per-gateway seen-envelope cache; an exact replay later than this is dropped `replayed-envelope`. | gateway | (none) |
+| `RGOE_SHUTDOWN_TIMEOUT_MS` | `10000` | Drain grace on SIGTERM/SIGINT before in-flight tunnels are force-closed. | gateway, bootnode | (none) |
 
 ## Client
 
@@ -43,7 +58,7 @@ Read by `client/shim.mjs` / `client/rgoe-client.mjs` (proxy + library) and `clie
 | `RGOE_ONION` | (unset) | Pin a single gateway onion (skips directory selection). `.onion` suffix optional. | client | `--onion` |
 | `RGOE_DIRECTORY` | (unset) | Path to a static signed directory JSON (offline discovery). | client selection | `--directory` |
 | `RGOE_DIR_SIGNER` | (unset; no default — directory mode is off unless set) | Pinned ed25519 public key of the directory signer (bootnode signer, or the static directory signer). | client selection | `--dir-signer` |
-| `RGOE_BOOTNODE_ONION` | (unset) | Bootnode onion to fetch the live signed directory from over Tor. Wins over `RGOE_DIRECTORY` if both set. | client selection | `--bootnode` |
+| `RGOE_BOOTNODE_ONION` | (unset; or from `network/<RGOE_NETWORK>/bootnode.json`) | Bootnode onion to fetch the live signed directory from over Tor. Wins over `RGOE_DIRECTORY` if both set. | client selection | `--bootnode` |
 | `RGOE_DIRECTORY_CACHE` | `cache/bootnode-directory.lkg` (bootnode) or `<RGOE_DIRECTORY>.lkg` (file), else none | Last-known-good directory cache path. | client selection | (none) |
 | `RGOE_DIRECTORY_REFRESH_MS` | `300000` (5 min) | How often to refresh the loaded directory. | client selection | (none) |
 | `RGOE_SHIM_PORT` | `8888` | Local HTTP-CONNECT proxy listen port (on `127.0.0.1`). | shim | `--shim-port` |
@@ -57,7 +72,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `RGOE_STAKE_MODE` | auto: `onchain` if `RGOE_GATEWAY_REGISTRY` set, else `mock` | StakeVerifier source: `onchain` (eth_call `isStaked`) or `mock` (chainless dev). | gateway-registry | `--stake-mode` |
-| `RGOE_GATEWAY_REGISTRY` | (unset; register scripts fall back to `deployed.local.json`) | `GatewayRegistry` contract address (required for `onchain` stake mode and `register-gateway`). | gateway-registry, register-gateway | `--gateway-registry` |
+| `RGOE_GATEWAY_REGISTRY` | (unset; falls back to `network/<RGOE_NETWORK>/contracts.json` `contracts.gatewayRegistry`, then `deployed.local.json`) | `GatewayRegistry` contract address (required for `onchain` stake mode and `register-gateway`). | gateway-registry, register-gateway | `--gateway-registry` |
 | `RGOE_STAKE_ALLOWLIST` | (unset → everyone staked) | Comma-separated operator addresses treated as staked in `mock` mode; empty means open dev (all staked). | gateway-registry (mock) | `--stake-allowlist` |
 | `RGOE_STAKE_CACHE_MS` | `15000` | TTL of the on-chain `isStaked` result cache (keeps heartbeat storms cheap). | gateway-registry (onchain) | (none) |
 | `RGOE_FRESHNESS_ROOTS` | `2` | Current root plus how many prior roots are still accepted (freshness window ring). | root-provider | (none) |
@@ -71,6 +86,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
+| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
 | `RGOE_RPC_URL` | `http://127.0.0.1:8545` (register scripts try `deployed.rpcUrl` first) | JSON-RPC endpoint for all on-chain reads/writes. | gateway-registry, root-provider, gateway slasher, register-* | `--rpc-url` |
 | `RGOE_TOR_HOST` | `127.0.0.1` | Local Tor SOCKS host. | heartbeat, client, selection | `--tor-host` |
 | `RGOE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |

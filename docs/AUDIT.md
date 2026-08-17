@@ -79,8 +79,10 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
 - **Replay within the Tor tunnel.** The gateway dedups by nullifier and slots; a proof only ever
   travels inside the onion-encrypted tunnel to a single verifier. The message is not bound to the
   target beyond the request signal.
-- **The deploy bootstrap** (`bootnode/deploy/bootstrap.sh`) runs as root on a fresh box and is not
-  yet covered by an integration test; read it before running it.
+- **The deploy bootstrap** (`bootnode/deploy/bootstrap.sh`) runs as root on a fresh box. It is
+  exercised end to end in CI inside a systemd container (`.github/workflows/bootstrap-e2e.yml`,
+  `bootnode/deploy/e2e-container.sh`, T-TEST-8), which proves it brings the fleet up, not that
+  every root-level side effect is safe; read it before running it.
 - **Docker image build** is unverified in CI here (no daemon on the authoring machine); the compose
   schema validates.
 

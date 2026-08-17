@@ -78,6 +78,22 @@ export function measure(entry) {
   return { path: entry.path, sha256: sha256File(abs), bytes: statSync(abs).size };
 }
 
+// ---- artifact ids (T-HARD-8) ------------------------------------------------------------
+// Each circuit's artifact SET is named by a content-derived id: `<circuit>-<sha256(vkey)[0:16]>`
+// (lib/zk-artifacts.mjs artifactIdOf), i.e. literally the vkey's lock hash prefix. The gateway
+// accepts a set of ids (RGOE_ZK_ARTIFACTS), the envelope carries one, so a ceremony swap can run
+// as a dual-VK window. The lock records `circuits.<c>.artifactId` (checked == derived from the
+// vkey on disk) and, for rln, `previousArtifactId`: when a regeneration sees the rln vkey hash
+// CHANGE, the outgoing id is kept as previousArtifactId (the default legacy id a field-less
+// envelope maps to, so un-upgraded clients get a precise `artifact-retired` after the window).
+export const VKEY_OF = {
+  rln: "circuits/rln/verification_key.json",
+  withdraw: "circuits/rln/withdraw_verification_key.json",
+};
+export function artifactIdFor(circuit, sha256hex) {
+  return `${circuit}-${sha256hex.slice(0, 16)}`;
+}
+
 export function readLock(path = LOCK_PATH) {
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf8"));
@@ -101,6 +117,13 @@ export function buildLock({ prev = null, provenanceOverride = null } = {}) {
     };
   }
   const anyDev = Object.values(artifacts).some((e) => e.provenance === PROVENANCE_DEV);
+  // rln artifact id + rotation memory: the vkey hash changed since `prev` => the outgoing id
+  // becomes previousArtifactId (a rerun with an unchanged vkey keeps whatever prev recorded).
+  const rlnId = artifactIdFor("rln", artifacts[VKEY_OF.rln].sha256);
+  const prevRln = prev?.circuits?.rln || {};
+  const rlnPrevious = prevRln.artifactId && prevRln.artifactId !== rlnId
+    ? prevRln.artifactId
+    : (prevRln.previousArtifactId ?? null);
   return {
     _note:
       "ZK artifact provenance lock (ship-plan T-HARD-1). sha256 + bytes are RECOMPUTED by " +
@@ -118,8 +141,15 @@ export function buildLock({ prev = null, provenanceOverride = null } = {}) {
       note: "Filled in by hand after docs/CEREMONY.md phase 2: id, date, contributors[], transcriptSha256[], finalContributionHash, beacon, publishedAt.",
     },
     circuits: {
-      rln: { family: "rate-limiting-nullifier/circom-rln", tag: "v1.0.0", commit: "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d", main: "RLN(20,16)", constraints: 12390, nPublic: 5 },
-      withdraw: { family: "rate-limiting-nullifier/circom-rln", tag: "v1.0.0", commit: "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d", main: "Withdraw", nPublic: 2 },
+      rln: {
+        family: "rate-limiting-nullifier/circom-rln", tag: "v1.0.0", commit: "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d", main: "RLN(20,16)", constraints: 12390, nPublic: 5,
+        artifactId: rlnId,
+        previousArtifactId: rlnPrevious,
+      },
+      withdraw: {
+        family: "rate-limiting-nullifier/circom-rln", tag: "v1.0.0", commit: "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d", main: "Withdraw", nPublic: 2,
+        artifactId: artifactIdFor("withdraw", artifacts[VKEY_OF.withdraw].sha256),
+      },
     },
     artifacts,
   };
@@ -143,6 +173,20 @@ export function checkLock(lock) {
   }
   for (const p of Object.keys(lock.artifacts || {})) {
     if (!seen.has(p)) problems.push(`lock entry ${p} is not in the ARTIFACTS list of scripts/zk-artifacts-lock.mjs`);
+  }
+  // Artifact ids must be exactly the vkey hash prefixes (T-HARD-8): a hand-edited id would let
+  // the gateway/client/Rust disagree with the lock on the name of the set.
+  for (const [circuit, vkPath] of Object.entries(VKEY_OF)) {
+    const e = lock.artifacts?.[vkPath];
+    const declared = lock.circuits?.[circuit]?.artifactId;
+    if (!e) continue; // reported above
+    if (declared !== artifactIdFor(circuit, e.sha256)) {
+      problems.push(`circuits.${circuit}.artifactId ${JSON.stringify(declared)} != ${artifactIdFor(circuit, e.sha256)} (sha256 prefix of ${vkPath})`);
+    }
+  }
+  const prevId = lock.circuits?.rln?.previousArtifactId;
+  if (prevId != null && (typeof prevId !== "string" || !/^rln-[0-9a-f]{16}$/.test(prevId) || prevId === lock.circuits?.rln?.artifactId)) {
+    problems.push(`circuits.rln.previousArtifactId must be null or a distinct rln-<hex16> id (got ${JSON.stringify(prevId)})`);
   }
   const anyDev = Object.values(lock.artifacts || {}).some((e) => e.provenance === PROVENANCE_DEV);
   if (anyDev && lock.trust !== "UNTRUSTED-TESTNET") problems.push(`trust must be UNTRUSTED-TESTNET while any artifact is ${PROVENANCE_DEV} (got ${lock.trust})`);

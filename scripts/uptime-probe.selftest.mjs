@@ -69,7 +69,7 @@ function startMockBootnode(dirJson, healthJson) {
 // Run the prober as a subprocess with a curated env (parent RGOE_* stripped) and capture exit code.
 function runProbe(overrides, args = []) {
   const env = { ...process.env };
-  delete env.RGOE_BOOTNODE_ONION; delete env.RGOE_BOOTNODE_URL; delete env.RGOE_DIR_SIGNER;
+  delete env.RGOE_BOOTNODE_ONION; delete env.RGOE_BOOTNODE_URL; delete env.RGOE_DIR_SIGNER; delete env.RGOE_NETWORK;
   Object.assign(env, overrides);
   try {
     const stdout = execFileSync(process.execPath, [PROBE, ...args], { env, encoding: "utf8" });
@@ -137,6 +137,22 @@ async function main() {
     ok(nBad.status === 2, "nagios unhealthy -> exit 2 (CRITICAL)");
     ok(/^CRITICAL:/.test(nBad.stdout.trim()), "nagios unhealthy -> 'CRITICAL: ...' line");
     ok(!/\.onion/.test(nBad.stdout), "nagios line leaks no onion address");
+
+    // 5. RGOE_NETWORK RECORD (lib/network-record.mjs) ------------------------
+    // Explicit env wins over the record (the mock URL + signer still drive the probe); a record
+    // that resolves NO bootnode (network/sepolia/bootnode.json is pending, or an unknown network)
+    // is a misconfig -> unhealthy, never a throw / hang.
+    console.log("\nRGOE_NETWORK record:");
+    const nEnv = runProbe({ RGOE_NETWORK: "sepolia", RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub });
+    ok(nEnv.status === 0, "RGOE_NETWORK + explicit URL/signer -> explicit env wins, healthy");
+    const nOnly = runProbe({ RGOE_NETWORK: "sepolia" });
+    let nj = {};
+    try { nj = JSON.parse(nOnly.stdout.trim()); } catch {}
+    ok(nOnly.status !== 0 && nj.ok === false, "RGOE_NETWORK alone (no live bootnode in the record, or a live one unreachable here) -> unhealthy, not a crash");
+    const nBadNet = runProbe({ RGOE_NETWORK: "no-such-network-zzz" });
+    let bj = {};
+    try { bj = JSON.parse(nBadNet.stdout.trim()); } catch {}
+    ok(nBadNet.status === 1 && bj.ok === false && /^misconfig:/.test(bj.reason || ""), "unknown RGOE_NETWORK -> misconfig reason, exit 1");
   } finally {
     child.kill();
   }

@@ -266,7 +266,13 @@ SUBCOMMANDS:
           --target    host:port bound into the proof (the egress destination)
           --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;
                       omit it to use the artifacts EMBEDDED in this binary (self-contained,
-                      no external circuit files — T-RUST-4)
+                      no external circuit files — T-RUST-4). Embedded artifacts are hash-
+                      checked at startup against the embedded zk-artifacts lock (T-HARD-8):
+                      any drift is a hard, named error. The set's content-derived artifact
+                      id (rln-<sha256(vkey)[0:16]>) is stamped into the envelope's `artifact`
+                      field; if the selected gateway advertises accepted artifact ids
+                      (signed caps.artifacts) that exclude ours, egress fails closed with
+                      `no-mutual-artifact:...` BEFORE proving.
           --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
           --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
           --slot-cursor  persist a per-epoch slot cursor (or RGOE_SLOT_CURSOR) so
@@ -520,8 +526,14 @@ mod live {
         /// `--plain-tcp <host:port>` — dial plain TCP, no Tor (the CI-harness / socket path).
         PlainTcp(String),
         /// `--onion <addr>`, a directory selection, or bootnode discovery — dial
-        /// `<onion>.onion:<port>` over embedded Tor.
-        Onion { onion: String, port: u16 },
+        /// `<onion>.onion:<port>` over embedded Tor. `artifacts` is the gateway's SIGNED
+        /// accepted-ZK-artifact ad (`caps.artifacts`, T-HARD-8) when it came from a verified
+        /// directory entry that advertises one; `None` = unknown (no ad / explicit --onion).
+        Onion {
+            onion: String,
+            port: u16,
+            artifacts: Option<Vec<String>>,
+        },
     }
 
     impl Transport {
@@ -530,7 +542,7 @@ mod live {
         fn label(&self) -> String {
             match self {
                 Transport::PlainTcp(hp) => hp.clone(),
-                Transport::Onion { onion, port } => format!("{onion}.onion:{port}"),
+                Transport::Onion { onion, port, .. } => format!("{onion}.onion:{port}"),
             }
         }
         /// The onion (with suffix) this transport reports liveness for, or `None` for a
@@ -697,7 +709,17 @@ mod live {
         let mut transports = Vec::with_capacity(order.len());
         for g in &order {
             let (onion, _) = parse_onion_addr(&g.onion, 80)?;
-            transports.push(Transport::Onion { onion, port: 80 });
+            // Carry the gateway's signed accepted-artifact ad (already capsSig-verified by
+            // verify_directory) so the artifact pick happens BEFORE proving (T-HARD-8).
+            let artifacts = g
+                .caps
+                .as_ref()
+                .and_then(|c| rgoe_proto::canonical_caps(c).artifacts);
+            transports.push(Transport::Onion {
+                onion,
+                port: 80,
+                artifacts,
+            });
         }
         eprintln!(
             "egress: {} candidate gateway(s) from verified directory; first = {}",
@@ -958,7 +980,11 @@ mod live {
             let mut transports = Vec::new();
             for addr in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 let (onion, port) = parse_onion_addr(addr, 80)?;
-                transports.push(Transport::Onion { onion, port });
+                transports.push(Transport::Onion {
+                    onion,
+                    port,
+                    artifacts: None,
+                });
             }
             if transports.is_empty() {
                 return Err("--onion: no targets".into());
@@ -1009,7 +1035,7 @@ mod live {
                 eprintln!("egress: dialing {hp} (plain TCP, no Tor) ...");
                 send_envelope(hp, wire)
             }
-            Transport::Onion { onion, port } => {
+            Transport::Onion { onion, port, .. } => {
                 if tor.is_none() {
                     *tor = Some(TorSession::bootstrap()?);
                 }
@@ -1094,9 +1120,55 @@ mod live {
             }
         };
 
+        // ZK artifact set (T-HARD-8). Embedded: hash-check the binary's own artifacts against
+        // the lock it embeds, FAIL CLOSED on any drift, and take the set's content-derived id.
+        // External --circuits dir: derive the id from that dir's verification_key.json.
+        let client_artifact = match circuits.as_deref() {
+            None => match rgoe_rln::artifacts::verify_embedded() {
+                Ok(c) => {
+                    eprintln!(
+                        "egress: embedded artifacts verified against zk-artifacts lock (artifact={}, trust={}, provenance={})",
+                        c.artifact_id, c.trust, c.provenance
+                    );
+                    c.artifact_id
+                }
+                Err(e) => {
+                    eprintln!("egress: REFUSING to prove — {e}");
+                    return ExitCode::from(3);
+                }
+            },
+            Some(dir) => {
+                let vkey_path = format!("{dir}/verification_key.json");
+                match std::fs::read(&vkey_path) {
+                    Ok(bytes) => rgoe_proto::artifact_id_of("rln", &bytes),
+                    Err(e) => {
+                        eprintln!("egress: cannot read {vkey_path} to derive the artifact id: {e}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+        };
+        // Pick the artifact id against the first candidate that ADVERTISES an accepted set
+        // (parity with client/rgoe-client.mjs _pickArtifact): this binary holds ONE set, so
+        // the pick is "ours if listed, else fail closed"; with no ad anywhere, optimistically ours.
+        let gateway_ad: Option<&[String]> = plan.transports.iter().find_map(|t| match t {
+            Transport::Onion {
+                artifacts: Some(a), ..
+            } if !a.is_empty() => Some(a.as_slice()),
+            _ => None,
+        });
+        let artifact =
+            match rgoe_proto::select_artifact(gateway_ad, std::slice::from_ref(&client_artifact)) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("egress: artifact negotiation failed: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+
         // Build the REAL envelope in Rust (native tree + Groth16 prover).
         eprintln!(
-            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}, {}) ...",
+            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}, artifact={artifact}, {}) ...",
             match circuits.as_deref() {
                 Some(d) => format!("circuits={d}"),
                 None => "circuits=embedded".to_string(),
@@ -1123,10 +1195,13 @@ mod live {
         };
 
         // Frame the wire envelope byte-for-byte like client/rgoe-client.mjs buildEnvelope.
+        // `artifact` (T-HARD-8) names the ZK artifact set the proof was made with, so a gateway
+        // in a dual-VK window verifies under the matching vkey (older gateways ignore the field).
         let envelope = serde_json::json!({
             "v": 3,
             "target": built.target,
             "nonce": built.nonce,
+            "artifact": artifact,
             "proof": {
                 "snarkProof": { "proof": built.proof, "publicSignals": built.public_signals },
                 "epoch": built.epoch,
@@ -1200,6 +1275,22 @@ mod live {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("(no err field)");
             println!("not-ok: gate-refused: {err}");
+            // An artifact reject (T-HARD-8) advertises the gateway's accepted ids back; surface
+            // them + whether ours is among them (parity with client/rgoe-client.mjs connect()).
+            if let Some(list) = ack.get("artifacts").and_then(serde_json::Value::as_array) {
+                let ids: Vec<String> = list
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                let hint = match rgoe_proto::select_artifact(
+                    Some(&ids),
+                    std::slice::from_ref(&client_artifact),
+                ) {
+                    Ok(id) => format!("retry with {id}"),
+                    Err(e) => e.to_string(),
+                };
+                println!("gateway accepts artifacts: {} ({hint})", ids.join(","));
+            }
             ExitCode::from(1)
         }
     }

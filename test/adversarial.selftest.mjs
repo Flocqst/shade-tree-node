@@ -18,13 +18,18 @@
 //   3. FORGED ANNOUNCE     — the full announce forgery matrix against the live registry.
 //   4. STAKE LAPSE         — an operator staked at announce time later unstakes.
 //   5. REGISTRY DoS        — mint->announce flood + weight-grab against the DoS controls.
+//   6. GATEWAY ENDPOINT DoS — slow-loris on the envelope, half-close crash, tunnel pinning
+//                             (T-HARD-4; real handler on a real loopback socket).
+//   7. BOOTNODE ENDPOINT DoS — fresh-onion verify burst vs the GLOBAL bucket (spy proves
+//                             verify never runs past the cap), HTTP slow-loris cut off.
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import net from "node:net";
 
 import { generateOnionIdentity } from "../bootnode/keygen.mjs";
-import { buildAnnounce, operatorAuthMessage } from "../bootnode/announce.mjs";
+import { buildAnnounce, operatorAuthMessage, verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeRegistry, makeServer, loadOrMintSigner } from "../bootnode/server.mjs";
 import { MockStakeVerifier } from "../lib/gateway-registry.mjs";
 import {
@@ -258,6 +263,105 @@ async function main() {
     for (let i = 0; i < N; i++) if (pickGateway(dirW)?.onion === attacker.onion) greedyWins++;
     const share = greedyWins / N;
     ok(share < 0.6, `weight clamp bounds the greedy gateway's traffic share to ${(share * 100).toFixed(1)}% (~33% expected; unclamped it would be ~100%), so it cannot capture the fleet`);
+
+    // =====================================================================================
+    // SCENARIO 6 — GATEWAY ENDPOINT DoS (T-HARD-4)
+    // An unauthenticated peer (it has NO proof) tries to exhaust the gateway without ever
+    // passing the gate: (a) slow-loris — connect and never finish the envelope, or dribble it
+    // one byte at a time forever; (b) the half-close crash — send a partial envelope then FIN
+    // (pre-fix this took the WHOLE gateway process down: an unhandled 'error' on writeAfterFIN);
+    // (c) tunnel pinning — one admitted proof, replayed inside the honest-retry window, used to
+    // hold N idle tunnels open. Executed against the REAL connection handler on a REAL loopback
+    // TCP server; only verify is stubbed (no Groth16) and the knobs are tiny for speed.
+    // =====================================================================================
+    console.log("\nSCENARIO 6 — gateway endpoint DoS (slow-loris / half-close crash / tunnel pinning):");
+    process.env.RGOE_EGRESS_ALLOW = "127.0.0.1:*"; // egress policy is built at import; allow the loopback echo target
+    const { makeHandler, makeConnLimiter } = await import("../gateway/gateway.mjs");
+    const echo = net.createServer((c) => { c.on("data", (d) => c.write(d)); c.on("error", () => {}); });
+    await new Promise((r) => echo.listen(0, "127.0.0.1", r));
+    const stubVerify = async (env) => ({ ok: true, nullifier: String(env.nullifier), externalNullifier: "1", share: env.share || { x: "1", y: "2" } });
+    const limiter6 = makeConnLimiter({ maxConns: 3, maxPerNullifier: 2 });
+    const gw = net.createServer(makeHandler({ admit: async () => ({ ok: true, action: "first" }) }, { verify: stubVerify, envelopeTimeoutMs: 250, idleTimeoutMs: 0, limiter: limiter6 }));
+    await new Promise((r) => gw.listen(0, "127.0.0.1", r));
+    const gwPort = gw.address().port;
+    const dial = () => new Promise((resolve, reject) => {
+      const sock = net.connect(gwPort, "127.0.0.1"); const st = { sock, closed: false, buf: "" };
+      sock.on("data", (d) => { st.buf += d.toString(); }); sock.on("error", () => {}); sock.on("close", () => { st.closed = true; });
+      sock.once("connect", () => resolve(st)); sock.once("error", reject);
+    });
+    const until = async (pred, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return true; await new Promise((r) => setTimeout(r, 5)); } return false; };
+    const envOf = (n) => JSON.stringify({ v: 3, target: `127.0.0.1:${echo.address().port}`, nullifier: n, share: { x: "1", y: "2" }, nonce: "n" }) + "\n";
+    try {
+      // (a) slow-loris: silence, then dribble. Both die at the ABSOLUTE deadline.
+      const t0 = Date.now();
+      const silent = await dial();
+      ok(await until(() => silent.closed, 3000) && Date.now() - t0 < 2000, "slow-loris (silence): connection cut at the envelope deadline, not held forever");
+      ok(/bad-envelope:envelope timeout/.test(silent.buf), "…with the envelope-timeout reply");
+      const t1 = Date.now();
+      const drib = await dial();
+      const drip = setInterval(() => { if (!drib.closed) drib.sock.write("x"); }, 20);
+      ok(await until(() => drib.closed, 3000) && Date.now() - t1 < 2000, "slow-loris (dribble, one byte/20ms, no newline): still cut at the same deadline — activity does not re-arm it");
+      clearInterval(drip);
+      // (b) half-close crash: partial envelope + FIN. The process must survive and keep serving.
+      const half = await dial(); half.sock.write("{\"partial\":"); half.sock.end();
+      await until(() => half.closed, 3000);
+      const after = await dial(); after.sock.write(envOf("alive"));
+      ok(await until(() => /"ok":true/.test(after.buf), 3000), "half-close (partial envelope + FIN) no longer crashes the gateway: the next request is served (pre-fix: uncaught EPIPE killed the process)");
+      after.sock.destroy();
+      // (c) tunnel pinning: same nullifier replayed => capped per nullifier; sockets capped in total.
+      await until(() => limiter6.total() === 0, 3000);
+      const p1 = await dial(); p1.sock.write(envOf("pin")); await until(() => /"ok":true/.test(p1.buf), 3000);
+      const p2 = await dial(); p2.sock.write(envOf("pin")); await until(() => /"ok":true/.test(p2.buf), 3000);
+      const p3 = await dial(); p3.sock.write(envOf("pin"));
+      ok(await until(() => p3.closed, 3000) && /nullifier-conn-limit/.test(p3.buf), "tunnel pinning: a 3rd concurrent tunnel on ONE nullifier is refused nullifier-conn-limit (cap 2)");
+      await new Promise((r) => setTimeout(r, 50)); await until(() => limiter6.total() === 2, 3000);
+      const q1 = await dial(); // 3rd socket, no envelope
+      await until(() => limiter6.total() === 3, 3000);
+      const q2 = await dial();
+      ok(await until(() => q2.closed, 3000) && /too-many-connections/.test(q2.buf), "socket exhaustion: the (max+1)th concurrent connection is refused too-many-connections before any byte is read");
+      for (const s of [p1, p2, q1]) s.sock.destroy();
+      ok(await until(() => limiter6.total() === 0 && limiter6.trackedNullifiers() === 0, 3000), "every slot is released on close (no leak; per-nullifier map bounded by open sockets)");
+    } finally {
+      await new Promise((r) => gw.close(r)); await new Promise((r) => echo.close(r));
+    }
+
+    // =====================================================================================
+    // SCENARIO 7 — BOOTNODE ENDPOINT DoS (T-HARD-4)
+    // (a) The verify burst: scenario 5 proved the SIZE cap and the PER-ONION throttle, but an
+    //     attacker minting fresh onions is neither "existing" (no throttle) nor refused until the
+    //     registry is FULL — so up to maxEntries ed25519 verifies were reachable in one burst.
+    //     The GLOBAL announce bucket must refuse the overflow BEFORE verify (spied).
+    // (b) HTTP slow-loris against the bootnode's http.Server: partial headers, never finished.
+    // =====================================================================================
+    console.log("\nSCENARIO 7 — bootnode endpoint DoS (fresh-onion verify burst / HTTP slow-loris):");
+    let clock7 = 6_000_000;
+    let verifies = 0;
+    const spyVerify = (rec, o) => { verifies++; return verifyAnnounce(rec, o); };
+    const BURST = 3;
+    const reg7 = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", ttlSec: 900, maxEntries: 1000, minReannounceSec: 5,
+      announceRate: 1, announceBurst: BURST, verify: spyVerify, now: () => clock7 });
+    let throttled = 0;
+    for (let i = 0; i < 8; i++) {
+      const id = await generateOnionIdentity(join(work, `burst7-${i}`), { label: `burst7-${i}` });
+      const r = await reg7.announce(buildAnnounce({ onion: id.onion, weight: 100, onionSeedHex: id.seed, ts: clock7 }));
+      if (r.reason === "global-rate-limited") throttled++;
+    }
+    ok(throttled === 8 - BURST, `fresh-onion burst of 8 (registry NOT full): ${throttled} refused global-rate-limited`);
+    ok(verifies === BURST, `verify ran exactly ${verifies} times == burst (${BURST}) — the throttle sits BEFORE signature verification`);
+    const server7 = makeServer(reg7, { signerPub: signer.pub, limits: { headersTimeout: 300, requestTimeout: 600, keepAliveTimeout: 300, connectionsCheckingInterval: 50 } });
+    await new Promise((r) => server7.listen(0, "127.0.0.1", r));
+    try {
+      const t7 = Date.now();
+      const st = await new Promise((resolve, reject) => {
+        const sock = net.connect(server7.address().port, "127.0.0.1"); const o = { sock, closed: false, buf: "" };
+        sock.on("data", (d) => { o.buf += d.toString(); }); sock.on("error", () => {}); sock.on("close", () => { o.closed = true; });
+        sock.once("connect", () => resolve(o)); sock.once("error", reject);
+      });
+      st.sock.write("POST /announce HTTP/1.1\r\nHost: b\r\nX-Slow: "); // headers never complete
+      ok(await until(() => st.closed, 5000) && Date.now() - t7 < 4000 && /^HTTP\/1\.1 408/.test(st.buf), "HTTP slow-loris (headers never complete) is cut off with 408 at headersTimeout, not Node's 60s default");
+    } finally {
+      await new Promise((r) => server7.close(r));
+    }
   } finally {
     await rm(work, { recursive: true, force: true });
   }

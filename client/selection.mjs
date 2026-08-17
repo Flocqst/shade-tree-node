@@ -23,8 +23,15 @@ import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGH
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
+import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// RGOE_NETWORK=<name>: fill discovery inputs (RGOE_BOOTNODE_ONION / RGOE_DIR_SIGNER, or the static
+// RGOE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
+// snapshot the env. Explicit env always wins (applyNetworkEnv only fills unset keys). Done here, not
+// only in bin/rgoe.mjs, so `node client/shim.mjs` and the SDK (client/rgoe-client.mjs) honour it too.
+applyNetworkEnv(process.env);
 
 // Two directory SOURCES, same signed shape and same pinned-signer verification:
 //   - RGOE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor
@@ -726,7 +733,15 @@ export async function selectCandidates(req = null) {
   // weighted round-robin so load spreads evenly across the healthy fleet (no back-to-back hammering
   // of the top gateway) while the long-run weighted share is preserved exactly.
   const order = ROTATION_SPREAD ? spreadSelectionOrder(view) : selectionOrder(view);
-  return order.map((g) => ({ onion: g.onion.replace(/\.onion$/, "") }));
+  // Each candidate carries the gateway's SIGNED accepted-ZK-artifact ad when it has one
+  // (caps.artifacts, T-HARD-8) so the client can pick a mutual artifact set before proving.
+  // ADDITIVE: the field is present only when advertised (legacy candidates are `{ onion }` as before).
+  return order.map((g) => {
+    const c = { onion: g.onion.replace(/\.onion$/, "") };
+    const arts = canonicalCaps(g.caps).artifacts;
+    if (arts) c.artifacts = arts;
+    return c;
+  });
 }
 
 // Health/latency feedback from the shim after a dial attempt.

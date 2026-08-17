@@ -3,12 +3,13 @@
 // It listens on 127.0.0.1:8443 (Tor maps <addr>.onion:80 -> here). For each
 // incoming connection it:
 //   1. reads a single newline-terminated v3 JSON envelope
-//      { v:3, target, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
+//      { v:3, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
 //   2. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
 //        externalNullifier is current/previous epoch's               (cheap)
 //        share.x == proof's committed public x                        (cheap)
 //        proof's public root ∈ recent-roots                           (cheap)
-//        RLN Groth16 verifyProof                                      (expensive SNARK)
+//        `artifact` id ∈ the accepted ZK artifact set (T-HARD-8)      (cheap; absent => legacy id)
+//        RLN Groth16 verifyProof under THAT artifact's vkey            (expensive SNARK)
 //      all bundled behind lib verifyEnvelope(),
 //   3. collects the RLN share per `nullifier`: the first share egresses; an identical
 //      replay (same share.x) is deduped (no slash); a SECOND DISTINCT signal (same
@@ -28,7 +29,7 @@ import { readFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH } from "../lib/semaphore.mjs";
+import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
@@ -51,12 +52,85 @@ const M = {
   requests: metrics.counter("rgoe_gateway_requests_total", "Requests by result=pass|drop (+ reason on drop)."),
   slashes: metrics.counter("rgoe_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
   verify: metrics.histogram("rgoe_gateway_verify_seconds", "verifyEnvelope() latency in seconds (cheap-first checks + Groth16)."),
+  // Established tunnels closed by the gateway itself (not by either peer), by reason. Kept
+  // SEPARATE from requests_total: a tunnel that idles out already counted as result=pass, so
+  // counting it again as a drop would double-count the request (T-HARD-4).
+  tunnelCloses: metrics.counter("rgoe_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
 };
+
+// ---- endpoint hardening knobs (T-HARD-4) -----------------------------------
+// Every lever an unauthenticated peer could pull BEFORE it has proven anything (or after it has
+// spent one proof) is bounded here, env-configurable with safe defaults. `envInt` keeps the
+// convention of the rest of this file (unset/garbage => default) but ALLOWS an explicit 0, which
+// disables the corresponding timeout/limit (an operator opt-out, never the default).
+//   RGOE_ENVELOPE_TIMEOUT_MS      absolute deadline for the newline-terminated envelope, measured
+//                                 from connect (default 30000 — the value that was hard-coded
+//                                 before; a slow-loris that never sends the newline, or dribbles
+//                                 one byte per N seconds, is cut at the deadline: the timer is
+//                                 NOT reset by activity). Drop reason `envelope-timeout`.
+//   RGOE_TUNNEL_IDLE_TIMEOUT_MS   inactivity timeout on the ESTABLISHED relay: no bytes in EITHER
+//                                 direction for this long => both sockets destroyed (default
+//                                 300000 = 5 min; 0 = never). Counted `idle-timeout` in
+//                                 rgoe_gateway_tunnel_closes_total. Also bounds an upstream
+//                                 connect that black-holes (never completes, never errors).
+//   RGOE_MAX_CONNS                max concurrent client connections to the gateway, counted from
+//                                 accept (default 1024; 0 = unlimited). Over => reply
+//                                 `too-many-connections` and close, BEFORE reading any envelope.
+//   RGOE_MAX_CONNS_PER_NULLIFIER  max concurrent tunnels a single nullifier may hold open
+//                                 (default 8; 0 = unlimited). The RLN budget counts REQUESTS, not
+//                                 open tunnels: an exact-envelope honest retry inside the replay
+//                                 window is admitted idempotently, so without this cap one proof
+//                                 could pin N idle tunnels open. Over => `nullifier-conn-limit`.
+function envInt(name, dflt) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return dflt;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+export const HARDENING = Object.freeze({
+  envelopeTimeoutMs: envInt("RGOE_ENVELOPE_TIMEOUT_MS", 30000),
+  idleTimeoutMs: envInt("RGOE_TUNNEL_IDLE_TIMEOUT_MS", 300000),
+  maxConns: envInt("RGOE_MAX_CONNS", 1024),
+  maxConnsPerNullifier: envInt("RGOE_MAX_CONNS_PER_NULLIFIER", 8),
+});
+
+// Concurrent-connection accounting. Pure + injectable (the selftest drives it directly and via
+// the real handler). `acquire()` is called once per accepted socket BEFORE the envelope read and
+// `release()` exactly once on that socket's close; the per-nullifier pair brackets an admitted
+// tunnel the same way. Both maps are bounded by the total connection cap (an entry exists only
+// while a socket is open), so an attacker cannot grow them past maxConns. 0 == unlimited.
+export function makeConnLimiter({ maxConns = HARDENING.maxConns, maxPerNullifier = HARDENING.maxConnsPerNullifier } = {}) {
+  let total = 0;
+  const perNullifier = new Map(); // nullifier -> open tunnel count
+  return {
+    maxConns, maxPerNullifier,
+    acquire() { if (maxConns > 0 && total >= maxConns) return false; total++; return true; },
+    release() { if (total > 0) total--; },
+    acquireNullifier(n) {
+      const k = String(n);
+      const cur = perNullifier.get(k) || 0;
+      if (maxPerNullifier > 0 && cur >= maxPerNullifier) return false;
+      perNullifier.set(k, cur + 1);
+      return true;
+    },
+    releaseNullifier(n) {
+      const k = String(n);
+      const cur = perNullifier.get(k) || 0;
+      if (cur <= 1) perNullifier.delete(k); else perNullifier.set(k, cur - 1);
+    },
+    total: () => total,
+    nullifierCount: (n) => perNullifier.get(String(n)) || 0,
+    trackedNullifiers: () => perNullifier.size,
+  };
+}
 
 // ---- recent-roots: the accepted admission roots, refreshed on change --------
 // A proof against any root inside the freshness window verifies. On-chain: fed by
 // the RootProvider. PoC fallback: the single members.json root, re-read on change.
 let recentRoots = new Set();
+// Test seam (gateway/*.selftest.mjs, lib/zk-artifacts.selftest.mjs): install the accepted
+// root set directly so a handler can be driven without initRoots()/members.json/a chain.
+export function _setRecentRoots(roots) { recentRoots = new Set(Array.from(roots || []).map(String)); }
 
 async function initRoots() {
   if (process.env.RGOE_GROUP_CONTRACT) {
@@ -323,14 +397,25 @@ function versionRepr(v) {
   return typeof v;
 }
 
-function readEnvelope(socket) {
+// Errors carry a bounded `reason` (envelope-timeout | envelope-too-large | bad-envelope) so the
+// drop metric can label them without ever putting a client-controlled string on a metric label.
+function envelopeError(message, reason) {
+  const e = new Error(message);
+  e.reason = reason;
+  return e;
+}
+
+// The envelope deadline is ABSOLUTE from connect (setTimeout armed once, never re-armed on data), so
+// a slow-loris client that dribbles one byte at a time inside the timeout cannot hold the read open
+// past `timeoutMs` — that is the whole point of a deadline instead of an inactivity timer here.
+function readEnvelope(socket, { timeoutMs = HARDENING.envelopeTimeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     let buf = Buffer.alloc(0);
     const onData = (chunk) => {
       buf = Buffer.concat([buf, chunk]);
       const nl = buf.indexOf(0x0a);
       if (nl === -1) {
-        if (buf.length > MAX_ENVELOPE) cleanup(new Error("envelope too large"));
+        if (buf.length > MAX_ENVELOPE) cleanup(envelopeError("envelope too large", "envelope-too-large"));
         return;
       }
       const line = buf.subarray(0, nl).toString("utf8");
@@ -338,10 +423,11 @@ function readEnvelope(socket) {
       cleanup(null, line, rest);
     };
     const onErr = (e) => cleanup(e);
-    const onEnd = () => cleanup(new Error("closed before envelope"));
-    const timer = setTimeout(() => cleanup(new Error("envelope timeout")), 30000);
+    const onEnd = () => cleanup(envelopeError("closed before envelope", "bad-envelope"));
+    // 0 disables the deadline (operator opt-out); the default is the pre-hardening 30s.
+    const timer = timeoutMs > 0 ? setTimeout(() => cleanup(envelopeError("envelope timeout", "envelope-timeout")), timeoutMs) : null;
     function cleanup(err, line, rest) {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       socket.removeListener("data", onData);
       socket.removeListener("error", onErr);
       socket.removeListener("end", onEnd);
@@ -550,15 +636,48 @@ async function makeReceiptSigner() {
   return () => buildReceipt({ onion: id.onion, epoch: currentEpoch(), onionSeedHex: id.seed });
 }
 
-function makeHandler(spentSet, { makeReceipt = null } = {}) {
+// Also driven by lib/zk-artifacts.selftest.mjs with a fake socket (artifact-reject reply path).
+// Exported so gateway/hardening.selftest.mjs can run the REAL connection handler on a real
+// loopback socket. `verify` and `connect` are injectable ONLY for that (defaults are the real
+// verifyEnvelope + net.connect; main() passes neither); the hardening knobs default to HARDENING
+// (env) and the limiter to a fresh one, so main()'s call is byte-for-byte the pre-T-HARD-4 path
+// plus the caps.
+export function makeHandler(spentSet, {
+  makeReceipt = null,
+  verify = verifyEnvelope,
+  connect = net.connect,
+  envelopeTimeoutMs = HARDENING.envelopeTimeoutMs,
+  idleTimeoutMs = HARDENING.idleTimeoutMs,
+  limiter = makeConnLimiter(),
+} = {}) {
   return async function handle(socket) {
     socket.setNoDelay(true);
+    // A permanent error sink on the client socket (T-HARD-4). Found by the slow-loris selftest: a
+    // client that sends a PARTIAL envelope and then half-closes (FIN) made readEnvelope reject
+    // (its listeners removed), and the error reply then hit Node's writeAfterFIN, which emits an
+    // asynchronous 'error' on a server socket — with no listener that is an uncaught exception
+    // and the WHOLE gateway process died. One half-closed connection == a full outage. Every
+    // later per-path listener below is additive; this one guarantees there is always at least
+    // one, so a peer's socket error can never escalate past that one connection.
+    socket.on("error", () => {});
+    // Concurrent-connection cap (T-HARD-4): decided at accept, BEFORE any byte is read, so an
+    // attacker holding sockets open (with or without an envelope) is bounded at maxConns. The
+    // release is bound to `close`, which every exit path below reaches (destroy() or a natural end).
+    if (!limiter.acquire()) {
+      M.requests.inc({ result: "drop", reason: "too-many-connections" });
+      reply(socket, { ok: false, err: "too-many-connections" });
+      return socket.destroy();
+    }
+    socket.once("close", () => limiter.release());
     let env;
     try {
-      const { line, rest } = await readEnvelope(socket);
+      const { line, rest } = await readEnvelope(socket, { timeoutMs: envelopeTimeoutMs });
       env = JSON.parse(line);
       env.__rest = rest;
     } catch (e) {
+      // `reason` is our own bounded tag (never client bytes): envelope-timeout for the slow-loris
+      // deadline, envelope-too-large for the size cap, bad-envelope for close-before-newline / JSON.
+      M.requests.inc({ result: "drop", reason: e.reason || "bad-envelope" });
       reply(socket, { ok: false, err: "bad-envelope:" + e.message });
       return socket.destroy();
     }
@@ -582,12 +701,17 @@ function makeHandler(spentSet, { makeReceipt = null } = {}) {
       // -> root ∈ recent-roots -> RLN Groth16 verify. Returns the authoritative
       // nullifier/externalNullifier/share (read from the proof's public signals) to act on.
       const t0 = performance.now();
-      const v = await verifyEnvelope(env, recentRoots);
+      const v = await verify(env, recentRoots);
       M.verify.observe((performance.now() - t0) / 1000);
       if (!v.ok) {
         log.warn("drop", { reason: v.reason, target: env.target });
-        M.requests.inc({ result: "drop", reason: v.reason });
-        reply(socket, { ok: false, err: "gate:" + v.reason });
+        // Metrics use the bounded `label` when the lib supplies one (the T-HARD-8 artifact
+        // rejections carry the offending id in `reason`; the label is the coarse key), else the
+        // reason itself as before.
+        M.requests.inc({ result: "drop", reason: v.label ?? v.reason });
+        // An artifact rejection advertises the accepted ids back (like `proto` on a version
+        // reject) so the client can re-select a mutual artifact set or fail closed precisely.
+        reply(socket, v.artifacts ? { ok: false, err: "gate:" + v.reason, artifacts: v.artifacts } : { ok: false, err: "gate:" + v.reason });
         return socket.destroy();
       }
 
@@ -612,8 +736,23 @@ function makeHandler(spentSet, { makeReceipt = null } = {}) {
         return socket.destroy();
       }
 
+      // Per-nullifier concurrent-tunnel cap (T-HARD-4). Checked AFTER admit on purpose: the
+      // spent-set must still see every share (a 2nd DISTINCT share under a nullifier that is
+      // pinning tunnels open must still reconstruct + slash), and an exact replay inside the
+      // honest-retry window is still admitted — it just cannot pin more than maxPerNullifier
+      // tunnels open at once. Released on close of THIS socket only.
+      if (!limiter.acquireNullifier(v.nullifier)) {
+        log.warn("drop", { reason: "nullifier-conn-limit", nullifier: String(v.nullifier).slice(0, 10) + "..", open: limiter.nullifierCount(v.nullifier) });
+        M.requests.inc({ result: "drop", reason: "nullifier-conn-limit" });
+        reply(socket, { ok: false, err: "nullifier-conn-limit" });
+        return socket.destroy();
+      }
+      socket.once("close", () => limiter.releaseNullifier(v.nullifier));
+
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
-      const upstream = net.connect(tgt.port, tgt.host, () => {
+      let established = false;
+      const upstream = connect(tgt.port, tgt.host, () => {
+        established = true;
         log.info("egress", { target: `${tgt.host}:${tgt.port}`, nullifier: String(v.nullifier).slice(0, 10) + "..", externalNullifier: String(v.externalNullifier).slice(0, 10) + ".." });
         M.requests.inc({ result: "pass" });
         // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
@@ -629,6 +768,28 @@ function makeHandler(spentSet, { makeReceipt = null } = {}) {
         socket.destroy();
       });
       socket.on("error", () => upstream.destroy());
+      // Idle timeout on the relay (T-HARD-4). A socket's inactivity timer covers BOTH its reads
+      // and its writes, and every relayed byte is a read on one side and a write on the other, so
+      // "one side idle for idleTimeoutMs" == "no bytes in EITHER direction" — either timer firing
+      // means the tunnel is dead weight and both ends are torn down. Armed on the upstream from
+      // creation, so a black-holed connect (never completes, never errors) is bounded too. Idle
+      // relay: counted in tunnel_closes (the request already counted as pass); a connect that
+      // never completes: counted as a drop `upstream-timeout` (never passed).
+      if (idleTimeoutMs > 0) {
+        const onIdle = () => {
+          if (established) {
+            M.tunnelCloses.inc({ reason: "idle-timeout" });
+            log.info("tunnel closed: idle-timeout", { target: `${tgt.host}:${tgt.port}`, idleMs: idleTimeoutMs });
+          } else {
+            M.requests.inc({ result: "drop", reason: "upstream-timeout" });
+            reply(socket, { ok: false, err: "upstream:ETIMEDOUT" });
+          }
+          upstream.destroy();
+          socket.destroy();
+        };
+        upstream.setTimeout(idleTimeoutMs, onIdle);
+        socket.setTimeout(idleTimeoutMs, onIdle);
+      }
     } catch (e) {
       log.error("gateway-error", { err: e.message, target: env.target });
       reply(socket, { ok: false, err: "gateway-error" });
@@ -677,7 +838,23 @@ export function makeGracefulShutdown(server, {
   };
 }
 
+// ---- ZK artifact set (T-HARD-8 dual-VK rollout window) ----------------------
+// Load the accepted {artifactId -> vkey} set at startup so a mis-configured window
+// (RGOE_ZK_ARTIFACTS pointing an id at the wrong file, a missing vkey, ...) is a loud startup
+// error, never a silently-wrong accepted set. verifyEnvelope reads the same process-wide set.
+function initArtifacts() {
+  const set = getArtifactSet(); // throws with a precise message on a bad config
+  log.info("zk artifacts", {
+    accepted: set.ids,
+    legacy: set.legacyId,
+    legacyStatus: set.legacyAccepted ? "accepted (window open: field-less envelopes verify under it)" : "RETIRED (field-less / explicit-legacy envelopes => artifact-retired)",
+    source: set.explicit ? "RGOE_ZK_ARTIFACTS" : "built-in circuits/rln/verification_key.json",
+  });
+  return set;
+}
+
 async function main() {
+  initArtifacts();
   await initRoots();
   const slash = await makeSlasher();
   // Optional cross-fleet shared spent-nullifier tally (T-FEAT-20). null unless a real
@@ -690,7 +867,8 @@ async function main() {
   // Optional signed success receipts (T-FEAT-13); null unless RGOE_RECEIPTS=1.
   const makeReceipt = await makeReceiptSigner();
 
-  const server = net.createServer(makeHandler(spentSet, { makeReceipt }));
+  const limiter = makeConnLimiter();
+  const server = net.createServer(makeHandler(spentSet, { makeReceipt, limiter }));
 
   // Track live tunnels for draining (add/delete only — no per-byte work).
   const openSockets = new Set();
@@ -720,6 +898,7 @@ async function main() {
     const replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000;
     log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
     if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");
+    log.info("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

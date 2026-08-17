@@ -46,7 +46,8 @@ It creates three `Restart=always` units:
 | `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, `RGOE_ENABLE_POW=1` (onion PoW
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref), `RGOE_ENABLE_POW=1` (onion PoW
 DoS defense; **off by default** because a `pow: no` client tor cannot reach a PoW onion),
 `RGOE_GATEWAY_REGION=eu`. Full table: `bootnode/deploy/README.md` "Tunables". Every value
 is validated before anything is installed.
@@ -206,21 +207,26 @@ Locally (non-bootstrapped) the same files live under `tor/hs*/identity.local.jso
 
 ### Backup
 
-**Manual for now** (no backup tooling is shipped). Copy the seed files off-box,
-encrypted. Example:
+`rgoe backup` / `rgoe restore` (`scripts/backup.mjs`, full guide in
+[BACKUP.md](./BACKUP.md)) encrypt the onion seeds (`identity.local.json`,
+`hs_ed25519_secret_key`) and the bootnode signer key into one tamper-evident file
+(scrypt + AES-256-GCM, Node crypto only, no `gpg` needed). The passphrase is read
+**only** from `RGOE_BACKUP_PASSPHRASE`, never from argv, never logged.
 
 ```bash
-sudo tar czf - \
-  /opt/rgoe/deploy-state/bootnode-hs/identity.local.json \
-  /opt/rgoe/deploy-state/gateway-hs/identity.local.json \
-  /opt/rgoe/deploy-state/bootnode-signer.key \
-  | gpg --symmetric --cipher-algo AES256 -o rgoe-keys-$(date +%F).tar.gz.gpg
-# then move rgoe-keys-*.tar.gz.gpg to an off-box, encrypted-at-rest location.
+export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+sudo -E node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state rgoe-keys-$(date +%F).rgoebak
+# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+
+# on a fresh box, before starting the units:
+sudo -E node /opt/rgoe/bin/rgoe.mjs restore rgoe-keys-<date>.rgoebak /opt/rgoe/deploy-state   # --force to overwrite
 ```
 
-Restore by placing the files back before starting the units; the onion address and
-pinned signer are preserved, so clients keep working. The operator EOA key is backed up
-with your normal wallet backups, not here.
+Restore lays the files back with `0600`/`0700` perms; the onion address and pinned
+signer are preserved, so clients keep working. To prove the restored key really is the
+same onion before cutting over, use `scripts/onion-identity.mjs`
+([ONION-IDENTITY.md](./ONION-IDENTITY.md)). The operator EOA key is backed up with your
+normal wallet backups, not here.
 
 ---
 
@@ -430,6 +436,52 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
 | `RGOE_EGRESS_ALLOW` / `RGOE_EGRESS_DENY` | (none) | Egress policy (see §2). When `RGOE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
 | `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
+| `RGOE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
+| `RGOE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `RGOE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
+| `RGOE_ENVELOPE_TIMEOUT_MS` / `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
+| `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
+| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+
+### Endpoint hardening (T-HARD-4)
+
+Both listeners bound every lever an *unauthenticated* peer can pull. Defaults are on; you
+should not need to touch them unless you run an unusually large or slow fleet.
+
+**Gateway** (`gateway/gateway.mjs`):
+
+- **Envelope deadline** — the newline-terminated envelope must arrive within
+  `RGOE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
+  at a time does not extend it). Cut connections show as `drop reason=envelope-timeout` in the
+  metrics (`rgoe_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
+- **Relay idle timeout** — an established tunnel with no bytes in either direction for
+  `RGOE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
+  (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
+  simply reconnect; raise it if members legitimately hold idle connections longer.
+- **Connection caps** — `RGOE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
+  before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+  tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry
+  window cannot pin an unbounded number of idle tunnels. Both slots are released on close.
+- **Half-close crash fixed** — a client that sent a partial envelope and then FIN'd used to
+  crash the whole gateway process (uncaught `EPIPE` on the error reply). Fixed in the same
+  slice; `test/adversarial.selftest.mjs` scenario 6 exercises it.
+
+If a *legitimate* member trips `too-many-connections` (metric climbing under normal load), raise
+`RGOE_MAX_CONNS`; the per-nullifier cap should never be hit by an honest client (one request per
+nullifier, one tunnel each; a retry replaces a dead tunnel).
+
+**Bootnode** (`bootnode/server.mjs`):
+
+- **HTTP slow-client limits** — headers within 10 s, whole request within 30 s (`408`), keep-alive
+  idle 5 s, headers <= 8 KiB (`431`), enforced every second (Node's own defaults are 60 s / 300 s
+  / 16 KiB / checked every 30 s).
+- **Global announce bucket** — in front of the per-onion throttle's blind spot: an attacker
+  minting *fresh* onions could force one ed25519 verify per onion until the registry filled. Now
+  at most `RGOE_BOOTNODE_ANNOUNCE_BURST` (1000) reach verification in one instant, then
+  `RGOE_BOOTNODE_ANNOUNCE_RATE` (66.7/s). Overflow gets `429` + `Retry-After` and the heartbeat
+  simply retries at its next beat. Legit fleets never hit it at default cadence — the math is in
+  `docs/BOOTNODE.md` "Endpoint hardening". If your bootnode logs many `global-rate-limited`
+  rejects while the fleet is healthy, you are under an announce flood, not misconfigured.
 
 ### Capability advertisement (T-FEAT-10b)
 
@@ -442,6 +494,10 @@ attaches a **signed** capability set to every announce:
   (`*:443` → `[443]`; `*:443,*:8443` → `[443,8443]`; a wildcard `*` port is dropped).
 - `region` — your `RGOE_GATEWAY_REGION` bucket, if valid.
 - `proto` — the envelope version range this build speaks (from the gateway's negotiated range).
+- `artifacts` — the ZK artifact ids the gateway verifies proofs under, ONLY when
+  `RGOE_ZK_ARTIFACTS` is set (the dual-VK rollout window, `docs/CEREMONY.md` §6). Loaded through
+  the same fail-closed loader the gateway verifies with, so a heartbeat can never advertise an id
+  the gateway does not hold.
 
 The caps are signed by the gateway's onion key (not the bootnode), so a bootnode or directory
 signer cannot forge or alter them. Clients that opt into capability-aware selection then route a

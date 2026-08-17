@@ -728,6 +728,7 @@ fn vector_caps(v: &Value) -> Caps {
             min: c["proto"]["min"].as_i64().unwrap(),
             max: c["proto"]["max"].as_i64().unwrap(),
         }),
+        artifacts: None,
     }
 }
 
@@ -868,6 +869,7 @@ fn directory_with_tampered_caps_is_rejected_bad_caps_sig() {
         ports: Some(vec![443]),
         region: Some("eu".to_string()),
         proto: Some(ProtoCaps { min: 3, max: 3 }),
+        artifacts: None,
     });
     let resig = ed25519_sign(
         &canonical_directory_bytes(&dir),
@@ -901,6 +903,7 @@ fn absent_caps_is_byte_identical_to_no_caps_vector() {
         ports: Some(vec![]),
         region: Some("zzz".to_string()),
         proto: Some(ProtoCaps { min: 9, max: 1 }),
+        artifacts: Some(vec!["Not An Id".to_string(), String::new()]),
     });
     dir2.gateways[0].caps_sig = Some("deadbeef".to_string());
     assert_eq!(
@@ -909,4 +912,163 @@ fn absent_caps_is_byte_identical_to_no_caps_vector() {
     );
     // And such an entry still verifies (no caps to check -> capsSig ignored).
     verify_directory(&dir2, s(&v, "signerPub")).expect("empty-canonicalizing caps are ignored");
+}
+
+// -- 10. ZK artifact-version negotiation (artifacts vector, T-HARD-8) --------------------
+// Consumes the `artifacts` vector: the content-derived id, the client's pick + its
+// byte-pinned disjoint reason, the bounded reason labels, and caps that CARRY an
+// `artifacts` list (canonical form, bytes, onion sig) — while the pre-existing
+// `capabilities` vectors above stay byte-identical (artifacts absent => omitted).
+
+fn str_vec(v: &Value) -> Vec<String> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn artifact_id_matches_vector() {
+    let v = vectors();
+    let smp = &v["artifacts"]["sample"];
+    assert_eq!(
+        rgoe_proto::artifact_id_of(s(smp, "circuit"), s(smp, "inputUtf8").as_bytes()),
+        s(smp, "artifactId")
+    );
+    assert!(rgoe_proto::is_artifact_id(s(smp, "artifactId")));
+    assert!(!rgoe_proto::is_artifact_id("Not An Id"));
+    assert!(!rgoe_proto::is_artifact_id(""));
+    assert!(!rgoe_proto::is_artifact_id(&"a".repeat(65)));
+    assert!(rgoe_proto::is_artifact_id(&"a".repeat(64)));
+}
+
+#[test]
+fn artifact_reason_labels_match_vector() {
+    let v = vectors();
+    let r = &v["artifacts"]["reasons"];
+    assert_eq!(rgoe_proto::REASON_BAD_ARTIFACT, s(r, "badArtifact"));
+    assert_eq!(rgoe_proto::REASON_ARTIFACT_RETIRED, s(r, "artifactRetired"));
+    assert_eq!(rgoe_proto::REASON_ARTIFACT_UNKNOWN, s(r, "artifactUnknown"));
+    assert_eq!(
+        rgoe_proto::REASON_NO_MUTUAL_ARTIFACT,
+        s(r, "noMutualArtifact")
+    );
+    assert_eq!(
+        rgoe_proto::REASON_NO_CLIENT_ARTIFACT,
+        s(r, "noClientArtifact")
+    );
+}
+
+#[test]
+fn select_artifact_matches_vector() {
+    let v = vectors();
+    let sel = &v["artifacts"]["selection"];
+    let mine = str_vec(&sel["clientNewestFirst"]);
+    let ad = str_vec(&sel["gatewayAd"]);
+    assert_eq!(
+        rgoe_proto::select_artifact(Some(&ad), &mine).unwrap(),
+        s(sel, "picked")
+    );
+    assert_eq!(
+        rgoe_proto::select_artifact(None, &mine).unwrap(),
+        s(sel, "noAdPicked")
+    );
+    assert_eq!(
+        rgoe_proto::select_artifact(Some(&[]), &mine).unwrap(),
+        s(sel, "noAdPicked"),
+        "an empty ad is treated as no ad"
+    );
+    let disjoint = vec![
+        "rln-ffffffffffffffff".to_string(),
+        "rln-aaaaaaaaaaaaaaaa".to_string(),
+    ];
+    let err = rgoe_proto::select_artifact(Some(&disjoint), &mine).unwrap_err();
+    assert_eq!(err.to_string(), s(sel, "disjointReason"));
+    let err = rgoe_proto::select_artifact(None, &[]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        s(&v["artifacts"]["reasons"], "noClientArtifact")
+    );
+    // junk client ids are ignored, not selected
+    let err = rgoe_proto::select_artifact(None, &["Not An Id".to_string()]).unwrap_err();
+    assert_eq!(err.to_string(), rgoe_proto::REASON_NO_CLIENT_ARTIFACT);
+}
+
+#[test]
+fn caps_with_artifacts_match_vector() {
+    let v = vectors();
+    let cwa = &v["artifacts"]["capsWithArtifacts"];
+    let onion = s(&v, "onion");
+    let caps = Caps {
+        ports: Some(str_ports(&cwa["caps"]["ports"])),
+        region: None,
+        proto: Some(ProtoCaps {
+            min: cwa["caps"]["proto"]["min"].as_i64().unwrap(),
+            max: cwa["caps"]["proto"]["max"].as_i64().unwrap(),
+        }),
+        artifacts: Some(str_vec(&cwa["caps"]["artifacts"])),
+    };
+    // canonical form: artifacts deduped + sorted, appended after proto
+    let cc = rgoe_proto::canonical_caps(&caps);
+    assert_eq!(
+        cc.artifacts.as_deref().unwrap(),
+        str_vec(&cwa["canonical"]["artifacts"])
+    );
+    assert!(
+        rgoe_proto::has_caps(&Caps {
+            artifacts: Some(vec![s(&v["artifacts"]["sample"], "artifactId").to_string()]),
+            ..Default::default()
+        }),
+        "artifacts alone make caps non-empty"
+    );
+    // bytes + sig byte-pinned
+    assert_eq!(
+        hex::encode(canonical_caps_bytes(onion, &caps)),
+        s(cwa, "canonicalCapsBytesHex")
+    );
+    let sig = ed25519_sign(
+        &canonical_caps_bytes(onion, &caps),
+        &seed32(s(&v, "onionSeed")),
+    );
+    assert_eq!(hex::encode(sig), s(cwa, "capsSig"));
+    assert!(verify_caps_sig(onion, &caps, Some(s(cwa, "capsSig"))));
+    // Grafting an extra artifact id breaks the onion-bound signature (ids are unforgeable).
+    let mut grafted = caps.clone();
+    grafted
+        .artifacts
+        .as_mut()
+        .unwrap()
+        .push("rln-ffffffffffffffff".to_string());
+    assert!(!verify_caps_sig(onion, &grafted, Some(s(cwa, "capsSig"))));
+    // Junk / oversize lists canonicalize to NO artifacts (TOTAL, never fails).
+    let junk = Caps {
+        artifacts: Some(vec!["Not An Id".to_string(), String::new()]),
+        ..Default::default()
+    };
+    assert_eq!(rgoe_proto::canonical_caps(&junk).artifacts, None);
+    let too_many: Vec<String> = (0..=rgoe_proto::MAX_CAPS_ARTIFACTS)
+        .map(|i| format!("rln-{i:016x}"))
+        .collect();
+    assert_eq!(
+        rgoe_proto::canonical_caps(&Caps {
+            artifacts: Some(too_many),
+            ..Default::default()
+        })
+        .artifacts,
+        None
+    );
+    // And the pre-existing no-artifacts caps still byte-match their (unchanged) vector.
+    assert_eq!(
+        hex::encode(canonical_caps_bytes(onion, &vector_caps(&v))),
+        s(&v["capabilities"], "canonicalCapsBytesHex")
+    );
+}
+
+fn str_ports(v: &Value) -> Vec<i64> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_i64().unwrap())
+        .collect()
 }

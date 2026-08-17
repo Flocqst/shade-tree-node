@@ -1,8 +1,12 @@
 # Light-client integration: trust-minimized reads of the reputation root
 
-**Status: protocol design, for review.** Not built. The near-term build uses the
-trusted-node provider (`RGOE_ROOT_PROVIDER=node`), which is the right default for a solo
-operator; this doc is the design for the *other* provider, so an operator who does not
+**Status: protocol design, for review; partly built.** `LightClientRootProvider`
+(`lib/root-provider.mjs`, `RGOE_ROOT_PROVIDER=light`) now verifies the contract's `currentRoot`
+storage slot against a block header's `stateRoot` via an EIP-1186 `eth_getProof` MPT proof
+(SHIP-PLAN T-DEV-9); what remains open is validating that `stateRoot` itself through a beacon /
+Helios light client instead of trusting the RPC's header (T-DEV-9b, `docs/ONCHAIN.md` "what it
+does not yet do"). The default is still the trusted-node provider (`RGOE_ROOT_PROVIDER=node`),
+which is the right default for a solo operator; this doc is the design for the *other* provider, so an operator who does not
 run a full node can still read the reputation-set root without trusting an RPC. It is
 written to be reviewed by someone who knows the Helios internals, so it front-loads the
 trust model and collects the open questions at the end.

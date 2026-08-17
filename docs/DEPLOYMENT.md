@@ -1,9 +1,13 @@
 # Deployment runbook: testnet contracts + DO gateway fleet
 
-Status: in progress. This is the concrete plan + runbook for deploying the next
-version (docs/NEXT-VERSION.md) to an Ethereum testnet and a DigitalOcean gateway
-fleet, using the `~/agent-devops` OpenTofu + Ansible repo. Grounded in live recon, not
-aspiration.
+Status: **historical record (July 2026), kept for the decisions and the live-Tor evidence.**
+This was the plan + runbook for deploying the next version (docs/NEXT-VERSION.md) to an
+Ethereum testnet and a DigitalOcean gateway fleet, using the `~/agent-devops` OpenTofu +
+Ansible repo. Grounded in live recon, not aspiration. The current bring-up path is the
+one-command `bootnode/deploy/bootstrap.sh` (see `docs/OPERATOR.md`, `docs/QUICKSTART.md`)
+and the human-gated first live deployment is `docs/GO-LIVE.md`; the live contract
+addresses are in `network/sepolia/contracts.json` (release `rln-v3`), which supersedes the
+addresses this file's checklist was written against.
 
 ## Topology
 
@@ -122,7 +126,7 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns the 
 ## Status checklist
 
 - [x] Contracts Sepolia-ready (env-parameterized deploy, public RPC wired)
-- [x] Deployer funded → **contracts deployed to Sepolia** (StakedReputationSet `0x35719A47…98EC`, block 11274471)
+- [x] Deployer funded → **contracts deployed to Sepolia** (first deploy: StakedReputationSet `0x35719A47…98EC`, block 11274471 — **superseded** by the `rln-v3` release `0xdAE242AE…20FC`, block 11279842; see `network/sepolia/contracts.json` + `network/sepolia/README.md`)
 - [x] `members.json` re-seeded (identity leaves) + proof round-trip verified
 - [x] Next-version code committed + pushed (`deploy/onchain-staked-fleet`)
 - [x] `rgoe_gateway` Ansible role (agent-devops)
@@ -142,9 +146,12 @@ the laptop's. Requests rotate across gateways and slots per request:
 
 | req | egress IP (gateway) | onion | slot (nullifier) |
 |---|---|---|---|
-| 1 | 167.172.224.177 (egress-02) | oi73ktti… | 0 |
-| 2 | 167.172.224.177 (egress-02) | oi73ktti… | 1 |
-| 3 | 167.172.237.22 (rgoe-03) | spoe2hmw… | 2 |
+| 1 | `<egress-02 droplet IP>` | oi73ktti… | 0 |
+| 2 | `<egress-02 droplet IP>` | oi73ktti… | 1 |
+| 3 | `<rgoe-03 droplet IP>` | spoe2hmw… | 2 |
+
+(Droplet IPs are operational metadata and are elided here; the onions are the member-facing
+handles, published in `network/sepolia/directory.json`.)
 
 Privacy check: the laptop's public IP appears **0 times** in the gateways' logs — Tor
 rendezvous never reveals the client to the gateway.
@@ -173,9 +180,16 @@ issue") was wrong — nothing that worked before had broken:
 The old *silent hang* on this path (the very first client bug) is also fixed — the shim
 now reports the Tor error cleanly instead of hanging.
 
-## Membership: does staking on-chain make you a recognized member? (not yet — RLN)
+## Membership: does staking on-chain make you a recognized member? (resolved by the RLN release)
 
-No. Gateways gate membership on the committed `members.json` (Semaphore *identity* leaves,
+**Update:** the RLN circuit described below has since shipped (`docs/RLN-MIGRATION.md`,
+`lib/rln.mjs`, `circuits/rln/`) and is what the live `rln-v3` contracts use: the on-chain leaf
+is the real circom-rln `rateCommitment = Poseidon(Poseidon(secret), limit)` and a gateway
+in on-chain root mode (`RGOE_GROUP_CONTRACT`, `lib/root-provider.mjs`) reads the admission
+root from that same contract, so staking on chain is membership. (`bootstrap.sh` still
+defaults to the committed `members.json`; see `docs/CONFIG.md` profiles.) The paragraph below is the pre-RLN reasoning that motivated it.
+
+At the time: no. Gateways gated membership on the committed `members.json` (Semaphore *identity* leaves,
 `Poseidon(EdDSA-pubkey(secret))`); the on-chain stake leaf is `Poseidon(secret)` (so the
 contract can recompute it from a revealed secret to authorize a slash). These are
 different leaf functions and cannot be unified by registering both, because nothing binds

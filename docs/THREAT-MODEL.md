@@ -250,10 +250,43 @@ The gateway declares an inclusive envelope-version range and checks the incoming
 field is read**, so a garbage or out-of-range version never reaches `verifyEnvelope`. **Enforced** by
 `gateway/gateway.mjs:acceptEnvelopeVersion` (sole version authority; `bad-version` for
 non-integers, `unsupported-version` for out-of-range; absent `v` == legacy v3). The advertised range
-rides back on rejection so a client can re-select. **Limit:** capability advertisement is *not yet
-signed* into the directory/announce (T-FEAT-10 deferred), so a MITM could rewrite the advertised
-range — but this does **not** weaken the membership proof: version choice cannot forge §4.2/§4.3.
+rides back on rejection so a client can re-select. Capability advertisement (incl. the proto
+range) is signed into the announce and directory entry with an onion-bound `capsSig`
+(`lib/directory.mjs:verifyCapsSig`; T-FEAT-10/10b), so a bootnode or MITM cannot rewrite an
+advertised range without the gateway's onion key. **Limit:** the range that rides back on a
+*rejection* is unsigned, but a forged one can only cause a re-select or a fail-closed
+`no-mutual-version`, and version choice cannot forge §4.2/§4.3.
 Adversary A1.
+
+### 4.16 Endpoint DoS levers (slow-loris, connection pinning, verify floods) — CLOSED (T-HARD-4)
+Both listeners bound what an *unauthenticated* peer can cost before it has proven anything, and
+what a member can cost with one proof. **Enforced** by:
+- `gateway/gateway.mjs:readEnvelope` — absolute envelope deadline (`RGOE_ENVELOPE_TIMEOUT_MS`,
+  30 s from connect, not re-armed by dribbled bytes) => drop `envelope-timeout`; size cap =>
+  `envelope-too-large`.
+- `gateway/gateway.mjs:makeHandler` — relay idle timeout on both sockets (`RGOE_TUNNEL_IDLE_TIMEOUT_MS`,
+  5 min; either socket idle == no bytes in either direction) => `tunnel_closes{idle-timeout}`; a
+  black-holed upstream connect is bounded by the same timer (`upstream-timeout`); a permanent
+  socket error sink closes the **half-close crash** (a partial envelope + FIN used to raise an
+  unhandled `EPIPE` on the error reply and kill the whole gateway process — one connection, full
+  outage; found by the T-HARD-4 selftest, confirmed against `main` before the fix).
+- `gateway/gateway.mjs:makeConnLimiter` — `RGOE_MAX_CONNS` (1024) concurrent sockets, refused at
+  accept before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+  tunnels per nullifier (`nullifier-conn-limit`), checked *after* `spentSet.admit` so a slashable
+  second distinct share is never hidden by the cap. Slots released on close; the per-nullifier map
+  is bounded by open sockets.
+- `bootnode/server.mjs:makeAnnounceBucket` — GLOBAL announce token bucket, the last gate before
+  `verifyAnnounce` (`RGOE_BOOTNODE_ANNOUNCE_RATE`/`_BURST`, default 66.7/s, burst 1000 = 2×maxEntries/
+  heartbeat and maxEntries/10): an attacker minting fresh onions gets at most `burst` ed25519 verifies
+  in an instant, then `rate`/s (was: up to `maxEntries` in one burst); `429` + `Retry-After`; cheap
+  per-onion/full rejects are checked first and consume no token; legit heartbeats at default cadence
+  never hit it (`docs/BOOTNODE.md` "Endpoint hardening" for the math).
+- `bootnode/server.mjs:HTTP_LIMITS` — headers 10 s / request 30 s (`408`), keep-alive idle 5 s,
+  headers <= 8 KiB (`431`), enforced every 1 s (Node defaults 60 s / 300 s / 16 KiB / 30 s).
+Proven in `gateway/hardening.selftest.mjs`, `bootnode/hardening.selftest.mjs` (real sockets, verify
+spy) and `test/adversarial.selftest.mjs` scenarios 6–7. **Limit:** these bound *this process*; Tor
+rendezvous/onion-service DoS remains an operator concern (§5, `docs/TOR-HARDENING.md`). Adversaries
+A1 (as a client of peers), A5, and any unauthenticated network peer.
 
 ---
 
@@ -264,20 +297,25 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 
 **Residual (tracked, will change the security surface when built):**
 
-- **Cross-fleet replay / rate is not fleet-wide (T-FEAT-20, ROADMAP-v1 #1/#3).** §4.6 defends *one*
-  gateway. Non-colluding gateways share no spent-set, so a malicious gateway can fan a captured
-  envelope to peers (each accepts it once), and a member spreading requests across `N` gateways gets
-  up to `N`× its intended budget. The fix (a gossiped per-epoch nullifier tally) must be paired with
-  RLN's per-request nullifiers so the shared tally is not itself a linkability channel.
-- **Exit-auth verifier is a mock (T-DEV-1, P0).** `StakedReputationSet.initiateExit`/`withdraw` use
-  `MockWithdrawVerifier`, so the ZK authorization of a member exit/withdraw is not real yet. A real
-  Groth16 verifier is required before withdrawals are genuinely proof-gated.
-- **RLN leaf-removal parity (T-DEV-2, P0).** `reconstructRoot` rebuilds a fresh tree of survivors
-  (renumbering indices); an on-chain slash that zeroes a leaf in place would diverge. JS and contract
-  removal semantics must be made to agree before on-chain slashing is trustworthy end-to-end.
+- **Cross-fleet replay / rate is fleet-wide only when the tally is on (T-FEAT-20/20b, ROADMAP-v1
+  #1/#3).** §4.6 defends *one* gateway. The shared per-epoch nullifier tally
+  (`gateway/fleet-tally.mjs`, `RGOE_FLEET_TALLY_PEERS`) rejects a replay at a second gateway and
+  shares only `(nullifier, epoch)` (RLN's per-request nullifiers keep it from being a linkability
+  channel), but it is **opt-in and fail-open**: a fleet without it lets a malicious gateway fan a
+  captured envelope to peers (each accepts it once), and a member spreading requests across `N`
+  gateways gets up to `N`× its intended budget.
+- **Exit-auth verifier is a mock on the live testnet (T-DEV-1).** The real Groth16 exit-auth
+  verifier is built (`contracts/WithdrawVerifier.sol`, `test/WithdrawVerifier.t.sol`), but the
+  live Sepolia `rln-v3` deployment still wires `MockWithdrawVerifier`, so on that deployment the
+  ZK authorization of a member exit/withdraw is not real until the redeploy in the go-live runbook.
+- **RLN leaf-removal parity (T-DEV-2) — closed.** `reconstructRoot` now follows the contract's
+  zero-in-place convention (`lib/root-provider.mjs`, three-way JS/Solidity/Rust proof); listed so
+  the history of the caveat is not lost.
 - **Trusted-setup provenance (T-HARD-1, P0).** The ZK artifacts came from an **untrusted testnet
-  phase-2 ceremony** (`circuits/rln/ARTIFACTS.md`). No real anonymity or funds until a real ceremony
-  or pinned audited artifacts (with CI hash verification) land. This is the single biggest caveat.
+  phase-2 ceremony** (`circuits/rln/ARTIFACTS.md`). Their hashes are now pinned and CI-verified
+  (`testdata/zk-artifacts.lock.json`, `test/zk-artifacts.selftest.mjs`), which fixes *which* untrusted
+  artifacts run, not their provenance: no real anonymity or funds until the human-gated ceremony
+  (`docs/CEREMONY.md`) or pinned audited artifacts land. This is the single biggest caveat.
 - **Cold-start directory staleness (T-FEAT-21).** The rollback floor (§4.9) only bounds staleness
   *within* a session; the absolute max-age bound is **off by default**, so a brand-new client can
   accept a validly-signed but months-old directory from a replaying bootnode. Set
@@ -286,9 +324,12 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
   exists but is **off by default**; the default path trusts the bootnode's operator↔onion pairing
   label.
 - **Reorg safety off by default (§4.14).** `latest` reads unless `RGOE_CONFIRMATIONS` is set.
-- **Unsigned capability/version advertisement (T-FEAT-10, §4.15).**
-- **Deploy bootstrap not integration-tested.** `bootnode/deploy/bootstrap.sh` runs as root on a
-  fresh box with no integration test; read it before running it (`docs/AUDIT.md`, `SECURITY.md`).
+- **Capability/version advertisement is opt-in on the gateway side (T-FEAT-10/10b, §4.15).** Signed
+  and onion-bound when present; a gateway that advertises nothing is treated as default-capable
+  only, and the version range echoed on a rejection is unsigned (fail-closed either way).
+- **Deploy bootstrap runs as root.** `bootnode/deploy/bootstrap.sh` is exercised end to end in CI
+  (`.github/workflows/bootstrap-e2e.yml`, T-TEST-8) but runs as root on a fresh box; read it before
+  running it (`docs/AUDIT.md`, `SECURITY.md`).
 
 **Explicitly out of scope (design boundaries, not bugs):**
 
@@ -317,10 +358,13 @@ Highest-value review targets, roughly in order of trust concentration:
    not the envelope. Confirm `signalFieldSafe` runs before hashing. Beside `lib/rln.selftest.mjs`.
 3. **`gateway/gateway.mjs:makeSpentSet`** — the over-spend/slash and replay control flow. Confirm
    slash-exactly-once, the `seenEnv` replay window, and that failures don't crash the path. Confirm
-   `acceptEnvelopeVersion` is the sole version gate.
+   `acceptEnvelopeVersion` is the sole version gate. In `makeHandler`, confirm the socket error sink,
+   the envelope deadline, the connection caps and the idle timeout (§4.16) bracket every exit path.
 4. **`bootnode/announce.mjs:verifyAnnounce`** — the discovery loop's admission. Confirm onion-sig +
    operator-sig + `isStaked` ordering, freshness/skew, nonce replay, and that a chain-read failure
-   hard-rejects under `requireStake`. Beside `bootnode/selftest.mjs`.
+   hard-rejects under `requireStake`. Beside `bootnode/selftest.mjs`. In `bootnode/server.mjs`,
+   confirm the global announce bucket is the last gate before verify and reload is its only exemption
+   (§4.16).
 5. **`client/selection.mjs:ensureLoaded`** — the rollback floor + max-age bound + last-known-good
    fallback; and `reverifyGateway`/`filterReverified` for the zero-trust stake path.
 6. **`contracts/StakedReputationSet.sol` + `contracts/GatewayRegistry.sol`** — stake lifecycle, the

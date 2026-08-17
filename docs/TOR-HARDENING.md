@@ -130,10 +130,11 @@ deployments, mutually exclusive in spirit with permissionless
   it to `0750` for the group only; avoid it unless required.
 - **Keep the HS secret key off-box.** The onion identity IS the ed25519 secret
   in `hs_ed25519_secret_key`. Anyone with that file can impersonate the onion.
-  Take an encrypted, off-box backup and store it outside the droplet. This is
-  the manual `tar | gpg` step today; automated encrypted backup/restore is
-  tracked as **T-FEAT-15** (see `docs/SHIP-PLAN.md`). Restore support is
-  T-DEPLOY-5. Never commit or log the secret key.
+  Take an encrypted, off-box backup and store it outside the droplet:
+  `rgoe backup <deploy-state-dir> <out.rgoebak>` / `rgoe restore` (T-FEAT-15,
+  `docs/BACKUP.md`; passphrase only via `RGOE_BACKUP_PASSPHRASE`), and verify a
+  restored key before cutover with `scripts/onion-identity.mjs`
+  (`docs/ONION-IDENTITY.md`). Never commit or log the secret key.
 - **`Sandbox 1`.** Tor's own seccomp2 syscall filter around the tor process,
   strong defense in depth. CAVEATS: Linux-only (x86_64 and a few arches), and
   once enabled tor cannot live-reload a config change that needs a new syscall

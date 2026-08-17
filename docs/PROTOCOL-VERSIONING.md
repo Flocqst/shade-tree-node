@@ -9,6 +9,9 @@ Scope of this task: the **client ↔ gateway handshake only**. Advertising the r
 announce / directory is a deliberate **follow-up** (it belongs with T-FEAT-10 gateway capability
 advertisement) and touches `bootnode/*` + `lib/directory.mjs`, which this task does not.
 
+A second, independent negotiation axis — WHICH ZK ARTIFACT SET a proof was made with — is
+described at the end (T-HARD-8), so a ceremony's artifact swap runs as a dual-VK window.
+
 ## Single source of truth per side
 
 Each side declares the inclusive range of envelope versions it can emit/parse in ONE place:
@@ -29,10 +32,13 @@ Today both ranges are exactly `{3}`.
 
 `selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANGE)` in `client/rgoe-client.mjs`:
 
-- **Gateway range unknown (`null`)** — the common case today, since the directory does not yet
-  carry the range: the client optimistically emits **its own max**. A genuine mismatch then
-  surfaces as an explicit reject (below) carrying the gateway's real range, which the client
-  records on `this.gatewayRange` for the next attempt.
+- **Gateway range unknown (`null`)** — the common case today: `RgoeClient` starts with no
+  gateway range unless the caller passes one, so the client optimistically emits **its own
+  max**. A genuine mismatch then surfaces as an explicit reject (below) carrying the gateway's
+  real range, which the client records on `this.gatewayRange` for the next attempt. A gateway
+  that advertises signed capabilities (T-FEAT-10/10b, `bootnode/heartbeat.mjs`) also carries
+  its `caps.proto = {min,max}` in the directory entry, and capability-aware selection
+  (`client/selection.mjs` `gatewayMeetsRequirement`, `req.proto`) can filter on it before dialing.
 - **Ranges overlap:** returns `min(clientMax, gatewayMax)` — the **highest** both sides accept.
 - **Ranges disjoint:** returns `{ ok:false, reason:"no-mutual-version:client=<lo>-<hi>,gateway=<lo>-<hi>" }`.
   The client **fails closed** (throws `version negotiation failed: …`) before proving or dialing.
@@ -98,6 +104,39 @@ with a valid accepted `v` but a missing nonce is still rejected `unbound-target`
 sockets/Tor/proof): range constants, accept/reject branches, distinct reasons, backward-compat,
 gate-is-sole-authority, downgrade-safety, highest-mutual selection, disjoint fail-closed, and a
 round-trip grid where every selected version is one the gateway then accepts.
+
+## Artifact-version negotiation (T-HARD-8) — the SECOND axis
+
+Envelope version (above) says how the envelope is SHAPED. Independently, the proof inside it was
+made with one ZK **artifact set** (wasm + zkey + vkey from one phase-2 output), and the gateway can
+only verify it under the matching vkey. Swapping the set (a real ceremony, `docs/CEREMONY.md`)
+used to be a flag day: one `VKEY`, no field on the wire, `invalid-proof` for whichever side
+upgraded first. Now (`lib/zk-artifacts.mjs`):
+
+| Piece | Where | What |
+| --- | --- | --- |
+| Artifact id | `artifactIdOf(circuit, vkeyBytes)` | `<circuit>-<sha256(verification_key.json bytes)[0:16]>`, i.e. the vkey's `testdata/zk-artifacts.lock.json` hash prefix (`circuits.rln.artifactId`). Content-derived: no registry, and a mislabeled id fails closed at load. Rust: `rgoe_proto::artifact_id_of`. |
+| Gateway accepted set | `RGOE_ZK_ARTIFACTS=<id>=<vkey>[,<id>=<vkey>]` → `loadArtifactSet` | `{artifactId → vkey}`; unset = the built-in vkey under its own id (byte-equivalent to the single-VK code). Advertised as SIGNED `caps.artifacts` when set (`bootnode/heartbeat.mjs`). |
+| Legacy id | `RGOE_ZK_ARTIFACT_LEGACY=<id>` (default: lock `previousArtifactId`, else built-in id) | What an envelope WITHOUT `artifact` means — the pre-T-HARD-8 wire / an un-upgraded client. |
+| Envelope field | `artifact` (after `nonce`) | The set the proof was made with; `buildEnvelope` stamps the prover's echoed id. |
+| Gateway gate | `verifyEnvelope` step 3b (`resolveArtifact`) | Cheap map lookup BEFORE the SNARK; then Groth16 verify under THAT vkey. |
+| Client pick | `selectArtifact(gatewayIds, clientIds)` | The NEWEST of the client's own sets (`RGOE_ZK_PROVER_ARTIFACTS`, newest first) that the gateway advertises; no ad ⇒ optimistically its newest. Rust: `rgoe_proto::select_artifact`. |
+
+Reason strings (bounded labels pinned in `testdata/vectors.json` `artifacts.reasons`):
+
+| Reason | Meaning |
+| --- | --- |
+| `artifact-retired:<id>` | the (legacy) id is known but no longer accepted — window closed; carries `artifacts:[accepted]` |
+| `artifact-unknown:<id>` | an id this gateway holds no vkey for (incl. spoofing to an unheld key); carries `artifacts` |
+| `bad-artifact:<repr>` | field present but not an id (repr bounded) |
+| `invalid-proof` | (unchanged) incl. a proof CLAIMING an accepted id it was not made with — spoofing buys nothing |
+| `no-mutual-artifact:client=…,gateway=…` | client-side: disjoint sets ⇒ fail closed BEFORE proving/dialing |
+| `artifact negotiation failed: …` | client-side throw wrapping `no-mutual-artifact` |
+
+Backward compatibility (proven in `lib/zk-artifacts.selftest.mjs` + `test/zk-artifact-window.
+selftest.mjs`): no field ⇒ legacy id (accepted while it is in the set); a gateway that predates the
+field ignores it; nothing configured on either side ⇒ prove/verify round-trip exactly as before.
+The dual-VK WINDOW procedure with concrete env is `docs/CEREMONY.md` §6.
 
 ## Follow-ups
 

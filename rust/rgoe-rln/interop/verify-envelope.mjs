@@ -23,6 +23,9 @@ const envelope = {
   externalNullifier: r.externalNullifier,
   share: r.share,
 };
+// T-HARD-8: a Rust envelope may name the artifact set it proved with; the JS gateway resolves
+// it against its accepted set (absent => legacy/built-in id, as before).
+if (r.artifact) envelope.artifact = r.artifact;
 
 // The proof was built for epoch=r.epoch; pin nowMs so currentEpoch(nowMs) == that epoch
 // (verifyEnvelope check-1 accepts this-or-last epoch's external nullifier).

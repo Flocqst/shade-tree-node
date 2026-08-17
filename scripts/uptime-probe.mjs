@@ -16,6 +16,8 @@
 //   RGOE_TOR_HOST/PORT    local Tor SOCKS proxy   (default 127.0.0.1:9250)
 //   RGOE_BOOTNODE_URL     plain http base, e.g. http://127.0.0.1:8877  (DEV ONLY; bypasses Tor)
 //   RGOE_DIR_SIGNER       pinned directory-signer pubkey (hex) -- REQUIRED
+//   RGOE_NETWORK          <name>: default BOOTNODE_ONION + DIR_SIGNER from network/<name>/bootnode.json
+//                         (explicit env wins; a pending record supplies nothing -> misconfig)
 //   RGOE_PROBE_TIMEOUT_MS per-request timeout     (default 20000)
 //
 // PRIVACY: this mirrors the status page's posture. It prints a COUNT (fleetSize), never gateway
@@ -25,6 +27,7 @@
 import http from "node:http";
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyDirectory } from "../lib/directory.mjs";
+import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
 const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
@@ -80,6 +83,9 @@ export async function probe() {
   // Fail-closed default: everything false / zero until proven otherwise.
   const result = { ok: false, bootnodeReachable: false, signerOk: false, fleetSize: 0, ts: Math.floor(Date.now() / 1000) };
 
+  // RGOE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
+  // misconfig (fail closed), never a throw out of probe().
+  try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return result; }
   const pinnedSigner = process.env.RGOE_DIR_SIGNER;
   const fetchJson = makeFetcher();
   if (!fetchJson) { result.reason = "misconfig:set RGOE_BOOTNODE_ONION or RGOE_BOOTNODE_URL"; return result; }

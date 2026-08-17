@@ -250,8 +250,9 @@ per-gateway onion↔pubkey binding (section 4.3, reasons 5–6) is then checked 
 | — | success | `{ ok:true, signers:[matched…], threshold }` |
 
 Golden vector: `testdata/vectors.json` `thresholdDirectory` (2-of-3, fixed seeds; its canonical
-bytes equal `canonicalDirectoryBytesHex`). Rust follow-up: `rust/rgoe-proto` `verify_directory`
-is single-signer only and needs a threshold sibling to consume this shape (noted, not built).
+bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/rgoe-proto`
+`verify_directory_threshold(dir, pinned_signers)` consumes this shape (T-FEAT-9b);
+`verify_directory` remains the single-signer path.
 
 ## 5. Bootnode HTTP API
 
@@ -281,6 +282,8 @@ Server: `bootnode/server.mjs:151` `makeServer`. All responses
 | --- | --- | --- | --- |
 | 400 | `{ ok:false, err:"bad-json:<msg>" }` | `/announce` body not JSON, or body too large | `:169` |
 | 400 | `{ ok:false, err:"<reason>" }` | `/announce` verify failed; `<reason>` = a section-3.4 code or a section-5.3 cap reason | `:171` |
+| 429 | `{ ok:false, err:"global-rate-limited" }` + `Retry-After: <s>` | `/announce` refused by the GLOBAL announce bucket before verify (T-HARD-4); retry at the next heartbeat | `makeServer` |
+| 408 / 431 | (Node http built-in) | request headers/body slower than `HTTP_LIMITS` / headers over `maxHeaderSize` (T-HARD-4) | `HTTP_LIMITS` |
 | 404 | `{ ok:false, err:"not-found" }` | `/gateway/<onion>` unknown | `:165` |
 | 404 | `{ ok:false, err:"no-route" }` | no route matched | `:173` |
 | 500 | `{ ok:false, err:"bootnode-error:<msg>" }` | unhandled exception | `:175` |
@@ -297,6 +300,8 @@ Registry: `bootnode/server.mjs:76` `makeRegistry`.
 | `minReannounceSec` | `5` | `RGOE_BOOTNODE_MIN_REANNOUNCE` | a resident onion re-announcing sooner is refused `rate-limited` |
 | `MAX_WEIGHT` | `1000` | (const) | stored weight = `max(0, min(1000, weight))`; `weight` non-finite -> `100` (`:97`,`:100`) |
 | request body cap | `64 KiB` | (const) | `readBody` max (`:142`); overflow -> `400 bad-json:body too large` |
+| global announce bucket | `66.7/s`, burst `1000` | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `_BURST` | `makeAnnounceBucket`: the LAST gate before `verifyAnnounce`; overflow -> `429 global-rate-limited` + `Retry-After` (T-HARD-4) |
+| HTTP slow-client limits | 10 s / 30 s / 5 s / 8 KiB | `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` etc. | `HTTP_LIMITS`: headers / request / keep-alive timeouts (`408`) + max header size (`431`) (T-HARD-4) |
 
 Registry-level announce reasons (returned as `400 { err:<reason> }`), checked BEFORE the
 signature verify (`:87`,`:88`):
@@ -305,6 +310,7 @@ signature verify (`:87`,`:88`):
 | --- | --- |
 | `rate-limited` | resident onion, `now - lastAt < minReannounceSec` |
 | `registry-full` | new onion, `live.size >= maxEntries` after a sweep |
+| `global-rate-limited` (HTTP `429`) | the global announce bucket has no token (checked LAST before verify; not charged by the two rejects above; store reload exempt) |
 
 The signed `/directory` response is bounded transitively by `maxEntries` (one gateway object
 per live entry); there is no separate byte-cap on the response. See ambiguity note in the
@@ -326,6 +332,7 @@ Rust client emits must satisfy `verifyEnvelope`.
   "v": 3,
   "target": "<host:port>",
   "nonce":  "<16 random bytes hex, 32 chars>",
+  "artifact": "rln-<16 hex>",    // OPTIONAL (T-HARD-8): id of the ZK artifact set the proof was made with
   "proof": {                     // wireProof, lib/rln.mjs:227
     "snarkProof": { "proof": {...}, "publicSignals": { "y","root","nullifier","x","externalNullifier" } },
     "epoch": "<decimal string>",
@@ -336,6 +343,19 @@ Rust client emits must satisfy `verifyEnvelope`.
   "share": { "x": "<decimal string>", "y": "<decimal string>" }
 }
 ```
+
+`artifact` (T-HARD-8, `lib/zk-artifacts.mjs`) names the ZK artifact set (wasm + zkey + vkey from one
+phase-2 output) the proof was generated with, so a gateway running a dual-VK rollout window
+(`docs/CEREMONY.md` §6) verifies under the matching vkey. Value = `<circuit>-<sha256(verification_
+key.json bytes) hex[0:16]>` — grammar `^[a-z0-9][a-z0-9._-]{0,63}$` — i.e. literally the vkey's
+hash prefix in `testdata/zk-artifacts.lock.json` (`circuits.rln.artifactId`), derived identically
+by the JS client (`artifactIdOf`), the Rust client (`rgoe_proto::artifact_id_of`, from its embedded
+bytes) and the gateway (from the files `RGOE_ZK_ARTIFACTS` names). OPTIONAL and additive: an
+envelope WITHOUT it is treated as the gateway's LEGACY id (`RGOE_ZK_ARTIFACT_LEGACY`, default the
+lock's `previousArtifactId` else the built-in id), so an un-upgraded client keeps working while
+that id is accepted and is rejected `artifact-retired:<id>` once it is not; a gateway that predates
+the field ignores it. The client sends the NEWEST of its own sets that the gateway advertises in
+its signed caps (`caps.artifacts`, §3), else optimistically its newest (`selectArtifact`).
 
 `nullifier`, `externalNullifier`, and `share` are copies of the proof's public signals but are
 NON-authoritative: `verifyEnvelope` reads them from `proof.snarkProof.publicSignals` (`ps`), not
@@ -385,9 +405,21 @@ Fail-closed, FIRST failure returned. `ps = proof.snarkProof.publicSignals`;
 | 2b | `bad-signal-field` | `!signalFieldSafe(target,256)` or `!signalFieldSafe(nonce,128)` |
 | 2b | `target-not-bound` | `calculateSignalHash(requestSignal(target,nonce)) !== ps.x` |
 | 3 | `wrong-group-root` | `String(ps.root)` not in `recentRoots` |
-| 4 | `verify-threw:<msg>` | Groth16 verify threw |
-| 4 | `invalid-proof` | Groth16 verify returned false |
-| — | success | `{ ok:true, reason:"ok", nullifier, externalNullifier, share:{x,y} }` from `ps` |
+| 3b | `bad-artifact:<repr>` | `env.artifact` present but not an artifact id (repr bounded to 16 chars) |
+| 3b | `artifact-retired:<id>` | the (legacy) id resolved for this envelope is known but no longer in the accepted set (rollout window closed) |
+| 3b | `artifact-unknown:<id>` | an id this gateway holds no vkey for (incl. id spoofing to an unheld key) |
+| 4 | `verify-threw:<msg>` | Groth16 verify threw (under the resolved artifact's vkey) |
+| 4 | `invalid-proof` | Groth16 verify returned false (incl. a proof claiming an accepted id it was not made with) |
+| — | success | `{ ok:true, reason:"ok", nullifier, externalNullifier, share:{x,y}, artifact }` from `ps` |
+
+Step 3b (`lib/zk-artifacts.mjs` `resolveArtifact`) is a cheap map lookup on the accepted set
+`{artifactId -> vkey}` (`RGOE_ZK_ARTIFACTS`; default = the built-in vkey under its own id): absent
+field ⇒ the legacy id, then the same rules. Its three rejections additionally return `label` (the
+bounded metrics key: `bad-artifact` / `artifact-retired` / `artifact-unknown`, never the id) and
+`artifacts` (the accepted ids), which the gateway writes back as `{ ok:false, err:"gate:<reason>",
+artifacts:[...] }` — the client uses that list to re-select a mutual set (or fail closed with
+`no-mutual-artifact:client=…,gateway=…`). Reason labels are pinned in `testdata/vectors.json`
+`artifacts.reasons`.
 
 Ordering is load-bearing (`:319` INVARIANT): 2b binds `target -> ps.x` cheaply, but `ps.x` is
 only AUTHORITATIVE once check 4 proves the Groth16 membership proof. Both are required; never
@@ -415,6 +447,9 @@ Epoch clock: `epoch = floor(nowMs/1000 / EPOCH_SECONDS)`, `EPOCH_SECONDS` defaul
 4. `verifyAnnounce` / `verifyDirectory` / `verifyEnvelope` reason codes and ordering.
 5. EIP-191 `personal_sign` recover for `operatorAuthMessage` (secp256k1).
 6. `requestSignal` string, `signalFieldSafe`, and the target-binding hash.
+7. `artifactIdOf` (sha256 prefix of the vkey bytes), `canonicalCaps.artifacts`, and `selectArtifact`
+   (T-HARD-8; the Rust client also hash-checks its embedded artifacts against the embedded lock at
+   startup, `rust/rgoe-rln/src/artifacts.rs`).
 
 ## 8. Ambiguities / notes
 
@@ -444,6 +479,10 @@ Rust client MUST reproduce every BYTE-PINNED value below exactly.
 | `announceOnionSig` | YES | `ed25519Sign(canonicalAnnounceBytes, onionSeed)` |
 | `operator` | input | `0x000000000000000000000000000000000000dEaD` (note mixed-case input) |
 | `operatorAuthMessage` | YES | `operatorAuthMessage(onion, operator)` (operator lowercased in the string) |
+| `artifacts.sample` | YES | `artifactIdOf("rln", utf8("hello"))` = `rln-2cf24dba5fb0a30e` (T-HARD-8 artifact id = `<circuit>-<sha256[0:16]>`) |
+| `artifacts.reasons` | YES | bounded reason labels `bad-artifact` / `artifact-retired` / `artifact-unknown` / `no-mutual-artifact` / `no-client-artifact` |
+| `artifacts.selection` | YES | `selectArtifact` pick (newest client id the gateway lists) + the byte-exact `no-mutual-artifact:client=…,gateway=…` string |
+| `artifacts.capsWithArtifacts` | YES | `canonicalCaps` with an `artifacts` list (sorted, appended after `proto`), its `canonicalCapsBytes` hex and onion `capsSig`; the no-artifacts `capabilities` vectors are byte-unchanged |
 
 NOT pinned (verify by equivalence, never byte-equality):
 

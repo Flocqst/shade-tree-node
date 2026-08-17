@@ -46,7 +46,11 @@ desync the spent-set. Reasons, in cheap→expensive order:
 2. `signal-mismatch` — `share.x` must equal the proof's public `x`.
 3. `wrong-group-root` — the proof's public `root` must be in `recentRoots`
    (accepts a `Set` or `Array`; `Array.from` normalizes both — unchanged).
-4. `invalid-proof` / `verify-threw:*` — the RLN Groth16 verify (last, expensive).
+3b. `bad-artifact:*` / `artifact-retired:<id>` / `artifact-unknown:<id>` — (T-HARD-8) the
+   envelope's optional `artifact` id must resolve to a vkey in the gateway's accepted set
+   (`RGOE_ZK_ARTIFACTS`; absent field ⇒ the legacy id). Cheap map lookup; see
+   `docs/PROTOCOL-VERSIONING.md` "Artifact-version negotiation".
+4. `invalid-proof` / `verify-threw:*` — the RLN Groth16 verify under THAT vkey (last, expensive).
 
 ## Semantic changes the gateway MUST make
 
