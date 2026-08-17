@@ -1,5 +1,11 @@
 # you've been handed a key
 
+> **Which path is this?** This is the original single-gateway PoC path (`scripts/join.sh`,
+> a pinned onion, the committed `group/members.json`). The current fleet path — live
+> discovery through a bootnode, on-chain admission, the `rgoe` CLI — is
+> [`docs/post/JOIN.md`](post/JOIN.md) / [`docs/QUICKSTART.md`](QUICKSTART.md). Use this page
+> only if the operator handed you the PoC bundle and a secret for the PoC set.
+
 Someone added you to a private reputation set. That key lets you browse out through a clean IP on a server in New York, while proving you belong to the set and never telling the server who you are. No login, no account, and none of your own IP ever reaches it.
 
 Here is the whole thing.
@@ -30,8 +36,12 @@ ezguggje6sbldhw4pl5nudwg2mrwkb5zzyu3a26qc4eka2ur24bv3eqd.onion
 `bash scripts/join.sh <other-gateway>.onion <your-secret>`.) Knowing the address
 buys nothing on its own. The gate is fail-closed, so without a valid membership
 proof every connection is dropped. That command starts a local Tor and a small
-proxy, then runs a check. When it prints `PASS` next to
-the gateway's IP (`204.48.28.220`), you are out.
+proxy, then runs a check that asserts your egress really comes out of the PoC
+gateway's clearnet IP: `join.sh` sets `RGOE_EXPECT_IP` to that IP (`204.48.28.220`)
+and `verify.sh` compares it to what `api.ipify.org` saw. The IP is printed here
+for exactly that reason — it is the receipt you compare against, not something
+you connect to. When it prints `PASS` next to that IP, you are out. (Different
+gateway? Set `RGOE_EXPECT_IP` to its IP, or unset it to skip the assertion.)
 
 ## use it
 

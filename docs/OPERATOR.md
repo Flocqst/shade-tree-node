@@ -28,7 +28,7 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 Or, if the repo is already on the box:
@@ -46,7 +46,8 @@ It creates three `Restart=always` units:
 | `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`.
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, and `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref).
 
 Firewall: the gateway and bootnode are onion services and take **no inbound clearnet
 ports**. Inbound-22-only + outbound-allow (UFW) is correct. Never expose the loopback
@@ -182,21 +183,26 @@ Locally (non-bootstrapped) the same files live under `tor/hs*/identity.local.jso
 
 ### Backup
 
-**Manual for now** (no backup tooling is shipped). Copy the seed files off-box,
-encrypted. Example:
+`rgoe backup` / `rgoe restore` (`scripts/backup.mjs`, full guide in
+[BACKUP.md](./BACKUP.md)) encrypt the onion seeds (`identity.local.json`,
+`hs_ed25519_secret_key`) and the bootnode signer key into one tamper-evident file
+(scrypt + AES-256-GCM, Node crypto only, no `gpg` needed). The passphrase is read
+**only** from `RGOE_BACKUP_PASSPHRASE`, never from argv, never logged.
 
 ```bash
-sudo tar czf - \
-  /opt/rgoe/deploy-state/bootnode-hs/identity.local.json \
-  /opt/rgoe/deploy-state/gateway-hs/identity.local.json \
-  /opt/rgoe/deploy-state/bootnode-signer.key \
-  | gpg --symmetric --cipher-algo AES256 -o rgoe-keys-$(date +%F).tar.gz.gpg
-# then move rgoe-keys-*.tar.gz.gpg to an off-box, encrypted-at-rest location.
+export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+sudo -E node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state rgoe-keys-$(date +%F).rgoebak
+# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+
+# on a fresh box, before starting the units:
+sudo -E node /opt/rgoe/bin/rgoe.mjs restore rgoe-keys-<date>.rgoebak /opt/rgoe/deploy-state   # --force to overwrite
 ```
 
-Restore by placing the files back before starting the units; the onion address and
-pinned signer are preserved, so clients keep working. The operator EOA key is backed up
-with your normal wallet backups, not here.
+Restore lays the files back with `0600`/`0700` perms; the onion address and pinned
+signer are preserved, so clients keep working. To prove the restored key really is the
+same onion before cutting over, use `scripts/onion-identity.mjs`
+([ONION-IDENTITY.md](./ONION-IDENTITY.md)). The operator EOA key is backed up with your
+normal wallet backups, not here.
 
 ---
 
