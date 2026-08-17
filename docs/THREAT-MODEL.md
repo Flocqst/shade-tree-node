@@ -255,6 +255,36 @@ signed* into the directory/announce (T-FEAT-10 deferred), so a MITM could rewrit
 range — but this does **not** weaken the membership proof: version choice cannot forge §4.2/§4.3.
 Adversary A1.
 
+### 4.16 Endpoint DoS levers (slow-loris, connection pinning, verify floods) — CLOSED (T-HARD-4)
+Both listeners bound what an *unauthenticated* peer can cost before it has proven anything, and
+what a member can cost with one proof. **Enforced** by:
+- `gateway/gateway.mjs:readEnvelope` — absolute envelope deadline (`RGOE_ENVELOPE_TIMEOUT_MS`,
+  30 s from connect, not re-armed by dribbled bytes) => drop `envelope-timeout`; size cap =>
+  `envelope-too-large`.
+- `gateway/gateway.mjs:makeHandler` — relay idle timeout on both sockets (`RGOE_TUNNEL_IDLE_TIMEOUT_MS`,
+  5 min; either socket idle == no bytes in either direction) => `tunnel_closes{idle-timeout}`; a
+  black-holed upstream connect is bounded by the same timer (`upstream-timeout`); a permanent
+  socket error sink closes the **half-close crash** (a partial envelope + FIN used to raise an
+  unhandled `EPIPE` on the error reply and kill the whole gateway process — one connection, full
+  outage; found by the T-HARD-4 selftest, confirmed against `main` before the fix).
+- `gateway/gateway.mjs:makeConnLimiter` — `RGOE_MAX_CONNS` (1024) concurrent sockets, refused at
+  accept before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+  tunnels per nullifier (`nullifier-conn-limit`), checked *after* `spentSet.admit` so a slashable
+  second distinct share is never hidden by the cap. Slots released on close; the per-nullifier map
+  is bounded by open sockets.
+- `bootnode/server.mjs:makeAnnounceBucket` — GLOBAL announce token bucket, the last gate before
+  `verifyAnnounce` (`RGOE_BOOTNODE_ANNOUNCE_RATE`/`_BURST`, default 66.7/s, burst 1000 = 2×maxEntries/
+  heartbeat and maxEntries/10): an attacker minting fresh onions gets at most `burst` ed25519 verifies
+  in an instant, then `rate`/s (was: up to `maxEntries` in one burst); `429` + `Retry-After`; cheap
+  per-onion/full rejects are checked first and consume no token; legit heartbeats at default cadence
+  never hit it (`docs/BOOTNODE.md` "Endpoint hardening" for the math).
+- `bootnode/server.mjs:HTTP_LIMITS` — headers 10 s / request 30 s (`408`), keep-alive idle 5 s,
+  headers <= 8 KiB (`431`), enforced every 1 s (Node defaults 60 s / 300 s / 16 KiB / 30 s).
+Proven in `gateway/hardening.selftest.mjs`, `bootnode/hardening.selftest.mjs` (real sockets, verify
+spy) and `test/adversarial.selftest.mjs` scenarios 6–7. **Limit:** these bound *this process*; Tor
+rendezvous/onion-service DoS remains an operator concern (§5, `docs/TOR-HARDENING.md`). Adversaries
+A1 (as a client of peers), A5, and any unauthenticated network peer.
+
 ---
 
 ## 5. Known residual risks and out-of-scope
@@ -317,10 +347,13 @@ Highest-value review targets, roughly in order of trust concentration:
    not the envelope. Confirm `signalFieldSafe` runs before hashing. Beside `lib/rln.selftest.mjs`.
 3. **`gateway/gateway.mjs:makeSpentSet`** — the over-spend/slash and replay control flow. Confirm
    slash-exactly-once, the `seenEnv` replay window, and that failures don't crash the path. Confirm
-   `acceptEnvelopeVersion` is the sole version gate.
+   `acceptEnvelopeVersion` is the sole version gate. In `makeHandler`, confirm the socket error sink,
+   the envelope deadline, the connection caps and the idle timeout (§4.16) bracket every exit path.
 4. **`bootnode/announce.mjs:verifyAnnounce`** — the discovery loop's admission. Confirm onion-sig +
    operator-sig + `isStaked` ordering, freshness/skew, nonce replay, and that a chain-read failure
-   hard-rejects under `requireStake`. Beside `bootnode/selftest.mjs`.
+   hard-rejects under `requireStake`. Beside `bootnode/selftest.mjs`. In `bootnode/server.mjs`,
+   confirm the global announce bucket is the last gate before verify and reload is its only exemption
+   (§4.16).
 5. **`client/selection.mjs:ensureLoaded`** — the rollback floor + max-age bound + last-known-good
    fallback; and `reverifyGateway`/`filterReverified` for the zero-trust stake path.
 6. **`contracts/StakedReputationSet.sol` + `contracts/GatewayRegistry.sol`** — stake lifecycle, the

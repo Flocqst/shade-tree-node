@@ -20,6 +20,15 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). | heartbeat | `--operator-key` |
 | `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key). | heartbeat | `--operator` |
 | `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. | heartbeat | `--operator-sig` |
+| `RGOE_BOOTNODE_MAX_ENTRIES` | `10000` | Registry size cap: a NEW onion is refused `registry-full` when full; resident onions still refresh. | bootnode server | (none) |
+| `RGOE_BOOTNODE_MIN_REANNOUNCE` | `5` | Per-onion re-announce throttle in seconds (`rate-limited`, before verify). | bootnode server | (none) |
+| `RGOE_BOOTNODE_ANNOUNCE_RATE` | `2 * maxEntries / RGOE_BOOTNODE_HEARTBEAT` (= `66.7`/s) | GLOBAL announce token-bucket refill (announces/second that may reach ed25519 verification, whoever sends them). Sized so a fleet at the registry cap heartbeating at the default cadence (`maxEntries/heartbeat` = 33.3/s) draws half the refill; see `docs/BOOTNODE.md` "Endpoint hardening". Overflow is `429 global-rate-limited` + `Retry-After`. `0` with burst `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_ANNOUNCE_BURST` | `max(100, maxEntries / 10)` (= `1000`) | The bucket's capacity: how many announces may reach verify in one instant. Covers a lockstep re-announce of a fleet up to this size; an attacker minting fresh onions gets at most this many verifies up front, then `RATE`/s. | bootnode server | (none) |
+| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` | `10000` | HTTP: complete request headers must arrive within this (slow-loris headers => `408` + close). `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_REQUEST_TIMEOUT_MS` | `30000` | HTTP: the whole request (headers + body) must complete within this (a dribbled body => `408` + close). Must be >= headers timeout (clamped). `0` disables. | bootnode server | (none) |
+| `RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS` | `5000` | HTTP: an idle keep-alive connection is closed after this. | bootnode server | (none) |
+| `RGOE_BOOTNODE_MAX_HEADER_BYTES` | `8192` | HTTP: max total request-header bytes; over => `431`. | bootnode server | (none) |
+| `RGOE_BOOTNODE_CONN_CHECK_MS` | `1000` | HTTP: how often the timeouts above are enforced (Node's default 30 s would let a slow client linger that long past the deadline). | bootnode server | (none) |
 
 ## Gateway
 
@@ -32,6 +41,12 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | `RGOE_SLASH_KEY` | (unset → dry-run) | Operational hot key that submits on-chain `slash()` txs. Without it (or without a slash contract) slashing logs a dry-run. | gateway slasher | `--slash-key` |
 | `RGOE_SLASH_CONTRACT` | (unset; falls back to `deployed.local.json`) | Slash contract address. Independent of the membership root source, so a gateway can slash on-chain while membership stays on `members.json`. | gateway slasher | `--slash-contract` |
 | `RGOE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |
+| `RGOE_ENVELOPE_TIMEOUT_MS` | `30000` | Absolute deadline (from connect, NOT re-armed by activity) for the newline-terminated envelope; a slow-loris client that never sends the newline or dribbles bytes is cut at the deadline (reply `bad-envelope:envelope timeout`, drop reason `envelope-timeout`). `0` disables. | gateway | (none) |
+| `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Also bounds a black-holed upstream connect (`upstream-timeout`). `0` disables. | gateway | (none) |
+| `RGOE_MAX_CONNS` | `1024` | Max concurrent client connections, decided at accept BEFORE any byte is read; over => reply `too-many-connections` + close. `0` = unlimited. | gateway | (none) |
+| `RGOE_MAX_CONNS_PER_NULLIFIER` | `8` | Max concurrent tunnels ONE nullifier may hold open (the RLN budget counts requests, not open tunnels; an in-window honest retry is admitted idempotently, so without this one proof could pin N idle tunnels). Over => `nullifier-conn-limit`. `0` = unlimited. | gateway | (none) |
+| `RGOE_REPLAY_WINDOW_MS` | `5000` | Honest-retry window of the per-gateway seen-envelope cache; an exact replay later than this is dropped `replayed-envelope`. | gateway | (none) |
+| `RGOE_SHUTDOWN_TIMEOUT_MS` | `10000` | Drain grace on SIGTERM/SIGINT before in-flight tunnels are force-closed. | gateway, bootnode | (none) |
 
 ## Client
 

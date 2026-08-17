@@ -172,6 +172,57 @@ converge on the same live set; the forged/tampered/unstaked/stale rejection matr
 the caps; fail-soft over a dark peer; and a no-peer registry directory byte-identical to a
 federation-free one.
 
+## Endpoint hardening (T-HARD-4)
+
+The registry's DoS controls (`maxEntries`, `minReannounceSec`, the weight clamp) bound *what is
+resident*. Two more levers are bounded at the endpoint itself (`bootnode/server.mjs`):
+
+### The global announce token bucket
+
+`minReannounceSec` throttles a *resident* onion and `maxEntries` refuses new ones once *full*,
+but an attacker minting fresh onions is neither: until the registry fills, every fresh
+crypto-valid announce reached the ed25519 verify — up to `maxEntries` verifies in one burst.
+`makeAnnounceBucket` sits directly in front of `verifyAnnounce` and bounds the **rate** at
+which any announces reach signature verification, whoever sends them. A throttled announce
+costs a Map lookup and an add; never a verify. Rejections are `429 global-rate-limited` with
+`Retry-After`; per-onion `rate-limited` and `registry-full` are checked *first* and consume no
+token, so an attacker's cheap rejects never starve a legitimate heartbeat. Store reload on
+boot is exempt (local work, still fully re-verified).
+
+Sizing (defaults; every number derives from the registry constants + the fleet heartbeat):
+
+```
+legit sustained load  = N gateways × 1 announce / RGOE_BOOTNODE_HEARTBEAT,   N ≤ maxEntries
+                      = maxEntries / heartbeat = 10000 / 300 = 33.3 announces/s at FULL capacity
+rate  (refill/s)      = 2 × maxEntries / heartbeat = 66.7/s          RGOE_BOOTNODE_ANNOUNCE_RATE
+burst (capacity)      = max(100, maxEntries / 10)  = 1000            RGOE_BOOTNODE_ANNOUNCE_BURST
+```
+
+So a fleet at the registry cap, heartbeating at the default cadence, draws half the refill and
+the bucket never drains; a fleet of up to `burst` gateways re-announcing in perfect lockstep
+(a fleet-wide restart) passes in one instant and is fully refilled before its next beat; an
+attacker minting fresh onions gets at most `burst` verifies up front and then `rate`/s — 1000
+then 66.7/s instead of 10000 in a burst. A throttled legit heartbeat is not lost: it retries at
+its next beat (TTL 900 s = 3 beats), so a healthy gateway is never aged out by the bucket. Only
+fleets *larger* than `burst` that restart in lockstep need `RGOE_BOOTNODE_ANNOUNCE_BURST` raised.
+
+### HTTP slow-client limits
+
+Node's `http.Server` defaults leave slow-loris open (headers 60 s, whole request 300 s, headers
+16 KiB, enforced every 30 s). Every bootnode request is small and fast, so `makeServer` sets:
+headers within `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` (10 s), whole request within
+`RGOE_BOOTNODE_REQUEST_TIMEOUT_MS` (30 s) → `408` + close; idle keep-alive closed after
+`RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS` (5 s); headers over `RGOE_BOOTNODE_MAX_HEADER_BYTES`
+(8 KiB) → `431`; enforced every `RGOE_BOOTNODE_CONN_CHECK_MS` (1 s). The 64 KiB body cap on
+`/announce` is unchanged.
+
+*Accept (proven in `bootnode/hardening.selftest.mjs`, real sockets + a verify spy):* a
+fresh-onion burst gets exactly `burst` verifies and the rest are `429` with verify never called;
+cheap rejects consume no token; reload is exempt; N gateways at heartbeat cadence (random phase
+and lockstep) never hit the bucket at default sizing; slow-loris headers/body are cut with
+`408`; oversized headers `431`; idle keep-alive closed. `test/adversarial.selftest.mjs`
+scenario 7 replays the burst + slow-loris as attack narratives.
+
 ## Client side
 
 ```bash

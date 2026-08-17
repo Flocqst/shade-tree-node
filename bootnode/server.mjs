@@ -51,6 +51,12 @@
 //   RGOE_BOOTNODE_FED_MAX_PULL    max gateways pulled per peer per cycle (bounds a hostile peer)
 //   RGOE_BOOTNODE_ONION      OPTIONAL this bootnode's own onion, filtered out of the peer set
 //   RGOE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
+//   RGOE_BOOTNODE_ANNOUNCE_RATE   GLOBAL announce token-bucket refill, announces/second that reach
+//                            signature verification (default 2*maxEntries/heartbeat = 66.7/s; see
+//                            makeAnnounceBucket for the sizing math). Over => 429 global-rate-limited.
+//   RGOE_BOOTNODE_ANNOUNCE_BURST  the bucket's capacity (default max(100, maxEntries/10) = 1000).
+//   RGOE_BOOTNODE_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
+//   _MAX_HEADER_BYTES / _CONN_CHECK_MS   HTTP slow-client limits (see HTTP_LIMITS below).
 
 import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -103,6 +109,65 @@ function makeNonceGuard(ttlMs) {
     add: (k) => seen.set(k, Date.now()),
     sweep: () => { const cut = Date.now() - ttlMs; for (const [k, at] of seen) if (at < cut) seen.delete(k); },
   };
+}
+
+// ---- GLOBAL announce token bucket (T-HARD-4) ---------------------------------
+// The per-onion throttle (minReannounceSec) and the size cap (maxEntries) do not slow an attacker
+// who mints FRESH onions: each new onion is not "existing" (no throttle) and until the registry is
+// full it is not refused, so up to maxEntries ed25519 verifies were reachable in one burst. This
+// bucket sits directly in front of verifyAnnounce and bounds the RATE at which ANY announces reach
+// signature verification, whoever sends them. A rejected announce costs one Map lookup + this
+// arithmetic — never a verify.
+//
+// SIZING (defaults; every number derives from the registry constants + the fleet heartbeat):
+//   legit sustained load  = N gateways × 1 announce / heartbeatSec, N ≤ maxEntries
+//                         = maxEntries / heartbeatSec = 10000 / 300 = 33.3 announces/s at FULL capacity
+//   rate  (refill/s)      = 2 × maxEntries / heartbeatSec = 66.7/s   (2× headroom over full capacity)
+//   burst (capacity)      = max(100, maxEntries / 10) = 1000
+// So a fleet at the registry cap, heartbeating at the default cadence, draws HALF the refill and
+// the bucket never drains; a fleet of up to `burst` gateways re-announcing in perfect lockstep
+// (e.g. a fleet-wide restart) passes in one instant; an attacker minting fresh onions gets at most
+// `burst` verifies up front and then `rate`/s — 1000 then 66.7/s instead of 10000 in a burst.
+// The floor of 100 on burst keeps small/dev registries (tiny maxEntries) usable. Only fleets
+// LARGER than `burst` that restart in lockstep need RGOE_BOOTNODE_ANNOUNCE_BURST raised.
+// A throttled legit heartbeat is not lost: it is refused 429 with Retry-After and re-sent at the
+// next beat (TTL 900s = 3 beats), so a healthy gateway is never aged out by the bucket.
+// Refill uses the registry's injected `now()` (seconds) so tests are deterministic; fractional
+// tokens accumulate, so a sub-1/s rate still refills correctly. rate=0 && burst=0 disables (opt-out).
+// Env number with an explicit-0 allowed (0 = opt-out where documented); unset/garbage => default.
+function envInt(name, dflt) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return dflt;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+export function makeAnnounceBucket({ rate, burst, now = () => Math.floor(Date.now() / 1000) }) {
+  let tokens = burst;
+  let last = now();
+  const disabled = !(rate > 0) && !(burst > 0);
+  const refill = () => {
+    const t = now();
+    if (t > last) { tokens = Math.min(burst, tokens + (t - last) * rate); last = t; }
+    return tokens;
+  };
+  return {
+    rate, burst, disabled,
+    take() {
+      if (disabled) return true;
+      if (refill() < 1) return false;
+      tokens -= 1;
+      return true;
+    },
+    tokens: refill,
+    // Seconds until one token is available (for Retry-After); >= 1.
+    retryAfterSec: () => (rate > 0 ? Math.max(1, Math.ceil((1 - tokens) / rate)) : 1),
+  };
+}
+export function defaultAnnounceBucketParams(maxEntries) {
+  const heartbeatSec = Number(process.env.RGOE_BOOTNODE_HEARTBEAT || 300);
+  const rate = envInt("RGOE_BOOTNODE_ANNOUNCE_RATE", (2 * maxEntries) / heartbeatSec);
+  const burst = envInt("RGOE_BOOTNODE_ANNOUNCE_BURST", Math.max(100, Math.floor(maxEntries / 10)));
+  return { rate, burst, heartbeatSec };
 }
 
 // ---- active health probing (T-DEV-12) ---------------------------------------
@@ -218,9 +283,16 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     // OPTIONAL active prober (T-DEV-12). Off (null) by default => directory() marks every live
     // entry up, exactly as before. When supplied, directory() consults prober.health.isDown() to
     // demote a silently-dead gateway to health:"down" (still listed, just deprioritized).
-    prober = null }) {
+    prober = null,
+    // GLOBAL announce token bucket (T-HARD-4): rate/burst default from maxEntries + heartbeat
+    // (see makeAnnounceBucket). `verify` is injectable ONLY so the selftest can spy that a
+    // throttled announce never reaches signature verification; default = the real verifyAnnounce.
+    announceRate = defaultAnnounceBucketParams(maxEntries).rate,
+    announceBurst = defaultAnnounceBucketParams(maxEntries).burst,
+    verify = verifyAnnounce }) {
   const live = new Map(); // onion -> { pubkey, weight, operator, staked, rec, expiresAt, lastAt }
   const nonces = makeNonceGuard(ttlSec * 1000);
+  const bucket = makeAnnounceBucket({ rate: announceRate, burst: announceBurst, now });
   const requireStake = admission === "stake";
   // While replaying the store on boot we call announce() but must NOT write-through each replay
   // (it would churn the file mid-reload); a single persist() after reload prunes what dropped.
@@ -291,8 +363,13 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     const existing = onionKey ? live.get(onionKey) : null;
     if (existing && now() - existing.lastAt < minReannounceSec) return { ok: false, reason: "rate-limited" };
     if (!existing && live.size >= maxEntries) { sweep(); if (live.size >= maxEntries) return { ok: false, reason: "registry-full" }; }
+    // GLOBAL rate cap (T-HARD-4), the LAST gate before the ed25519 verify: whatever the mix of
+    // onions, at most `burst` + `rate`/s announces reach verifyAnnounce. Charged only here (after
+    // the cheap rejects) so a legit heartbeat never pays for an attacker's rate-limited/full
+    // rejects. Replaying our OWN store on boot (fromStore) is local work, not peer input: exempt.
+    if (!fromStore && !bucket.take()) return { ok: false, reason: "global-rate-limited", retryAfterSec: bucket.retryAfterSec() };
 
-    const v = await verifyAnnounce(rec, {
+    const v = await verify(rec, {
       now: now(),
       // Reloading our OWN persisted store: freshness is the stored TTL (checked in loadPersisted),
       // not the anti-replay ts window — so don't drop a gateway announced more than one skew-window
@@ -472,15 +549,35 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
   return { announce, admitGossip, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size,
-    liveOnions: () => [...live.keys()], maxEntries: () => maxEntries, prober, admission, ttlSec };
+    liveOnions: () => [...live.keys()], maxEntries: () => maxEntries, prober, admission, ttlSec, announceBucket: bucket };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
-function send(res, code, obj) {
+function send(res, code, obj, extraHeaders = null) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(body), ...(extraHeaders || {}) });
   res.end(body);
 }
+
+// ---- HTTP slow-client limits (T-HARD-4) --------------------------------------
+// Node's http.Server defaults leave several slow-loris levers open: headersTimeout 60s,
+// requestTimeout 300s (a body can dribble for 5 minutes), maxHeaderSize 16 KiB, and the
+// timeouts are only enforced every connectionsCheckingInterval=30s. Every request the bootnode
+// serves is small and fast (a signed JSON announce or a directory fetch), so these can be tight.
+// Env-configurable, an explicit 0 disables the corresponding timeout (opt-out, never the default).
+//   RGOE_BOOTNODE_HEADERS_TIMEOUT_MS   complete request headers must arrive within (default 10000)
+//   RGOE_BOOTNODE_REQUEST_TIMEOUT_MS   the WHOLE request (headers+body) within (default 30000);
+//                                      a slow-dribbled body is cut at 408 (must be >= headers)
+//   RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS idle keep-alive connection closed after (default 5000, Node's)
+//   RGOE_BOOTNODE_MAX_HEADER_BYTES     max total header bytes, over => 431 (default 8192)
+//   RGOE_BOOTNODE_CONN_CHECK_MS        how often the timeouts are enforced (default 1000)
+export const HTTP_LIMITS = Object.freeze({
+  headersTimeout: envInt("RGOE_BOOTNODE_HEADERS_TIMEOUT_MS", 10000),
+  requestTimeout: envInt("RGOE_BOOTNODE_REQUEST_TIMEOUT_MS", 30000),
+  keepAliveTimeout: envInt("RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS", 5000),
+  maxHeaderSize: envInt("RGOE_BOOTNODE_MAX_HEADER_BYTES", 8192),
+  connectionsCheckingInterval: envInt("RGOE_BOOTNODE_CONN_CHECK_MS", 1000),
+});
 function readBody(req, max = 64 * 1024) {
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -490,11 +587,22 @@ function readBody(req, max = 64 * 1024) {
   });
 }
 
-export function makeServer(registry, { signerPub } = {}) {
+// `limits` overrides HTTP_LIMITS (the selftest sets tiny timeouts); main() passes none.
+export function makeServer(registry, { signerPub, limits = {} } = {}) {
   // Current live-gateway count as a gauge, evaluated at scrape time from this registry.
   metrics.gauge("rgoe_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
 
-  return http.createServer(async (req, res) => {
+  const lim = { ...HTTP_LIMITS, ...limits };
+  // Node refuses headersTimeout > requestTimeout (when both are on); clamp so a partial override
+  // can never wedge startup.
+  if (lim.requestTimeout > 0 && lim.headersTimeout > lim.requestTimeout) lim.headersTimeout = lim.requestTimeout;
+  const server = http.createServer({
+    headersTimeout: lim.headersTimeout,
+    requestTimeout: lim.requestTimeout,
+    keepAliveTimeout: lim.keepAliveTimeout,
+    maxHeaderSize: lim.maxHeaderSize,
+    connectionsCheckingInterval: lim.connectionsCheckingInterval,
+  }, async (req, res) => {
     try {
       const url = new URL(req.url, "http://bootnode");
       if (req.method === "GET" && url.pathname === "/health") {
@@ -558,6 +666,9 @@ export function makeServer(registry, { signerPub } = {}) {
         const r = await registry.announce(rec);
         if (r.ok) M.announces.inc({ result: "accepted" });
         else M.announces.inc({ result: "rejected", reason: r.reason });
+        // The GLOBAL bucket (T-HARD-4) answers 429 + Retry-After (a heartbeat should simply retry
+        // at its next beat); every other rejection keeps its 400 exactly as before.
+        if (!r.ok && r.reason === "global-rate-limited") return send(res, 429, { ok: false, err: r.reason }, { "retry-after": String(r.retryAfterSec || 1) });
         return send(res, r.ok ? 200 : 400, r.ok ? { ok: true, onion: r.onion, staked: r.staked, ttl: registry.ttlSec } : { ok: false, err: r.reason });
       }
       return send(res, 404, { ok: false, err: "no-route" });
@@ -565,6 +676,8 @@ export function makeServer(registry, { signerPub } = {}) {
       return send(res, 500, { ok: false, err: "bootnode-error:" + e.message });
     }
   });
+  server.limits = lim; // introspection for the selftest / boot log
+  return server;
 }
 
 // ---- graceful shutdown / connection draining (T-DEV-8) ----------------------
@@ -660,6 +773,8 @@ async function main() {
     log.info("pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):");
     log.info(`  ${signer.pub}`);
     log.info("endpoints: POST /announce  GET /directory  GET /directory/delta?since=<etag>  GET /gateway/<onion>  GET /health");
+    const b = registry.announceBucket;
+    log.info("endpoint hardening", { announceRatePerSec: Number(b.rate.toFixed(2)), announceBurst: b.burst, ...server.limits });
   });
 
   const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);

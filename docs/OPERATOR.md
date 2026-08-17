@@ -390,6 +390,50 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
 | `RGOE_EGRESS_ALLOW` / `RGOE_EGRESS_DENY` | (none) | Egress policy (see §2). When `RGOE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
 | `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
+| `RGOE_ENVELOPE_TIMEOUT_MS` / `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
+| `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
+| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+
+### Endpoint hardening (T-HARD-4)
+
+Both listeners bound every lever an *unauthenticated* peer can pull. Defaults are on; you
+should not need to touch them unless you run an unusually large or slow fleet.
+
+**Gateway** (`gateway/gateway.mjs`):
+
+- **Envelope deadline** — the newline-terminated envelope must arrive within
+  `RGOE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
+  at a time does not extend it). Cut connections show as `drop reason=envelope-timeout` in the
+  metrics (`rgoe_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
+- **Relay idle timeout** — an established tunnel with no bytes in either direction for
+  `RGOE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
+  (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
+  simply reconnect; raise it if members legitimately hold idle connections longer.
+- **Connection caps** — `RGOE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
+  before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+  tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry
+  window cannot pin an unbounded number of idle tunnels. Both slots are released on close.
+- **Half-close crash fixed** — a client that sent a partial envelope and then FIN'd used to
+  crash the whole gateway process (uncaught `EPIPE` on the error reply). Fixed in the same
+  slice; `test/adversarial.selftest.mjs` scenario 6 exercises it.
+
+If a *legitimate* member trips `too-many-connections` (metric climbing under normal load), raise
+`RGOE_MAX_CONNS`; the per-nullifier cap should never be hit by an honest client (one request per
+nullifier, one tunnel each; a retry replaces a dead tunnel).
+
+**Bootnode** (`bootnode/server.mjs`):
+
+- **HTTP slow-client limits** — headers within 10 s, whole request within 30 s (`408`), keep-alive
+  idle 5 s, headers <= 8 KiB (`431`), enforced every second (Node's own defaults are 60 s / 300 s
+  / 16 KiB / checked every 30 s).
+- **Global announce bucket** — in front of the per-onion throttle's blind spot: an attacker
+  minting *fresh* onions could force one ed25519 verify per onion until the registry filled. Now
+  at most `RGOE_BOOTNODE_ANNOUNCE_BURST` (1000) reach verification in one instant, then
+  `RGOE_BOOTNODE_ANNOUNCE_RATE` (66.7/s). Overflow gets `429` + `Retry-After` and the heartbeat
+  simply retries at its next beat. Legit fleets never hit it at default cadence — the math is in
+  `docs/BOOTNODE.md` "Endpoint hardening". If your bootnode logs many `global-rate-limited`
+  rejects while the fleet is healthy, you are under an announce flood, not misconfigured.
 
 ### Capability advertisement (T-FEAT-10b)
 

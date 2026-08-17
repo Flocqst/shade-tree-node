@@ -281,6 +281,8 @@ Server: `bootnode/server.mjs:151` `makeServer`. All responses
 | --- | --- | --- | --- |
 | 400 | `{ ok:false, err:"bad-json:<msg>" }` | `/announce` body not JSON, or body too large | `:169` |
 | 400 | `{ ok:false, err:"<reason>" }` | `/announce` verify failed; `<reason>` = a section-3.4 code or a section-5.3 cap reason | `:171` |
+| 429 | `{ ok:false, err:"global-rate-limited" }` + `Retry-After: <s>` | `/announce` refused by the GLOBAL announce bucket before verify (T-HARD-4); retry at the next heartbeat | `makeServer` |
+| 408 / 431 | (Node http built-in) | request headers/body slower than `HTTP_LIMITS` / headers over `maxHeaderSize` (T-HARD-4) | `HTTP_LIMITS` |
 | 404 | `{ ok:false, err:"not-found" }` | `/gateway/<onion>` unknown | `:165` |
 | 404 | `{ ok:false, err:"no-route" }` | no route matched | `:173` |
 | 500 | `{ ok:false, err:"bootnode-error:<msg>" }` | unhandled exception | `:175` |
@@ -297,6 +299,8 @@ Registry: `bootnode/server.mjs:76` `makeRegistry`.
 | `minReannounceSec` | `5` | `RGOE_BOOTNODE_MIN_REANNOUNCE` | a resident onion re-announcing sooner is refused `rate-limited` |
 | `MAX_WEIGHT` | `1000` | (const) | stored weight = `max(0, min(1000, weight))`; `weight` non-finite -> `100` (`:97`,`:100`) |
 | request body cap | `64 KiB` | (const) | `readBody` max (`:142`); overflow -> `400 bad-json:body too large` |
+| global announce bucket | `66.7/s`, burst `1000` | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `_BURST` | `makeAnnounceBucket`: the LAST gate before `verifyAnnounce`; overflow -> `429 global-rate-limited` + `Retry-After` (T-HARD-4) |
+| HTTP slow-client limits | 10 s / 30 s / 5 s / 8 KiB | `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` etc. | `HTTP_LIMITS`: headers / request / keep-alive timeouts (`408`) + max header size (`431`) (T-HARD-4) |
 
 Registry-level announce reasons (returned as `400 { err:<reason> }`), checked BEFORE the
 signature verify (`:87`,`:88`):
@@ -305,6 +309,7 @@ signature verify (`:87`,`:88`):
 | --- | --- |
 | `rate-limited` | resident onion, `now - lastAt < minReannounceSec` |
 | `registry-full` | new onion, `live.size >= maxEntries` after a sweep |
+| `global-rate-limited` (HTTP `429`) | the global announce bucket has no token (checked LAST before verify; not charged by the two rejects above; store reload exempt) |
 
 The signed `/directory` response is bounded transitively by `maxEntries` (one gateway object
 per live entry); there is no separate byte-cap on the response. See ambiguity note in the
