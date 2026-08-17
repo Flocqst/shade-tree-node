@@ -23,18 +23,20 @@
 // `rgoe identity > id.json` is safe. stderr carries the human summary: the public leaf and the
 // output path. The app secret and identitySecret are NEVER printed to stderr/logs.
 //
-// The leaf depends on RGOE_SLOTS (K, default 8) like every rateCommitment in the system: derive
-// with the same RGOE_SLOTS the fleet runs, or the leaf will not be in the tree.
+// The leaf depends on the member's tier limit (`--limit` / RGOE_LIMIT; default K = RGOE_SLOTS = 8)
+// like every rateCommitment in the system: derive with the limit the leaf was enrolled with, or the
+// leaf will not be in the tree. A non-default limit is written into the file (`limit`) so the Rust
+// client proves with it (T-FEAT-8).
 
 import { readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { identityFileFor, serializeIdentityFile } from "../lib/identity-file.mjs";
-import { K_SLOTS } from "../lib/rln.mjs";
+import { K_SLOTS, normLimit } from "../lib/rln.mjs";
 
-const USAGE = "usage: rgoe identity [--out <path>] [--secret-file <path>]   (secret: --secret-file | RGOE_SECRET | ./.secret)";
+const USAGE = "usage: rgoe identity [--out <path>] [--secret-file <path>] [--limit <n>]   (secret: --secret-file | RGOE_SECRET | ./.secret; limit: --limit | RGOE_LIMIT | 8)";
 
 function parseArgs(argv) {
-  const opts = { out: null, secretFile: null };
+  const opts = { out: null, secretFile: null, limit: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") { console.log(USAGE); process.exit(0); }
@@ -42,9 +44,9 @@ function parseArgs(argv) {
     const eq = a.indexOf("=");
     const key = eq === -1 ? a.slice(2) : a.slice(2, eq);
     const val = eq === -1 ? argv[++i] : a.slice(eq + 1);
-    if (key !== "out" && key !== "secret-file") { console.error(`identity: unknown flag --${key}\n${USAGE}`); process.exit(2); }
+    if (key !== "out" && key !== "secret-file" && key !== "limit") { console.error(`identity: unknown flag --${key}\n${USAGE}`); process.exit(2); }
     if (val === undefined || val === "" || val.startsWith("--")) { console.error(`identity: --${key} needs a value\n${USAGE}`); process.exit(2); }
-    if (key === "out") opts.out = val; else opts.secretFile = val;
+    if (key === "out") opts.out = val; else if (key === "limit") opts.limit = val; else opts.secretFile = val;
   }
   return opts;
 }
@@ -82,12 +84,15 @@ function main() {
     console.error(`identity: the secret from ${source} is not 0x-hex or decimal (value not shown)`);
     process.exit(1);
   }
+  let limit;
+  try { limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS)); }
+  catch (e) { console.error(`identity: ${e.message}`); process.exit(2); }
   let file;
-  try { file = identityFileFor(secret); }
+  try { file = identityFileFor(secret, limit); }
   catch { console.error(`identity: cannot derive from the secret (${source}) (value not shown)`); process.exit(1); }
   const bytes = serializeIdentityFile(file);
 
-  console.error(`rgoe identity — Rust client identity file (secret from ${source}; K=RGOE_SLOTS=${K_SLOTS})`);
+  console.error(`rgoe identity — Rust client identity file (secret from ${source}; limit=${limit}${limit === K_SLOTS ? ` = K (RGOE_SLOTS)` : " (tier; written into the file)"})`);
   console.error(`  leaf (public; must be in the fleet's members.json):  ${file.leaf}`);
   if (opts.out) {
     const out = resolve(opts.out);

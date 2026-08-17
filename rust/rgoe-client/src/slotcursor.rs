@@ -35,6 +35,11 @@ use serde::{Deserialize, Serialize};
 /// default, and the same default this client's `--k`/`userMessageLimit` flag uses.
 pub const K_SLOTS: u64 = 8;
 
+/// The largest tier limit the circuit can range-check: RLN(20, 16) compares messageId and
+/// userMessageLimit with a 16-bit LessThan, so a limit MUST be <= 2^16 - 1 (lib/rln.mjs
+/// MAX_LIMIT). Reputation tiers (T-FEAT-8) are per-leaf limits inside this bound.
+pub const MAX_LIMIT: u64 = 65535;
+
 /// The persisted cursor: only the epoch it belongs to and the NEXT slot index to hand
 /// out. Two non-secret integers — never any identity/secret/nullifier material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,9 +107,12 @@ pub fn save(path: Option<&Path>, cursor: SlotCursor) -> bool {
 /// Best-effort throughout: a failed load falls back to slot 0; a failed save just means
 /// the NEXT run also starts at 0. It never errors and never blocks egress.
 pub fn next_slot(path: Option<&Path>, epoch: u64, k: u64) -> u64 {
-    let k = k.max(1); // guard: K must be >= 1 so the modulo is well-defined
-                      // Continue the cursor only within the SAME epoch and while it's still in range
-                      // (a shrunk --k could leave a persisted next_slot >= k) — otherwise reset to 0.
+    // guard: K must be in 1..=MAX_LIMIT (a tier limit; the modulo needs >= 1 and the circuit's
+    // 16-bit range check needs <= 65535). `rgoe egress` rejects an out-of-range --k before
+    // reaching here; this keeps the cursor arithmetic well-defined for any caller.
+    let k = k.clamp(1, MAX_LIMIT);
+    // Continue the cursor only within the SAME epoch and while it's still in range
+    // (a shrunk --k could leave a persisted next_slot >= k) — otherwise reset to 0.
     let base = match load(path) {
         Some(c) if c.epoch == epoch && c.next_slot < k => c.next_slot,
         _ => 0,

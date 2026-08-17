@@ -30,7 +30,7 @@ import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
-import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
+import { reconstructSecret, resolveSlashLeaf, TIERS, K_SLOTS } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
 import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
@@ -128,9 +128,28 @@ export function makeConnLimiter({ maxConns = HARDENING.maxConns, maxPerNullifier
 // A proof against any root inside the freshness window verifies. On-chain: fed by
 // the RootProvider. PoC fallback: the single members.json root, re-read on change.
 let recentRoots = new Set();
+// The local set's LEAVES (members.json mode only; null in on-chain root mode, which holds
+// roots). Used ONLY after an over-spend, to name which tier's leaf a reconstructed
+// identitySecret sits behind (T-FEAT-8 resolveSlashLeaf) — never during verification.
+let localLeaves = null;
 // Test seam (gateway/*.selftest.mjs, lib/zk-artifacts.selftest.mjs): install the accepted
 // root set directly so a handler can be driven without initRoots()/members.json/a chain.
 export function _setRecentRoots(roots) { recentRoots = new Set(Array.from(roots || []).map(String)); }
+
+// deriveSlashLeaf(identitySecret) -> commitment (string): the leaf to slash. Reputation tiers
+// (T-FEAT-8) make the leaf depend on the member's PRIVATE limit, so try every tier this gateway
+// knows (RGOE_TIERS; always includes K) and pick the one present in the local set. Without
+// leaves (on-chain root mode) this is the default tier's leaf — exactly the pre-tier
+// deriveCommitment — with a warn naming the candidates, since the on-chain hasher pins K=8
+// today (docs/ONCHAIN.md "Tiers on chain").
+export function deriveSlashLeaf(identitySecret, { tiers = TIERS, leaves = localLeaves } = {}) {
+  const hasLeaf = leaves ? (c) => leaves.has(String(c)) : null;
+  const r = resolveSlashLeaf(identitySecret, { tiers, hasLeaf });
+  if (!r.resolved && tiers.length > 1) {
+    log.warn("slash: tier of the over-spent leaf not resolvable locally; naming the default tier's leaf", { tiers, limit: r.limit, hasLeaves: !!leaves });
+  }
+  return r.commitment;
+}
 
 async function initRoots() {
   if (process.env.RGOE_GROUP_CONTRACT) {
@@ -146,8 +165,9 @@ async function initRoots() {
   }
   // PoC fallback: members.json is the root source; refresh on file change.
   const load = async () => {
-    const { root, count } = await loadGroup();
+    const { root, count, leaves } = await loadGroup();
     recentRoots = new Set([String(root)]);
+    localLeaves = new Set((leaves || []).map(String));
     return count;
   };
   let count = await load();
@@ -206,7 +226,7 @@ async function initRoots() {
 // window is deterministically testable without a real wall clock.
 export function makeSpentSet({
   reconstruct = reconstructSecret,
-  derive = deriveCommitment,
+  derive = deriveSlashLeaf,
   slash,
   sharedTally = null,
   ttlMs = 2 * EPOCH_SECONDS * 1000,
@@ -895,6 +915,7 @@ async function main() {
     const dflt = allowDesc === "*:443" && !denyDesc;
     log.info(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
     log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
+    log.info(`tiers: per-leaf userMessageLimit (private to the proof); default K=${K_SLOTS}; slash-leaf candidates RGOE_TIERS=[${TIERS.join(",")}]`);
     const replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000;
     log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
     if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");

@@ -205,3 +205,33 @@ fn remove_middle_matches_zero_in_place_reconstruction() {
         "c2's level-0 sibling is the vacated (index 3) empty slot = zero value"
     );
 }
+
+#[test]
+fn rate_commitment_tiers_match_js_derive_commitment() {
+    // T-FEAT-8 reputation tiers: the leaf commits to its `userMessageLimit`, so the SAME
+    // identitySecret at limit 8 (default K) and at limit 32 (a higher tier) are two DIFFERENT
+    // leaves — and each equals the JS reference. Goldens regenerated with:
+    //
+    // ```text
+    // node --input-type=module -e '
+    //   import { deriveCommitment } from "./lib/rln.mjs";
+    //   console.log(deriveCommitment(111n), deriveCommitment(111n, 32));
+    // '
+    // ```
+    let s = dec_to_fr("111");
+    assert_eq!(
+        fr_to_dec(&rgoe_rln::tree::rate_commitment(s, 8)),
+        "11302006078516901731073162965056551612114122314181142374993834332168998510316",
+        "limit-8 leaf == JS deriveCommitment(111n) (the default tier; unchanged by T-FEAT-8)"
+    );
+    assert_eq!(
+        fr_to_dec(&rgoe_rln::tree::rate_commitment(s, 32)),
+        "15363698809722346745616993869789510363416645981863858152379739283427647190637",
+        "limit-32 leaf == JS deriveCommitment(111n, 32)"
+    );
+    assert_ne!(
+        rgoe_rln::tree::rate_commitment(s, 8),
+        rgoe_rln::tree::rate_commitment(s, 32),
+        "a different limit is a different leaf: a member cannot claim a tier its leaf lacks"
+    );
+}

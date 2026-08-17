@@ -43,6 +43,20 @@ pub fn poseidon2(a: Fr, b: Fr) -> Fr {
     hasher.hash(&[a, b]).expect("poseidon2 hash")
 }
 
+/// `poseidon1([a])` over BN254 — circomlib / poseidon-lite compatible (t=2 params).
+pub fn poseidon1(a: Fr) -> Fr {
+    let mut hasher = Poseidon::<Fr>::new_circom(1).expect("poseidon1 circom params");
+    hasher.hash(&[a]).expect("poseidon1 hash")
+}
+
+/// The RLN `rateCommitment` leaf for an `identitySecret` at a tier `limit`
+/// (`userMessageLimit`, T-FEAT-8): `Poseidon2(Poseidon1(identitySecret), limit)` — the exact
+/// leaf `lib/rln.mjs deriveCommitment(identitySecret, limit)` publishes and the circuit opens.
+/// The limit is PART of the leaf, so a member's tier is what its leaf commits to.
+pub fn rate_commitment(identity_secret: Fr, limit: u64) -> Fr {
+    poseidon2(poseidon1(identity_secret), Fr::from(limit))
+}
+
 /// The Semaphore group hash used for the tree's zero value:
 /// `hash(m) = keccak256( be32(m mod 2^256) ) >> 8`.
 ///

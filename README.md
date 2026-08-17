@@ -156,6 +156,11 @@ Built and verified:
 - **Client anonymous to the gateway.** Onion rendezvous, no exit node, no IP.
 - **Membership proven, never named**, with *per-request* unlinkable nullifiers (real RLN), so
   even a colluding set of gateways cannot rejoin a member's requests.
+- **Reputation is a spectrum, not a bit.** A member's per-epoch budget is a *tier* baked into
+  its leaf (`rgoe enroll --limit 32`); two tiers with different `K` are proven in the same
+  circuit, enforced by the same root + nullifier set, unforgeable, and invisible on the wire
+  ([ADR 0006](docs/adr/0006-reputation-tiers.md)). On-chain tier admission/slash is a flagged
+  follow-up.
 - **Operator never holds a secret.** Self-enrollment: only the commitment leaves the member.
 - **On-chain admission with stake and slashing.** `StakedReputationSet` (members) and an optional
   `GatewayRegistry` (operators); over-spenders are slashed by cryptographic reconstruction.

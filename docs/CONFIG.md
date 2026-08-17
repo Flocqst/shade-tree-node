@@ -45,6 +45,7 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Also bounds a black-holed upstream connect (`upstream-timeout`). `0` disables. | gateway | (none) |
 | `RGOE_MAX_CONNS` | `1024` | Max concurrent client connections, decided at accept BEFORE any byte is read; over => reply `too-many-connections` + close. `0` = unlimited. | gateway | (none) |
 | `RGOE_MAX_CONNS_PER_NULLIFIER` | `8` | Max concurrent tunnels ONE nullifier may hold open (the RLN budget counts requests, not open tunnels; an in-window honest retry is admitted idempotently, so without this one proof could pin N idle tunnels). Over => `nullifier-conn-limit`. `0` = unlimited. | gateway | (none) |
+| `RGOE_TIERS` | `RGOE_SLOTS` (i.e. `8`) | Comma-separated tier limits this gateway KNOWS (T-FEAT-8), e.g. `8,32`; ascending, distinct, 1..65535; `K` is always included. Used ONLY after an over-spend to name which tier's leaf the reconstructed `identitySecret` sits behind (`resolveSlashLeaf`); verification never consults it (the tier is private to the proof). Bad value = startup error. | gateway slash path | (none) |
 | `RGOE_REPLAY_WINDOW_MS` | `5000` | Honest-retry window of the per-gateway seen-envelope cache; an exact replay later than this is dropped `replayed-envelope`. | gateway | (none) |
 | `RGOE_SHUTDOWN_TIMEOUT_MS` | `10000` | Drain grace on SIGTERM/SIGINT before in-flight tunnels are force-closed. | gateway, bootnode | (none) |
 
@@ -62,7 +63,8 @@ Read by `client/shim.mjs` / `client/rgoe-client.mjs` (proxy + library) and `clie
 | `RGOE_DIRECTORY_CACHE` | `cache/bootnode-directory.lkg` (bootnode) or `<RGOE_DIRECTORY>.lkg` (file), else none | Last-known-good directory cache path. | client selection | (none) |
 | `RGOE_DIRECTORY_REFRESH_MS` | `300000` (5 min) | How often to refresh the loaded directory. | client selection | (none) |
 | `RGOE_SHIM_PORT` | `8888` | Local HTTP-CONNECT proxy listen port (on `127.0.0.1`). | shim | `--shim-port` |
-| `RGOE_SLOTS` | `8` | `K_SLOTS`: per-epoch rate cap / number of per-slot nullifiers before over-spend. | lib/rln (client + gateway) | (none) |
+| `RGOE_SLOTS` | `8` | `K_SLOTS`: the DEFAULT tier's per-epoch rate cap (`userMessageLimit` baked into a leaf enrolled without `--limit`; number of per-slot nullifiers before over-spend). | lib/rln (client + gateway) | (none) |
+| `RGOE_LIMIT` | `RGOE_SLOTS` (8) | THIS member's reputation-tier limit (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`): the `userMessageLimit` its leaf was enrolled with (`rgoe enroll --limit N`). The client wraps slots at it and proves with it; a value the leaf does not carry fails at prove time (`not in group`). 1..65535. Also read by `rgoe identity` (`--limit`) for the Rust identity file. | client, `rgoe identity` | `RgoeClient({ limit })`, `--limit` |
 | `RGOE_RLN_IDENTIFIER` | `1` | RLN identifier bound into the circuit / external nullifier. Must match across client and gateway. | lib/rln (client + gateway) | (none) |
 
 ## On-chain

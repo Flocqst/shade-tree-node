@@ -41,7 +41,8 @@ a1                 = Poseidon(3)([ identitySecret, externalNullifier, messageId 
 y                  = identitySecret + a1 * x        ← the SSS share; slash reveals identitySecret
 ```
 
-Tree DEPTH=20, LIMIT_BIT_SIZE=16 (max `userMessageLimit` = 2^16). The slashable value is
+Tree DEPTH=20, LIMIT_BIT_SIZE=16 (max `userMessageLimit` = 2^16 - 1; T-FEAT-8 uses this
+per-leaf limit AS the reputation tier, `docs/adr/0006-reputation-tiers.md`). The slashable value is
 `identitySecret` (= `Poseidon(nullifier, trapdoor)` of the RLN identity), not the raw secret.
 
 So the earlier "the on-chain side is already RLN-shaped / hasher already `Poseidon(secret)`"
