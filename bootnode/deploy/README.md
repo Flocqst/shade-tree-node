@@ -32,7 +32,8 @@ the exact `rgoe client …` command to hand out. Re-running is safe (keys and un
 - Onion identities minted once into `/opt/rgoe/deploy-state/` and copied into Tor's own HS
   dirs (`bootnode/keygen.mjs`).
 - Three systemd units: `rgoe-bootnode`, `rgoe-gateway`, `rgoe-heartbeat` — all `Restart=always`.
-  (Gateway-only mode: two units, no `rgoe-bootnode`.)
+  (Gateway-only mode: two units, no `rgoe-bootnode`. `RGOE_HELIOS=1` adds a fourth,
+  `rgoe-helios`, plus the sha256-pinned `helios` binary at `/usr/local/bin/helios`.)
 - A `torrc` include publishing two onions (bootnode → `:8877`, gateway → `:8443`), each block
   carrying `HiddenServicePoWDefensesEnabled <RGOE_ENABLE_POW>` right after its `HiddenServicePort`
   (it is a per-service option). Gateway-only mode publishes the gateway onion only.
@@ -52,6 +53,14 @@ the script exits before installing anything on a bad one.
 | `RGOE_BOOTNODE_ONION` | *(unset = run our own bootnode)* | **Gateway-only mode.** A v3 onion (56 base32 chars, `.onion` optional): the box installs ONLY tor + `rgoe-gateway` + `rgoe-heartbeat`, mints only the gateway identity, publishes only the gateway HS, and the heartbeat announces to *that* remote bootnode. Re-running a former bootnode+gateway box in this mode disables and removes its `rgoe-bootnode` unit. |
 | `RGOE_BOOTNODE_SIGNER` | *(unset)* | gateway-only only: the remote bootnode's pinned signer pubkey, printed into the client command at the end. The heartbeat itself does not need it. |
 | `RGOE_GATEWAY_REGION` | *(unset = not advertised)* | `na sa eu af as oc aq unknown`: coarse region bucket the heartbeat advertises in signed caps (`docs/CONFIG.md`). Written as `Environment=` into `rgoe-heartbeat.service`. |
+| `RGOE_HELIOS` | `0` | **Opt-in Helios light-client sidecar** (T-DEV-9b, `docs/LIGHT-CLIENT.md`). `1` = download the pinned [a16z/helios](https://github.com/a16z/helios) release (`RGOE_HELIOS_VERSION`, default `0.11.1`; `helios_linux_{amd64,arm64}.tar.gz`, sha256 verified against the table in `bootstrap.sh` before install), render + start a hardened `rgoe-helios.service` (loopback `127.0.0.1:RGOE_HELIOS_PORT`, endpoints via `EXECUTION_RPC`/`CONSENSUS_RPC` env so keys stay out of `ps`, same sandbox as the other units plus `MemoryDenyWriteExecute`), and set `RGOE_ROOT_PROVIDER=light` + `RGOE_HELIOS_RPC_URL` + `RGOE_RPC_URL` + `RGOE_GROUP_CONTRACT` on `rgoe-gateway.service` (ordered after the sidecar). The admission root is then anchored to the beacon sync committee — the RPC can withhold but not lie. Re-running with `0` disables and removes the unit. Also accepts `true/false/yes/no/on/off`. |
+| `RGOE_HELIOS_CONSENSUS_RPC` | *(unset)* | **required with `RGOE_HELIOS=1`**: beacon API URL serving the light-client endpoints (`/eth/v1/beacon/light_client/…`). Sepolia has no built-in default; `https://lodestar-sepolia.chainsafe.io` worked on 2026-08-17 (publicnode's beacon API did not). |
+| `RGOE_RPC_URL` | *(unset)* | **required with `RGOE_HELIOS=1`**: execution JSON-RPC (http(s)/ws(s)); the sidecar's `EXECUTION_RPC` and the gateway's `RGOE_RPC_URL`. Must serve `eth_getProof` at the **finalized** block (own node / archive-capable provider; public RPCs' ~32-block proof windows are shorter than finality). If the URL carries an API key, prefer a root-only drop-in (`systemctl edit rgoe-helios` / `rgoe-gateway`) over the world-readable unit. |
+| `RGOE_GROUP_CONTRACT` | *(unset)* | **required with `RGOE_HELIOS=1`**: `StakedReputationSet` address the gateway reads roots from (`0x` + 40 hex). Written as `Environment=` into `rgoe-gateway.service`. |
+| `RGOE_HELIOS_NETWORK` | `sepolia` | `mainnet` \| `sepolia` \| `holesky` — helios `--network`. |
+| `RGOE_HELIOS_PORT` | `8546` | sidecar loopback RPC port (1024..65535); `8545` is left free for a local node. `RGOE_HELIOS_RPC_URL` on the gateway follows it. |
+| `RGOE_HELIOS_CHECKPOINT` | *(unset)* | weak-subjectivity checkpoint: a recent **finalized** beacon block root (`0x` + 64 hex, e.g. `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second source). Unset = helios `--load-external-fallback` (fetches one from public checkpoint services). Pinning is the more trust-minimized bootstrap. |
+| `RGOE_HELIOS_VERSION` / `RGOE_HELIOS_SHA256` | `0.11.1` / *(pinned table)* | release to install; a version without a pinned sha256 in `bootstrap.sh` must pass `RGOE_HELIOS_SHA256=<sha256 of helios_linux_<arch>.tar.gz>` — there is no unpinned download. Unsupported arch (only amd64/arm64 are pinned) ⇒ the script stops and tells you to install `helios` at `/usr/local/bin/helios` by hand and re-run. |
 | `RGOE_RENDER_ONLY` | *(unset)* | `<dir>`: **render mode** — write the torrc include + units under `<dir>/etc/…` with placeholder onions and exit; no root, no apt, no tor/node install, no clone, no `systemctl`. `bootstrap.sh --render <dir>` is the same. This is what `bootstrap.selftest.mjs` drives. |
 
 `RGOE_GW_OPERATOR_KEY` (staked bootnodes) is a secret and deliberately **not** a tunable: add it
@@ -72,7 +81,9 @@ Same idempotence rules: re-running reuses the gateway identity and units.
 ```bash
 bash bootnode/deploy/bootstrap.sh --render /tmp/r && find /tmp/r -type f
 RGOE_ENABLE_POW=1 RGOE_BOOTNODE_ONION=<onion> bash bootnode/deploy/bootstrap.sh --render /tmp/r2
-node bootnode/deploy/bootstrap.selftest.mjs   # golden default + PoW on/off + gateway-only assertions
+RGOE_HELIOS=1 RGOE_HELIOS_CONSENSUS_RPC=https://… RGOE_RPC_URL=https://… RGOE_GROUP_CONTRACT=0x… \
+  bash bootnode/deploy/bootstrap.sh --render /tmp/r3     # + rgoe-helios.service, gateway unit pointed at it
+node bootnode/deploy/bootstrap.selftest.mjs   # golden default + PoW on/off + gateway-only + helios assertions
 ```
 
 The default render is frozen in `bootnode/deploy/golden/default/`; a deliberate change to what
@@ -81,7 +92,8 @@ and reviewed as a diff.
 
 ## Systemd hardening
 
-All three units run under a sandboxed `[Service]` section: `NoNewPrivileges`,
+All units (the optional `rgoe-helios` too, which additionally sets `MemoryDenyWriteExecute=true`
+since helios is a Rust binary with no JIT) run under a sandboxed `[Service]` section: `NoNewPrivileges`,
 `ProtectSystem=strict` (with `ReadWritePaths=/opt/rgoe/deploy-state` so the minted signer key,
 persistence store, and onion identities stay writable), `ProtectHome`, `PrivateTmp`,
 `ProtectKernel{Tunables,Modules}`, `ProtectControlGroups`,
@@ -120,7 +132,7 @@ See [docs/BOOTNODE.md](../../docs/BOOTNODE.md) and [docs/CONFIG.md](../../docs/C
 | file | purpose |
 |---|---|
 | `bootstrap.sh` | the one-command bring-up (idempotent); `--render <dir>` = write configs only |
-| `bootstrap.selftest.mjs` | offline render assertions: golden default, `RGOE_ENABLE_POW` on/off, gateway-only mode, input validation |
+| `bootstrap.selftest.mjs` | offline render assertions: golden default, `RGOE_ENABLE_POW` on/off, gateway-only mode, `RGOE_HELIOS` sidecar render, input validation |
 | `golden/default/` | the frozen default render (torrc include + 3 units) |
 | `e2e-container.sh` | systemd-in-container e2e (`E2E_MODE=gateway-only` for the remote-bootnode mode) |
 

@@ -428,7 +428,10 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
 | `RGOE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `RGOE_SLOTS`. See "Reputation tiers" below. |
 | `RGOE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
-| `RGOE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. |
+| `RGOE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `RGOE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |
+| `RGOE_ROOT_PROVIDER` | `--root-provider` | `node` (trusted node, event reconstruction; default) or `light` (EIP-1186 storage proof of the on-chain `currentRoot`). |
+| `RGOE_HELIOS_RPC_URL` | (none) | `light` only: local Helios verifying RPC (`http://127.0.0.1:8546` from `bootstrap.sh RGOE_HELIOS=1`). Set ⇒ the proof's block `stateRoot` is sync-committee verified and the RPC cannot lie about the root (only withhold); startup logs `stateRootSource: helios (sync-committee verified)`. Unset ⇒ `stateRootSource: rpc header (TRUSTED, …)`. See "Anchor the admission root to the sync committee" below and `docs/LIGHT-CLIENT.md`. |
+| `RGOE_HELIOS_CHAIN_ID` | (none) | Decimal chain id Helios must report; unset = must equal the RPC's `eth_chainId`. Mismatch ⇒ refuses to start reading roots. |
 | `RGOE_TOR_HOST` / `RGOE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
 | `RGOE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
 | `RGOE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
@@ -443,6 +446,32 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
 | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
 | `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+
+### Anchor the admission root to the sync committee (optional, T-DEV-9b)
+
+By default an on-chain gateway (`RGOE_GROUP_CONTRACT` set) trusts its RPC for the admission
+root — fine when `RGOE_RPC_URL` is your own node. If it is a third-party RPC, run the Helios
+light-client sidecar so the root is verified against Ethereum consensus instead:
+
+```bash
+RGOE_HELIOS=1 \
+RGOE_HELIOS_CONSENSUS_RPC=https://lodestar-sepolia.chainsafe.io \   # a beacon API with the light-client endpoints
+RGOE_RPC_URL=<execution RPC that serves eth_getProof at finalized> \
+RGOE_GROUP_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC \
+  sudo bash bootnode/deploy/bootstrap.sh          # composes with RGOE_BOOTNODE_ONION (gateway-only)
+journalctl -u rgoe-helios -f                       # 'consensus client in sync with checkpoint', then 'finalized block number=…'
+journalctl -u rgoe-gateway | grep stateRootSource  # expect: helios (sync-committee verified)
+```
+
+That installs the sha256-pinned `helios 0.11.1` release binary, a hardened `rgoe-helios`
+unit (loopback `:8546`), and sets `RGOE_ROOT_PROVIDER=light` + `RGOE_HELIOS_RPC_URL` on the
+gateway unit, ordered after the sidecar. Optional: `RGOE_HELIOS_CHECKPOINT=0x<recent finalized
+beacon block root>` to pin the weak-subjectivity checkpoint yourself (else Helios fetches one
+from public checkpoint services), `RGOE_HELIOS_NETWORK` (`sepolia` default), `RGOE_HELIOS_PORT`.
+Trust after this: the sync committee + that checkpoint; the RPC can withhold but not lie
+(`docs/THREAT-MODEL.md`). If Helios is down or on the wrong chain the gateway refuses to
+start reading roots (fail closed) and restarts until it is up. Full how-to, flags and the live
+Sepolia receipt: `docs/LIGHT-CLIENT.md`; tunables: `bootnode/deploy/README.md`.
 
 ### Reputation tiers (T-FEAT-8)
 

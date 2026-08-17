@@ -37,6 +37,27 @@
 #                            client command at the end (the heartbeat does not need it).
 #   RGOE_GATEWAY_REGION  na|sa|eu|af|as|oc|aq|unknown  (default: unset = not advertised)
 #                    coarse region bucket the heartbeat advertises in signed caps (docs/CONFIG.md).
+#   RGOE_HELIOS      1 | 0              (default: 0) OPT-IN Helios light-client sidecar (T-DEV-9b,
+#                    docs/LIGHT-CLIENT.md). =1 installs the pinned a16z/helios release binary
+#                    (sha256-verified, RGOE_HELIOS_VERSION below), renders + starts a hardened
+#                    rgoe-helios.service (local verifying JSON-RPC on 127.0.0.1:RGOE_HELIOS_PORT),
+#                    and points the gateway at it: the gateway unit gets RGOE_ROOT_PROVIDER=light,
+#                    RGOE_HELIOS_RPC_URL, RGOE_RPC_URL, RGOE_GROUP_CONTRACT and is ordered after
+#                    the sidecar. The admission root is then anchored to the beacon sync committee
+#                    (no RPC trust). Default OFF: the default render is byte-identical to before.
+#                    Companions, read only when RGOE_HELIOS=1:
+#     RGOE_HELIOS_CONSENSUS_RPC  beacon API URL that serves the light-client endpoints  (REQUIRED)
+#     RGOE_RPC_URL               execution JSON-RPC; MUST serve eth_getProof at the finalized
+#                                block (own node / archive-capable provider)               (REQUIRED)
+#     RGOE_GROUP_CONTRACT        StakedReputationSet address the gateway reads roots from (REQUIRED)
+#     RGOE_HELIOS_NETWORK        mainnet | sepolia | holesky   (default: sepolia)
+#     RGOE_HELIOS_PORT           sidecar loopback RPC port     (default: 8546; 8545 is left for a local node)
+#     RGOE_HELIOS_CHECKPOINT     weak-subjectivity checkpoint = a recent FINALIZED beacon block
+#                                root, 0x + 64 hex (default: unset -> helios --load-external-fallback,
+#                                i.e. it fetches one from public checkpoint services; pinning your
+#                                own is the more trust-minimized choice, docs/LIGHT-CLIENT.md)
+#     RGOE_HELIOS_VERSION        release tag to install         (default: 0.11.1, sha256-pinned below;
+#                                another version needs RGOE_HELIOS_SHA256=<sha256 of the tarball>)
 #   RGOE_RENDER_ONLY <dir>   (default: unset) RENDER mode for tests/review: write the torrc
 #                    include + systemd units under <dir>/etc/... and exit WITHOUT touching the
 #                    host (no root, no apt, no tor/node install, no clone, no systemctl). Onions
@@ -58,6 +79,26 @@ RGOE_BOOTNODE_SIGNER="${RGOE_BOOTNODE_SIGNER:-}"
 RGOE_GATEWAY_REGION="${RGOE_GATEWAY_REGION:-}"
 RGOE_RENDER_ONLY="${RGOE_RENDER_ONLY:-}"
 RUN_USER="${RGOE_USER:-rgoe}"
+RGOE_HELIOS="${RGOE_HELIOS:-0}"
+RGOE_HELIOS_CONSENSUS_RPC="${RGOE_HELIOS_CONSENSUS_RPC:-}"
+RGOE_RPC_URL="${RGOE_RPC_URL:-}"
+RGOE_GROUP_CONTRACT="${RGOE_GROUP_CONTRACT:-}"
+RGOE_HELIOS_NETWORK="${RGOE_HELIOS_NETWORK:-sepolia}"
+RGOE_HELIOS_PORT="${RGOE_HELIOS_PORT:-8546}"
+RGOE_HELIOS_CHECKPOINT="${RGOE_HELIOS_CHECKPOINT:-}"
+RGOE_HELIOS_VERSION="${RGOE_HELIOS_VERSION:-0.11.1}"
+RGOE_HELIOS_SHA256="${RGOE_HELIOS_SHA256:-}"
+HELIOS_BIN=/usr/local/bin/helios
+# Pinned sha256 of the a16z/helios 0.11.1 release tarballs (github.com/a16z/helios/releases/tag/0.11.1),
+# computed 2026-08-17 from the downloaded assets. Another RGOE_HELIOS_VERSION must bring its own
+# RGOE_HELIOS_SHA256 (no unpinned download, ever).
+helios_pinned_sha256() {  # $1 = version, $2 = amd64|arm64 -> echoes sha256 or nothing
+  case "$1:$2" in
+    0.11.1:amd64) echo 339bf4ce73073c53790e41e3217b6d91f0e5d8571132b9e88689997613162ddb ;;
+    0.11.1:arm64) echo 20132e1f772af246eac3885bcba3b54c21a98ac24027a5853eca2fb0edc5dab6 ;;
+    *) ;;
+  esac
+}
 
 log() { echo -e "\n\033[1;36m== $*\033[0m"; }
 die() { echo "bootstrap.sh: $*" >&2; exit 1; }
@@ -81,6 +122,28 @@ fi
 if [ -n "$RGOE_GATEWAY_REGION" ]; then
   case "$RGOE_GATEWAY_REGION" in na|sa|eu|af|as|oc|aq|unknown) ;;
     *) die "RGOE_GATEWAY_REGION must be one of na sa eu af as oc aq unknown (got '$RGOE_GATEWAY_REGION')" ;; esac
+fi
+case "$RGOE_HELIOS" in
+  1|true|yes|on)   RGOE_HELIOS=1 ;;
+  0|false|no|off)  RGOE_HELIOS=0 ;;
+  *) die "RGOE_HELIOS must be 1 or 0 (got '$RGOE_HELIOS')" ;;
+esac
+if [ "$RGOE_HELIOS" = "1" ]; then
+  # URLs: http(s) (ws(s) too for the execution RPC), no whitespace/quotes/semicolons (they land in unit files).
+  [[ "$RGOE_HELIOS_CONSENSUS_RPC" =~ ^https?://[A-Za-z0-9._~:/?#@!$\&*+,=%-]+$ ]] \
+    || die "RGOE_HELIOS=1 needs RGOE_HELIOS_CONSENSUS_RPC=<http(s) beacon API URL serving the light-client endpoints>"
+  [[ "$RGOE_RPC_URL" =~ ^(https?|wss?)://[A-Za-z0-9._~:/?#@!$\&*+,=%-]+$ ]] \
+    || die "RGOE_HELIOS=1 needs RGOE_RPC_URL=<execution JSON-RPC URL that serves eth_getProof at finalized>"
+  [[ "$RGOE_GROUP_CONTRACT" =~ ^0x[0-9a-fA-F]{40}$ ]] \
+    || die "RGOE_HELIOS=1 needs RGOE_GROUP_CONTRACT=<0x StakedReputationSet address> (the gateway reads its roots from it)"
+  case "$RGOE_HELIOS_NETWORK" in mainnet|sepolia|holesky) ;;
+    *) die "RGOE_HELIOS_NETWORK must be mainnet, sepolia or holesky (got '$RGOE_HELIOS_NETWORK')" ;; esac
+  { [[ "$RGOE_HELIOS_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$RGOE_HELIOS_PORT" -ge 1024 ] && [ "$RGOE_HELIOS_PORT" -le 65535 ]; } \
+    || die "RGOE_HELIOS_PORT must be a port in 1024..65535 (got '$RGOE_HELIOS_PORT')"
+  { [ -z "$RGOE_HELIOS_CHECKPOINT" ] || [[ "$RGOE_HELIOS_CHECKPOINT" =~ ^0x[0-9a-fA-F]{64}$ ]]; } \
+    || die "RGOE_HELIOS_CHECKPOINT must be a 0x-prefixed 32-byte beacon block root (got '$RGOE_HELIOS_CHECKPOINT')"
+  [[ "$RGOE_HELIOS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "RGOE_HELIOS_VERSION must look like 0.11.1 (got '$RGOE_HELIOS_VERSION')"
+  { [ -z "$RGOE_HELIOS_SHA256" ] || [[ "$RGOE_HELIOS_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; } || die "RGOE_HELIOS_SHA256 must be 64 hex chars"
 fi
 
 # --- renderers: the ONLY places torrc / unit text is produced (live + render mode share them) ---
@@ -167,19 +230,71 @@ EOF
   } > "$1"
 }
 
+# With RGOE_HELIOS=1 the gateway is ordered after the sidecar and told to read on-chain roots
+# through the light provider anchored to it (RGOE_ROOT_PROVIDER=light + RGOE_HELIOS_RPC_URL);
+# lib/root-provider.mjs fails closed if the sidecar is down/mismatched, so the gateway simply
+# restarts until Helios is synced. Default (RGOE_HELIOS=0): byte-identical to before.
 render_gateway_unit() {  # $1 = output file
+  {
+    echo "[Unit]"
+    echo "Description=rgoe reputation-gated egress gateway"
+    if [ "$RGOE_HELIOS" = "1" ]; then
+      echo "After=network-online.target tor.service rgoe-helios.service"
+      echo "Wants=network-online.target rgoe-helios.service"
+    else
+      echo "After=network-online.target tor.service"
+      echo "Wants=network-online.target"
+    fi
+    cat <<EOF
+[Service]
+User=${RUN_USER}
+WorkingDirectory=${RGOE_DIR}
+EOF
+    if [ "$RGOE_HELIOS" = "1" ]; then
+      echo "Environment=RGOE_GROUP_CONTRACT=${RGOE_GROUP_CONTRACT}"
+      echo "Environment=RGOE_RPC_URL=${RGOE_RPC_URL}"
+      echo "Environment=RGOE_ROOT_PROVIDER=light"
+      echo "Environment=RGOE_HELIOS_RPC_URL=http://127.0.0.1:${RGOE_HELIOS_PORT}"
+    fi
+    cat <<EOF
+ExecStart=${NODE_BIN} ${RGOE_DIR}/gateway/gateway.mjs
+Restart=always
+RestartSec=3
+EOF
+    render_sandbox
+  } > "$1"
+}
+
+# The Helios sidecar (T-DEV-9b, docs/LIGHT-CLIENT.md option A): a local JSON-RPC that only
+# answers with sync-committee-verified headers/state. Endpoints go in via helios' own env vars
+# (EXECUTION_RPC / CONSENSUS_RPC / CHECKPOINT) rather than argv so an API key in a URL is not
+# in `ps`. Binds loopback only. Same sandbox as the other units; helios is a Rust binary (no
+# JIT), so W^X (MemoryDenyWriteExecute) is ON here even though the Node units must leave it off.
+# The checkpoint cache lives under deploy-state (already the one writable path).
+render_helios_unit() {  # $1 = output file
   {
     cat <<EOF
 [Unit]
-Description=rgoe reputation-gated egress gateway
-After=network-online.target tor.service
+Description=rgoe helios light client (sync-committee verified stateRoot anchor, ${RGOE_HELIOS_NETWORK})
+After=network-online.target
 Wants=network-online.target
 [Service]
 User=${RUN_USER}
 WorkingDirectory=${RGOE_DIR}
-ExecStart=${NODE_BIN} ${RGOE_DIR}/gateway/gateway.mjs
+Environment=RUST_LOG=info
+Environment=EXECUTION_RPC=${RGOE_RPC_URL}
+Environment=CONSENSUS_RPC=${RGOE_HELIOS_CONSENSUS_RPC}
+EOF
+    if [ -n "$RGOE_HELIOS_CHECKPOINT" ]; then
+      echo "Environment=CHECKPOINT=${RGOE_HELIOS_CHECKPOINT}"
+      echo "ExecStart=${HELIOS_BIN} ethereum --network ${RGOE_HELIOS_NETWORK} --rpc-bind-ip 127.0.0.1 --rpc-port ${RGOE_HELIOS_PORT} --data-dir ${RGOE_DIR}/deploy-state/helios"
+    else
+      echo "ExecStart=${HELIOS_BIN} ethereum --network ${RGOE_HELIOS_NETWORK} --rpc-bind-ip 127.0.0.1 --rpc-port ${RGOE_HELIOS_PORT} --data-dir ${RGOE_DIR}/deploy-state/helios --load-external-fallback"
+    fi
+    cat <<EOF
 Restart=always
-RestartSec=3
+RestartSec=5
+MemoryDenyWriteExecute=true
 EOF
     render_sandbox
   } > "$1"
@@ -233,7 +348,8 @@ if [ -n "$RGOE_RENDER_ONLY" ]; then
   [ "$WITH_BOOTNODE" = "1" ] && render_bootnode_unit "$out/etc/systemd/system/rgoe-bootnode.service"
   render_gateway_unit   "$out/etc/systemd/system/rgoe-gateway.service"
   render_heartbeat_unit "$out/etc/systemd/system/rgoe-heartbeat.service"
-  echo "rendered to $out (mode: $([ "$WITH_BOOTNODE" = "1" ] && echo bootnode+gateway || echo gateway-only), pow=${RGOE_ENABLE_POW})"
+  [ "$RGOE_HELIOS" = "1" ] && render_helios_unit "$out/etc/systemd/system/rgoe-helios.service"
+  echo "rendered to $out (mode: $([ "$WITH_BOOTNODE" = "1" ] && echo bootnode+gateway || echo gateway-only), pow=${RGOE_ENABLE_POW}, helios=${RGOE_HELIOS})"
   exit 0
 fi
 
@@ -319,6 +435,42 @@ grep -q "torrc.d-rgoe" /etc/tor/torrc || echo "%include /etc/tor/torrc.d-rgoe" >
 systemctl enable tor >/dev/null 2>&1 || true
 systemctl restart tor
 
+if [ "$RGOE_HELIOS" = "1" ]; then
+  log "helios ${RGOE_HELIOS_VERSION} light-client sidecar (sha256-pinned release binary)"
+  # Release layout (checked 2026-08-17): helios_linux_{amd64,arm64,armv7,riscv64gc}.tar.gz, each
+  # a tarball containing the single `helios` binary at its root. Anything else -> manual install
+  # (docs/LIGHT-CLIENT.md "Sidecar"): put a `helios` on ${HELIOS_BIN} and re-run.
+  case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+    amd64|x86_64) HELIOS_ARCH=amd64 ;;
+    arm64|aarch64) HELIOS_ARCH=arm64 ;;
+    *) die "no pinned helios build for this arch; install helios ${RGOE_HELIOS_VERSION} manually at ${HELIOS_BIN} (docs/LIGHT-CLIENT.md)" ;;
+  esac
+  WANT_SHA="${RGOE_HELIOS_SHA256:-$(helios_pinned_sha256 "$RGOE_HELIOS_VERSION" "$HELIOS_ARCH")}"
+  [ -n "$WANT_SHA" ] || die "no pinned sha256 for helios ${RGOE_HELIOS_VERSION}/${HELIOS_ARCH}; pass RGOE_HELIOS_SHA256=<sha256 of helios_linux_${HELIOS_ARCH}.tar.gz>"
+  if [ -x "$HELIOS_BIN" ] && "$HELIOS_BIN" --version 2>/dev/null | grep -q " ${RGOE_HELIOS_VERSION}\$"; then
+    echo "helios ${RGOE_HELIOS_VERSION} already installed at ${HELIOS_BIN}"
+  else
+    tmpd="$(mktemp -d)"
+    curl -fsSL -o "$tmpd/helios.tar.gz" \
+      "https://github.com/a16z/helios/releases/download/${RGOE_HELIOS_VERSION}/helios_linux_${HELIOS_ARCH}.tar.gz"
+    echo "${WANT_SHA}  $tmpd/helios.tar.gz" | sha256sum -c - >/dev/null \
+      || die "helios tarball sha256 mismatch (want ${WANT_SHA}); refusing to install"
+    tar -xzf "$tmpd/helios.tar.gz" -C "$tmpd" helios
+    install -o root -g root -m 0755 "$tmpd/helios" "$HELIOS_BIN"
+    rm -rf "$tmpd"
+  fi
+  "$HELIOS_BIN" --version
+  install -d -o "$RUN_USER" -g "$RUN_USER" -m 0700 "$RGOE_DIR/deploy-state/helios"
+  render_helios_unit /etc/systemd/system/rgoe-helios.service
+  systemctl daemon-reload
+  systemctl enable --now rgoe-helios >/dev/null 2>&1 || systemctl restart rgoe-helios
+elif [ -f /etc/systemd/system/rgoe-helios.service ]; then
+  # A previous run had the sidecar on; RGOE_HELIOS=0 (default) means it must go, and the gateway
+  # unit rendered below no longer points at it.
+  systemctl disable --now rgoe-helios >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/rgoe-helios.service
+fi
+
 log "systemd units"
 UNITS="rgoe-gateway"
 if [ "$WITH_BOOTNODE" = "1" ]; then
@@ -355,6 +507,7 @@ rgoe fleet is up.
   gateway onion  : ${GW_ONION}
   admission      : ${RGOE_ADMISSION}
   onion PoW      : ${RGOE_ENABLE_POW}   (RGOE_ENABLE_POW; 0 = off)
+  helios sidecar : ${RGOE_HELIOS}   (RGOE_HELIOS; 1 = admission root anchored to the sync committee, journalctl -u rgoe-helios)
 
 Clients connect with (pin the signer!):
   rgoe client --secret <member-hex> \\
@@ -362,7 +515,7 @@ Clients connect with (pin the signer!):
     --dir-signer ${SIGNER}
 
 Check it:
-  systemctl status rgoe-bootnode rgoe-gateway rgoe-heartbeat
+  systemctl status rgoe-bootnode rgoe-gateway rgoe-heartbeat$([ "$RGOE_HELIOS" = "1" ] && echo " rgoe-helios")
   curl --socks5-hostname 127.0.0.1:9050 http://${BN_ONION}/health   # after ~30s of descriptor propagation
 ========================================================================
 EOF
