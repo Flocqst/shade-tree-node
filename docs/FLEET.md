@@ -1,11 +1,16 @@
 # Fleet: egress discovery and per-request gateway selection
 
-**Status: design, plus code scaffolding.** The directory library, its signature and
+**Status: design; most of it is now built.** The directory library, its signature and
 onion-control binding, per-request selection, and the shim wiring are written and
 tested (`lib/directory.mjs`, `client/selection.mjs`, `group/directory.example.json`,
-the `RGOE_DIRECTORY` path in `client/shim.mjs`). What is *not* built is the shared
-budget accounting across gateways and the on-chain-sourced directory. Those are the
-protocol changes, and they are the honest part of this doc. This expands
+the `RGOE_DIRECTORY` path in `client/shim.mjs`); live discovery through a bootnode is
+`bootnode/` (`docs/BOOTNODE.md`); the shared per-epoch spent-nullifier tally across
+gateways is `gateway/fleet-tally.mjs` (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, opt-in,
+fail-open — it shares only `(nullifier, epoch)`, so a replay to a second gateway is
+rejected but cross-gateway *share* exchange for reconstruction is not wired). What is
+*not* built is the on-chain-sourced directory (the onion is deliberately never on chain,
+ADR 0002; `GatewayRegistry` stakes an operator address only). The "fleet budget does not
+compose" section below is the original analysis that motivated the tally. This expands
 [ROADMAP v1](ROADMAP-v1.md) item 3 into a spec; read that first for the framing.
 
 The PoC has one gateway and the client pins it (`RGOE_ONION` or `tor/hs/hostname`).
@@ -91,15 +96,18 @@ able to graft a hostile address:
   signature; verification is belt-and-suspenders over the git channel). **This is a
   placeholder, not the answer** — real discovery is an open question (see below); we
   ship this to unblock the fleet and revisit.
-- **Next.** Serve the same signed JSON over its own onion so clients refresh live
+- **Next (built).** Serve the same signed JSON over its own onion so clients refresh live
   without a new commit. The signer key stays pinned; only the *list* moves. The loader
   already fetches-verify-cache with a refresh interval and a last-known-good fallback,
-  so this stage is a fetch source, not new trust.
-- **Endgame (open).** Source the fleet from the **same on-chain group as the reputation
-  set**
-  (see [ONCHAIN.md](ONCHAIN.md)), so the fleet and the membership share one canonical,
-  tamper-evident root and there is no separate signer to trust or rotate. This is a
-  TODO in `lib/directory.mjs` behind the same entry shape. See
+  so this stage is a fetch source, not new trust. This is the bootnode (`bootnode/`,
+  [BOOTNODE.md](BOOTNODE.md)), with federation and an M-of-N threshold-signed directory.
+- **Endgame (revised).** The original endgame — source the fleet from the **same on-chain
+  group as the reputation set** (see [ONCHAIN.md](ONCHAIN.md)) so there is no separate
+  signer — was narrowed by ADR 0002 (`docs/adr/0002-onion-never-on-chain.md`): the
+  **stake** is on chain (`GatewayRegistry`, keyed by operator address) but the onion never
+  is; the onion↔stake binding is the operator's signature on the announce, re-checkable
+  by clients (`RGOE_VERIFY_STAKE`). Rebuilding the gateway *set* purely from chain is not
+  a client path (see the status map in [ROADMAP.md](ROADMAP.md)). See
   [the reconciliation with ONCHAIN.md](#reconciliation-with-onchainmd) below.
 
 ## Per-request selection in the shim (shim-as-router)
@@ -159,7 +167,9 @@ root-and-epoch scoped, not gateway-scoped.
 
 ## The hard cost: fleet budget does not compose
 
-This is the part that is genuinely unbuilt, and the reason the doc exists.
+This was the genuinely unbuilt part when the doc was written, and the reason it exists.
+Since then the shared nullifier tally (T-FEAT-20/20b, `gateway/fleet-tally.mjs`) covers the
+replay-to-a-second-gateway case; the per-gateway `Map` below is still the local budget.
 
 Each gateway keeps its rate budget in a per-process in-memory `Map`
 (`budget` in `gateway/gateway.mjs`): `scope -> Map<nullifier, count>`, capped at

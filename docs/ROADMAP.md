@@ -28,8 +28,8 @@ backlog with acceptance criteria is [SHIP-PLAN.md](SHIP-PLAN.md).
 
 ## Implementation status against this roadmap (2026-08-14)
 
-What `feat/bootnode-and-productionize` (PR #5) already delivers, mapped onto the sections
-below, so the roadmap reads as *remaining* work rather than restating what exists:
+What `feat/bootnode-and-productionize` (PR #5, merged to `main` 2026-08-16) already delivers,
+mapped onto the sections below, so the roadmap reads as *remaining* work rather than restating what exists:
 
 | Section | Built | Where |
 |---|---|---|
@@ -67,9 +67,18 @@ The roadmap starts from the code that exists now, not from the June PoC.
 | Transport | TCP `CONNECT :443`; TLS remains end-to-end between client and destination |
 | Payments | separate design exists in [PAYMENTS.md](PAYMENTS.md), but payment is not part of the live request path |
 
-Several older docs still describe the pre-RLN, single-gateway state. Documentation
-reconciliation is itself a P0 item: a security property is not useful if the code and
-the stated threat model describe different protocols.
+Documentation reconciliation is itself a P0 item: a security property is not useful if the
+code and the stated threat model describe different protocols. **Status (2026-08-17,
+SHIP-PLAN T-DOC-8): done for the operator-facing set** — `OPERATOR.md`, `INCIDENT.md`,
+`TOR-HARDENING.md`, `DEPLOYMENT.md`, `network/sepolia/README.md`, the bootstrap URLs and
+the member-facing `JOIN.md` were reconciled against the code (superseded contract address,
+bootnode persistence, replay defense, backup tooling, signer rotation, IP/onion hygiene).
+Docs that describe the pre-RLN single-gateway PoC (`docs/JOIN.md`, `docs/STATUS.md`,
+`docs/REPORT.md`, `docs/DEPLOY.md`, `docs/DEPLOYMENT.md`) are kept as history and now say
+so at the top and point at the current path. `docs/THREAT-MODEL.md` and `docs/AUDIT.md`
+are the current statements of the trust model; the design docs (`ONCHAIN.md`,
+`LIGHT-CLIENT.md`, `FLEET.md`, `PAYMENTS.md`) carry a status line saying what of them is
+built.
 
 ---
 

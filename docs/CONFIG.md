@@ -17,9 +17,9 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `RGOE_BOOTNODE_HEARTBEAT` | `300` | Re-announce interval in seconds. | heartbeat | `--interval` |
 | `RGOE_GW_IDENTITY` | `tor/hs/identity.local.json` | Path to the onion identity `{onion, seed}` (from `keygen`) the heartbeat announces. | heartbeat | `--identity` |
 | `RGOE_GW_WEIGHT` | `100` | Selection weight advertised for this gateway. | heartbeat | `--weight` |
-| `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). | heartbeat | `--operator-key` |
-| `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key). | heartbeat | `--operator` |
-| `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. | heartbeat | `--operator-sig` |
+| `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). Must be 64 hex (0x optional); a malformed value fails the heartbeat at startup with a message that never echoes the key. | heartbeat | `--operator-key` |
+| `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key; the pair takes precedence over `RGOE_GW_OPERATOR_KEY`). Setting one without the other is a startup error, not a silent onion-only downgrade. | heartbeat | `--operator` |
+| `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. Verified locally at startup (same check the bootnode runs); a sig that does not recover `RGOE_GW_OPERATOR` for this onion fails fast. | heartbeat | `--operator-sig` |
 | `RGOE_BOOTNODE_MAX_ENTRIES` | `10000` | Registry size cap: a NEW onion is refused `registry-full` when full; resident onions still refresh. | bootnode server | (none) |
 | `RGOE_BOOTNODE_MIN_REANNOUNCE` | `5` | Per-onion re-announce throttle in seconds (`rate-limited`, before verify). | bootnode server | (none) |
 | `RGOE_BOOTNODE_ANNOUNCE_RATE` | `2 * maxEntries / RGOE_BOOTNODE_HEARTBEAT` (= `66.7`/s) | GLOBAL announce token-bucket refill (announces/second that may reach ed25519 verification, whoever sends them). Sized so a fleet at the registry cap heartbeating at the default cadence (`maxEntries/heartbeat` = 33.3/s) draws half the refill; see `docs/BOOTNODE.md` "Endpoint hardening". Overflow is `429 global-rate-limited` + `Retry-After`. `0` with burst `0` disables. | bootnode server | (none) |
@@ -37,7 +37,7 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `RGOE_GROUP_CONTRACT` | (unset; falls back to `contracts/deployed.local.json`, else `members.json`) | `StakedReputationSet` address. If set, the gateway reads roots on-chain via a RootProvider; if unset it uses the local `members.json` root (PoC fallback). | gateway root source, root-provider | `--group-contract` |
-| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (Helios light client; not yet wired). | root-provider factory | `--root-provider` |
+| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (EIP-1186 storage proof of `currentRoot` against the block header, `LightClientRootProvider`; the header's `stateRoot` is still taken from the RPC — beacon/Helios validation is T-DEV-9b). | root-provider factory | `--root-provider` |
 | `RGOE_SLASH_KEY` | (unset → dry-run) | Operational hot key that submits on-chain `slash()` txs. Without it (or without a slash contract) slashing logs a dry-run. | gateway slasher | `--slash-key` |
 | `RGOE_SLASH_CONTRACT` | (unset; falls back to `deployed.local.json`) | Slash contract address. Independent of the membership root source, so a gateway can slash on-chain while membership stays on `members.json`. | gateway slasher | `--slash-contract` |
 | `RGOE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |
@@ -78,7 +78,8 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | `RGOE_FRESHNESS_ROOTS` | `2` | Current root plus how many prior roots are still accepted (freshness window ring). | root-provider | (none) |
 | `RGOE_FROM_BLOCK` | `0x0` | Deploy / start block for `eth_getLogs` when reconstructing the member tree. | root-provider (node) | (none) |
 | `RGOE_CONFIRMATIONS` | `0` | Confirmation depth. `0` reads `latest` (stake) / `finalized` (roots); `>0` reads `head - N` for reorg safety. | gateway-registry, root-provider | (none) |
-| `RGOE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway) | Funding / operator private key used to submit the stake tx. | register-onchain, register-gateway | `--register-key` |
+| `RGOE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway) | Funding / operator private key used to submit the stake tx. `exit-gateway` / `withdraw-gateway` reuse it as the operator signer (falling back to `RGOE_GW_OPERATOR_KEY`; the anvil default applies only on a loopback RPC). Prefer `--key-file` / `--account` on a real chain. | register-onchain, register-gateway, exit-gateway, withdraw-gateway | `--register-key` |
+| `RGOE_KEYSTORE_PASSWORD` | (unset → interactive prompt on a TTY) | Password for the Foundry-style encrypted keystore selected with `--account <name>` (`~/.foundry/keystores/<name>`, dir overridable via `FOUNDRY_KEYSTORES`) or `--keystore <path>`. Env only, never argv. | exit-gateway, withdraw-gateway, gateway-status | (none) |
 | `RGOE_BOND` | on-chain `BOND()` (member also tries `deployed.bond`) | Bond amount in wei to stake. | register-onchain, register-gateway | `--bond` |
 
 ## Common

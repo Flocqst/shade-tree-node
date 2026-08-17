@@ -7,14 +7,19 @@
 //
 // The SAME members.json is copied over group/members.json by egress-run.sh so the JS
 // gateway's PoC root source (loadGroup) computes the identical depth-20 root the Rust
-// native tree does. This is the ONLY place the identity derivation lives (Semaphore-v3
-// identitySecret + rateCommitment leaf); the Rust side takes them as inputs and computes
-// the root + path natively.
+// native tree does. The identity derivation itself (Semaphore-v3 identitySecret +
+// rateCommitment leaf) lives in lib/identity-file.mjs, shared with the member-facing
+// `rgoe identity` command (group/identity.mjs), so the harness and the CLI can never drift.
+// The Rust side takes them as inputs and computes the root + path natively.
+//
+// This is a HARNESS helper (fixed dev secret, single-leaf members.json). Members exporting
+// their real identity for the Rust client should use `rgoe identity` instead.
 //
 // Usage: node egress-derive.mjs <outdir> [secret]
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { identityFor, identitySecretOf, rateCommitmentOf, cleanUp } from "../../../lib/rln.mjs";
+import { identityFileFor, serializeIdentityFile } from "../../../lib/identity-file.mjs";
+import { cleanUp } from "../../../lib/rln.mjs";
 
 const outdir = process.argv[2];
 if (!outdir) {
@@ -23,11 +28,9 @@ if (!outdir) {
 }
 const SECRET = process.argv[3] || "12345678901234567890";
 
-const identity = identityFor(SECRET);
-const identitySecret = identitySecretOf(identity).toString();
-const leaf = rateCommitmentOf(identity).toString();
+const { identitySecret, leaf } = identityFileFor(SECRET);
 
-writeFileSync(join(outdir, "identity.json"), JSON.stringify({ identitySecret, leaf }, null, 2) + "\n");
+writeFileSync(join(outdir, "identity.json"), serializeIdentityFile({ identitySecret, leaf }));
 writeFileSync(join(outdir, "members.json"), JSON.stringify({ version: 2, members: [leaf] }, null, 2) + "\n");
 
 console.error("[derive] secret          =", SECRET);

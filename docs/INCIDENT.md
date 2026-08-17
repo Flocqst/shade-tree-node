@@ -2,8 +2,8 @@
 
 Operational playbook for the seven failure modes that matter. Each entry: symptoms, immediate
 containment, root-cause investigation, recovery, prevention. Read `docs/AUDIT.md` first for the
-trust model these procedures rely on. Where a step is not yet tooled it says so and points at the
-`docs/SHIP-PLAN.md` task.
+trust model these procedures rely on. Where a step is still manual it says so and points at the
+`docs/SHIP-PLAN.md` task (the "Honest gaps" list at the end is the current one).
 
 The single fact that shapes every response: **the bootnode and its signer authenticate a list, they
 are not a trust root.** Clients re-derive each onion's ed25519 key from its own `.onion` address
@@ -35,16 +35,23 @@ published.
 env/tor/deps. Confirm gateways can reach `POST /announce` (a network partition looks like a dead
 bootnode from the client side only).
 
-**Recovery.** Restart `bootnode/server.mjs`. Note: the registry is in-memory, so a restart drops the
-whole fleet until every gateway re-announces on its next heartbeat (up to `RGOE_BOOTNODE_HEARTBEAT`,
-default 300s). Persistence across restarts is **not yet built** (SHIP-PLAN T-DEV-4); until it lands,
-expect a re-announce settling window after every bootnode restart. The signer key persists on disk
+**Recovery.** Restart `bootnode/server.mjs` (on a bootstrapped box: `systemctl restart
+rgoe-bootnode`). If the bootnode runs with `RGOE_BOOTNODE_STORE` set (the `bootstrap.sh` unit sets it
+to `deploy-state/bootnode-state.json`), the live set is mirrored to that JSON file on every accepted
+announce and reloaded on boot: `loadPersisted()` re-runs each stored record through the real announce
+path (onion control + operator/stake re-verified; tampered, forged, or past-TTL entries are dropped),
+so `/directory` is populated immediately and no re-announce settling window is needed (T-DEV-4;
+`bootnode/server.mjs`, `docs/BOOTNODE.md` "Surviving a restart"). Without the store the registry is
+in-memory only, and a restart drops the fleet until every gateway re-announces on its next heartbeat
+(up to `RGOE_BOOTNODE_HEARTBEAT`, default 300s). Either way the signer key persists on disk
 (`RGOE_BOOTNODE_SIGNER_KEY`), so the pinned signer is unchanged and clients accept the rebuilt
 directory with no re-pin.
 
-**Prevention.** Run redundant bootnodes (each its own onion + signer, clients pin one). Keep the LKG
-cache path writable so degradation actually works. Publish a static signed directory as a cold
-fallback. Automated bootnode failover is **not tooled**; failover today is a manual client re-point.
+**Prevention.** Set `RGOE_BOOTNODE_STORE` so a restart is not a fleet blank. Run redundant bootnodes,
+federated with `RGOE_BOOTNODE_PEERS` so each learns the others' gateways (T-FEAT-1,
+`bootnode/federation.mjs`); clients pin one bootnode onion at a time (`RGOE_BOOTNODE_ONION`), so
+re-pointing a client to a surviving peer is still a manual re-point. Keep the LKG cache path
+writable so degradation actually works. Publish a static signed directory as a cold fallback.
 
 ---
 
@@ -74,19 +81,22 @@ onions were dropped, added, reweighted. Every added onion is by definition one w
 holds OR a public honest gateway (the binding guarantees no third option). Audit the box holding
 `RGOE_BOOTNODE_SIGNER_KEY` for exfiltration.
 
-**Recovery.** Rotate the pinned signer. **This is manual: versioned signer rotation with an overlap
-window is NOT built (SHIP-PLAN T-HARD-5).** Today rotation means: mint a new signer, re-sign the
-directory (bootnode does this automatically on next boot with the new key file), and **redistribute
-the new `RGOE_DIR_SIGNER` to every client out of band.** There is no overlap window, so this is a
-flag day: clients on the old pin reject the new directory (`signer-not-pinned` / `bad-signature`) and
-fall back to their LKG cache until re-pinned. Plan the cutover accordingly.
+**Recovery.** Rotate the pinned signer. `RGOE_DIR_SIGNER` accepts a comma-separated **allowlist**
+of signer pubkeys (T-HARD-5, `client/selection.mjs` `parsePinnedSigners`; a single value behaves as
+before), so rotation has an overlap window: (1) push the NEW signer pubkey to every client's
+allowlist alongside the old one, out of band; (2) mint the new signer key on the bootnode and
+restart it (the bootnode re-signs the directory with whatever `RGOE_BOOTNODE_SIGNER_KEY` holds);
+(3) once every client carries both, drop the OLD pubkey from the allowlist. Clients that only carry
+the old pin reject the new directory (`signer-not-pinned` / `bad-signature`) and fall back to their
+LKG cache until re-pinned, so step (1) must precede step (2). Redistribution of the new pubkey is
+still an out-of-band step (there is no in-band signer-rotation message).
 
 **Revoke.** Once clients are re-pinned to the new signer, the old signer's directories are inert (no
 client trusts them). No on-chain revocation exists or is needed; the pin IS the trust anchor.
 
-**Prevention.** Keep the signer key off the network-facing surface, minimal blast radius. Ship
-T-HARD-5 so rotation stops being a flag day. Keep static-directory fallback ready so containment does
-not depend on the compromised bootnode.
+**Prevention.** Keep the signer key off the network-facing surface, minimal blast radius. Pre-stage
+a second signer in clients' allowlists so a rotation is a re-key, not a redistribution. Keep
+static-directory fallback ready so containment does not depend on the compromised bootnode.
 
 ---
 
@@ -100,10 +110,15 @@ tampering, downtime).
 - See the `host:port` targets (`:443` only, metadata) of requests routed to it. It never sees
   plaintext (TLS is end-to-end client-to-target).
 - Drop, delay, or selectively censor requests routed to it.
-- Replay an exact envelope to the SAME target and amplify the member's apparent traffic on one
-  proof. Cross-gateway replay defense is **NOT built (SHIP-PLAN T-FEAT-12)**: there is no shared
-  spent-set across non-colluding gateways and no per-epoch seen-nonce cache yet, so this replay
-  succeeds today.
+- Replay an exact envelope. Against the SAME gateway this fails: `makeSpentSet` fingerprints
+  `(nullifier, share.x, nonce)`, and an identical envelope seen again after `RGOE_REPLAY_WINDOW_MS`
+  (5s, the honest-retry window) is rejected `replayed-envelope` (T-FEAT-12,
+  `gateway/gateway.mjs`). Against OTHER gateways it fails only when the fleet runs the shared
+  per-epoch nullifier tally (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, `gateway/fleet-tally.mjs`;
+  off by default, fail-open); a fleet without the tally lets a captured envelope be fanned to
+  peers, each of which sees it once and egresses it. Amplification is therefore bounded to
+  one egress per non-tallying gateway per captured envelope, and it never slashes (identical `x`
+  is deduped).
 
 **What a malicious gateway CANNOT do.**
 - Forge membership. A valid RLN Groth16 proof against a recent admission root is required; it cannot
@@ -125,7 +140,8 @@ Clients also route around a bad gateway locally: `reportHealth` marks it `down` 
 
 **Root-cause investigation.** Pull the offending gateway's logs (`DROP` / `PASS` / `ERROR` lines,
 `egress->` targets). Confirm the misbehavior class: redirect (should be impossible, `target-not-bound`
-would have fired), replay/amplification (T-FEAT-12, expected until built), or censorship/downtime.
+would have fired), replay/amplification (`replayed-envelope` drops on the victim gateways, or a
+same-envelope `PASS` on several gateways when the fleet tally is off), or censorship/downtime.
 Identify the operator address from its announce (`GET /gateway/<onion>` returns the stored signed
 announce with `operator` + `operatorSig`).
 
@@ -137,8 +153,9 @@ proof and therefore permissionless.
 
 **Prevention.** Per-request rotation across N non-colluding gateways spreads target metadata to
 ~1/N; RLN's fresh per-request nullifiers stop even colluding gateways from rejoining a member's
-requests. Require `admission=stake` so misbehavior has a bond behind it. Ship T-FEAT-12 to close the
-replay/amplification gap.
+requests. Require `admission=stake` so misbehavior has a bond behind it. Enable the shared fleet
+tally (`RGOE_FLEET_TALLY_PEERS`, `docs/OPERATOR.md` section 5) so a captured envelope cannot be
+fanned across the fleet.
 
 ---
 
@@ -283,9 +300,10 @@ treating it as an incident.
 3. If the member insists it did not over-spend: check for a client bug re-using a nullifier across
    requests, or a `RGOE_SLOTS` mismatch causing the client to think it had more slots than the
    gateway enforces.
-4. Rule out cross-gateway amplification: T-FEAT-12 (unbuilt) means an EXACT-envelope replay to the
-   same target does not itself slash (identical `x` is deduped), but confirm no path produced two
-   distinct signals illegitimately.
+4. Rule out cross-gateway amplification: an EXACT-envelope replay never slashes (identical `x` is
+   deduped, and a late replay is rejected `replayed-envelope`, T-FEAT-12; with the fleet tally on,
+   the same nullifier+epoch seen at a peer is rejected too, T-FEAT-20), but confirm no path produced
+   two distinct signals illegitimately.
 
 **Recovery.** A legitimate slash is final and correct; no recovery, the rate cap worked. If
 investigation shows an illegitimate slash (a bug reconstructing on identical or mishandled shares),
@@ -298,17 +316,24 @@ member's own rate accounting matches what the gateway enforces. Run the slasher 
 
 ---
 
-## Not yet tooled (honest gaps)
+## Honest gaps (what is still manual)
 
-- **Directory signer rotation** (#2): manual re-pin + out-of-band redistribution, flag day, no
-  overlap window. SHIP-PLAN T-HARD-5.
-- **Automated bootnode failover** (#1): clients auto-degrade to the LKG cache, but restoring or
-  re-pointing to a healthy bootnode is manual.
-- **Bootnode persistence across restart** (#1): a restart drops the in-memory fleet until every
-  gateway re-announces. SHIP-PLAN T-DEV-4.
-- **Cross-gateway replay / amplification defense** (#3, #7): no shared spent-set or per-epoch nonce
-  cache across non-colluding gateways yet. SHIP-PLAN T-FEAT-12.
-- **Client zero-trust operator re-verification** (#3): in stake mode the client trusts the bootnode's
-  `staked` label unless it manually fetches `GET /gateway/<onion>` and re-verifies. SHIP-PLAN T-DEV-5.
+- **Directory signer redistribution** (#2): the overlap window exists (allowlist, T-HARD-5), but
+  getting the new pubkey into every client's allowlist is out of band; there is no in-band
+  rotation message.
+- **Automated bootnode failover** (#1): clients auto-degrade to the LKG cache and bootnodes can
+  federate (T-FEAT-1), but a client pins one bootnode onion; re-pointing it to a healthy peer is
+  manual.
+- **Fleet-wide replay defense is opt-in** (#3, #7): per-gateway replay rejection is always on
+  (T-FEAT-12); the cross-gateway tally (T-FEAT-20/20b) must be enabled with
+  `RGOE_FLEET_TALLY_PEERS` and is fail-open by design.
+- **Client zero-trust operator re-verification is opt-in** (#3): `RGOE_VERIFY_STAKE=1` makes the
+  client re-fetch `GET /gateway/<onion>` and re-check sigs + live stake itself (T-DEV-5,
+  `client/selection.mjs`); off by default, the client trusts the bootnode's `staked` label.
+
+Shipped since this playbook was written: bootnode persistence (T-DEV-4, `RGOE_BOOTNODE_STORE`),
+per-gateway replay cache (T-FEAT-12), signer-rotation allowlist (T-HARD-5), client stake
+re-verification (T-DEV-5), encrypted key backup/restore (`rgoe backup` / `rgoe restore`,
+`docs/BACKUP.md`).
 </content>
 </invoke>

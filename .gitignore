@@ -23,6 +23,9 @@ contracts/deployed.local.json
 # bootnode + gateway onion identities and signer keys (secret)
 identity.local.json
 **/identity.local.json
+# Rust client member identity file from `rgoe identity` ({identitySecret, leaf}) — secret
+identity.json
+**/identity.json
 bootnode/bootnode-signer.key
 hs_ed25519_secret_key
 

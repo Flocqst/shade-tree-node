@@ -37,19 +37,23 @@ instead.
 
 - **Unaudited, testnet ZK artifacts.** Untrusted ceremony output.
   (`docs/AUDIT.md` "Known unaudited surfaces"; residual T-HARD-1.)
-- **Cross-gateway exact-envelope replay.** Target binding stops a proof being
-  redirected, but an exact-envelope replay to the *same* target still egresses,
-  and non-colluding gateways share no spent-set, so one proof can be amplified
-  across the fleet. Design tracked as T-FEAT-12.
-- **Stale `staked` label.** In stake mode the client currently trusts the
-  bootnode's `staked` label for the operator-to-onion pairing rather than
-  re-fetching `GET /gateway/<onion>` and re-verifying the operator signature and
-  live stake itself. Tracked as T-DEV-5.
-- **No directory signer rotation.** The pinned directory signer cannot yet
-  rotate with an overlap window. Tracked as T-HARD-5.
-- **Deploy bootstrap not integration-tested.** `bootnode/deploy/bootstrap.sh`
-  runs as root on a fresh box and has no integration test yet; read it before
-  running it. (`docs/AUDIT.md`.)
+- **Cross-gateway exact-envelope replay is opt-in.** Target binding stops a proof
+  being redirected, and a single gateway rejects an exact-envelope replay outside
+  the 5s honest-retry window (`replayed-envelope`, T-FEAT-12). Non-colluding
+  gateways share a spent-nullifier tally only when the operator enables it
+  (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b; fail-open), so without it one captured
+  envelope can still be fanned once per peer gateway.
+- **Stale `staked` label by default.** In stake mode the client trusts the
+  bootnode's `staked` label for the operator-to-onion pairing unless
+  `RGOE_VERIFY_STAKE=1`, which makes it re-fetch `GET /gateway/<onion>` and
+  re-verify the operator signature and live stake itself (T-DEV-5).
+- **Directory signer rotation is out of band.** `RGOE_DIR_SIGNER` accepts an
+  allowlist so rotation has an overlap window (T-HARD-5), but distributing the new
+  pubkey to clients is a manual step; there is no in-band rotation message.
+- **Deploy bootstrap runs as root.** `bootnode/deploy/bootstrap.sh` is exercised
+  end to end in CI inside a systemd container (`.github/workflows/bootstrap-e2e.yml`,
+  T-TEST-8), but it still runs as root on a fresh box; read it before running it.
+  (`docs/AUDIT.md`.)
 - Anything under "Scope: what it is and is not" in the README that is called out
   as deliberately out of scope or an operator responsibility (no payments,
   sourcing clean egress IPs, rendezvous DoS, and so on).
