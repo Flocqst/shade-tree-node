@@ -77,7 +77,7 @@ IP(s) in production (default is open).
 | `image` | `ubuntu-24-04-x64` | bootstrap targets fresh 24.04 |
 | `droplet_name` | `rgoe-bootnode` | also names the key + firewall |
 | `git_repo` | `github.com/dmarzzz/reputation-gated-onion-egress` | passed as `RGOE_REPO` |
-| `git_ref` | `feat/bootnode-and-productionize` | passed as `RGOE_REF`; **pin a tag/sha for reproducibility** |
+| `git_ref` | `main` | passed as `RGOE_REF`; **pin a tag/sha for reproducibility** |
 | `admission` | `open` | `open` or `stake` → `RGOE_ADMISSION` |
 | `bootnode_port` | `8877` | loopback → `RGOE_BOOTNODE_PORT` |
 | `gateway_port` | `8443` | loopback → `RGOE_GATEWAY_PORT` |

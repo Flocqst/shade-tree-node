@@ -134,8 +134,17 @@ grep -q "^Environment=RGOE_BOOTNODE_ONION=${REMOTE}$" /etc/systemd/system/rgoe-h
 grep -q '^After=network-online.target tor.service$' /etc/systemd/system/rgoe-heartbeat.service
 echo "heartbeat -> ${REMOTE}"
 
-echo "-- gateway TCP listener on loopback --"
-timeout 3 bash -c ":</dev/tcp/127.0.0.1/${GW_PORT}" && echo "gateway :${GW_PORT} accepting connections"
+echo "-- gateway TCP listener on loopback (waits up to 90s: the gateway loads the zk artifacts before it binds) --"
+# The default mode gets this wait for free (bootstrap.sh sleeps 15s for the bootnode signer);
+# gateway-only mode has no such pause, so poll instead of racing the bind.
+bound=0
+for _ in $(seq 1 45); do
+  if timeout 3 bash -c ":</dev/tcp/127.0.0.1/${GW_PORT}" 2>/dev/null; then bound=1; break; fi
+  systemctl is-active --quiet rgoe-gateway || true
+  sleep 2
+done
+[ "$bound" = "1" ] || { echo "gateway never bound :${GW_PORT}"; systemctl status rgoe-gateway --no-pager | head -20; journalctl -u rgoe-gateway --no-pager | tail -40; exit 1; }
+echo "gateway :${GW_PORT} accepting connections"
 CHECK
 log "PASS -- bootstrap.sh brought a gateway-only box up in the container (remote bootnode: $REMOTE_BN_ONION)"
 exit 0
@@ -160,8 +169,14 @@ done
 echo "-- bootnode /health on loopback --"
 curl -fsS --max-time 5 "http://127.0.0.1:${BN_PORT}/health" ; echo
 
-echo "-- gateway TCP listener on loopback --"
-timeout 3 bash -c ":</dev/tcp/127.0.0.1/${GW_PORT}" && echo "gateway :${GW_PORT} accepting connections"
+echo "-- gateway TCP listener on loopback (waits up to 90s) --"
+bound=0
+for _ in $(seq 1 45); do
+  if timeout 3 bash -c ":</dev/tcp/127.0.0.1/${GW_PORT}" 2>/dev/null; then bound=1; break; fi
+  sleep 2
+done
+[ "$bound" = "1" ] || { echo "gateway never bound :${GW_PORT}"; journalctl -u rgoe-gateway --no-pager | tail -40; exit 1; }
+echo "gateway :${GW_PORT} accepting connections"
 CHECK
 
 log "best-effort: reach the bootnode onion over Tor (non-fatal)"

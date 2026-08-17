@@ -28,7 +28,7 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 Or, if the repo is already on the box:
@@ -70,7 +70,7 @@ existing bootnode:
 ```bash
 ssh root@<new-droplet-ip>
 RGOE_BOOTNODE_ONION=<bootnode-onion> RGOE_BOOTNODE_SIGNER=<pinned-signer> \
-  bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh)
+  bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh)
 journalctl -u rgoe-heartbeat -f      # 'announced (...)' once the descriptors propagate
 ```
 

@@ -20,7 +20,7 @@ If you just want it running, rent a fresh Ubuntu 24.04 box and:
 
 ```bash
 ssh root@<droplet>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 It installs Tor + Node, mints the onions, starts the bootnode + gateway + heartbeat as

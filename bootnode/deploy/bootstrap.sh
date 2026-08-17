@@ -3,7 +3,7 @@
 # gateway, in one idempotent command. You rent the box; this does the rest.
 #
 #   ssh root@<droplet>            # or a sudo user
-#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 #   # or, if you already cloned the repo on the box:
 #   sudo bash bootnode/deploy/bootstrap.sh
 #
@@ -14,7 +14,7 @@
 #
 # Tunables (env):
 #   RGOE_REPO        git URL            (default: the public repo)
-#   RGOE_REF         branch/tag/sha     (default: feat/bootnode-and-productionize)
+#   RGOE_REF         branch/tag/sha     (default: main)
 #   RGOE_DIR         install dir        (default: /opt/rgoe)
 #   RGOE_ADMISSION   open | stake       (default: open)
 #   RGOE_BOOTNODE_PORT / RGOE_GATEWAY_PORT   loopback backends (default 8877 / 8443)
@@ -47,7 +47,7 @@ set -euo pipefail
 if [ "${1:-}" = "--render" ]; then RGOE_RENDER_ONLY="${2:?--render needs a directory}"; shift 2; fi
 
 RGOE_REPO="${RGOE_REPO:-https://github.com/dmarzzz/reputation-gated-onion-egress}"
-RGOE_REF="${RGOE_REF:-feat/bootnode-and-productionize}"
+RGOE_REF="${RGOE_REF:-main}"
 RGOE_DIR="${RGOE_DIR:-/opt/rgoe}"
 RGOE_ADMISSION="${RGOE_ADMISSION:-open}"
 RGOE_BOOTNODE_PORT="${RGOE_BOOTNODE_PORT:-8877}"

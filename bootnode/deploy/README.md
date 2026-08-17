@@ -10,7 +10,7 @@ that joins an existing bootnode instead (see Tunables).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 or, if you already cloned the repo on the box:
@@ -42,7 +42,7 @@ the script exits before installing anything on a bad one.
 
 | env | default | meaning |
 |---|---|---|
-| `RGOE_REPO` / `RGOE_REF` | public repo / `feat/bootnode-and-productionize` | what to clone onto the box |
+| `RGOE_REPO` / `RGOE_REF` | public repo / `main` | what to clone onto the box |
 | `RGOE_DIR` | `/opt/rgoe` | install dir; `deploy-state/` under it holds keys + persistence |
 | `RGOE_ADMISSION` | `open` | bootnode admission (`open` \| `stake`); ignored in gateway-only mode |
 | `RGOE_BOOTNODE_PORT` / `RGOE_GATEWAY_PORT` | `8877` / `8443` | loopback backends the onions map to |
