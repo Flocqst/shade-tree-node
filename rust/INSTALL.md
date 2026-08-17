@@ -100,10 +100,19 @@ Live egress (`-live` binary only) — the circuit artifacts are **embedded**, so
 `--circuits` directory is needed:
 
 ```sh
-# dial the selected gateway .onion over embedded Tor, minting a real RLN envelope
+# 1. export your member identity for the Rust client from your RGOE_SECRET (JS CLI, once;
+#    writes {identitySecret, leaf} mode 0600 — secret material, keep it local).
+#    `rgoe identity` here is the JS bin/rgoe.mjs (npm link), not this binary.
+RGOE_SECRET=0x… rgoe identity --out identity.json        # or --secret-file ./.secret
+
+# 2. dial the selected gateway .onion over embedded Tor, minting a real RLN envelope
 rgoe egress --directory directory.json --signer <hex> \
   --identity identity.json --members members.json --target example.com:443
 ```
+
+`--members` is the fleet's committed `group/members.json` (`{version, members[]}`); the
+`leaf` in `identity.json` must be one of its entries (`rgoe identity` echoes the leaf on
+stderr so you can check). Derive with the same `RGOE_SLOTS` (K, default 8) the fleet runs.
 
 Pass `--circuits <dir>` only if you want to prove against circuit files on disk
 instead of the ones baked into the binary. Use `--plain-tcp <host:port>` to dial
