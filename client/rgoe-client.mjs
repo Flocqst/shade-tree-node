@@ -26,9 +26,64 @@ import tls from "node:tls";
 import https from "node:https";
 import { SocksClient } from "socks";
 import { currentEpoch, K_SLOTS, normLimit, requestSignal, proveForSlot, loadGroup, cleanUp, clientArtifactIds, selectArtifact } from "../lib/semaphore.mjs";
+// Namespace import (not named): selftests that mock lib/rln.mjs need not provide these two; they
+// are only touched by makeLeafSourceLoader when a contract is configured.
+import * as rln from "../lib/rln.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
+import { configuredContracts, loadGroupFromContract } from "../lib/root-provider.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// ---- leaf-source discovery (T-FEAT-7, docs/PAYMENTS.md) ----------------------------
+// A member's leaf lives in exactly one of the sets the gateway trusts (gateway/gateway.mjs
+// initRoots): the static members.json (friends), a StakedReputationSet (`rgoe register-member`),
+// or the PaidAccessSet (paid access, docs/PAYMENTS.md). The proof must be built against THAT tree, so the client
+// looks for its own leaf: members.json first (no chain needed), then each configured contract in
+// order (the RGOE_GROUP_CONTRACT list, then RGOE_PAID_ACCESS_CONTRACT), rebuilding the tree from
+// the event log (lib/root-provider.mjs loadGroupFromContract). Returns a loadGroupFn for
+// makeSlotPool: async () => { group, root, source }. Every failure names every source tried.
+//   - With NO contract configured this is byte-compatible with the pre-T-FEAT-7 client: the
+//     static group is returned even when the leaf is not in it (proveForSlot then reports
+//     "not in group", as before), and a missing members.json is that read error.
+//   - `limit` MUST be the tier the leaf was enrolled / staked / paid at (a different limit is a
+//     different leaf) — the discovery error says so.
+export function makeLeafSourceLoader({
+  secret, limit = K_SLOTS, env = process.env,
+  loadStatic = loadGroup, loadContract = loadGroupFromContract,
+  contracts = null, rpcUrl = env.RGOE_RPC_URL || "http://127.0.0.1:8545",
+} = {}) {
+  const sources = contracts || configuredContracts(env);
+  const holds = (g, leaf) => !!g && typeof g.indexOf === "function" && g.indexOf(BigInt(leaf)) !== -1;
+  return async function discoverGroup() {
+    // Legacy path first (no contract configured): the static group, exactly as before, even
+    // when the leaf is not in it or the secret is not derivable here (fakes in tests).
+    if (sources.length === 0) return { ...(await loadStatic()), source: "members.json" };
+    const leaf = rln.rateCommitmentOf(rln.identityFor(secret), limit).toString();
+    const tried = [];
+    try {
+      const st = await loadStatic();
+      if (holds(st.group, leaf)) return { ...st, source: "members.json" };
+      tried.push(`members.json (${st.count ?? (st.group && st.group.members ? st.group.members.length : "?")} leaves)`);
+    } catch (e) {
+      tried.push(`members.json (unreadable: ${e.message})`);
+    }
+    for (const c of sources) {
+      const label = `${c.kind || "staked"}(${c.address})`;
+      try {
+        const r = await loadContract({ contract: c.address, rpcUrl });
+        if (holds(r.group, leaf)) return { ...r, source: label };
+        tried.push(`${label} (${r.count} leaves)`);
+      } catch (e) {
+        tried.push(`${label} (unreadable: ${e.message})`);
+      }
+    }
+    throw new Error(
+      `RgoeClient: your leaf ${leaf.slice(0, 12)}.. (limit ${limit}) is in none of: ${tried.join(", ")} — ` +
+      "check --limit / RGOE_LIMIT (it must equal the tier you enrolled, staked or paid at), " +
+      "or buy access (docs/PAYMENTS.md), stake (`rgoe register-member`), or ask the operator to add you to members.json",
+    );
+  };
+}
 
 // ---- slot pool: per-epoch group warm + one slot/request rotation ----------------
 // (moved verbatim from the shim; the deterministic-retry + rotation invariants live here.)
@@ -265,7 +320,9 @@ export class RgoeClient {
     // This member's tier limit (T-FEAT-8): { limit } or RGOE_LIMIT; default K_SLOTS (RGOE_SLOTS, 8).
     // Must equal the limit the member's leaf was enrolled with (`rgoe enroll --limit`).
     this.limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS));
-    this.pool = makeSlotPool({ secret: this.secret, K: this.limit });
+    // Which tree holds this member's leaf (T-FEAT-7): members.json, a staked set, or the paid
+    // set — discovered lazily on first use (makeLeafSourceLoader); { loadGroupFn } overrides.
+    this.pool = makeSlotPool({ secret: this.secret, K: this.limit, loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit }) });
     this.pool.ensureEpoch(); // warm the current epoch in the background
   }
 

@@ -24,6 +24,11 @@
 > [`docs/post/JOIN.md`](post/JOIN.md) / [`docs/QUICKSTART.md`](QUICKSTART.md). Use this page
 > only if the operator handed you the PoC bundle and a secret for the PoC set.
 
+> **Buy access** (no key handed to you, no stake): the fleet also admits PAID members — you pay the
+> operator over HTTP 402 rails and your leaf is inserted into the paid set; then
+> `RGOE_NETWORK=sepolia rgoe client --limit <your tier>` finds it there and proves against it. The
+> flow, the rails and the anonymity caveats: [`docs/PAYMENTS.md`](PAYMENTS.md).
+
 Someone added you to a private reputation set. That key lets you browse out through a clean IP on a server in New York, while proving you belong to the set and never telling the server who you are. No login, no account, and none of your own IP ever reaches it.
 
 Here is the whole thing.

@@ -80,7 +80,11 @@ Three things make it a system rather than one proxy:
   commitment ever leaves the machine) and stake into `StakedReputationSet` (`contracts/`, live on
   Sepolia). The gateway reads the admission root from the chain through a `RootProvider`
   (`lib/root-provider.mjs`), so there is no `members.json` to keep in sync and the operator never
-  holds a member secret.
+  holds a member secret. Several sets can be trusted at once: the gateway admits the UNION of
+  the static `members.json`, every staked set in `RGOE_GROUP_CONTRACT`, and a **paid** set
+  (`PaidAccessSet`, `RGOE_PAID_ACCESS_CONTRACT`) whose leaves the operator inserts after an
+  off-chain payment — same tree, same proof; a slash lands on whichever contract holds the leaf
+  ([`docs/PAYMENTS.md`](docs/PAYMENTS.md), [ADR 0007](docs/adr/0007-paid-access.md)).
 - **The fleet is discovered live.** Gateways announce to a **bootnode** (`bootnode/`), which
   serves a signed directory of live onions; the client pulls it over Tor, verifies it, caches a
   persisted last-known-good copy, and rotates per request. The onion is never on chain, and the
@@ -209,7 +213,7 @@ Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-
 | [`docs/FLEET.md`](docs/FLEET.md) | Fleet discovery + per-request selection design, and the fleet-wide budget analysis |
 | [`docs/ONCHAIN.md`](docs/ONCHAIN.md) | On-chain admission: staked set, gateway registry, root provider |
 | [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md) | Trust-minimized (light-client) reads of the reputation root |
-| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Anonymous-payment design (designed, not built) |
+| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Paid access: 402-settled off-chain payment → operator-inserted leaf; the gateway/root/slash side is shipped (T-FEAT-7), the 402 registrar is in flight |
 | [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/AUDIT.md`](docs/AUDIT.md) | The consolidated threat model; trust boundaries, test inventory, review order |
 | [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md) | Auditor's guide + written invariants for the Solidity contracts |
 | [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |

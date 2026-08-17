@@ -27,6 +27,7 @@ const SLOW_SUITES = new Set([
   "zk-artifact-window.selftest.mjs", // real proofs under two artifact sets (T-HARD-8)
   "reputation-tiers.selftest.mjs",   // real proofs at two tier limits in one tree (T-FEAT-8)
   "onchain-tiers.selftest.mjs",      // anvil + forge broadcast + real gateway + real proofs (T-FEAT-8b / T-DEV-9c)
+  "paid-access.selftest.mjs",        // anvil + forge + real gateway + real proofs: union roots + slasher routing (T-FEAT-7)
 ]);
 
 // Recursively find *.selftest.mjs, skipping node_modules / out / build dirs.

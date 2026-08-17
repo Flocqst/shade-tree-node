@@ -263,7 +263,8 @@ SUBCOMMANDS:
           --identity  JSON { identitySecret, leaf[, limit] } (the member's derived secret + leaf;
                       export it from your RGOE_SECRET with the JS CLI: `rgoe identity --out identity.json`;
                       `limit` = the leaf's reputation-tier userMessageLimit, T-FEAT-8, default 8)
-          --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
+          --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway;
+                      for a staked/paid ON-CHAIN set export it: `rgoe leaves --contract <addr> --out members.json`)
           --target    host:port bound into the proof (the egress destination)
           --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;
                       omit it to use the artifacts EMBEDDED in this binary (self-contained,

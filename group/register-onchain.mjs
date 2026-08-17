@@ -35,6 +35,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { normLimit, K_SLOTS } from "../lib/rln.mjs";
+import { parseContractList } from "../lib/root-provider.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -76,7 +77,9 @@ async function main() {
   const deployed = await readDeployed();
 
   const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
-  const address = process.env.RGOE_GROUP_CONTRACT || deployed.StakedReputationSet || deployed.address;
+  // RGOE_GROUP_CONTRACT may be a comma list since T-FEAT-7 (several sets trusted by the gateway);
+  // a stake goes to the FIRST — the canonical staked set. (Paid access is inserted by the operator, docs/PAYMENTS.md.)
+  const address = parseContractList(process.env.RGOE_GROUP_CONTRACT)[0] || deployed.StakedReputationSet || deployed.address;
   const key = process.env.RGOE_REGISTER_KEY || ANVIL_KEY_0;
   if (!address) {
     console.error("no StakedReputationSet address: set RGOE_GROUP_CONTRACT or write contracts/deployed.local.json");
