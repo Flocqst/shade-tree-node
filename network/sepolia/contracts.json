@@ -99,7 +99,25 @@
       "8": "100000",
       "32": "400000"
     },
-    "note": "T-FEAT-7: the operator's 402 registrar (payments/registrar.mjs) rides the bootnode onion (bootnode.json onion) on virtual port 8878: GET /pay/quote?limit=8 -> 402 with PAYMENT-REQUIRED (x402 v2) + WWW-Authenticate: Payment (MPP evm/charge type=authorization); POST /pay settles the buyer's EIP-3009 authorization in payAsset from the operator key and inserts the leaf into contracts.paidAccessSet. Prices are payAsset atomic units per tier (0.10 / 0.40 tUSD). Advertised in the bootnode's /health `pay` block. Deployed by bootstrap.sh RGOE_REGISTRAR=1 (bootnode/deploy/README.md)."
+    "note": "T-FEAT-7: the operator's 402 registrar (payments/registrar.mjs) rides the bootnode onion (bootnode.json onion) on virtual port 8878: GET /pay/quote?limit=8 -> 402 with PAYMENT-REQUIRED (x402 v2) + WWW-Authenticate: Payment (MPP evm/charge type=authorization); POST /pay settles the buyer's EIP-3009 authorization in payAsset from the operator key and inserts the leaf into contracts.paidAccessSet. Prices are payAsset atomic units per tier (0.10 / 0.40 tUSD). Advertised in the bootnode's /health `pay` block. Deployed by bootstrap.sh RGOE_REGISTRAR=1 (bootnode/deploy/README.md).",
+    "status": "live",
+    "deployedAt": "2026-08-17",
+    "liveReceipts": {
+      "x402": {
+        "settleTx": "0xfdaf57de730022b7a90f02aed161b4acfcd2f5d2f5ab5fddc25bf91c71b83036",
+        "insertTx": "0x54b32eaa98d32e8b4aab1e261975fb39f04f1a758268187645f5f0186b22c004",
+        "leafIndex": 1,
+        "limit": 8
+      },
+      "mpp": {
+        "settleTx": "0xbbe396b966e8cad82f63bd61d319f9619dd15daad14628dcc0b52e4137320119",
+        "insertTx": "0x169de6a88af2cec58d96766f7813e927ff9c7e919a0b4c0ef46df2d23f2b55c9",
+        "leafIndex": 2,
+        "limit": 32
+      },
+      "rootAfter": "8669670862295694646456075933965303186871311459997988128668309404743902147713",
+      "report": "docs/GO-LIVE-LOG-2026-08-17.md (payments)"
+    }
   },
   "circuit": {
     "family": "rate-limiting-nullifier / circom-rln v1.0.0",

@@ -106,6 +106,8 @@ export function resolveCommitment(o, env = process.env) {
 }
 
 const target = (o) => (o.registrarUrl ? { url: o.registrarUrl } : { onion: o.bootnode, port: o.registrarPort });
+// The paying POST waits for settle + insert to be mined (2 confirmations on a 12 s chain) over Tor.
+const PAY_TIMEOUT_MS = Number(process.env.RGOE_PAY_HTTP_TIMEOUT_MS || 240000);
 
 // ---- x402 ---------------------------------------------------------------------------------
 export async function payX402({ o, wallet, commitment, out, nowMs = Date.now() }) {
@@ -130,7 +132,9 @@ export async function payX402({ o, wallet, commitment, out, nowMs = Date.now() }
   }
   const signature = await signAuthorization(wallet, domain, auth);
   const payload = x402PaymentPayload(pr, accepted, auth, signature);
-  const r = await request({ ...target(o), method: "POST", path: "/pay", headers: { "PAYMENT-SIGNATURE": encodeX402Header(payload) }, body: { commitment, limit: o.limit } });
+  // The paying POST spans settle + insert (two confirmations) plus Tor latency: give it minutes,
+  // and one retry — an identical retry is idempotent on the registrar (stored receipt).
+  const r = await request({ ...target(o), method: "POST", path: "/pay", headers: { "PAYMENT-SIGNATURE": encodeX402Header(payload) }, body: { commitment, limit: o.limit }, timeoutMs: PAY_TIMEOUT_MS, attempts: 2 });
   const settlement = decodeX402Header(r.headers["payment-response"]);
   if (r.status !== 200) throw new Error(`payment refused (HTTP ${r.status}): ${settlement?.errorReason || ""} ${r.body.slice(0, 300)}`);
   return { protocol: "x402", settlement, result: r.json, nonce: auth.nonce };
@@ -169,7 +173,7 @@ export async function payMpp({ o, wallet, commitment, out, nowMs = Date.now() })
   }
   const signature = await signAuthorization(wallet, domain, auth);
   const cred = mppCredential(c, { type: "authorization", ...auth, signature }, { source: `did:pkh:eip155:${chainId}:${wallet.address}` });
-  const r = await request({ ...target(o), method: "POST", path: "/pay", headers: { Authorization: `Payment ${cred}` }, body });
+  const r = await request({ ...target(o), method: "POST", path: "/pay", headers: { Authorization: `Payment ${cred}` }, body, timeoutMs: PAY_TIMEOUT_MS, attempts: 2 });
   if (r.status !== 200) throw new Error(`payment refused (HTTP ${r.status}): ${r.json?.type || ""} ${r.json?.detail || r.body.slice(0, 300)}`);
   return { protocol: "mpp", receipt: decodeMppReceipt(r.headers["payment-receipt"]), result: r.json, nonce: auth.nonce };
 }
