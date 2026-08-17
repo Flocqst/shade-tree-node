@@ -30,26 +30,31 @@ the real RLN rateCommitment. An intermediate RLN deploy `0x7c5bcfD3…8c6E` was 
 
 [`bootnode.json`](bootnode.json) is the committed discovery record (`{onion, signer,
 admission, staticDirectory}`; schema in `network/README.md`). Status: **live** since
-2026-08-17 (T-DEPLOY-1, [`docs/GO-LIVE-LOG-2026-08-17.md`](../../docs/GO-LIVE-LOG-2026-08-17.md)).
+2026-08-17 (T-DEPLOY-1 + T-DEPLOY-2 + stake admission,
+[`docs/GO-LIVE-LOG-2026-08-17.md`](../../docs/GO-LIVE-LOG-2026-08-17.md)).
 
 | field | value |
 |---|---|
 | bootnode onion | `kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion` |
 | pinned signer (`RGOE_DIR_SIGNER`) | `d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73` |
-| admission | `open` (stake admission = Phase 3 of the runbook, not yet switched on) |
-| gateway-1 onion (region `na`) | `yaxo4ywgoizk4yiylx66k3vjsgcj5waruumgi6dgds4fgaihd2eh7yqd.onion` |
+| admission | **`stake`** since 2026-08-17 (later): `RGOE_STAKE_MODE=onchain` against `GatewayRegistry` `0x94ECeD0C…A868` (bond 0.001 ETH); the fleet operator `0xc8606C75…7f02` is staked and both heartbeats sign the onion↔operator auth (`announced (staked=true)`), one stake backs both onions (`docs/BOOTNODE.md` "The onion is never on chain") |
+| gateway-1 onion (region `na`, NYC) | `yaxo4ywgoizk4yiylx66k3vjsgcj5waruumgi6dgds4fgaihd2eh7yqd.onion` |
+| gateway-2 onion (region `na`, SFO) | `av4m256h4wwgwdmg74wnqem7s7l333h6755sroydlbcq62ptkmawtwid.onion` (gateway-only box, `bootstrap.sh` `RGOE_BOOTNODE_ONION` mode, T-DEPLOY-2) |
+| gateway slashing | on-chain (`RGOE_SLASH_CONTRACT` = `StakedReputationSet` `0xdAE242AE…20FC`) on both gateways since 2026-08-17 (later) |
 | onion PoW | off (`RGOE_ENABLE_POW=0`; a `pow: no` client tor could not reach a PoW onion) |
 | membership root | committed `group/members.json` (PoC fallback), 8 members |
-| ref deployed | `main` @ `cb237e07` |
+| ref deployed | droplet-1 `main` @ `cb237e07`; droplet-2 `main` @ `d8a6530` |
 
 `RGOE_NETWORK=sepolia` now resolves `RGOE_BOOTNODE_ONION` + `RGOE_DIR_SIGNER` to the values
 above, so `RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client` discovers the fleet through the
 bootnode. Cold path (bootnode dark, `docs/INCIDENT.md` #1): the record's `staticDirectory`
 points at [`directory-bootnode.json`](directory-bootnode.json), the bootnode's own signed
-`/directory` export (same signer), so `RGOE_DIRECTORY=network/sepolia/directory-bootnode.json
+`/directory` export (same signer, both gateways), so `RGOE_DIRECTORY=network/sepolia/directory-bootnode.json
 RGOE_DIR_SIGNER=d79f78c3…3a73` still works. The box hosting bootnode + gateway-1 is a
-DigitalOcean droplet in NYC (`docs/GO-LIVE-LOG-2026-08-17.md` names it); its clearnet IP is
-operational metadata and is not recorded here.
+DigitalOcean droplet in NYC and gateway-2 is a DigitalOcean droplet in SFO (same AS14061,
+different regions — `docs/GO-LIVE-LOG-2026-08-17.md` names them); their clearnet IPs are
+operational metadata and are not recorded here. The client rotates across both
+(`RGOE_ROTATION_SPREAD=1` for strict round-robin).
 
 ## Legacy gateway fleet (static directory)
 
