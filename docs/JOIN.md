@@ -24,6 +24,10 @@
 > [`docs/post/JOIN.md`](post/JOIN.md) / [`docs/QUICKSTART.md`](QUICKSTART.md). Use this page
 > only if the operator handed you the PoC bundle and a secret for the PoC set.
 
+> **Buy access** (no key handed to you, no stake): see "buy access" below — `rgoe pay`, then
+> `RGOE_NETWORK=sepolia rgoe client --limit <your tier>` finds your leaf in the paid set and proves
+> against it ([`docs/PAYMENTS.md`](PAYMENTS.md)).
+
 Someone added you to a private reputation set. That key lets you browse out through a clean IP on a server in New York, while proving you belong to the set and never telling the server who you are. No login, no account, and none of your own IP ever reaches it.
 
 Here is the whole thing.
@@ -84,7 +88,8 @@ rgoe enroll                                     # your secret + your commitment,
 rgoe pay --network sepolia --limit 8 \
   --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
-RGOE_NETWORK=sepolia rgoe client --secret <your secret>     # egress as usual
+RGOE_NETWORK=sepolia rgoe client --secret <your secret>     # egress as usual (add --limit 32 if you bought tier 32:
+                                                            # the client finds your leaf in the PAID set and proves against it)
 ```
 
 `--dry-run` shows the operator's 402 challenge and the exact authorization you would sign, and

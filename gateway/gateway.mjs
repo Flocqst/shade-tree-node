@@ -21,17 +21,20 @@
 //
 // The reputation root is read from a RootProvider (the on-chain StakedReputationSet,
 // via lib/root-provider.mjs) so TRUSTED_ROOT is a recent-roots SET refreshed on
-// membership change, not a static members.json. Without RGOE_GROUP_CONTRACT it falls
-// back to members.json so the PoC path still works.
+// membership change, not only a static members.json. T-FEAT-7 (docs/PAYMENTS.md): the
+// accepted set is the UNION of every configured root SOURCE — the static members.json
+// (friends / PoC), each StakedReputationSet in RGOE_GROUP_CONTRACT (a comma list), and the
+// PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT — see initRoots() / RGOE_ROOTS. Without any
+// contract it is members.json alone, so the PoC path still works.
 
 import net from "node:net";
 import { readFile } from "node:fs/promises";
-import { watch } from "node:fs";
+import { watch, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
 import { reconstructSecret, resolveSlashLeaf, deriveCommitments, TIERS, K_SLOTS } from "../lib/rln.mjs";
-import { makeRootProvider } from "../lib/root-provider.mjs";
+import { makeRootProvider, configuredContracts } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
 import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
 import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
@@ -56,6 +59,10 @@ const M = {
   // SEPARATE from requests_total: a tunnel that idles out already counted as result=pass, so
   // counting it again as a drop would double-count the request (T-HARD-4).
   tunnelCloses: metrics.counter("rgoe_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
+  // T-FEAT-7: trusted roots per source (source=static|staked|paid, contract=address|members.json)
+  // and the paid set's live leaf count (its anonymity set; the floor is RGOE_PAID_MIN_LEAVES).
+  rootsBySource: metrics.gauge("rgoe_gateway_trusted_roots", "Trusted admission roots right now, by source (static members.json / staked contract / paid contract)."),
+  paidLeaves: metrics.gauge("rgoe_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet (anonymity set of paid members); compare with the RGOE_PAID_MIN_LEAVES floor."),
 };
 
 // ---- endpoint hardening knobs (T-HARD-4) -----------------------------------
@@ -157,33 +164,139 @@ export function deriveSlashLeaf(identitySecret, opts = {}) {
   return resolveSlashTier(identitySecret, opts).commitment;
 }
 
+// ---- root SOURCES (T-FEAT-7) -----------------------------------------------------
+// RGOE_ROOTS names which sources feed recentRoots: a comma list of `static` (the members.json
+// file, MEMBERS_PATH / RGOE_MEMBERS_FILE) and `onchain` (every configured contract: the
+// RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT). Unset = the least-surprising union:
+// `onchain` whenever a contract is configured, PLUS `static` whenever members.json exists (so a
+// fleet that starts trusting a paid/staked set keeps admitting its members.json friends). Set
+// RGOE_ROOTS=onchain to trust the chain alone (the pre-T-FEAT-7 on-chain-only behavior), or
+// RGOE_ROOTS=static to ignore configured contracts. Exported + pure for the selftest.
+export function resolveRootSources({ spec = process.env.RGOE_ROOTS, contracts = configuredContracts(), staticExists = existsSync(MEMBERS_PATH) } = {}) {
+  const raw = String(spec == null ? "" : spec).trim();
+  if (raw === "") {
+    const onchain = contracts.length > 0;
+    return { static: staticExists || !onchain, onchain, explicit: false };
+  }
+  const parts = raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  for (const p of parts) if (p !== "static" && p !== "onchain") throw new Error(`RGOE_ROOTS: unknown source "${p.slice(0, 16)}" (expected static,onchain)`);
+  const want = { static: parts.includes("static"), onchain: parts.includes("onchain"), explicit: true };
+  if (want.onchain && contracts.length === 0) throw new Error("RGOE_ROOTS names onchain but no contract is configured (set RGOE_GROUP_CONTRACT and/or RGOE_PAID_ACCESS_CONTRACT)");
+  if (!want.static && !want.onchain) throw new Error("RGOE_ROOTS: no source selected");
+  return want;
+}
+
+// The paid set's anonymity-set floor K (docs/PAYMENTS.md open item 3): below it the gateway WARNS
+// at startup and on every refresh that crosses it, and NEVER refuses — the floor is a deployment
+// parameter, not a proven bound; it is logged so an operator can see how thin the set is.
+export const PAID_MIN_LEAVES = Number(process.env.RGOE_PAID_MIN_LEAVES || 8);
+
+// PaidAccessSet.leafCount() over raw JSON-RPC (selector precomputed; no ethers on this path).
+// Returns null when the contract has no such view (a StakedReputationSet) or the call fails.
+async function readLeafCount(contract, rpcUrl) {
+  try {
+    const res = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: contract, data: "0x30e69fc3" }, "latest"] }) });
+    const j = await res.json();
+    if (j.error || typeof j.result !== "string" || j.result === "0x") return null;
+    return Number(BigInt(j.result));
+  } catch { return null; }
+}
+
+// Format the ABI-file startup line: `roots: members.json + staked(0x…) + paid(0x…)`.
+export function describeRootSources({ static: st, contracts = [] } = {}) {
+  const parts = [];
+  if (st) parts.push("members.json");
+  for (const c of contracts) parts.push(`${c.kind}(${c.address})`);
+  return "roots: " + (parts.join(" + ") || "(none)");
+}
+
 async function initRoots() {
-  if (process.env.RGOE_GROUP_CONTRACT) {
-    const provider = makeRootProvider(); // node|light per RGOE_ROOT_PROVIDER
+  const contracts = configuredContracts();
+  const want = resolveRootSources({ contracts });
+  const rpcUrl = process.env.RGOE_RPC_URL || "http://127.0.0.1:8545";
+  let staticRoot = null;
+  let staticCount = 0;
+  let chainRoots = [];
+  let perSource = [];
+  const recompute = () => {
+    const union = new Set();
+    if (want.static && staticRoot) union.add(String(staticRoot));
+    for (const r of chainRoots) union.add(String(r));
+    recentRoots = union;
+    if (want.static) M.rootsBySource.set(staticRoot ? 1 : 0, { source: "static", contract: "members.json" });
+    for (const p of perSource) {
+      const kind = (contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked";
+      M.rootsBySource.set(p.roots.length, { source: kind, contract: p.contract || "?" });
+    }
+  };
+
+  // Static members.json: root + leaves (leaves feed the local slash-tier resolution).
+  if (want.static) {
+    const load = async () => {
+      const { root, count, leaves } = await loadGroup();
+      staticRoot = root;
+      staticCount = count;
+      localLeaves = new Set((leaves || []).map(String));
+      recompute();
+      return count;
+    };
+    await load();
+    try {
+      watch(MEMBERS_PATH, { persistent: false }, () => load().catch(() => {}));
+    } catch { /* watch is best-effort */ }
+  }
+
+  // On-chain: one provider per contract, unioned (lib/root-provider.mjs makeRootProvider).
+  let provider = null;
+  let paidWarned = false;
+  const paidContracts = contracts.filter((c) => c.kind === "paid");
+  const checkPaidFloor = async (first) => {
+    for (const c of paidContracts) {
+      const src = perSource.find((p) => String(p.contract || "").toLowerCase() === c.address.toLowerCase());
+      const n = (await readLeafCount(c.address, rpcUrl)) ?? (src && src.leafCount != null ? src.leafCount : null);
+      if (n == null) { if (first) log.warn("paid-access anonymity set: leafCount() unreadable", { contract: c.address }); continue; }
+      M.paidLeaves.set(n, { contract: c.address });
+      const line = `paid-access anonymity set: ${n} leaves (floor K=${PAID_MIN_LEAVES})`;
+      if (n < PAID_MIN_LEAVES) {
+        if (first || !paidWarned) log.warn(line + " — BELOW the floor: paid members are thinly hidden among each other (still admitted; the floor is a warning, not a gate)", { contract: c.address, leaves: n, floor: PAID_MIN_LEAVES });
+        paidWarned = true;
+      } else {
+        if (first || paidWarned) log.info(line, { contract: c.address, leaves: n, floor: PAID_MIN_LEAVES });
+        paidWarned = false;
+      }
+    }
+  };
+  if (want.onchain) {
+    provider = makeRootProvider(undefined, { contracts: contracts.map((c) => c.address) }); // node|light per RGOE_ROOT_PROVIDER
     const refresh = async () => {
-      const { recentRoots: roots } = await loadGroupOnchain(provider);
-      recentRoots = new Set((roots || []).map(String));
+      const r = await loadGroupOnchain(provider);
+      chainRoots = r.recentRoots || [];
+      perSource = r.perSource || [{ contract: provider.contract || contracts[0].address, roots: chainRoots.slice(), leafCount: r.leafCount ?? null }];
+      recompute();
+      for (const e of r.errors || []) log.warn("root source failed this refresh; keeping its last-known-good", { contract: e.contract, err: e.error });
     };
     await refresh();
-    provider.onChange?.(() => refresh().catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
+    provider.onChange?.(() => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
+  }
+  recompute();
+
+  // Startup lines. `root source: on-chain RootProvider` / `members.json (PoC fallback)` are the
+  // pre-T-FEAT-7 substrings scripts grep; the ABI-file `roots:` line names every source.
+  const desc = provider && provider.describe ? provider.describe() : null;
+  const stateRootSource = desc ? (desc.provider === "composite" ? Array.from(new Set(desc.children.map((c) => c.stateRootSource))).join(" | ") : desc.stateRootSource) : undefined;
+  if (want.onchain) {
     // stateRoot source is logged verbatim so an operator can see whether the admission root is
     // anchored to the sync committee (RGOE_HELIOS_RPC_URL) or merely RPC-trusted (T-DEV-9b).
-    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", recentRoots: recentRoots.size, ...(provider.describe ? { stateRootSource: provider.describe().stateRootSource } : {}) });
-    return { count: null };
+    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", contracts: contracts.length, recentRoots: chainRoots.length, ...(stateRootSource ? { stateRootSource } : {}) });
   }
-  // PoC fallback: members.json is the root source; refresh on file change.
-  const load = async () => {
-    const { root, count, leaves } = await loadGroup();
-    recentRoots = new Set([String(root)]);
-    localLeaves = new Set((leaves || []).map(String));
-    return count;
-  };
-  let count = await load();
-  try {
-    watch(MEMBERS_PATH, { persistent: false }, () => load().then((c) => { count = c; }).catch(() => {}));
-  } catch { /* watch is best-effort */ }
-  log.info("root source: members.json (PoC fallback)", { members: count });
-  return { count };
+  if (want.static) log.info(want.onchain ? "root source: members.json (static, unioned with the chain)" : "root source: members.json (PoC fallback)", { members: staticCount });
+  log.info(describeRootSources({ static: want.static, contracts: want.onchain ? contracts : [] }), {
+    trustedRoots: recentRoots.size,
+    ...(want.static ? { static: staticRoot ? 1 : 0 } : {}),
+    ...Object.fromEntries(perSource.map((p) => [`${(contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked"}:${String(p.contract || "").slice(0, 10)}`, p.roots.length])),
+  });
+  if (want.onchain) await checkPaidFloor(true);
+  return { count: want.static ? staticCount : null, contracts };
 }
 
 // ---- share-collecting spent-set (RLN slashing at PoC fidelity) --------------
@@ -333,18 +446,23 @@ async function readDeployed() {
 async function makeSlasher() {
   const key = process.env.RGOE_SLASH_KEY;
   const deployed = await readDeployed();
-  // The slash contract is INDEPENDENT of the membership root source. RGOE_SLASH_CONTRACT
-  // (or a deployed.local.json) enables on-chain slashing while membership stays on
-  // members.json; it deliberately does NOT read RGOE_GROUP_CONTRACT, which is the
-  // separate trigger for on-chain root mode (initRoots). So a gateway can slash on-chain
-  // without also switching its membership tree — the common fleet config.
-  const address = process.env.RGOE_SLASH_CONTRACT || deployed.stakedReputationSet
-    || deployed.StakedReputationSet || deployed.address;
+  // Slash TARGETS (T-FEAT-7 routing). RGOE_SLASH_CONTRACT (or a deployed.local.json) is the
+  // PRIMARY — it may name a set that is NOT a root source (the fleet's superseded rln-v3 set,
+  // still slashable), which is why it stays independent of the root config. Every configured
+  // root contract (the RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT) is appended, so an
+  // over-spender is slashed on WHICHEVER contract holds its leaf (`limitOf(leaf) != 0`, per
+  // makeRoutingSlasher). One address => the plain single-contract slasher, as before.
+  const primary = process.env.RGOE_SLASH_CONTRACT || deployed.stakedReputationSet
+    || deployed.StakedReputationSet || deployed.address || null;
+  const targets = [];
+  const push = (address, kind) => { if (address && !targets.some((t) => t.address.toLowerCase() === address.toLowerCase())) targets.push({ address, kind }); };
+  push(primary, "primary");
+  for (const c of configuredContracts()) push(c.address, c.kind);
   const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
   const receiver = process.env.RGOE_SLASH_RECEIVER || null;
 
-  if (!key || !address) {
-    log.info("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)");
+  if (!key || targets.length === 0) {
+    log.info("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_SLASH_CONTRACT/RGOE_GROUP_CONTRACT/RGOE_PAID_ACCESS_CONTRACT to submit on chain)");
     return async (commitment, secret, tier) => {
       // Log the (public) commitment leaf only; never any bytes of the reconstructed secret.
       log.info("SLASH (dry-run)", { commitment: String(commitment).slice(0, 18) + "..", ...(tier && tier.limit != null ? { limit: tier.limit } : {}) });
@@ -362,21 +480,26 @@ async function makeSlasher() {
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   const rcv = receiver || wallet.address;
-  return makeOnchainSlasher({ ethers, wallet, address, receiver: rcv });
+  if (targets.length === 1) return makeOnchainSlasher({ ethers, wallet, address: targets[0].address, receiver: rcv });
+  return makeRoutingSlasher({ ethers, wallet, contracts: targets, receiver: rcv });
 }
 
 // The on-chain slash submitter proper, over an ethers wallet. Exported (with `ethers` injected)
 // so gateway/onchain-tiers.selftest.mjs can drive it against a throwaway anvil.
 //
-// Two contract generations (docs/ONCHAIN.md "Tiers on chain"):
+// Three contract shapes (docs/ONCHAIN.md "Tiers on chain", docs/PAYMENTS.md):
 //   rln-v3  slash(commitment, secret, receiver)          — hasher pins K=8; only tier-8 leaves
 //   rln-v4  slash(commitment, secret, limit, receiver)   — T-FEAT-8b tiered: the leaf is
 //           recomputed at the CLAIMED limit and that tier's bond burns; `limitOf(commitment)`
 //           names the tier a leaf was staked at; `allowedLimits()` is the admitted tier table.
-// Detected ONCE at startup by probing `DEFAULT_LIMIT()` (v4 only). Against v4 the tier is
-// resolved in this order: the local resolution (members.json leaves), else the contract's
+//   paid    PaidAccessSet: the SAME tiered slash signature (no bond to burn — the price is
+//           already the operator's; the leaf is zeroed so the over-spender's access ends).
+// Detected ONCE at startup by probing `DEFAULT_LIMIT()` (v4/paid only). Against a tiered set the
+// tier is resolved in this order: the local resolution (members.json leaves), else the contract's
 // own record — `limitOf` over the candidate leaves of every known tier (RGOE_TIERS ∪
 // allowedLimits()); a leaf the contract does not hold is not slashable on it anyway.
+// The returned function also carries `.holds(secret, tier)` -> { leaf, limit } | null (does THIS
+// contract hold a live leaf of the secret?), `.address` and `.tiered`, for makeRoutingSlasher.
 export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) {
   const ABI = [
     "function slash(uint256 commitment, uint256 secret, address receiver)",
@@ -384,6 +507,7 @@ export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) 
     "function limitOf(uint256 commitment) view returns (uint256)",
     "function allowedLimits() view returns (uint256[])",
     "function DEFAULT_LIMIT() view returns (uint256)",
+    "function isActive(uint256 commitment) view returns (bool)",
   ];
   const contract = new ethers.Contract(address, ABI, wallet);
   let tiered = false;
@@ -398,17 +522,32 @@ export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) 
   }
   log.info("slash: on-chain", { via: address, receiver, abi: tiered ? "rln-v4 tiered" : "rln-v3 (default tier only)", tiers: tiered ? tiers : [K_SLOTS] });
 
-  return async (commitment, secret, tier) => {
+  // Which live leaf of `secret` does THIS contract hold? Tiered: `limitOf` over the candidates
+  // (the locally-resolved tier's leaf first). rln-v3: `isActive` of the default-tier leaf.
+  async function holds(secret, tier) {
+    const cands = deriveCommitments(secret, tiered ? tiers : [K_SLOTS]);
+    if (tier && tier.resolved && tier.commitment != null) {
+      cands.sort((a, b) => (String(a.commitment) === String(tier.commitment) ? -1 : String(b.commitment) === String(tier.commitment) ? 1 : 0));
+    }
+    for (const c of cands) {
+      if (tiered) {
+        const l = Number(await contract.limitOf(c.commitment));
+        if (l !== 0) return { leaf: c.commitment, limit: l };
+      } else if (await contract.isActive(c.commitment)) {
+        return { leaf: c.commitment, limit: K_SLOTS };
+      }
+    }
+    return null;
+  }
+
+  const slash = async (commitment, secret, tier) => {
     let limit = tier && tier.resolved ? Number(tier.limit) : null;
     let leaf = commitment;
     if (tiered && limit == null) {
       // The local set could not name the tier (on-chain root mode holds roots, not leaves):
       // ask the contract which candidate leaf of this secret it actually holds.
-      const cands = deriveCommitments(secret, tiers);
-      for (const c of cands) {
-        const l = Number(await contract.limitOf(c.commitment));
-        if (l !== 0) { limit = l; leaf = c.commitment; break; }
-      }
+      const h = await holds(secret, tier);
+      if (h) { limit = h.limit; leaf = h.leaf; }
       if (limit == null) {
         // Not staked at any known tier on this contract: submit the default-tier claim so the
         // revert (NotMember) is on record — same outcome as rln-v3 for an unknown leaf.
@@ -420,12 +559,46 @@ export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) 
       ? await contract["slash(uint256,uint256,uint256,address)"](leaf, secret, limit, receiver)
       : await contract["slash(uint256,uint256,address)"](leaf, secret, receiver);
     // "SLASH tx <hash>" substring preserved for scripts/integration-sepolia.mjs's regex.
-    log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(leaf).slice(0, 18) + "..", ...(tiered ? { limit } : {}) });
+    log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(leaf).slice(0, 18) + "..", via: address, ...(tiered ? { limit } : {}) });
     const rcpt = await tx.wait();
     // "SLASH mined block <n>" substring preserved for scripts/integration-sepolia.mjs's regex.
-    log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(leaf).slice(0, 18) + "..", ...(tiered ? { limit } : {}) });
-    return { hash: tx.hash, block: rcpt.blockNumber, limit: tiered ? limit : K_SLOTS, commitment: leaf };
+    log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(leaf).slice(0, 18) + "..", via: address, ...(tiered ? { limit } : {}) });
+    return { hash: tx.hash, block: rcpt.blockNumber, limit: tiered ? limit : K_SLOTS, commitment: leaf, contract: address };
   };
+  slash.holds = holds;
+  slash.address = address;
+  slash.tiered = () => tiered;
+  return slash;
+}
+
+// makeRoutingSlasher({ ethers, wallet, contracts: [{ address, kind }], receiver }) — T-FEAT-7:
+// one makeOnchainSlasher per contract; a reconstructed secret is slashed on the FIRST contract
+// (in the given order: RGOE_SLASH_CONTRACT primary, then the RGOE_GROUP_CONTRACT list, then the
+// paid set) whose `holds(secret)` says it carries a live leaf of it — a paid over-spender lands on
+// the PaidAccessSet (leaf zeroed, root changes), a staked one on its StakedReputationSet. If NO
+// contract holds it (a members.json-only member, or a set this gateway is not configured to
+// slash), the primary receives the default-tier claim exactly as the single-contract slasher
+// would (the revert is on record). Exported for the selftest.
+export async function makeRoutingSlasher({ ethers, wallet, contracts, receiver }) {
+  const slashers = [];
+  for (const c of contracts) {
+    slashers.push({ ...c, slash: await makeOnchainSlasher({ ethers, wallet, address: c.address, receiver }) });
+  }
+  log.info("slash: routing over " + slashers.map((s) => `${s.kind}(${s.address})`).join(" + "), { contracts: slashers.length });
+  const route = async (commitment, secret, tier) => {
+    for (const s of slashers) {
+      let h = null;
+      try { h = await s.slash.holds(secret, tier); } catch (e) { log.warn("slash: holds() probe failed; skipping contract", { via: s.address, err: e.message }); continue; }
+      if (h) {
+        log.info(`slash: routed to ${s.kind}(${s.address})`, { commitment: String(h.leaf).slice(0, 18) + "..", limit: h.limit });
+        return s.slash(h.leaf, secret, { commitment: h.leaf, limit: h.limit, resolved: true });
+      }
+    }
+    log.warn("slash: no configured contract holds a live leaf of the over-spender; submitting the default claim to the primary", { primary: slashers[0].address });
+    return slashers[0].slash(commitment, secret, tier);
+  };
+  route.slashers = slashers;
+  return route;
 }
 
 // ---- wire protocol ----------------------------------------------------------

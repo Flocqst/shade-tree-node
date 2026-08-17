@@ -80,7 +80,11 @@ Three things make it a system rather than one proxy:
   commitment ever leaves the machine) and stake into `StakedReputationSet` (`contracts/`, live on
   Sepolia). The gateway reads the admission root from the chain through a `RootProvider`
   (`lib/root-provider.mjs`), so there is no `members.json` to keep in sync and the operator never
-  holds a member secret.
+  holds a member secret. Several sets can be trusted at once: the gateway admits the UNION of
+  the static `members.json`, every staked set in `RGOE_GROUP_CONTRACT`, and a **paid** set
+  (`PaidAccessSet`, `RGOE_PAID_ACCESS_CONTRACT`) whose leaves the operator inserts after an
+  off-chain payment — same tree, same proof; a slash lands on whichever contract holds the leaf
+  ([`docs/PAYMENTS.md`](docs/PAYMENTS.md), [ADR 0007](docs/adr/0007-paid-access.md)).
 - **The fleet is discovered live.** Gateways announce to a **bootnode** (`bootnode/`), which
   serves a signed directory of live onions; the client pulls it over Tor, verifies it, caches a
   persisted last-known-good copy, and rotates per request. The onion is never on chain, and the

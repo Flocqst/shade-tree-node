@@ -140,6 +140,30 @@ one-env swap**: `RGOE_PAY_ASSET=0x1c7D…7238` (the registrar probes the domain 
 
 ---
 
+## Shipped 2026-08-17: the gateway / root / slash / client half (T-FEAT-7 2/3, ADR [0007](adr/0007-paid-access.md))
+
+The registrar above sells the leaf; this is what happens to it afterwards — how the fleet trusts the paid set next to the staked and static ones, how a paid over-spender is slashed, and how a buyer's client finds its leaf.
+
+
+| Layer | What it is now | Code |
+|---|---|---|
+| **0 — identity decorrelation** | Unchanged: the buyer's choice of hop into a fresh address / account (Railgun, Privacy Pools, a CEX, a bridge; none mandated), now applied to the 402 payment as well as to any on-chain footprint. Nothing to build; documented in the leak ledger + THREAT-MODEL §5. | — |
+| **1 — payment + binding** | 402-settled off-chain payment (x402/MPP) → operator inserts the buyer's rateCommitment `Poseidon2(Poseidon1(identitySecret), limit)` into `PaidAccessSet`: the structural sibling of `StakedReputationSet` (T-DEV-9 on-chain depth-20 Poseidon tree, `currentRoot()` at storage slot 3, tiered leaf, `limitOf` / `leafCount` / `allowedLimits` / `DEFAULT_LIMIT`, `slash(commitment, secret, limit, receiver)` zeroes the leaf — no bond, no exit/withdraw). Contract: `contracts/PaidAccessSet.sol` (T-FEAT-7 1/3, PR #50; live on Sepolia at `0x4e8C2Bf5d3c5454A04837401095fce2646484111`). Off-chain readers: `lib/root-provider.mjs:TOPIC.inserted / TOPIC.deposit / TOPIC.paidSlashed` (the paid events, `(commitment indexed, limit, index, root)`), `reconstructGroup`, `loadGroupFromContract`. | `contracts/PaidAccessSet.sol`, `lib/root-provider.mjs` |
+| **2 — access** | Unchanged envelope + proof. The gateway trusts the UNION of its root sources — `members.json` (static), each `RGOE_GROUP_CONTRACT` (now a comma list) and `RGOE_PAID_ACCESS_CONTRACT` (sugar that appends) — one `RootProvider` per contract, node or light, unioned by `CompositeRootProvider`; `RGOE_ROOTS=static,onchain` selects (default = both when configured). Slashing ROUTES to the contract that holds the leaf. Anonymity floor `RGOE_PAID_MIN_LEAVES` (default 8) is logged + gauged, never enforced. Client: leaf discovery across the same sources; Rust bridge `rgoe leaves`. | `gateway/gateway.mjs:initRoots / resolveRootSources / describeRootSources / makeRoutingSlasher / makeOnchainSlasher.holds / PAID_MIN_LEAVES`, `lib/root-provider.mjs:CompositeRootProvider / configuredContracts / parseContractList / makeRootProvider`, `client/rgoe-client.mjs:makeLeafSourceLoader`, `group/leaves.mjs`, `lib/config.mjs:isEthAddressList / isRootSourceList` |
+
+Startup lines (ABI-of-record for scripts): `roots: members.json + staked(0x…) + paid(0x…)`, `paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)` (WARN below the floor, never refuse), `slash: routing over primary(0x…) + staked(0x…) + paid(0x…)`, and on a slash `slash: routed to paid(0x…)` / `SLASH tx … via=0x…`. Metrics: `rgoe_gateway_trusted_roots{source,contract}`, `rgoe_gateway_paid_access_leaves{contract}`.
+
+**Decisions on the four open items** (below, "Buildable today vs open"):
+
+1. *Live root vs pinned per-epoch snapshot* → **live**, exactly as the staked set: the gateway reads the confirmed root (`finalized`, or `head - RGOE_CONFIRMATIONS`) and keeps the freshness ring (`RGOE_FRESHNESS_ROOTS`, current + 2 prior), so a proof built against a just-superseded root still verifies and a reorg is bounded by the confirmation depth. No separate pin was needed (`lib/root-provider.mjs:NodeRootProvider / LightClientRootProvider`, unchanged; the paid set is just one more child).
+2. *One deposit = one access period vs an ongoing budget* → **subscription**: nullifier scoped to the epoch, fresh `limit` budget every epoch, for as long as the leaf lives (until slashed). Expiry is a follow-up (the contract could zero a leaf after N epochs; nothing in the gateway changes).
+3. *Anonymity-set floor K* → **logged, not enforced**: `RGOE_PAID_MIN_LEAVES` (8). `leafCount()` (total leaves ever inserted; slashed slots never reused) is read at startup and on every root refresh; below the floor the gateway WARNs and keeps serving. It is a deployment parameter, not a proven bound — say it, do not hide it.
+4. *Wiring the Layer-0 hop and the payment to one decorrelated address* → **a wiring note, unchanged by the pivot**: pay the 402 from a fresh address / account funded through the hop; the registrar's insert tx carries only the commitment + tier, never the payer. THREAT-MODEL §5 lists the residual (payment-side) linkability.
+
+**Leak ledger, updated:** in addition to the rows below — the **tier bucket is public** at insertion (the `limit` in the `Inserted` event; the same is already true of a stake's `bondFor(limit)`), the insert tx is public (it names the commitment, not the payer), the 402 payment is visible to its rail, and **which root a proof opens (static / staked / paid) is visible to the gateway** (the root is a public signal) — the paid crowd is `leafCount()`, hence the floor.
+
+**Verified by:** `test/paid-access.selftest.mjs` (anvil: the real staked set + the real `PaidAccessSet` from its forge artifact, the REAL gateway, REAL proofs — static, staked and paid members all egress with three roots trusted at once; unknown root → `gate:wrong-group-root`; a paid over-spender is slashed on the PAID contract, leaf zeroed, root changed, staked set untouched; the floor WARN; `rgoe leaves` round-trips the root), `gateway/root-sources.selftest.mjs`, `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`.
+
 ## Design of record (2026-08, pre-402): the four requirements and the three layers
 
 **Status: design; Layer 1 below is superseded by the 402 rails above (the tree + off-chain redemption stand).** This supersedes the earlier four-pass design. The access layer it builds on (Semaphore membership proof + epoch nullifiers) is live.
@@ -169,6 +193,8 @@ Only the middle layer is new code.
 If you do not want your funding address publicly known as a customer of a privacy-egress service, route the money through any large shared pool into a fresh address first. The protocol does not mandate which pool. Railgun, Privacy Pools, a CEX withdrawal, a bridge: all fine. It is a replaceable commodity hop. This is how we honor "no one specific party." The protocol assumes none, and where a big anonymity set is wanted, you pick the rail. If you want a named default that best fits the constraint, it is Railgun: client-side proof-of-innocence instead of a curator, and a decentralized broadcaster set rather than one relayer. Privacy Pools works too, but its association-set provider is a curator-party, so it is the weaker fit for this exact requirement.
 
 **Layer 1: payment and binding. New. One small immutable contract.**
+
+> **Superseded rail (2026-08-17, ADR 0007):** the payable `deposit(commitment)` / `sweep()` below is NOT what shipped. Payment settles off chain over HTTP 402 rails and the operator inserts the commitment (`insert(commitment, limit)`, operator only). The tree, the leaf and the redemption are exactly as described.
 
 ```
 deposit(commitment) payable

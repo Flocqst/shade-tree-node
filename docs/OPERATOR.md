@@ -174,6 +174,9 @@ Gateway on startup:
 gateway up on 127.0.0.1:8443  (epoch <n>, 120s)
 egress policy: :443 only (metadata-only TLS tunnel)
 root source: members.json (PoC fallback), <n> members     # or "on-chain RootProvider ..."
+roots: members.json + staked(0x…) + paid(0x…)  trustedRoots=3   # T-FEAT-7: every source unioned
+paid-access anonymity set: 12 leaves (floor K=8)                 # WARN when below the floor
+slash: routing over primary(0x…) + staked(0x…) + paid(0x…)      # with several slash targets
 ```
 
 A served request (PASS) and a rejected one (DROP):
@@ -559,6 +562,47 @@ Day 2:
   `RGOE_PAY_ASSET` (one env), restart.
 
 Buyer side: `docs/JOIN.md` "Buy access" / `rgoe pay --help`.
+
+### Selling access: the paid set (T-FEAT-7)
+
+Access can be BOUGHT as well as staked or granted (`docs/PAYMENTS.md`, `docs/adr/0007-paid-access.md`).
+The buyer pays OFF chain over HTTP 402 rails (x402 / MPP; the registrar service — a separate
+component — handles the payment) and the operator/registrar key inserts the buyer's
+rateCommitment into the `PaidAccessSet` (`insert(commitment, limit)`, `insertBatch`; operator
+only, nothing payable on chain, no refunds, no exit). From then on the buyer proves membership
+of the PAID tree exactly like everyone else; the gateway learns nothing about which leaf.
+
+What the gateway does with it — three knobs, all documented in `docs/CONFIG.md`:
+
+```bash
+# trust the paid set NEXT TO the staked set and members.json (union; nothing is replaced)
+export RGOE_GROUP_CONTRACT=0xStaked          # may be a comma list of sets
+export RGOE_PAID_ACCESS_CONTRACT=0xPaid      # appends the paid set as one more root source
+# (or: rgoe gateway --network sepolia, once the record carries contracts.paidAccessSet)
+export RGOE_PAID_MIN_LEAVES=8               # anonymity-set floor K: WARN below it, never refuse
+export RGOE_TIERS=8,32                       # the tiers you sell, so a paid over-spender's leaf resolves
+```
+
+- **Roots.** `RGOE_ROOTS` unset = the union of what is configured (`onchain` for every contract +
+  `static` while `group/members.json` / `RGOE_MEMBERS_FILE` exists), so your members.json friends
+  keep egressing while paid and staked leaves are admitted too. `RGOE_ROOTS=onchain` drops the
+  static root. Startup prints `roots: members.json + staked(0x…) + paid(0x…)` — read it.
+- **Floor.** `paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)`: with few paid
+  leaves a paid member is thinly hidden among the OTHER paid members (the gateway still cannot
+  tell which one; but "one of 3 buyers" is a small crowd). The gateway WARNs and keeps serving;
+  raise the floor for your own reporting, hold inserts to batch them (dwell time), or seed the set.
+  Metric: `rgoe_gateway_paid_access_leaves`; roots per source: `rgoe_gateway_trusted_roots`.
+- **Slashing.** A paid over-spender is slashed on the PAID contract: the gateway resolves which
+  configured set holds the reconstructed secret's leaf (`limitOf`) and calls THAT contract's
+  `slash(commitment, secret, limit, receiver)` (`slash: routed to paid(0x…)`). There is no bond
+  to burn — the leaf is zeroed, the buyer's access ends, the root changes on the next refresh. Your
+  `RGOE_SLASH_KEY` needs gas on the same chain; `RGOE_SLASH_CONTRACT` stays the primary (a
+  superseded set you still slash on) and is tried first.
+- **Sweep / prices.** Not on this contract any more: the money moves over the 402 rails
+  (registrar); the contract only records leaves. Prices and tiers are the registrar's config; the
+  contract's `allowedLimits()` is the admitted tier table.
+- **Rust clients.** They read a static `--members` file: `rgoe leaves --contract 0xPaid --out
+  members.json` exports the paid tree in that shape (zeros preserved), re-run after inserts/slashes.
 
 ### Endpoint hardening (T-HARD-4)
 

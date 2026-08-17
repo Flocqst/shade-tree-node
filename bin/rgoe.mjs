@@ -58,6 +58,11 @@ const FLAG_ENV = {
   "operator-sig": "RGOE_GW_OPERATOR_SIG",
   "register-key": "RGOE_REGISTER_KEY",
   bond: "RGOE_BOND",
+  // tiers / paid access (T-FEAT-7): the member's tier limit is read from RGOE_LIMIT by client,
+  // identity and register-member alike, so `--limit` maps to it for every command.
+  limit: "RGOE_LIMIT",
+  "paid-access-contract": "RGOE_PAID_ACCESS_CONTRACT",
+  roots: "RGOE_ROOTS",
 };
 
 // command -> { script, help }. `long` marks a durable service (just for the help hint).
@@ -70,6 +75,7 @@ const COMMANDS = {
   identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: rgoe identity [--out <path>] [--secret-file <path>] (secret: --secret-file | RGOE_SECRET | ./.secret)" },
   "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: rgoe register-member <commitment> [--limit N] (tier; default 8)" },
   pay:               { script: "group/pay.mjs",              help: "BUY a membership leaf over HTTP 402 (x402 or MPP; stablecoin, no gas): rgoe pay --bootnode <onion> --limit 8|32 [--protocol x402|mpp] [--key-file <buyer-key>] [--dry-run]" },
+  leaves:            { script: "group/leaves.mjs",           help: "export an on-chain set's ordered leaves as a members.json for the Rust client: rgoe leaves --contract 0x.. [--out members.json]" },
   "register-gateway":{ script: "group/register-gateway.mjs", help: "stake a gateway operator bond into GatewayRegistry" },
   // exit/withdraw/status share one script (group/exit-gateway.mjs); `prepend` selects the mode.
   "exit-gateway":    { script: "group/exit-gateway.mjs", prepend: ["exit"],     help: "start the GatewayRegistry unbonding clock for this operator (leave the active set; stay slashable for UNBONDING): rgoe exit-gateway [--dry-run]" },
@@ -123,7 +129,7 @@ function parse(argv) {
 function topHelp() {
   console.log(`rgoe ${pkg.version} — reputation-gated onion egress\n`);
   console.log("usage: rgoe <command> [--flags] [args]\n");
-  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "identity", "register-member", "pay", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "gateway", "client", "doctor", "backup", "restore", "record-deploy"];
+  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "identity", "register-member", "pay", "leaves", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "gateway", "client", "doctor", "backup", "restore", "record-deploy"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);

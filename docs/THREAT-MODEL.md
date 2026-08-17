@@ -271,6 +271,23 @@ decision under the gateway. **Enforced** by `lib/gateway-registry.mjs:blockTag` 
 reorg safety is opt-in via `RGOE_CONFIRMATIONS` — an honest default-config caveat, not a guarantee.
 Adversary A2.
 
+### 4.14b Multi-root admission: static + staked + paid sets (T-FEAT-7)
+The gateway admits a proof under ANY root in the union of its configured sources — the static
+`members.json`, each `StakedReputationSet` in `RGOE_GROUP_CONTRACT`, the `PaidAccessSet` in
+`RGOE_PAID_ACCESS_CONTRACT` (`gateway/gateway.mjs:initRoots`, `lib/root-provider.mjs:
+CompositeRootProvider`). Soundness per source is unchanged (§4.2: the proof still opens a leaf under
+one trusted root); what the union changes is WHO can add a leaf: the operator (members.json, and the
+paid set's operator-only `insert` after an off-chain 402 payment) and anyone who posts a bond
+(staked). So the paid set is exactly as trustworthy as the operator's insert key — a stolen
+registrar key mints admissions (never money: the contract holds none). Anonymity within the union:
+a proof reveals which ROOT it opens (the root is a public signal), i.e. whether the member is a
+static, staked or paid member, and nothing finer — the paid set's crowd is its live leaf count,
+logged against `RGOE_PAID_MIN_LEAVES` (WARN, never refuse; the floor is a parameter, not a bound).
+Slashing routes to the contract that holds the leaf (`limitOf`), so a paid over-spender loses its
+leaf on the paid set and a staked one its bond; a members.json member is only ever dry-run/primary
+slashed as before. **Enforced** in `gateway/gateway.mjs:makeRoutingSlasher`; tested in
+`test/paid-access.selftest.mjs`, `gateway/root-sources.selftest.mjs`. Adversaries A1, A2, A4.
+
 ### 4.15 Version-negotiation downgrade resistance
 The gateway declares an inclusive envelope-version range and checks the incoming `v` **before any
 field is read**, so a garbage or out-of-range version never reaches `verifyEnvelope`. **Enforced** by
@@ -353,6 +370,18 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 `docs/ROADMAP.md`, and `SECURITY.md`.
 
 **Residual (tracked, will change the security surface when built):**
+
+- **Paid access (T-FEAT-7, `docs/PAYMENTS.md`, ADR 0007) is prepaid trust in the operator.** The
+  payment settles OFF chain (HTTP 402 rails) and the operator inserts the leaf; a paying member
+  who is refused a valid proof, or never inserted, has no on-chain recourse — the same
+  buyer-seller trust any prepaid service carries, and NOT a facilitator: no third party is added.
+  Linkability lives at the payment, not at use: the 402 payment (its rail, its payer address /
+  account, its timing) and the on-chain `insert` tx are visible to the rail and to the chain
+  respectively; the TIER BUCKET (which `limit` was bought) is public in the insert event; use is
+  unlinkable to both (the proof hides the leaf). Mitigations are the buyer's Layer-0 hop (a fresh
+  address / account funded through a pool of their choice), the operator batching inserts (dwell
+  time between payment and insert), and a healthy paid crowd (`RGOE_PAID_MIN_LEAVES`). Which
+  root a proof opens (static / staked / paid) is public to the gateway (§4.14b).
 
 - **Cross-fleet replay / rate is fleet-wide only when the tally is on (T-FEAT-20/20b, ROADMAP-v1
   #1/#3).** §4.6 defends *one* gateway. The shared per-epoch nullifier tally
