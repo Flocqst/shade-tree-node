@@ -2,10 +2,10 @@
 // anvil: the gateway trusting a UNION of roots (static members.json + a StakedReputationSet + a
 // PaidAccessSet), the client discovering WHICH set holds its leaf, `rgoe leaves` exporting the paid
 // tree for the Rust client, and the slasher ROUTING a paid over-spender's slash to the PAID
-// contract. Real contracts for the staked side (deployed by contracts/script/DeployRegistry.s.sol),
-// the test double test/PaidAccessSetMock.sol for the paid side (operator-insert-only: the payment
-// itself is off chain, HTTP 402 rails; the production PaidAccessSet ships from ship/pay-contract —
-// swap it in here when it lands), the REAL gateway process, REAL RLN Groth16 proofs. Slow suite
+// contract. REAL contracts on both sides (the staked set deployed by contracts/script/
+// DeployRegistry.s.sol; the operator-insert-only contracts/PaidAccessSet.sol, PR #50, deployed from
+// its forge artifact — the payment itself is off chain, HTTP 402 rails), the REAL gateway process,
+// REAL RLN Groth16 proofs. Slow suite
 // (scripts/test-all.mjs SLOW_SUITES; skipped by RGOE_FAST=1). Needs anvil + forge on PATH and TCP
 // :8443 free; else SKIPs honestly.
 //
@@ -98,7 +98,7 @@ async function main() {
     for (let i = 0; i < 100 && !up; i++) { try { await rpc(url, "eth_chainId"); up = true; } catch { await new Promise((r) => setTimeout(r, 100)); } }
     if (!up) { console.log("  SKIP anvil did not come up"); return; }
 
-    // ---- 1. contracts: the real staked set (tiers 8,32) + the paid mock (tiers 8,32) ------------
+    // ---- 1. contracts: the real staked set (tiers 8,32) + the real paid set (tiers 8,32) ----------
     const outJson = join(ROOT, "cache", `paid-selftest-${port}.local.json`);
     const dep = spawnSync(forgeBin, ["script", "contracts/script/DeployRegistry.s.sol:DeployRegistry", "--rpc-url", url, "--broadcast", "--private-key", ANVIL_KEY_0, "-vv"], {
       cwd: ROOT, encoding: "utf8", timeout: 300000,
@@ -113,23 +113,19 @@ async function main() {
     const { ethers } = await import("ethers");
     const provider = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
     const deployer = new ethers.Wallet(ANVIL_KEY_0, provider);
-    // PoseidonT3 (external library) + the linked mock, from the forge artifacts.
+    // PoseidonT3 (external library) + the linked PaidAccessSet, from the forge artifacts (the deploy
+    // script above already built the tree; build if the artifact is missing).
     const readArtifact = (rel) => JSON.parse(readFileSync(join(ROOT, "out", rel), "utf8"));
-    if (!existsSync(join(ROOT, "out", "PaidAccessSetMock.sol", "PaidAccessSetMock.json"))) spawnSync(forgeBin, ["build"], { cwd: ROOT, encoding: "utf8", timeout: 300000 });
+    if (!existsSync(join(ROOT, "out", "PaidAccessSet.sol", "PaidAccessSet.json"))) spawnSync(forgeBin, ["build"], { cwd: ROOT, encoding: "utf8", timeout: 300000 });
     const poseidonArt = readArtifact("PoseidonT3.sol/PoseidonT3.json");
     const poseidon = await (await new ethers.ContractFactory(poseidonArt.abi, poseidonArt.bytecode.object, deployer).deploy()).waitForDeployment();
-    // Prefer the REAL contract's artifact once contracts/PaidAccessSet.sol is in the tree (ship/pay-contract),
-    // else the committed test double — same constructor (operator, hasher, limits) and interface.
-    const realArt = join(ROOT, "out", "PaidAccessSet.sol", "PaidAccessSet.json");
-    const usingReal = existsSync(join(ROOT, "contracts", "PaidAccessSet.sol")) && existsSync(realArt);
-    const mockArt = usingReal ? JSON.parse(readFileSync(realArt, "utf8")) : readArtifact("PaidAccessSetMock.sol/PaidAccessSetMock.json");
-    console.log(`  paid set under test: ${usingReal ? "contracts/PaidAccessSet.sol (REAL)" : "test/PaidAccessSetMock.sol (test double)"}`);
-    const linked = mockArt.bytecode.object.replace(/__\$[0-9a-fA-F]{34}\$__/g, (await poseidon.getAddress()).slice(2).toLowerCase());
-    const paidC = await (await new ethers.ContractFactory(mockArt.abi, linked, deployer).deploy(ANVIL_ADDR_3, hasher, [8n, 32n])).waitForDeployment();
+    const paidArt = readArtifact("PaidAccessSet.sol/PaidAccessSet.json");
+    const linked = paidArt.bytecode.object.replace(/__\$[0-9a-fA-F]{34}\$__/g, (await poseidon.getAddress()).slice(2).toLowerCase());
+    const paidC = await (await new ethers.ContractFactory(paidArt.abi, linked, deployer).deploy(ANVIL_ADDR_3, hasher, [8n, 32n])).waitForDeployment();
     const paid = await paidC.getAddress();
-    ok(/^0x[0-9a-fA-F]{40}$/.test(paid) && (await paidC.allowedLimits()).map(Number).join(",") === "8,32" && (await paidC.operator()) === ANVIL_ADDR_3, `PaidAccessSetMock deployed at ${paid} (operator = anvil #3; tiers 8,32; insert-only)`);
+    ok(/^0x[0-9a-fA-F]{40}$/.test(paid) && (await paidC.allowedLimits()).map(Number).join(",") === "8,32" && (await paidC.operator()) === ANVIL_ADDR_3, `PaidAccessSet (contracts/PaidAccessSet.sol) deployed at ${paid} (operator = anvil #3; tiers 8,32; insert-only)`);
     const slot3 = await rpc(url, "eth_getStorageAt", [paid, "0x3", "latest"]);
-    ok(BigInt(slot3) === (await paidC.currentRoot()), "mock keeps currentRoot at storage slot 3 (LightClientRootProvider-compatible)");
+    ok(BigInt(slot3) === (await paidC.currentRoot()), "currentRoot at storage slot 3 (LightClientRootProvider-compatible)");
 
     // ---- 2. three members: static S (tier 8), staked A (tier 8), paid P (tier 32) --------------
     const { memberOf, sendEnvelope, startGateway, stakeViaCli } = await import("../scripts/integration-tiers.mjs");

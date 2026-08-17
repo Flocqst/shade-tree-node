@@ -41,7 +41,8 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
    bond to burn). What it drops: exit / withdraw (nothing is refundable) and, after the pivot,
    anything payable: `insert(commitment, limit)` / `insertBatch` are `onlyOperator`. The
    payment itself is an off-chain 402 exchange between buyer and registrar; the registrar
-   inserts the buyer's rateCommitment. Test double for the JS half: `test/PaidAccessSetMock.sol`.
+   inserts the buyer's rateCommitment. Live on Sepolia (PR #50); the anvil selftest deploys it
+   from its forge artifact.
 2. **The gateway trusts a UNION of root sources, not one.** `RGOE_GROUP_CONTRACT` became a comma
    list (single value byte-equivalent), `RGOE_PAID_ACCESS_CONTRACT` appends the paid set, and
    `RGOE_ROOTS` (default: `static` while `members.json` exists + `onchain` for every contract)
@@ -119,7 +120,7 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
   `reconstructGroup`, `loadGroupFromContract`, paid event topics)
 - `gateway/gateway.mjs` (`resolveRootSources`, `describeRootSources`, `initRoots`,
   `PAID_MIN_LEAVES`, `makeRoutingSlasher`, `makeOnchainSlasher.holds`)
-- `client/rgoe-client.mjs` (`makeLeafSourceLoader`), `group/leaves.mjs`, `test/PaidAccessSetMock.sol`
+- `client/rgoe-client.mjs` (`makeLeafSourceLoader`), `group/leaves.mjs`, `contracts/PaidAccessSet.sol`
 - Tests: `test/paid-access.selftest.mjs` (anvil, real proofs), `gateway/root-sources.selftest.mjs`,
   `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`
 - zk-creds "insertion equals issuance": Rosenberg, White, Garman, Miers, IEEE S&P 2023
