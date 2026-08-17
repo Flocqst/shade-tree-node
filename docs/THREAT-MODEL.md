@@ -333,6 +333,37 @@ A1 (as a client of peers), A5, and any unauthenticated network peer.
 
 ---
 
+### 4.17 Paid admission over HTTP 402 (T-FEAT-7): the registrar as a trust surface
+
+**Property.** A buyer obtains exactly the leaf they paid for, once, at the tier they paid for; a
+captured or replayed payment never moves funds twice or mints a second leaf; the operator can
+neither be tricked into inserting an unpaid leaf nor into paying gas for a transfer that will
+revert; the payer↔leaf link never reaches the gateway.
+
+**Where enforced.** `payments/registrar.mjs` `makeEngine.verifyAndSettle` (order: wire shape via
+`payments/wire.mjs` `parseX402Payment` / `parseMppCredential`; body `limit` == paid tier;
+commitment is a field element; time window with a settle buffer; EIP-712 recovery over the
+token domain proven at boot against `DOMAIN_SEPARATOR()`; on-chain `authorizationState`,
+`balanceOf`, `PaidAccessSet.limitOf == 0`; `eth_call` simulation) → serialized settle → wait →
+`insert` → wait. Replay: the token burns `(from, nonce)`; the store keys orders by `(asset, from,
+nonce)` (identical replay → stored receipt, different commitment → `409`, chain-consumed nonce →
+`402`). MPP challenges are HMAC-bound (7-slot, core draft) so a tampered challenge fails
+`invalid-challenge`; the MPP nonce is `keccak256(id ‖ realm)` so a credential binds to one
+challenge; a bodied challenge is digest-bound (RFC 9530). Endpoint DoS: the bootnode's token
+bucket in front of paid POSTs and quotes, an in-flight cap, 4 KiB body cap, the T-HARD-4 slow-
+client limits, and the operator key never rendered into a unit (0600 drop-in). Proof:
+`payments/wire.selftest.mjs` (parse matrix, spec golden), `payments/registrar.selftest.mjs`
+(both rails end to end on anvil, replay/idempotency, adversarial matrix, slow-loris, crash
+recovery), `test/Eip3009Token.t.sol`.
+
+**Trust.** The buyer trusts the operator to insert after settlement (buyer–seller trust,
+irreducible for any prepaid service; the settle tx and `GET /pay/status/<nonce>` are the public
+evidence). The operator trusts its RPC as everywhere else. **The operator learns
+`commitment ↔ payer`** (it must, to insert), and a chain observer sees `payer → operator` plus the
+tier: Layer 0 (a fresh, pool-funded address) is the buyer's mitigation, stated in `rgoe pay`'s
+output and `docs/JOIN.md`. The gateway is unchanged: it sees an RLN proof over the paid root,
+never a leaf or a payer.
+
 ## 5. Known residual risks and out-of-scope
 
 These are documented limitations, not new findings. Cross-referenced to `docs/SHIP-PLAN.md`,

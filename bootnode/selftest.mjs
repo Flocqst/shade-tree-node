@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateOnionIdentity } from "./keygen.mjs";
 import { buildAnnounce, operatorAuthMessage, canonicalAnnounceBytes } from "./announce.mjs";
-import { makeRegistry, makeServer, loadOrMintSigner } from "./server.mjs";
+import { makeRegistry, makeServer, loadOrMintSigner, payAdvertFromEnv } from "./server.mjs";
 import { MockStakeVerifier } from "../lib/gateway-registry.mjs";
 import { verifyDirectory, onionToPubkey } from "../lib/directory.mjs";
 
@@ -177,6 +177,25 @@ async function main() {
     const big = await fetch(baseB + "/announce", { method: "POST", headers: { "content-type": "application/json" }, body: "x".repeat(200 * 1024) }).then((r) => ({ status: r.status })).catch(() => ({ status: "conn-reset" }));
     ok(big.status === 400 || big.status === "conn-reset", "oversized announce body is rejected (not buffered unbounded)");
     await new Promise((r) => serverB.close(r));
+
+    // registrar advert (T-FEAT-7): /health carries `pay` ONLY when advertised; the default is unchanged.
+    console.log("\nregistrar advert in /health:");
+    ok(payAdvertFromEnv({}) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "0" }) === null, "unset / 0 -> no advert");
+    const adv = payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=100000,32=400000" });
+    ok(adv && adv.port === 8878 && adv.protocols.join() === "x402,mpp" && adv.chain === "eip155:11155111" && adv.tiers["32"] === "400000", "=1 composes {port, protocols, asset, chain, tiers} from RGOE_PAY_*");
+    ok(payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "nope", RGOE_PAY_PRICES: "8=1" }) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=x" }) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "{bad" }) === null, "garbage asset / prices / JSON -> no advert (never a half advert)");
+    ok(payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: '{"port":9999,"protocols":["x402"]}' }).port === 9999, "JSON literal form is passed through");
+    const regP = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open" });
+    const serverP = makeServer(regP, { signerPub: signer.pub, pay: adv });
+    await new Promise((r) => serverP.listen(0, "127.0.0.1", r));
+    const hp = await fetch(`http://127.0.0.1:${serverP.address().port}/health`).then((r) => r.json());
+    ok(hp.ok && hp.pay && hp.pay.port === 8878 && hp.pay.asset === adv.asset && hp.signer === signer.pub, "/health includes `pay` when advertised");
+    await new Promise((r) => serverP.close(r));
+    const serverN = makeServer(regP, { signerPub: signer.pub });
+    await new Promise((r) => serverN.listen(0, "127.0.0.1", r));
+    const hn = await fetch(`http://127.0.0.1:${serverN.address().port}/health`).then((r) => r.json());
+    ok(hn.ok && !("pay" in hn), "/health without an advert has no `pay` key (byte-identical default)");
+    await new Promise((r) => serverN.close(r));
   } finally {
     await rm(work, { recursive: true, force: true });
   }

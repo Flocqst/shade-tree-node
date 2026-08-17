@@ -57,6 +57,12 @@
 //   RGOE_BOOTNODE_ANNOUNCE_BURST  the bucket's capacity (default max(100, maxEntries/10) = 1000).
 //   RGOE_BOOTNODE_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
 //   _MAX_HEADER_BYTES / _CONN_CHECK_MS   HTTP slow-client limits (see HTTP_LIMITS below).
+//   RGOE_REGISTRAR_ADVERTISE OPTIONAL: advertise the operator's 402 registrar (payments/registrar.mjs,
+//                            T-FEAT-7) in GET /health as `pay: {port, protocols, asset, chain, tiers}`
+//                            so a client can discover "this fleet sells access, here". Either a JSON
+//                            object literal, or "1" to compose it from RGOE_REGISTRAR_PORT (8878),
+//                            RGOE_PAY_ASSET, RGOE_PAY_PRICES ("8=100000,32=400000"), RGOE_PAY_CHAIN_ID
+//                            (11155111). Unset (default) => /health is byte-identical to before.
 
 import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -552,6 +558,29 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     liveOnions: () => [...live.keys()], maxEntries: () => maxEntries, prober, admission, ttlSec, announceBucket: bucket };
 }
 
+// ---- registrar advert (T-FEAT-7) ---------------------------------------------
+// The bootnode is discovery: it says WHERE the registrar is (same onion, another port) and what it
+// sells; it never proxies a payment. Pure over env so the selftest can pin the shape. Returns null
+// when unset/garbage (=> no `pay` key in /health at all).
+export function payAdvertFromEnv(env = process.env) {
+  const raw = env.RGOE_REGISTRAR_ADVERTISE;
+  if (!raw || String(raw).trim() === "" || String(raw).trim() === "0") return null;
+  if (String(raw).trim().startsWith("{")) {
+    try { const j = JSON.parse(raw); return j && typeof j === "object" && !Array.isArray(j) ? j : null; } catch { return null; }
+  }
+  const asset = env.RGOE_PAY_ASSET;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(asset || "")) return null;
+  const tiers = {};
+  for (const part of String(env.RGOE_PAY_PRICES || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+    const m = /^([1-9][0-9]{0,4})=([1-9][0-9]*)$/.exec(part);
+    if (!m) return null;
+    tiers[m[1]] = m[2];
+  }
+  if (!Object.keys(tiers).length) return null;
+  const chainId = Number(env.RGOE_PAY_CHAIN_ID || 11155111);
+  return { port: envInt("RGOE_REGISTRAR_PORT", 8878), protocols: ["x402", "mpp"], asset, chain: `eip155:${chainId}`, tiers };
+}
+
 // ---- HTTP transport ---------------------------------------------------------
 function send(res, code, obj, extraHeaders = null) {
   const body = JSON.stringify(obj);
@@ -588,7 +617,7 @@ function readBody(req, max = 64 * 1024) {
 }
 
 // `limits` overrides HTTP_LIMITS (the selftest sets tiny timeouts); main() passes none.
-export function makeServer(registry, { signerPub, limits = {} } = {}) {
+export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}) {
   // Current live-gateway count as a gauge, evaluated at scrape time from this registry.
   metrics.gauge("rgoe_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
 
@@ -606,7 +635,8 @@ export function makeServer(registry, { signerPub, limits = {} } = {}) {
     try {
       const url = new URL(req.url, "http://bootnode");
       if (req.method === "GET" && url.pathname === "/health") {
-        return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub });
+        // `pay` (T-FEAT-7): present only when the operator advertises a registrar (see payAdvertFromEnv).
+        return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub, ...(pay ? { pay } : {}) });
       }
       // Loopback Prometheus exposition. The bootnode already binds 127.0.0.1 only, so
       // /metrics inherits that loopback scope (no separate port needed).
@@ -761,7 +791,9 @@ async function main() {
     log.info("bootnode federation on", { peers, intervalSec: federation.intervalMs / 1000 });
   }
 
-  const server = makeServer(registry, { signerPub: signer.pub });
+  const pay = payAdvertFromEnv();
+  const server = makeServer(registry, { signerPub: signer.pub, pay });
+  if (pay) log.info("advertising 402 registrar in /health", pay);
 
   // Track live connections for draining (add/delete only — no per-request work).
   const openSockets = new Set();

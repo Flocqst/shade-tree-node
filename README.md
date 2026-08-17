@@ -168,6 +168,10 @@ Built and verified:
 - **Operator never holds a secret.** Self-enrollment: only the commitment leaves the member.
 - **On-chain admission with stake and slashing.** `StakedReputationSet` (members) and an optional
   `GatewayRegistry` (operators); over-spenders are slashed by cryptographic reconstruction.
+- **Access can be bought.** `rgoe pay` speaks HTTP 402 in both machine-payment dialects
+  (x402 v2 and MPP) to the operator's registrar on the bootnode onion, signs one EIP-3009
+  stablecoin authorization (no gas), and the operator inserts the leaf into `PaidAccessSet`;
+  egress is then the same RLN proof ([`docs/PAYMENTS.md`](docs/PAYMENTS.md)).
 - **A live fleet.** Bootnode discovery, per-request gateway rotation, failover, and a persisted
   last-known-good directory cache. Clients re-derive each onion's key and, opt-in with
   `RGOE_VERIFY_STAKE`, re-check a gateway's operator signature and live stake themselves rather
@@ -180,8 +184,12 @@ Built and verified:
 
 Deliberately out of scope, or still an operator responsibility:
 
-- **No payments.** The gate is membership plus stake, not a fee. Anonymous payments are designed
-  in [`docs/PAYMENTS.md`](docs/PAYMENTS.md), not built.
+- **Payments are testnet-only and the buyer↔operator link is public.** Access can be *bought*
+  over HTTP 402 (x402 + MPP, stablecoin, no gas for the buyer; `rgoe pay`, `payments/`,
+  [`docs/PAYMENTS.md`](docs/PAYMENTS.md) "Shipped 2026-08-17"): the operator inserts the paid
+  leaf into an on-chain `PaidAccessSet` and the gateway trusts that root. The transfer
+  (buyer address → operator, tier price) is on chain by design; decorrelating the funding
+  address (Layer 0) is the buyer's choice, not something the protocol does for them.
 - **Admission is where sybil resistance lives.** The proof gates membership; it does not create
   reputation. Whatever adds a leaf (stake, invite, standing, proof-of-personhood) is what
   "reputable" means. This moves the sybil problem to admission; it does not dissolve it.
@@ -213,7 +221,7 @@ Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-
 | [`docs/FLEET.md`](docs/FLEET.md) | Fleet discovery + per-request selection design, and the fleet-wide budget analysis |
 | [`docs/ONCHAIN.md`](docs/ONCHAIN.md) | On-chain admission: staked set, gateway registry, root provider |
 | [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md) | Trust-minimized (light-client) reads of the reputation root |
-| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Paid access: 402-settled off-chain payment → operator-inserted leaf; the gateway/root/slash side is shipped (T-FEAT-7), the 402 registrar is in flight |
+| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Payments: the shipped 402 rails (x402 + MPP → `PaidAccessSet`) and the anonymity design they sit in |
 | [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/AUDIT.md`](docs/AUDIT.md) | The consolidated threat model; trust boundaries, test inventory, review order |
 | [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md) | Auditor's guide + written invariants for the Solidity contracts |
 | [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |

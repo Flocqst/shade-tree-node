@@ -218,3 +218,42 @@ NOT touched: the PoC checkout `~/reputation-gated-onion-egress` and its `tor/hs/
 5. ~~PoC leftovers~~ stopped (not deleted).
 6. agent-devops: `rgoe-gw-04` committed on the checkout's current branch (`zakura-min-spec-bench`, pushed) — landing to `main` is a repo decision; the tofu state now mixes two DO accounts (see 5.1 note).
 7. Membership root on the gateways is still the PoC `members.json` (T-DEV-9c).
+
+## 2026-08-17 (later) — T-FEAT-7 (payments): 402 registrar live on box-1 `[RECEIPT T-FEAT-7]` `[FUNDS: ≈0.0067 ETH gas + 0.5 tUSD test money]`
+
+Box: droplet-1 (`anon-egress`, the bootnode+gateway-1 box). PRs: #50 (PaidAccessSet, merged),
+#52 (registrar + `rgoe pay`, merged), #51 (multi-root gateway, **not merged at the time of this
+run** — see "Egress after purchase"). Operator/registrar key = the fleet operator hot key
+(agent-devops `egress.sops.yml`, decrypted into a shell var, piped into the drop-in via stdin,
+never printed). Buyer keys = two fresh laptop-generated wallets funded with the test asset only
+(ZERO ETH); deleted after the run.
+
+| step | result | evidence (no IPs, no keys) |
+|---|---|---|
+| settle asset | Circle Sepolia USDC `0x1c7D4B19…7238` verified EIP-3009 via `cast` (`TRANSFER_WITH_AUTHORIZATION_TYPEHASH()`, `authorizationState()`, `DOMAIN_SEPARATOR()==keccak(EIP712Domain{"USDC","2",11155111,addr})`), faucet captcha-gated ⇒ deployed the test token instead | `test/Eip3009Token.sol` "Test USD"/tUSD 6 dec at `0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8`, deploy tx `0x9561fa319ec38468d691c46f22968a276901ee59c996a64d30746fdd3f3bb234` block 11511028 (gas 920680); mints 1000 tUSD → buyer-x402 `0xA70A991A1E0819b9269EfdeEF644E7cc409043f5` (`0x251be1a4…2aa5`) and buyer-mpp `0x5408C1F81f5F4C2bFfe838BcFbA4Ac67662e16a3` (`0xd38ae7ae…810e`). Recorded: `network/sepolia/contracts.json` `payAsset`. |
+| box-1 rollout | `sudo RGOE_ADMISSION=stake RGOE_REGISTRAR=1 RGOE_PAID_ACCESS_CONTRACT=0x4e8C…4111 RGOE_PAY_ASSET=0xCe0C…a3A8 RGOE_PAY_PRICES=8=100000,32=400000 RGOE_RPC_URL=…publicnode.com bash bootnode/deploy/bootstrap.sh` (twice: the first run executed the pre-#52 script from the box's old checkout while fetching main; the second run, on the updated checkout, rendered the registrar). Then the key drop-in `/etc/systemd/system/rgoe-registrar.service.d/operator.conf` (0600, via stdin), `daemon-reload`, restart `rgoe-registrar rgoe-bootnode`. | torrc bootnode block gained `HiddenServicePort 8878 127.0.0.1:8878`; `rgoe-registrar.service` active: `registrar up on 127.0.0.1:8878 operator=0xc8606C75… payTo=0xc8606C75… asset=0xCe0C… assetName="Test USD" chain=eip155:11155111 tiers={"8":"100000","32":"400000"} paidAccessSet=0x4e8C…4111`; bootnode `/health` now `…,"pay":{"port":8878,"protocols":["x402","mpp"],"asset":"0xCe0C…a3A8","chain":"eip155:11155111","tiers":{"8":"100000","32":"400000"}}`; all four units active. |
+| quote over Tor (laptop, SOCKS 9260) | `curl --socks5-hostname 127.0.0.1:9260 "http://kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion:8878/pay/quote?limit=8"` → `HTTP/1.1 402`, `content-type: application/problem+json`, `cache-control: no-store`, `payment-required: eyJ4NDAy…` (x402 v2, one `exact`/`eip155:11155111` entry, `extra{name:"Test USD",version:"1",assetTransferMethod:"eip3009",limit:8}`), `www-authenticate: Payment id="…", realm="kssrk54…uyd.onion", method="evm", intent="charge", request="…", expires="…", opaque="…"` | both challenges present on the wire, exactly as the selftests render them |
+| **x402 purchase** | `RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 rgoe pay --limit 8 --protocol x402 --key-file buyer-x402.key --secret-file member-x402.secret` (fresh member secret; commitment = its tier-8 leaf `11862308938146849244563094373121480232224739202752701472622144703337474877150`) → `paid (x402)` | settle `transferWithAuthorization` **`0xfdaf57de730022b7a90f02aed161b4acfcd2f5d2f5ab5fddc25bf91c71b83036`** block 11511133 (85096 gas, from the OPERATOR — buyer paid no gas), insert **`0x54b32eaa98d32e8b4aab1e261975fb39f04f1a758268187645f5f0186b22c004`** block 11511134 (902005 gas), `leafIndex 1`, `PAYMENT-RESPONSE {success:true, transaction:0xfdaf…, network:"eip155:11155111", payer:0xA70A…}` |
+| **MPP purchase** | `… rgoe pay --limit 32 --protocol mpp --key-file buyer-mpp.key --secret-file member-mpp.secret` (second fresh member; tier-32 leaf `1037630284327555020321053653440103393133961403566306921540596724215745575561`; challenge `tZ2pFHr-OTdHrzv1X-yAriFTfv9UEEKUKjGnCoshBZM`, nonce = `keccak256(id ‖ realm)`) → `paid (mpp, replayed order)` | settle **`0xbbe396b966e8cad82f63bd61d319f9619dd15daad14628dcc0b52e4137320119`** block 11511136 (67984 gas), insert **`0x169de6a88af2cec58d96766f7813e927ff9c7e919a0b4c0ef46df2d23f2b55c9`** block 11511137 (919105 gas), `leafIndex 2`, `Payment-Receipt {status:"success", method:"evm", challengeId, reference:0xbbe3…, chainId:11155111}`. **"replayed order"** = the client's first POST timed out on the Tor leg (30 s < settle+insert ≈ 2 blocks) and its automatic retry hit the registrar's idempotency path: `rgoe_registrar_payments_total{protocol="mpp",result="inserted"} 1` + `{result="replayed"} 1`, ONE settle, ONE insert — the store did its job live. Follow-up: the paying POST's client timeout is now 240 s (`RGOE_PAY_HTTP_TIMEOUT_MS`). |
+| chain == JS | `leafCount()==3` (smoke leaf from PR #50 + these two), `limitOf(leafA)==8`, `limitOf(leafB)==32`, `currentRoot()==8669670862295694646456075933965303186871311459997988128668309404743902147713 == newGroup([smoke, leafA, leafB]).root` (JS, `lib/rln.mjs`); operator tUSD balance `500000` (= 0.10 + 0.40); buyer ETH balances `0` before and after | `/pay/status/0x39e775f5…92da` over Tor → `{state:"inserted", payer:0x5408…, limit:32, settleTx, insertTx, leafIndex:2, root}` |
+| registrar journal | `registrar: settle tx sent payer=… value=100000 settleTx=0xfdaf… protocol=x402` → `registrar: leaf inserted commitment=… limit=8 leafIndex=1 insertTx=0x54b3… root=…` and the same pair for mpp; metrics `rgoe_registrar_txs_total{kind="settle",result="ok"} 2`, `{kind="insert"} 2`, `rgoe_registrar_orders 2` | no key, no signature, no header in any log line |
+| spend | operator ETH `0.0430 → 0.0363` (≈ 0.0067 ETH: token deploy + 2 mints + 2 settles + 2 inserts) — under the 0.01 budget | |
+
+### Egress after purchase — NOT demonstrated (blocked on PR #51)
+
+The multi-root gateway (`ship/pay-client`, PR #51 "T-FEAT-7 (2/3)") was still OPEN and
+conflicting when this run finished, so box-1's gateway does not yet trust the paid set's root and
+the "buyer egresses through gateway-1" step was **not** attempted (per the plan: stop at "leaves
+inserted, root on chain == JS root" and say so). What remains, once #51 lands: on box-1 add
+`RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111` (+ `RGOE_RPC_URL`) to
+`/etc/systemd/system/rgoe-gateway.service.d/` (the documented one-env switch), restart
+`rgoe-gateway`, then on the laptop `RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 rgoe client
+--secret <member-x402.secret>` and `curl -x 127.0.0.1:8888 https://api.ipify.org` = gateway-1's
+IP (and the tier-32 buyer with `RGOE_LIMIT=32`). The two purchased leaves are on chain and
+waiting; nothing about the purchase has to be redone.
+
+### Left open (payments)
+
+1. Egress-after-purchase (above) — one gateway env change after #51 merges.
+2. Real USDC instead of tUSD: `RGOE_PAY_ASSET=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` in the registrar unit (+ prices in 6-dec USDC), restart. Needs a funded buyer.
+3. Insert batching / dwell time (blur the settle→insert chain-timing link) — `insertBatch` exists on the contract; the registrar inserts per order today.

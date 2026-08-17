@@ -22,6 +22,13 @@
 //                             (T-HARD-4; real handler on a real loopback socket).
 //   7. BOOTNODE ENDPOINT DoS — fresh-onion verify burst vs the GLOBAL bucket (spy proves
 //                             verify never runs past the cap), HTTP slow-loris cut off.
+//   8. PAID ADMISSION (T-FEAT-7) — lives in its own files because it needs a chain: the wire
+//                             parse matrix (payments/wire.selftest.mjs: tampered x402 payloads,
+//                             HMAC-broken / replayed / mis-nonced MPP credentials, spec golden)
+//                             and the end-to-end attacks on the registrar over anvil
+//                             (payments/registrar.selftest.mjs §5: wrong amount / payTo /
+//                             window / signature, replayed nonce, already-inserted leaf,
+//                             oversize body+header, slow-loris, rate bucket).
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

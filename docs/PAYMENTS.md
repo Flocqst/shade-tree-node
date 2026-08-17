@@ -1,10 +1,149 @@
 # Payments: anonymous, cheap, ergonomic, scalable access funding
 
-**Status: design of record, partly shipped.** The "Shipped (2026-08-17)" section right below maps the three layers to code and records the decisions taken; the design text after it is kept as written (it is the argument), with one superseded point called out where it happens: the Layer 1 payment RAIL. The access layer it builds on (RLN membership proof + epoch nullifiers) is live.
+## Shipped 2026-08-17: 402 rails
 
-## Shipped (2026-08-17)
+**Status: Layer 1 is built and live on Sepolia** (T-FEAT-7). Access is *purchased* over HTTP 402
+using the two machine-payment protocols, settled in a stablecoin on the chain the fleet is
+deployed on, and the operator inserts the buyer's leaf into the on-chain `PaidAccessSet`.
+Redemption is unchanged: the buyer egresses with the ordinary RLN proof and the gateway trusts
+the paid set's root next to the staked set's. The design below ("The architecture", Layer 1)
+described a native-ETH `deposit(commitment) payable` / `sweep()` contract; **that Layer 1 is
+superseded by the 402 rails** (payment settles off the tree contract, in a stablecoin, straight
+to the operator). The on-chain tree, the off-chain redemption, Layer 0 and Layer 2 stand as
+written.
 
-**The one change to the design as written (ADR [0007](adr/0007-paid-access.md)):** by user decision of 2026-08-17 the payment does not settle as a native-ETH `deposit() payable` on the contract; it settles OFF chain over HTTP 402 rails (x402 + MPP, USDC on Sepolia) handled by a registrar service, and the operator/registrar then INSERTS the buyer's rateCommitment into the paid set (`insert(commitment, limit)` / `insertBatch`, `onlyOperator`; no `priceFor`, no `sweep`, nothing payable, no refunds). Everything else survives verbatim: a second on-chain tree, the same leaf, the same proof, off-chain redemption, no facilitator, Layer 0 as the buyer's choice. The 402 specifics (prices, rails, receipts, the buyer's flow) are the registrar slice's docs; this section covers the gateway / root / slash / client side.
+Code: `payments/registrar.mjs` (the operator's 402 service), `payments/wire.mjs` (both wire
+formats), `payments/eip3009.mjs` (the settlement typed data), `group/pay.mjs` (`rgoe pay`),
+`contracts/PaidAccessSet.sol` (the tree, PR #50), `test/Eip3009Token.sol` (a test stablecoin).
+Tests: `payments/wire.selftest.mjs` (fast, chainless; includes the x402 spec's worked-example
+signature as a cross-implementation golden), `payments/registrar.selftest.mjs` (anvil: both
+rails end to end via `rgoe pay`, replay/idempotency, the adversarial matrix, slow-loris, crash
+recovery), `test/Eip3009Token.t.sol` (Foundry). Live receipts: `docs/GO-LIVE-LOG-2026-08-17.md`
+"(payments)".
+
+### The flow
+
+```
+ buyer (rgoe pay)                registrar (operator, on the bootnode onion :8878)          chain
+   |                                   |                                                     |
+   | GET /pay/quote?limit=8            |                                                     |
+   |---------------------------------->|                                                     |
+   | 402  PAYMENT-REQUIRED (x402)      |                                                     |
+   |      WWW-Authenticate: Payment (MPP)                                                    |
+   |      body: {pay:{asset, chain, tiers, payTo}}                                            |
+   |<----------------------------------|                                                     |
+   | sign EIP-712 TransferWithAuthorization (EIP-3009) with the BUYER wallet: no gas needed |
+   | POST /pay {commitment, limit}     |                                                     |
+   |   + PAYMENT-SIGNATURE   (x402)    |                                                     |
+   |   | Authorization: Payment (MPP)  |  verify shape/offer/window/signature/nonce/balance   |
+   |---------------------------------->|  token.transferWithAuthorization(...)  (operator pays gas)
+   |                                   |---------------------------------------------------->|
+   |                                   |  wait 1 conf                                        |
+   |                                   |  PaidAccessSet.insert(commitment, limit)            |
+   |                                   |---------------------------------------------------->|
+   | 200  PAYMENT-RESPONSE (x402) / Payment-Receipt (MPP)                                    |
+   |      {settleTx, insertTx, leafIndex, root}                                              |
+   |<----------------------------------|                                                     |
+   | now: rgoe client --secret …  (RLN proof against the paid root; the gateway sees a proof, not a leaf)
+```
+
+x402 uses `GET /pay/quote` for the challenge; MPP uses `POST /pay` *without* a credential for
+the challenge, so the challenge is digest-bound (RFC 9530) to the exact body the buyer then
+pays for. Both are the same route with the same body; the registrar answers with **both**
+challenges every time, so a client speaks whichever it prefers.
+
+### Headers (both rails, exact)
+
+| rail | server → client (challenge) | client → server (payment) | server → client (result) |
+|---|---|---|---|
+| x402 v2 | `402` + `PAYMENT-REQUIRED: base64(PaymentRequired)` — `{x402Version:2, resource, accepts:[{scheme:"exact", network:"eip155:<chainId>", amount, asset, payTo, maxTimeoutSeconds, extra:{name, version, assetTransferMethod:"eip3009", limit}}]}` (one entry per tier) | `PAYMENT-SIGNATURE: base64(PaymentPayload)` — `{x402Version:2, resource, accepted, payload:{signature, authorization:{from,to,value,validAfter,validBefore,nonce}}}` | `200` + `PAYMENT-RESPONSE: base64({success:true, transaction:<settleTx>, network, payer})`; failure = `402` + fresh `PAYMENT-REQUIRED` + `PAYMENT-RESPONSE {success:false, errorReason}` (400 for a malformed payload) |
+| MPP | `402` + `WWW-Authenticate: Payment id="…", realm="<onion>", method="evm", intent="charge", request="<b64url JCS {amount, currency, recipient, description, externalId:"limit=8", methodDetails:{chainId, permit2Address, credentialTypes:["authorization"], decimals, eip712Domain}}>", expires="<RFC3339>", opaque="…"[, digest="sha-256=:…:"]` (one header per tier) + RFC 9457 body | `Authorization: Payment <base64url({challenge:{…echoed…}, payload:{type:"authorization", from,to,value,validAfter,validBefore,nonce,signature}, source:"did:pkh:eip155:<chainId>:<addr>"})>` with `nonce == keccak256(id ‖ realm)` | `200` + `Payment-Receipt: base64url({status:"success", method:"evm", challengeId, reference:<settleTx>, timestamp, chainId})`; failure = `402` + fresh challenge + `application/problem+json` (`malformed-credential` / `invalid-challenge` / `verification-failed` / `payment-expired` / `payment-insufficient`; `method-unsupported` = 400) |
+
+x402 **v1** (`X-PAYMENT` / `X-PAYMENT-RESPONSE`, `x402Version:1`) is *not* served; a v1 payload
+gets `invalid_x402_version`. The current version (v2, `PAYMENT-*` headers) is what the
+registrar speaks (specs fetched 2026-08-17: `coinbase/x402 specs/x402-specification-v2.md`,
+`specs/transports-v2/http.md`, `specs/schemes/exact/scheme_exact_evm.md`; `tempoxyz/mpp-specs
+specs/core/draft-httpauth-payment-00.md`, `specs/intents/draft-payment-intent-charge-00.md`,
+`specs/methods/evm/draft-evm-charge-00.md`).
+
+The MPP challenge `id` is the core draft's recommended stateless binding: `base64url(
+HMAC-SHA256(secret, realm|method|intent|request|expires|digest|opaque))` (seven fixed slots,
+absent optionals as `""`); the secret is random per registrar and persisted in the order store
+so a restart keeps unexpired challenges valid. Editing any challenge parameter (amount, recipient,
+expiry, digest…) breaks the id; the wire selftest and the anvil selftest both prove that.
+
+### One settlement primitive: EIP-3009, submitted by the operator
+
+Both rails carry the same signed object: an EIP-712 `TransferWithAuthorization(address from,
+address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)` over the
+**token's** domain (`{name, version, chainId, verifyingContract}` — USDC is `{"USDC","2"}`;
+the registrar probes `name()`/`version()` and *proves* its computed domain equals the token's
+on-chain `DOMAIN_SEPARATOR()` at boot, or refuses to start). The buyer's wallet needs the
+stablecoin and **nothing else** — no ETH, no approval, no on-chain action: the operator submits
+`transferWithAuthorization(from,to,value,validAfter,validBefore,nonce,v,r,s)` and pays the gas,
+then `insert(commitment, limit)` (gas again). The token contract burns `(from, nonce)` on use
+(`authorizationState`), which is the replay primitive both protocols lean on; x402 uses a fresh
+random nonce, MPP binds it to the challenge (`keccak256(id ‖ realm)`).
+
+**What the registrar verifies before it spends any gas** (`payments/registrar.mjs`
+`makeEngine.verifyAndSettle`, in order): wire shape (version/scheme/network/asset/payTo/amount
+→ tier; MPP: HMAC id, realm, expiry, digest, `type=authorization`, nonce binding); the body's
+`limit` equals the tier paid for and the `commitment` is a field element; `validAfter ≤ now <
+validBefore − settleBuffer` (default 20 s of headroom so the tx can still mine); the signature
+recovers to `from` over the token domain; on chain: `authorizationState(from,nonce) == false`,
+`balanceOf(from) ≥ value`, `PaidAccessSet.limitOf(commitment) == 0` (never take money for a
+leaf that cannot be inserted); an `eth_call` simulation of `transferWithAuthorization`. Then,
+serialized on the operator key: settle → wait `RGOE_PAY_CONFIRMATIONS` (1) → insert → wait.
+
+**Idempotency + crash safety.** Every order is keyed by `(asset, from, nonce)` in a small JSON
+store (`RGOE_REGISTRAR_STORE`, atomic tmp+rename like the bootnode's). An identical replay of a
+finished order returns the stored receipt (`200`, `replayed:true`, no second insert); the same
+nonce with a different commitment is `409 nonce-used`; a nonce already consumed on chain that
+the store never saw is `402`. A settle that mined but whose insert did not is resumed on the
+next identical POST and on boot (`recover()`); a stored `settling` order whose nonce is unused on
+chain is marked failed (the tx never landed; the buyer's authorization is still good).
+`GET /pay/status/<nonce>` shows an order's public state.
+
+### No facilitator: the operator IS the facilitator
+
+x402 defines a "facilitator" role (verify + settle, typically hosted). Here **the operator's own
+registrar is that facilitator**: it verifies the typed-data signature and submits the transfer
+itself, on its own key, against its own RPC. No hosted facilitator is called, none is needed, and
+using one is optional (an operator could point a Coinbase-style facilitator at the same
+`accepts` — nothing in the wire format changes). MPP's "server" role is the same process. So the
+"no facilitator party" rule of this document holds exactly: the buyer touches the chain (to
+hold the stablecoin) and the operator (to buy), nobody else. There is no x402 SDK dependency:
+the wire format is ~300 lines implemented straight from the specs (`payments/wire.mjs`), which
+keeps `ethers` the only crypto dependency, avoids pulling a facilitator client into an onion
+service, and lets the same parse surface serve both rails and be fuzzed in one place.
+
+### Leak ledger (as shipped)
+
+| link | what is public | mitigation |
+|---|---|---|
+| buyer address → operator | the stablecoin transfer is on chain: `from` (buyer) → `payTo` (operator), amount = the tier's price; the insert tx (operator → set) follows within a block or two | **Layer 0 is the user's choice**: pay from a fresh address funded through a shared pool (Railgun / Privacy Pools / a CEX withdrawal…). `rgoe pay` prints this advice every run. Nothing in the protocol mandates a pool. |
+| tier | public: the transfer amount *is* the tier price, and `insert(commitment, limit)` names the tier | by design (a tier bucket is a public anonymity set, as with the staked set); prices are fixed per tier so amounts never fingerprint within a tier |
+| payer ↔ leaf | the **operator** learns `commitment ↔ from` (it inserts the leaf right after that payment); a chain observer can correlate the transfer with the next `Inserted` event by timing | the gateway never learns it — it verifies an RLN proof against the root, not a leaf; batching inserts (`insertBatch`) and a dwell time between settle and insert would blur the chain-timing link and are a one-flag operator choice later |
+| client IP → anything | the quote/pay round trip rides the bootnode onion (`http://<onion>:8878`); the registrar sees a rendezvous circuit, never the buyer's IP | standard Tor caveats only |
+| operator linking payment to *use* | it cannot: redemption is a Semaphore/RLN proof over the paid root | timing correlation between an insert and a first use — dwell time (user's choice) |
+| the operator taking money and not inserting | the buyer holds the settle tx hash and the order key; the registrar's store retries the insert on boot; a refusal is visible (payment on chain, no `Inserted`) | buyer–seller trust, irreducible for any prepaid service (as stated below); public evidence makes it reputational |
+
+### Settle asset on Sepolia
+
+Circle's Sepolia USDC (`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`) implements EIP-3009 (checked
+2026-08-17: `TRANSFER_WITH_AUTHORIZATION_TYPEHASH()`, `authorizationState()`, `DOMAIN_SEPARATOR()
+== keccak(EIP712Domain{"USDC","2",11155111,0x1c7D…})`), but its faucet is captcha-gated, so the
+live run uses the test stablecoin `test/Eip3009Token.sol` ("Test USD"/tUSD, 6 decimals, same
+EIP-3009 surface) deployed at `network/sepolia/contracts.json` `payAsset`. **Real USDC is a
+one-env swap**: `RGOE_PAY_ASSET=0x1c7D…7238` (the registrar probes the domain and adapts).
+`payments/deploy-test-asset.mjs` deploys/mints the test token.
+
+---
+
+## Shipped 2026-08-17: the gateway / root / slash / client half (T-FEAT-7 2/3, ADR [0007](adr/0007-paid-access.md))
+
+The registrar above sells the leaf; this is what happens to it afterwards — how the fleet trusts the paid set next to the staked and static ones, how a paid over-spender is slashed, and how a buyer's client finds its leaf.
+
 
 | Layer | What it is now | Code |
 |---|---|---|
@@ -24,6 +163,10 @@ Startup lines (ABI-of-record for scripts): `roots: members.json + staked(0x…) 
 **Leak ledger, updated:** in addition to the rows below — the **tier bucket is public** at insertion (the `limit` in the `Inserted` event; the same is already true of a stake's `bondFor(limit)`), the insert tx is public (it names the commitment, not the payer), the 402 payment is visible to its rail, and **which root a proof opens (static / staked / paid) is visible to the gateway** (the root is a public signal) — the paid crowd is `leafCount()`, hence the floor.
 
 **Verified by:** `test/paid-access.selftest.mjs` (anvil: the real staked set + the real `PaidAccessSet` from its forge artifact, the REAL gateway, REAL proofs — static, staked and paid members all egress with three roots trusted at once; unknown root → `gate:wrong-group-root`; a paid over-spender is slashed on the PAID contract, leaf zeroed, root changed, staked set untouched; the floor WARN; `rgoe leaves` round-trips the root), `gateway/root-sources.selftest.mjs`, `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`.
+
+## Design of record (2026-08, pre-402): the four requirements and the three layers
+
+**Status: design; Layer 1 below is superseded by the 402 rails above (the tree + off-chain redemption stand).** This supersedes the earlier four-pass design. The access layer it builds on (Semaphore membership proof + epoch nullifiers) is live.
 
 ## What we are solving
 
