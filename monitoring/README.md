@@ -21,6 +21,7 @@ Files:
 | `rgoe_bootnode_live_gateways` | gauge | -- | `bootnode/server.mjs` |
 | `rgoe_gateway_requests_total` | counter | `result` (pass\|drop), `reason` (on drop) | `gateway/gateway.mjs` |
 | `rgoe_gateway_slashes_total` | counter | -- | `gateway/gateway.mjs` |
+| `rgoe_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout) | `gateway/gateway.mjs` (T-HARD-4; separate from requests_total so an idled-out tunnel is not double-counted as a drop) |
 | `rgoe_gateway_active_tunnels` | gauge | -- | `gateway/gateway.mjs` |
 | `rgoe_gateway_verify_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
 
