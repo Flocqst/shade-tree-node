@@ -109,6 +109,41 @@ tree, so it has no `currentRoot` slot yet. The light provider is end-to-end veri
 Sepolia; it will surface a real root once `StakedReputationSet` is redeployed with the
 T-DEV-9 contract (not tracked as a task at the time of writing; flagged in the T-DEV-9b PR).
 
+**Receipt 2 (live, 2026-08-17, T-DEV-9c — the REAL root).** After the rln-v4-tiers redeploy
+(`network/sepolia/contracts.json`, `StakedReputationSet 0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`,
+which carries the T-DEV-9 on-chain tree) and its live two-tier integration
+(`network/sepolia/integration-report-rln-v4.md`: ALICE tier 8 + BOB tier 32 staked, BOB slashed
+at block 11510548), the same `helios 0.11.1` sidecar (fresh run, checkpoint
+`0x73aa8e286e4a520bd5c3d437e84098540801742501b829ddea901a20421522a9` = that moment's finalized
+header root from lodestar-sepolia, cross-checked equal on publicnode's beacon API;
+`consensus client in sync with checkpoint`; finality followed 11510496 → 11510528 → 11510558)
+and the real `makeRootProvider()` (`RGOE_ROOT_PROVIDER=light`,
+`RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546`, `RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
+`RGOE_GROUP_CONTRACT=0xFe48De8b…9d25`) returned:
+
+```
+describe: {"provider":"light","mode":"proof","stateRootSource":"helios (sync-committee verified)","stateRootVerified":true,"contract":"0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25"}
+currentRoots: {"roots":["8610802244115318239575829157501362221923553955100605581936806202597950014363"],"observedAtBlock":11510558,"finalized":true,"verified":true,"stateRootVerified":true}
+helios chainId: 11155111 | helios finalized: 11510558
+  hash      0xefa2c6aa64c6d098c686e1e01a59ebca2c42f63c34fb0a8c9b74842499ac6ca9
+  stateRoot 0x435ab830c49e06e210c69e97dd2c16e803072515770161272ba51e2f9d66be6b   (RPC header for 11510558: identical)
+light root 8610802244115318239575829157501362221923553955100605581936806202597950014363
+  == JS root AFTER the slash: newGroup([leafALICE, leafBOB]) with index 1 zeroed in place
+  == NodeRootProvider (rln-v4 event reconstruction from the deploy block): same root
+  == on-chain currentRoot() (cast call)
+```
+
+The chain of custody is now complete end to end on Sepolia: sync committee → Helios
+`stateRoot` → account proof → storage proof of slot 3 → a **non-empty** membership root that
+equals the root the JS computes from the staked members' leaves. Two side notes from the run:
+(1) while Helios' finalized block was still BEFORE the deploy block (11510496 / 11510528 <
+11510538) the provider returned `account absent in state proof` — correct: the contract did not
+exist yet at that finalized state, and the provider refuses rather than guessing; (2) as in
+receipt 1, publicnode served the finalized-block `eth_getProof` only intermittently
+(`distance to target block exceeds maximum proof window` on the other attempts), so an
+operator needs a proof-serving RPC that keeps `eth_getProof` at finalized (own node /
+archive-capable provider); the last-known-good root bridges the gaps.
+
 Context: the gateway is a Tor onion-service egress that admits only members of a
 reputation set, where membership is an on-chain Semaphore/RLN group (docs/ONCHAIN.md).
 The gateway's only on-chain read is **the group's current Merkle root, plus the recent
