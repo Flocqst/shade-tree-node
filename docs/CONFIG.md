@@ -17,9 +17,9 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `RGOE_BOOTNODE_HEARTBEAT` | `300` | Re-announce interval in seconds. | heartbeat | `--interval` |
 | `RGOE_GW_IDENTITY` | `tor/hs/identity.local.json` | Path to the onion identity `{onion, seed}` (from `keygen`) the heartbeat announces. | heartbeat | `--identity` |
 | `RGOE_GW_WEIGHT` | `100` | Selection weight advertised for this gateway. | heartbeat | `--weight` |
-| `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). | heartbeat | `--operator-key` |
-| `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key). | heartbeat | `--operator` |
-| `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. | heartbeat | `--operator-sig` |
+| `RGOE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). Must be 64 hex (0x optional); a malformed value fails the heartbeat at startup with a message that never echoes the key. | heartbeat | `--operator-key` |
+| `RGOE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `RGOE_GW_OPERATOR_SIG` instead of the key; the pair takes precedence over `RGOE_GW_OPERATOR_KEY`). Setting one without the other is a startup error, not a silent onion-only downgrade. | heartbeat | `--operator` |
+| `RGOE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. Verified locally at startup (same check the bootnode runs); a sig that does not recover `RGOE_GW_OPERATOR` for this onion fails fast. | heartbeat | `--operator-sig` |
 
 ## Gateway
 

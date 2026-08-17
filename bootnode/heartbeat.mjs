@@ -21,33 +21,66 @@
 //   RGOE_GW_OPERATOR_KEY    operator EOA private key; signs the durable onion<->operator auth, OR
 //   RGOE_GW_OPERATOR +      a pre-computed operator address and
 //   RGOE_GW_OPERATOR_SIG    its signature over operatorAuthMessage(onion, operator)
+//                           (the pair takes precedence over the key; any misconfiguration —
+//                           half a pair, malformed key, sig that does not recover the
+//                           operator — fails at startup; see resolveOperator)
+//
+// Selftest: bootnode/heartbeat.selftest.mjs (operator resolution, announce bytes vs
+// testdata/vectors.json, failure paths, log hygiene) + bootnode/heartbeat-caps.selftest.mjs.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildAnnounce, operatorAuthMessage } from "./announce.mjs";
+import { buildAnnounce, operatorAuthMessage, verifyOperatorSig } from "./announce.mjs";
 import { postOverTor } from "./fetch.mjs";
 import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
 import { REGION_BUCKETS } from "../lib/directory.mjs";
+import { isPrivHex, isEthAddress } from "../lib/config.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-async function loadIdentity() {
-  const path = process.env.RGOE_GW_IDENTITY || join(HERE, "..", "tor", "hs", "identity.local.json");
-  const id = JSON.parse(await readFile(path, "utf8"));
-  if (!id.onion || !id.seed) throw new Error(`identity file ${path} missing onion/seed (run bootnode/keygen.mjs)`);
+// Every piece of the CLI path below takes its env + I/O as injectable arguments (defaulting to
+// process.env / real fs / real ethers / real Tor) so bootnode/heartbeat.selftest.mjs can drive
+// each source/precedence path and each failure path with fakes — no Tor, no network, no chain.
+// With the defaults, behaviour is byte-identical to the pre-refactor CLI.
+
+export async function loadIdentity(env = process.env, { readFile: readFileFn = readFile } = {}) {
+  const path = env.RGOE_GW_IDENTITY || join(HERE, "..", "tor", "hs", "identity.local.json");
+  const id = JSON.parse(await readFileFn(path, "utf8"));
+  if (!id || typeof id !== "object" || !id.onion || !id.seed) throw new Error(`identity file ${path} missing onion/seed (run bootnode/keygen.mjs)`);
   return id;
 }
 
 // Resolve the optional operator-stake authorization once (it is durable across heartbeats).
-async function resolveOperator(onion) {
-  if (process.env.RGOE_GW_OPERATOR && process.env.RGOE_GW_OPERATOR_SIG) {
-    return { operator: process.env.RGOE_GW_OPERATOR, operatorSig: process.env.RGOE_GW_OPERATOR_SIG };
+// Precedence: a pre-computed (RGOE_GW_OPERATOR + RGOE_GW_OPERATOR_SIG) pair wins over
+// RGOE_GW_OPERATOR_KEY; neither -> onion-only. Every misconfiguration FAILS FAST here (at
+// startup) instead of surfacing as `announce rejected: bad-operator-sig` on every beat:
+//   - a half-configured pair (operator without sig, or sig without operator) is an error, not a
+//     silent downgrade to onion-only;
+//   - a pre-computed sig is verified locally against the operator address before it is ever
+//     sent (verifyOperatorSig — the same check the bootnode runs);
+//   - a malformed RGOE_GW_OPERATOR_KEY is rejected by shape BEFORE it reaches ethers, whose
+//     INVALID_ARGUMENT error would otherwise echo the mistyped key bytes into the message that
+//     main() prints (log hygiene: the key value must never reach a log sink, mistyped or not).
+export async function resolveOperator(onion, env = process.env, { importEthers = () => import("ethers") } = {}) {
+  const operator = env.RGOE_GW_OPERATOR, operatorSig = env.RGOE_GW_OPERATOR_SIG, key = env.RGOE_GW_OPERATOR_KEY;
+  if (operator && operatorSig) {
+    if (!isEthAddress(operator)) throw new Error("RGOE_GW_OPERATOR is not a 0x-prefixed 20-byte address");
+    if (!/^0x[0-9a-fA-F]{130}$/.test(String(operatorSig).trim())) throw new Error("RGOE_GW_OPERATOR_SIG is not a 65-byte 0x-hex personal_sign signature");
+    if (!(await verifyOperatorSig(onion, operator, operatorSig))) {
+      throw new Error(`RGOE_GW_OPERATOR_SIG does not recover RGOE_GW_OPERATOR for onion ${onion} (re-sign operatorAuthMessage with the operator key)`);
+    }
+    return { operator, operatorSig };
   }
-  if (process.env.RGOE_GW_OPERATOR_KEY) {
-    const { ethers } = await import("ethers");
-    const w = new ethers.Wallet(process.env.RGOE_GW_OPERATOR_KEY);
+  if (key) {
+    if (!isPrivHex(key)) throw new Error("RGOE_GW_OPERATOR_KEY is not a 32-byte hex private key (64 hex, 0x optional)");
+    const { ethers } = await importEthers();
+    let w;
+    try { w = new ethers.Wallet(key.trim()); } catch { throw new Error("RGOE_GW_OPERATOR_KEY is not a valid secp256k1 private key"); }
     return { operator: w.address, operatorSig: await w.signMessage(operatorAuthMessage(onion, w.address)) };
+  }
+  if (operator || operatorSig) {
+    throw new Error("RGOE_GW_OPERATOR and RGOE_GW_OPERATOR_SIG must be set together (or set RGOE_GW_OPERATOR_KEY instead)");
   }
   return { operator: null, operatorSig: null };
 }
@@ -111,9 +144,12 @@ export function buildGatewayCaps(env = process.env) {
   return caps;
 }
 
-export async function announceOnce({ id, bootnode, op, weight, torHost, torPort, caps = buildGatewayCaps() }) {
+// One announce: build a fresh signed record (fresh ts + nonce) and POST it to the bootnode over
+// Tor. `post` is injectable (defaults to the real Tor transport) so the selftest can capture the
+// exact record + path/opts that would go on the wire without a Tor daemon.
+export async function announceOnce({ id, bootnode, op, weight, torHost, torPort, caps = buildGatewayCaps(), post = postOverTor }) {
   const rec = buildAnnounce({ onion: id.onion, weight, onionSeedHex: id.seed, operator: op.operator, operatorSig: op.operatorSig, caps });
-  return postOverTor(bootnode, "/announce", rec, { torHost, torPort });
+  return post(bootnode, "/announce", rec, { torHost, torPort });
 }
 
 // ---- egress-gated announce (T-FEAT-16) --------------------------------------
@@ -129,53 +165,102 @@ export async function announceOnce({ id, bootnode, op, weight, torHost, torPort,
 //
 // Factored out and fully injectable (announce + egress + enabled) so the selftest asserts the
 // gating with a fake checkEgress and a fake announce — no Tor, no real network.
-export function egressCheckEnabled() {
-  return String(process.env.RGOE_EGRESS_CHECK ?? "1") !== "0";
+export function egressCheckEnabled(env = process.env) {
+  return String(env.RGOE_EGRESS_CHECK ?? "1") !== "0";
 }
 
-export async function announceIfHealthy({ announce, egress, enabled = egressCheckEnabled() }) {
+export async function announceIfHealthy({ announce, egress, enabled = egressCheckEnabled(), log = console.log }) {
   if (!enabled) return announce(); // check disabled: announce unconditionally (current behavior)
   const r = await egress();
   if (!r.healthy) {
-    console.log(`egress DOWN (${r.target} ${r.reason}); SKIP announce — gateway ages out of the bootnode via TTL`);
+    log(`egress DOWN (${r.target} ${r.reason}); SKIP announce — gateway ages out of the bootnode via TTL`);
     return { skipped: true, egress: r };
   }
   return announce();
 }
 
-async function main() {
-  const bootnode = process.env.RGOE_BOOTNODE_ONION;
-  if (!bootnode) { console.error("set RGOE_BOOTNODE_ONION (the bootnode to announce to)"); process.exit(1); }
-  const intervalSec = Number(process.env.RGOE_BOOTNODE_HEARTBEAT || 300);
-  const weight = Number(process.env.RGOE_GW_WEIGHT || 100);
-  const torHost = process.env.RGOE_TOR_HOST || "127.0.0.1";
-  const torPort = Number(process.env.RGOE_TOR_PORT || 9250);
+// The runtime knobs main() reads. Throws (fail fast) when the bootnode is unset.
+export function heartbeatConfig(env = process.env) {
+  const bootnode = env.RGOE_BOOTNODE_ONION;
+  if (!bootnode) throw new Error("set RGOE_BOOTNODE_ONION (the bootnode to announce to)");
+  return {
+    bootnode,
+    intervalSec: Number(env.RGOE_BOOTNODE_HEARTBEAT || 300),
+    weight: Number(env.RGOE_GW_WEIGHT || 100),
+    torHost: env.RGOE_TOR_HOST || "127.0.0.1",
+    torPort: Number(env.RGOE_TOR_PORT || 9250),
+  };
+}
 
-  const id = await loadIdentity();
-  const op = await resolveOperator(id.onion);
-  console.log(`heartbeat: ${id.onion.slice(0, 16)}..onion -> ${bootnode.slice(0, 16)}..onion every ${intervalSec}s${op.operator ? ` (operator ${op.operator.slice(0, 10)}..)` : " (onion-only)"}`);
-  console.log(egressCheckEnabled()
+// One heartbeat tick: egress-gate, announce, log the outcome. NEVER throws — a failed or
+// rejected announce is logged and retried on the next interval (the bootnode's TTL is the only
+// state, so there is nothing to back off or reset). Returns the outcome for tests:
+//   { skipped: true }               egress DOWN, announce skipped
+//   { ok: true, ...bootnode reply }  accepted
+//   { ok: false, err }               rejected by the bootnode (or a malformed reply)
+//   { failed: true, err }            transport failure (unreachable bootnode, bad HTTP, bad JSON)
+// The bootnode reply is treated as UNTRUSTED input: anything that is not a plain object is a
+// rejection ("malformed response"), never a TypeError out of the tick.
+export function makeBeat({ announce, egress, enabled = egressCheckEnabled(), log = console.log }) {
+  return async () => {
+    try {
+      const r = await announceIfHealthy({ announce, egress, enabled, log });
+      if (r && r.skipped) return r; // egress DOWN: announce already logged + skipped
+      if (!r || typeof r !== "object" || Array.isArray(r)) {
+        log("announce rejected: malformed response from bootnode (will retry next interval)");
+        return { ok: false, err: "malformed response" };
+      }
+      log(r.ok === true ? `announced (staked=${r.staked ?? false}, ttl=${r.ttl}s)` : `announce rejected: ${r.err}`);
+      return r.ok === true ? r : { ok: false, err: r.err };
+    } catch (e) {
+      log(`announce failed: ${e.message} (will retry next interval)`);
+      return { failed: true, err: e.message };
+    }
+  };
+}
+
+// The long-running heartbeat. `deps` are all optional (defaults = the real CLI); tests inject
+// fakes for env, identity/operator resolution, announce transport, egress probe, scheduler, log.
+export async function runHeartbeat({
+  env = process.env,
+  log = console.log,
+  schedule = setInterval,
+  announce = announceOnce,
+  egress = checkEgress,
+  identity = null,       // pre-resolved { onion, seed } (else loadIdentity(env))
+  operator = null,       // pre-resolved { operator, operatorSig } (else resolveOperator(onion, env))
+} = {}) {
+  const { bootnode, intervalSec, weight, torHost, torPort } = heartbeatConfig(env);
+  const id = identity ?? await loadIdentity(env);
+  const op = operator ?? await resolveOperator(id.onion, env);
+  log(`heartbeat: ${id.onion.slice(0, 16)}..onion -> ${bootnode.slice(0, 16)}..onion every ${intervalSec}s${op.operator ? ` (operator ${op.operator.slice(0, 10)}..)` : " (onion-only)"}`);
+  const enabled = egressCheckEnabled(env);
+  log(enabled
     ? `egress self-check: ON (metadata-only TCP connect to ${EGRESS_CHECK_TARGET} before each announce; SKIP announce if DOWN). Disable with RGOE_EGRESS_CHECK=0`
     : "egress self-check: OFF (RGOE_EGRESS_CHECK=0) — announcing unconditionally");
-  const caps = buildGatewayCaps();
-  console.log(caps
+  const caps = buildGatewayCaps(env);
+  log(caps
     ? `capabilities advertised (signed): ${JSON.stringify(caps)}`
     : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW and/or RGOE_GATEWAY_REGION to advertise)");
 
-  const beat = async () => {
-    try {
-      const r = await announceIfHealthy({
-        announce: () => announceOnce({ id, bootnode, op, weight, torHost, torPort }),
-        egress: () => checkEgress(),
-      });
-      if (r && r.skipped) return; // egress DOWN: announce already logged + skipped
-      console.log(r.ok ? `announced (staked=${r.staked ?? false}, ttl=${r.ttl}s)` : `announce rejected: ${r.err}`);
-    } catch (e) {
-      console.log(`announce failed: ${e.message} (will retry next interval)`);
-    }
-  };
-  await beat();
-  setInterval(beat, intervalSec * 1000);
+  const beat = makeBeat({
+    announce: () => announce({ id, bootnode, op, weight, torHost, torPort, caps }),
+    egress: () => egress(),
+    enabled,
+    log,
+  });
+  const first = await beat();
+  const timer = schedule(beat, intervalSec * 1000);
+  return { beat, first, timer, id: { onion: id.onion }, op: { operator: op.operator }, caps };
+}
+
+async function main() {
+  try {
+    heartbeatConfig();
+  } catch (e) {
+    console.error(e.message); process.exit(1);
+  }
+  await runHeartbeat();
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

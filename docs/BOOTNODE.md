@@ -98,6 +98,15 @@ by continuing to announce (`rgoe heartbeat`, every `--interval` seconds); a dead
 out without anyone deregistering it. Clients cache the last-known-good directory, so a dead or
 poisoned bootnode degrades to the previous good fleet, never to nothing.
 
+The heartbeat itself keeps no state and never backs off: each tick egress-checks, announces, and
+logs one of `announced`, `announce rejected: <reason>` (the bootnode said no, or replied with
+something that is not a JSON object), or `announce failed: <err> (will retry next interval)` (the
+bootnode was unreachable over Tor). Every outcome is retried on the next `--interval`; a rejected
+or unreachable gateway simply ages out via the TTL. Operator configuration is resolved once at
+startup and fails fast on any misconfiguration (see `docs/CONFIG.md`, `RGOE_GW_OPERATOR*`);
+`bootnode/heartbeat.selftest.mjs` pins operator resolution, the announce bytes against
+`testdata/vectors.json`, every failure path, and that no seed or operator key ever reaches a log.
+
 ### Surviving a restart
 
 The live set is in-memory by default, so a bootnode restart would blank the fleet until every
