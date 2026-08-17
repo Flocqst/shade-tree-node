@@ -65,8 +65,13 @@ const COMMANDS = {
   heartbeat:         { script: "bootnode/heartbeat.mjs",    help: "keep this gateway announced on the bootnode", long: true },
   join:              { script: "group/join.mjs",            help: "guided front door: `rgoe join [member]` or `rgoe join gateway` — make an identity + print the next commands" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
+  identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: rgoe identity [--out <path>] [--secret-file <path>] (secret: --secret-file | RGOE_SECRET | ./.secret)" },
   "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: rgoe register-member <commitment>" },
   "register-gateway":{ script: "group/register-gateway.mjs", help: "stake a gateway operator bond into GatewayRegistry" },
+  // exit/withdraw/status share one script (group/exit-gateway.mjs); `prepend` selects the mode.
+  "exit-gateway":    { script: "group/exit-gateway.mjs", prepend: ["exit"],     help: "start the GatewayRegistry unbonding clock for this operator (leave the active set; stay slashable for UNBONDING): rgoe exit-gateway [--dry-run]" },
+  "withdraw-gateway":{ script: "group/exit-gateway.mjs", prepend: ["withdraw"], help: "after UNBONDING, reclaim the gateway bond: rgoe withdraw-gateway [--recipient 0x..] [--dry-run]" },
+  "gateway-status":  { script: "group/exit-gateway.mjs", prepend: ["status"],   help: "read-only: this operator's GatewayRegistry stake state (staked / exiting / withdrawableAt): rgoe gateway-status [--operator 0x..]" },
   "sign-directory":  { script: "group/sign-directory.mjs",  help: "sign a static fleet directory (offline discovery)" },
   gateway:           { script: "gateway/gateway.mjs",       help: "run the reputation-gated egress gateway", long: true },
   client:            { script: "client/shim.mjs",           help: "run the local HTTP-CONNECT proxy (fleet client)", long: true },
@@ -114,7 +119,7 @@ function parse(argv) {
 function topHelp() {
   console.log(`rgoe ${pkg.version} — reputation-gated onion egress\n`);
   console.log("usage: rgoe <command> [--flags] [args]\n");
-  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor", "backup", "restore"];
+  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "identity", "register-member", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "gateway", "client", "doctor", "backup", "restore"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);

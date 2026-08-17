@@ -43,6 +43,9 @@ async function main() {
   const help = rgoe(["help"]);
   ok(help.code === 0, "`rgoe help` exits 0");
   ok(/\bkeygen\b/.test(help.out) && /\bbootnode\b/.test(help.out), "`rgoe help` lists the commands (keygen, bootnode)");
+  ok(/\bidentity\b/.test(help.out) && /\bexit-gateway\b/.test(help.out) && /\bwithdraw-gateway\b/.test(help.out) && /\bgateway-status\b/.test(help.out),
+    "`rgoe help` lists identity, exit-gateway, withdraw-gateway, gateway-status (T-DEPLOY-5 GAP-4/GAP-12)");
+  ok(/\bjoin\b/.test(help.out) && /\bbackup\b/.test(help.out) && /\brestore\b/.test(help.out), "`rgoe help` lists join, backup, restore");
   // no args behaves as help too
   ok(rgoe([]).code === 0, "`rgoe` with no command exits 0 (prints help)");
 
@@ -70,6 +73,11 @@ async function main() {
   const bhelp = rgoe(["bootnode", "--help"], { timeout: 10_000 });
   ok(bhelp.code === 0, "`rgoe bootnode --help` exits 0 (never starts the service)");
   ok(/bootnode/.test(bhelp.out), "`rgoe bootnode --help` prints the bootnode command help");
+  // the on-chain exit commands must never reach a chain from --help either
+  const ehelp = rgoe(["exit-gateway", "--help"], { timeout: 10_000 });
+  ok(ehelp.code === 0 && /initiateExit|unbonding/i.test(ehelp.out), "`rgoe exit-gateway --help` exits 0 (no RPC touched)");
+  const ihelp = rgoe(["identity", "--help"], { timeout: 10_000 });
+  ok(ihelp.code === 0 && /--out/.test(ihelp.out), "`rgoe identity --help` exits 0 and names --out");
 
   // --- live flag plumbing: keygen mints an onion into a positional dir --------
   // Proves BOTH positional passthrough (<hsDir>) and the module-parsed --label flag (which is

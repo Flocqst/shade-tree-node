@@ -63,7 +63,8 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | `RGOE_FRESHNESS_ROOTS` | `2` | Current root plus how many prior roots are still accepted (freshness window ring). | root-provider | (none) |
 | `RGOE_FROM_BLOCK` | `0x0` | Deploy / start block for `eth_getLogs` when reconstructing the member tree. | root-provider (node) | (none) |
 | `RGOE_CONFIRMATIONS` | `0` | Confirmation depth. `0` reads `latest` (stake) / `finalized` (roots); `>0` reads `head - N` for reorg safety. | gateway-registry, root-provider | (none) |
-| `RGOE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway) | Funding / operator private key used to submit the stake tx. | register-onchain, register-gateway | `--register-key` |
+| `RGOE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway) | Funding / operator private key used to submit the stake tx. `exit-gateway` / `withdraw-gateway` reuse it as the operator signer (falling back to `RGOE_GW_OPERATOR_KEY`; the anvil default applies only on a loopback RPC). Prefer `--key-file` / `--account` on a real chain. | register-onchain, register-gateway, exit-gateway, withdraw-gateway | `--register-key` |
+| `RGOE_KEYSTORE_PASSWORD` | (unset → interactive prompt on a TTY) | Password for the Foundry-style encrypted keystore selected with `--account <name>` (`~/.foundry/keystores/<name>`, dir overridable via `FOUNDRY_KEYSTORES`) or `--keystore <path>`. Env only, never argv. | exit-gateway, withdraw-gateway, gateway-status | (none) |
 | `RGOE_BOND` | on-chain `BOND()` (member also tries `deployed.bond`) | Bond amount in wei to stake. | register-onchain, register-gateway | `--bond` |
 
 ## Common
