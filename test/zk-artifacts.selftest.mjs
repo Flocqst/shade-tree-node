@@ -15,6 +15,9 @@
 //   - the Rust `live` binary include_bytes!'s the SAME three circuits/rln files (path check on
 //     rust/rgoe-rln/src/prover.rs, no cargo build), so the lock hashes cover it
 //   - circuits/rln/ARTIFACTS.md's hash table agrees with the lock (docs cannot drift from bytes)
+//   - (T-HARD-8) each circuit's `artifactId` in the lock == `<circuit>-<sha256(vkey)[0:16]>`
+//     (the id the gateway/client/Rust derive at runtime; lib/zk-artifacts.mjs), the Rust `live`
+//     binary embeds the SAME lock file for its startup self-check, and release.yml runs this test
 //
 //   node test/zk-artifacts.selftest.mjs   (exit 0 = all invariants held)
 
@@ -22,8 +25,9 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ROOT, LOCK_PATH, ARTIFACTS, PROVENANCE_DEV, PROVENANCES, checkLock, readLock, measure,
+  ROOT, LOCK_PATH, ARTIFACTS, PROVENANCE_DEV, PROVENANCES, checkLock, readLock, measure, buildLock, artifactIdFor, VKEY_OF,
 } from "../scripts/zk-artifacts-lock.mjs";
+import { artifactIdOfFile, builtinArtifactId, lockArtifactIds } from "../lib/zk-artifacts.mjs";
 
 // FLIP THIS to "ceremony" in the same commit that pins ceremony output (docs/CEREMONY.md §7).
 const EXPECTED_PROVENANCE = PROVENANCE_DEV;
@@ -144,6 +148,31 @@ ok(mdRows >= 7 && mdOk === mdRows, `ARTIFACTS.md table rows agree with the lock 
 const ptauMd = md.match(/sha256 `([0-9a-f]{64})`/);
 ok(ptauMd && ptauMd[1] === lock?.ptau?.sha256, "ARTIFACTS.md ptau sha256 == lock.ptau.sha256");
 
+// ---- 6b. artifact ids (T-HARD-8): lock == runtime derivation; Rust embeds the lock; release runs this
+console.log("\nartifact ids (lock <-> runtime <-> Rust) + release gate:");
+for (const [circuit, vkPath] of Object.entries(VKEY_OF)) {
+  const declared = lock?.circuits?.[circuit]?.artifactId;
+  ok(declared === artifactIdOfFile(join(ROOT, vkPath), circuit), `lock circuits.${circuit}.artifactId == artifactIdOf(${vkPath}) (${declared})`);
+  ok(declared === artifactIdFor(circuit, lock.artifacts[vkPath].sha256), `circuits.${circuit}.artifactId is literally the vkey's lock sha256 prefix`);
+}
+ok(builtinArtifactId() === lock?.circuits?.rln?.artifactId, "lib/zk-artifacts builtinArtifactId() (what a default gateway accepts / client sends) == lock rln artifactId");
+ok(lock?.circuits?.rln?.previousArtifactId === null, "previousArtifactId is null (no ceremony has rotated the rln set); lockArtifactIds().previous mirrors it");
+ok(lockArtifactIds()?.previous === null && lockArtifactIds()?.current === lock?.circuits?.rln?.artifactId, "lockArtifactIds() reads {current, previous} from the lock");
+// rotation memory: rebuilding the lock over a prev whose rln id differs keeps that id as previousArtifactId
+const rotated = buildLock({ prev: { ...lock, circuits: { ...lock.circuits, rln: { ...lock.circuits.rln, artifactId: "rln-0123456789abcdef", previousArtifactId: null } } } });
+ok(rotated.circuits.rln.previousArtifactId === "rln-0123456789abcdef" && rotated.circuits.rln.artifactId === lock.circuits.rln.artifactId,
+  "buildLock over a prev with a different rln id records it as previousArtifactId (the default legacy id after a ceremony)");
+ok(buildLock({ prev: lock }).circuits.rln.previousArtifactId === lock.circuits.rln.previousArtifactId, "buildLock over an unchanged prev keeps previousArtifactId as-is");
+for (const circuit of Object.keys(VKEY_OF)) {
+  ok(md.includes(`| \`${circuit}\` | \`${lock.circuits[circuit].artifactId}\` |`), `ARTIFACTS.md artifact-id table names ${circuit} = ${lock.circuits[circuit].artifactId} (docs cannot drift from the lock)`);
+}
+const artifactsRs = readFileSync(join(ROOT, "rust/rgoe-rln/src/artifacts.rs"), "utf8");
+ok(artifactsRs.includes('"/../../testdata/zk-artifacts.lock.json"'), "rust/rgoe-rln/src/artifacts.rs include_str!s THIS lock (the live binary self-checks its embedded bytes against it)");
+ok(/#\[cfg\(feature = "embedded-artifacts"\)\]\s*pub const LOCK/.test(artifactsRs), "the embedded lock is behind the embedded-artifacts feature (live binary)");
+const releaseYml = readFileSync(join(ROOT, ".github/workflows/release.yml"), "utf8");
+ok(releaseYml.includes("node test/zk-artifacts.selftest.mjs"), "release.yml runs test/zk-artifacts.selftest.mjs (a tag build cannot embed drifted artifacts)");
+ok(/lock-check:[\s\S]*needs:[\s\S]*lock-check/.test(releaseYml) || /needs: \[set-version, lock-check\]/.test(releaseYml), "release.yml build jobs depend on the lock-check job");
+
 // ---- 7. negative: a tampered lock is caught by checkLock -------------------------------------
 console.log("\nnegative (checkLock catches drift):");
 const tampered = JSON.parse(JSON.stringify(lock));
@@ -158,6 +187,12 @@ ok(checkLock(badProv).some((p) => p.startsWith("bad provenance for circuits/rln/
 const halfCeremony = JSON.parse(JSON.stringify(lock));
 halfCeremony.trust = "CEREMONY";
 ok(checkLock(halfCeremony).some((p) => p.startsWith("trust must be UNTRUSTED-TESTNET")), "trust=CEREMONY with dev artifacts is reported");
+const badId = JSON.parse(JSON.stringify(lock));
+badId.circuits.rln.artifactId = "rln-0000000000000000";
+ok(checkLock(badId).some((p) => p.startsWith("circuits.rln.artifactId")), "a hand-edited rln artifactId is reported (id must be the vkey hash prefix)");
+const badPrev = JSON.parse(JSON.stringify(lock));
+badPrev.circuits.rln.previousArtifactId = lock.circuits.rln.artifactId;
+ok(checkLock(badPrev).some((p) => p.startsWith("circuits.rln.previousArtifactId")), "previousArtifactId equal to the current id is reported");
 // measure() on a nonexistent path reports missing (used by checkLock's missing-artifact branch)
 ok(measure({ path: "circuits/rln/does-not-exist.zkey" }).missing === true, "measure() flags a missing artifact");
 

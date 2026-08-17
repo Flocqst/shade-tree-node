@@ -64,6 +64,11 @@ export async function proveForSlot(secret, epoch, i, signal, opts) {
 }
 export async function loadGroup() { return { group: null, root: "ROOT", count: 1 }; }
 export function cleanUp() {}
+
+// T-HARD-8 artifact negotiation surface (mocked: one artifact set, no lock/vkey reads).
+export function clientArtifactIds() { return ["rln-mock0000000000"]; }
+export function selectArtifact(gatewayIds, clientIds) { return { ok: true, id: clientIds[0] }; }
+export function getArtifactSet() { return { accepted: new Map(), ids: ["rln-mock0000000000"], legacyId: "rln-mock0000000000", legacyAccepted: true, explicit: false }; }
 `;
 
 // Mock lib/receipt.mjs: validity is driven by the INJECTED receipt's marker, so the test controls

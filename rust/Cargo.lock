@@ -4599,6 +4599,7 @@ dependencies = [
  "hex",
  "num-bigint",
  "serde_json",
+ "sha2",
  "sha3",
 ]
 
@@ -4614,11 +4615,13 @@ dependencies = [
  "ark-relations",
  "ark-serialize",
  "ark-std",
+ "hex",
  "light-poseidon",
  "num-bigint",
  "rgoe-proto",
  "serde",
  "serde_json",
+ "sha2",
  "sha3",
  "tokio",
  "wasmer",

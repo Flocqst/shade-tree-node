@@ -58,6 +58,24 @@ mod embedded {
     ));
 }
 
+/// The three embedded artifact byte slices, for the T-HARD-8 runtime lock check
+/// (`crate::artifacts::verify_embedded`) and for deriving the set's artifact id.
+#[cfg(feature = "embedded-artifacts")]
+pub struct EmbeddedBytes {
+    pub wasm: &'static [u8],
+    pub zkey: &'static [u8],
+    pub vkey: &'static [u8],
+}
+
+#[cfg(feature = "embedded-artifacts")]
+pub fn embedded_bytes() -> EmbeddedBytes {
+    EmbeddedBytes {
+        wasm: embedded::WASM,
+        zkey: embedded::ZKEY,
+        vkey: embedded::VKEY,
+    }
+}
+
 /// Inputs to build one RLN egress envelope (T-RUST-2d).
 pub struct EnvelopeInput {
     /// Semaphore-v3 `identitySecret` (decimal) — the value a slash reveals.

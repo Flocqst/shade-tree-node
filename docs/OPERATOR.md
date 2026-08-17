@@ -412,6 +412,8 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
 | `RGOE_EGRESS_ALLOW` / `RGOE_EGRESS_DENY` | (none) | Egress policy (see §2). When `RGOE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
 | `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
+| `RGOE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
+| `RGOE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `RGOE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
 | `RGOE_ENVELOPE_TIMEOUT_MS` / `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
 | `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
 | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
@@ -468,6 +470,10 @@ attaches a **signed** capability set to every announce:
   (`*:443` → `[443]`; `*:443,*:8443` → `[443,8443]`; a wildcard `*` port is dropped).
 - `region` — your `RGOE_GATEWAY_REGION` bucket, if valid.
 - `proto` — the envelope version range this build speaks (from the gateway's negotiated range).
+- `artifacts` — the ZK artifact ids the gateway verifies proofs under, ONLY when
+  `RGOE_ZK_ARTIFACTS` is set (the dual-VK rollout window, `docs/CEREMONY.md` §6). Loaded through
+  the same fail-closed loader the gateway verifies with, so a heartbeat can never advertise an id
+  the gateway does not hold.
 
 The caps are signed by the gateway's onion key (not the bootnode), so a bootnode or directory
 signer cannot forge or alter them. Clients that opt into capability-aware selection then route a

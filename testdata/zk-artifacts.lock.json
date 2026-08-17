@@ -21,14 +21,17 @@
       "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
       "main": "RLN(20,16)",
       "constraints": 12390,
-      "nPublic": 5
+      "nPublic": 5,
+      "artifactId": "rln-0b25f824a04da3a8",
+      "previousArtifactId": null
     },
     "withdraw": {
       "family": "rate-limiting-nullifier/circom-rln",
       "tag": "v1.0.0",
       "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
       "main": "Withdraw",
-      "nPublic": 2
+      "nPublic": 2,
+      "artifactId": "withdraw-dd6bfa937405972f"
     }
   },
   "artifacts": {

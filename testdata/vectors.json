@@ -85,5 +85,63 @@
     "badVersion": "bad-version",
     "unsupportedVersion": "unsupported-version",
     "noMutualVersion": "no-mutual-version"
+  },
+  "artifacts": {
+    "_note": "T-HARD-8 ZK artifact-version negotiation. artifactIdOf(circuit, vkeyBytes) = `<circuit>-<sha256(bytes) hex[0:16]>` (lib/zk-artifacts.mjs; Rust rgoe_proto::artifact_id_of) — the vkey FILE bytes exactly as testdata/zk-artifacts.lock.json hashes them, so an artifact id is literally the lock hash prefix. `sample` pins the id of the utf8 bytes \"hello\" (sha256 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824). `reasons` are the bounded gateway/client reason LABELS (runtime strings append `:<id>` / `:client=..,gateway=..`, not pinned). `capsWithArtifacts` pins canonicalCaps (artifacts sorted, appended after proto) + canonicalCapsBytes + capsSig under the SAME onion key as `capabilities`; the pre-existing `capabilities` vectors are byte-UNCHANGED (artifacts absent => omitted).",
+    "sample": {
+      "circuit": "rln",
+      "inputUtf8": "hello",
+      "artifactId": "rln-2cf24dba5fb0a30e"
+    },
+    "idGrammar": "^[a-z0-9][a-z0-9._-]{0,63}$",
+    "reasons": {
+      "badArtifact": "bad-artifact",
+      "artifactRetired": "artifact-retired",
+      "artifactUnknown": "artifact-unknown",
+      "noMutualArtifact": "no-mutual-artifact",
+      "noClientArtifact": "no-client-artifact"
+    },
+    "selection": {
+      "clientNewestFirst": [
+        "rln-2cf24dba5fb0a30e",
+        "rln-0b25f824a04da3a8"
+      ],
+      "gatewayAd": [
+        "rln-0b25f824a04da3a8"
+      ],
+      "picked": "rln-0b25f824a04da3a8",
+      "noAdPicked": "rln-2cf24dba5fb0a30e",
+      "disjointReason": "no-mutual-artifact:client=rln-2cf24dba5fb0a30e|rln-0b25f824a04da3a8,gateway=rln-aaaaaaaaaaaaaaaa|rln-ffffffffffffffff"
+    },
+    "capsWithArtifacts": {
+      "caps": {
+        "ports": [
+          443
+        ],
+        "proto": {
+          "min": 3,
+          "max": 3
+        },
+        "artifacts": [
+          "rln-2cf24dba5fb0a30e",
+          "rln-0b25f824a04da3a8"
+        ]
+      },
+      "canonical": {
+        "ports": [
+          443
+        ],
+        "proto": {
+          "min": 3,
+          "max": 3
+        },
+        "artifacts": [
+          "rln-0b25f824a04da3a8",
+          "rln-2cf24dba5fb0a30e"
+        ]
+      },
+      "canonicalCapsBytesHex": "52474f452067617465776179206361706162696c69746965732076310a7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2263617073223a7b22706f727473223a5b3434335d2c2270726f746f223a7b226d696e223a332c226d6178223a337d2c22617274696661637473223a5b22726c6e2d30623235663832346130346461336138222c22726c6e2d32636632346462613566623061333065225d7d7d",
+      "capsSig": "62fe1df4aa753ad53820dcb23a5c701108108e9dce3b3b7e61fedadb725f06e0ab978a3f4a5832d5602a37512c186ed2cfedfca68c62dad08179b83af0198606"
+    }
   }
 }

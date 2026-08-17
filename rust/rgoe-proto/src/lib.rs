@@ -329,17 +329,26 @@ pub struct Caps {
     pub ports: Option<Vec<i64>>,
     pub region: Option<String>,
     pub proto: Option<ProtoCaps>,
+    /// T-HARD-8: the ZK artifact ids the gateway verifies proofs under (raw; validated,
+    /// deduped + sorted by [`canonical_caps`]). Mirrors `caps.artifacts`.
+    pub artifacts: Option<Vec<String>>,
 }
 
-/// Canonicalized caps: fixed field order (ports, region, proto), ports deduped + sorted
-/// ascending, only valid fields retained. The value [`canonical_caps_json`] serializes and
-/// [`has_caps`] tests. Mirrors the object `canonicalCaps` returns (`lib/directory.mjs:156`).
+/// Canonicalized caps: fixed field order (ports, region, proto, artifacts), ports deduped +
+/// sorted ascending, artifacts deduped + sorted, only valid fields retained. The value
+/// [`canonical_caps_json`] serializes and [`has_caps`] tests. Mirrors the object
+/// `canonicalCaps` returns (`lib/directory.mjs:156`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CanonicalCaps {
     pub ports: Option<Vec<u64>>,
     pub region: Option<String>,
     pub proto: Option<(u64, u64)>,
+    pub artifacts: Option<Vec<String>>,
 }
+
+/// Upper bound on advertised artifact ids (`lib/directory.mjs MAX_CAPS_ARTIFACTS`); a longer
+/// list is dropped entirely by [`canonical_caps`] (an ad can't balloon).
+pub const MAX_CAPS_ARTIFACTS: usize = 8;
 
 /// Normalize raw caps into canonical bucketed form (`lib/directory.mjs:156 canonicalCaps`).
 /// TOTAL: never fails; unknown/invalid fields are dropped; a fully-empty result is returned
@@ -372,6 +381,17 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
             out.proto = Some((p.min as u64, p.max as u64));
         }
     }
+    // T-HARD-8: artifact ids — grammar-checked, deduped, sorted (JS default sort == byte
+    // order for this ASCII grammar), count-bounded; appended LAST so pre-existing caps
+    // canonicalize to byte-identical JSON.
+    if let Some(list) = &caps.artifacts {
+        let mut v: Vec<String> = list.iter().filter(|a| is_artifact_id(a)).cloned().collect();
+        v.sort_unstable();
+        v.dedup();
+        if !v.is_empty() && v.len() <= MAX_CAPS_ARTIFACTS {
+            out.artifacts = Some(v);
+        }
+    }
     out
 }
 
@@ -380,7 +400,7 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
 /// when empty, keeping absent/empty-caps records byte-identical to before.
 pub fn has_caps(caps: &Caps) -> bool {
     let c = canonical_caps(caps);
-    c.ports.is_some() || c.region.is_some() || c.proto.is_some()
+    c.ports.is_some() || c.region.is_some() || c.proto.is_some() || c.artifacts.is_some()
 }
 
 /// Serialize canonical caps as the exact `JSON.stringify(canonicalCaps(caps))` bytes:
@@ -417,6 +437,20 @@ fn canonical_caps_json(cc: &CanonicalCaps) -> String {
         s.push_str(",\"max\":");
         s.push_str(&max.to_string());
         s.push('}');
+        first = false;
+    }
+    if let Some(arts) = &cc.artifacts {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"artifacts\":[");
+        for (i, a) in arts.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            push_json_string(&mut s, a);
+        }
+        s.push(']');
     }
     s.push('}');
     s
@@ -1154,6 +1188,92 @@ pub fn select_proto_version(
         )));
     }
     Ok(hi) // highest mutually supported
+}
+
+// --------------------------------------------------------------------------
+// ZK artifact-version negotiation (T-HARD-8)
+// --------------------------------------------------------------------------
+//
+// Reference: `lib/zk-artifacts.mjs` (`ARTIFACT_ID_RE`, `artifactIdOf`, `selectArtifact`,
+// `resolveArtifact` reason strings). An artifact SET (wasm + zkey + vkey from one phase-2
+// output) is named by a CONTENT-DERIVED id, `<circuit>-<sha256(verification_key.json)[0:16]>`
+// — literally the vkey's hash prefix in `testdata/zk-artifacts.lock.json` — so the lock, the
+// JS gateway/client and this Rust client agree on the name with no registry. The gateway
+// advertises its accepted ids in its signed caps (`caps.artifacts`) and verifies under the
+// vkey the envelope's `artifact` field names; the client sends the NEWEST of its own sets the
+// gateway accepts. Bounded reason labels are byte-pinned in `testdata/vectors.json`
+// `artifacts`; runtime reasons additionally carry ids (context-dependent, not pinned).
+
+/// Hex chars of the sha256 kept in an artifact id (`lib/zk-artifacts.mjs ARTIFACT_ID_HASH_CHARS`).
+pub const ARTIFACT_ID_HASH_CHARS: usize = 16;
+/// Gateway reason label: the envelope's `artifact` field is present but not an id.
+pub const REASON_BAD_ARTIFACT: &str = "bad-artifact";
+/// Gateway reason label: the (legacy) id is known but no longer accepted (window closed).
+pub const REASON_ARTIFACT_RETIRED: &str = "artifact-retired";
+/// Gateway reason label: an id this gateway holds no vkey for.
+pub const REASON_ARTIFACT_UNKNOWN: &str = "artifact-unknown";
+/// Client-side reason prefix: no artifact set is accepted by both sides (fail closed).
+pub const REASON_NO_MUTUAL_ARTIFACT: &str = "no-mutual-artifact";
+/// Client-side reason: this client has no prover artifact set at all.
+pub const REASON_NO_CLIENT_ARTIFACT: &str = "no-client-artifact";
+
+/// The artifact-id grammar (`lib/zk-artifacts.mjs ARTIFACT_ID_RE` =
+/// `/^[a-z0-9][a-z0-9._-]{0,63}$/`): lowercase alnum start, then up to 63 of `[a-z0-9._-]`.
+pub fn is_artifact_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.is_empty() || b.len() > 64 {
+        return false;
+    }
+    if !(b[0].is_ascii_lowercase() || b[0].is_ascii_digit()) {
+        return false;
+    }
+    b[1..]
+        .iter()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'))
+}
+
+/// `artifact_id_of(circuit, vkey_bytes)` = `<circuit>-<sha256(bytes) hex[0:16]>`
+/// (`lib/zk-artifacts.mjs artifactIdOf`). `vkey_bytes` are the `verification_key.json`
+/// FILE bytes exactly as the lock hashes them. Conformance target:
+/// `testdata/vectors.json` `artifacts.sample`.
+pub fn artifact_id_of(circuit: &str, vkey_bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(vkey_bytes);
+    let hex = hex::encode(digest);
+    format!("{circuit}-{}", &hex[..ARTIFACT_ID_HASH_CHARS])
+}
+
+/// The client's pick (`lib/zk-artifacts.mjs selectArtifact`). `client_ids` is the ORDERED
+/// list of sets this client can prove with, NEWEST FIRST; `gateway_ids` is the gateway's
+/// advertised accepted set (`caps.artifacts`) or `None` when unknown.
+///
+/// - no valid client id: `Err("no-client-artifact")`.
+/// - gateway unknown / empty ad: optimistically the client's newest.
+/// - otherwise the FIRST (newest) client id the gateway lists.
+/// - disjoint: `Err("no-mutual-artifact:client=a|b,gateway=c|d")` (gateway ids sorted).
+pub fn select_artifact(gateway_ids: Option<&[String]>, client_ids: &[String]) -> Result<String> {
+    let mine: Vec<&String> = client_ids.iter().filter(|s| is_artifact_id(s)).collect();
+    if mine.is_empty() {
+        return Err(Error::Reason(REASON_NO_CLIENT_ARTIFACT.to_string()));
+    }
+    let theirs: Vec<&String> = match gateway_ids {
+        Some(g) if !g.is_empty() => g.iter().filter(|s| is_artifact_id(s)).collect(),
+        _ => return Ok(mine[0].clone()),
+    };
+    for id in &mine {
+        if theirs.contains(id) {
+            return Ok((*id).clone());
+        }
+    }
+    let mut sorted: Vec<&str> = theirs.iter().map(|s| s.as_str()).collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mine_s: Vec<&str> = mine.iter().map(|s| s.as_str()).collect();
+    Err(Error::Reason(format!(
+        "{REASON_NO_MUTUAL_ARTIFACT}:client={},gateway={}",
+        mine_s.join("|"),
+        sorted.join("|")
+    )))
 }
 
 // --------------------------------------------------------------------------

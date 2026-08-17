@@ -3,12 +3,13 @@
 // It listens on 127.0.0.1:8443 (Tor maps <addr>.onion:80 -> here). For each
 // incoming connection it:
 //   1. reads a single newline-terminated v3 JSON envelope
-//      { v:3, target, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
+//      { v:3, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
 //   2. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
 //        externalNullifier is current/previous epoch's               (cheap)
 //        share.x == proof's committed public x                        (cheap)
 //        proof's public root ∈ recent-roots                           (cheap)
-//        RLN Groth16 verifyProof                                      (expensive SNARK)
+//        `artifact` id ∈ the accepted ZK artifact set (T-HARD-8)      (cheap; absent => legacy id)
+//        RLN Groth16 verifyProof under THAT artifact's vkey            (expensive SNARK)
 //      all bundled behind lib verifyEnvelope(),
 //   3. collects the RLN share per `nullifier`: the first share egresses; an identical
 //      replay (same share.x) is deduped (no slash); a SECOND DISTINCT signal (same
@@ -28,7 +29,7 @@ import { readFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH } from "../lib/semaphore.mjs";
+import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
 import { reconstructSecret, deriveCommitment } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
@@ -127,6 +128,9 @@ export function makeConnLimiter({ maxConns = HARDENING.maxConns, maxPerNullifier
 // A proof against any root inside the freshness window verifies. On-chain: fed by
 // the RootProvider. PoC fallback: the single members.json root, re-read on change.
 let recentRoots = new Set();
+// Test seam (gateway/*.selftest.mjs, lib/zk-artifacts.selftest.mjs): install the accepted
+// root set directly so a handler can be driven without initRoots()/members.json/a chain.
+export function _setRecentRoots(roots) { recentRoots = new Set(Array.from(roots || []).map(String)); }
 
 async function initRoots() {
   if (process.env.RGOE_GROUP_CONTRACT) {
@@ -632,6 +636,7 @@ async function makeReceiptSigner() {
   return () => buildReceipt({ onion: id.onion, epoch: currentEpoch(), onionSeedHex: id.seed });
 }
 
+// Also driven by lib/zk-artifacts.selftest.mjs with a fake socket (artifact-reject reply path).
 // Exported so gateway/hardening.selftest.mjs can run the REAL connection handler on a real
 // loopback socket. `verify` and `connect` are injectable ONLY for that (defaults are the real
 // verifyEnvelope + net.connect; main() passes neither); the hardening knobs default to HARDENING
@@ -700,8 +705,13 @@ export function makeHandler(spentSet, {
       M.verify.observe((performance.now() - t0) / 1000);
       if (!v.ok) {
         log.warn("drop", { reason: v.reason, target: env.target });
-        M.requests.inc({ result: "drop", reason: v.reason });
-        reply(socket, { ok: false, err: "gate:" + v.reason });
+        // Metrics use the bounded `label` when the lib supplies one (the T-HARD-8 artifact
+        // rejections carry the offending id in `reason`; the label is the coarse key), else the
+        // reason itself as before.
+        M.requests.inc({ result: "drop", reason: v.label ?? v.reason });
+        // An artifact rejection advertises the accepted ids back (like `proto` on a version
+        // reject) so the client can re-select a mutual artifact set or fail closed precisely.
+        reply(socket, v.artifacts ? { ok: false, err: "gate:" + v.reason, artifacts: v.artifacts } : { ok: false, err: "gate:" + v.reason });
         return socket.destroy();
       }
 
@@ -828,7 +838,23 @@ export function makeGracefulShutdown(server, {
   };
 }
 
+// ---- ZK artifact set (T-HARD-8 dual-VK rollout window) ----------------------
+// Load the accepted {artifactId -> vkey} set at startup so a mis-configured window
+// (RGOE_ZK_ARTIFACTS pointing an id at the wrong file, a missing vkey, ...) is a loud startup
+// error, never a silently-wrong accepted set. verifyEnvelope reads the same process-wide set.
+function initArtifacts() {
+  const set = getArtifactSet(); // throws with a precise message on a bad config
+  log.info("zk artifacts", {
+    accepted: set.ids,
+    legacy: set.legacyId,
+    legacyStatus: set.legacyAccepted ? "accepted (window open: field-less envelopes verify under it)" : "RETIRED (field-less / explicit-legacy envelopes => artifact-retired)",
+    source: set.explicit ? "RGOE_ZK_ARTIFACTS" : "built-in circuits/rln/verification_key.json",
+  });
+  return set;
+}
+
 async function main() {
+  initArtifacts();
   await initRoots();
   const slash = await makeSlasher();
   // Optional cross-fleet shared spent-nullifier tally (T-FEAT-20). null unless a real

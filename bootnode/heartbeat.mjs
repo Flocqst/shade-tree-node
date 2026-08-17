@@ -17,6 +17,9 @@
 //   RGOE_EGRESS_ALLOW       the gateway's egress policy (also read by gateway/gateway.mjs);
 //                           when SET, its concrete allowed ports are advertised as signed caps
 //   RGOE_GATEWAY_REGION     a coarse self-declared region bucket (REGION_BUCKETS; e.g. `eu`)
+//   RGOE_ZK_ARTIFACTS       the gateway's accepted ZK artifact set (also read by lib/rln.mjs
+//                           verifyEnvelope; T-HARD-8); when SET, its artifact ids are advertised
+//                           as signed caps so clients pick a mutual set in a dual-VK window
 //   stake (optional, admission=stake bootnodes):
 //   RGOE_GW_OPERATOR_KEY    operator EOA private key; signs the durable onion<->operator auth, OR
 //   RGOE_GW_OPERATOR +      a pre-computed operator address and
@@ -35,6 +38,7 @@ import { buildAnnounce, operatorAuthMessage, verifyOperatorSig } from "./announc
 import { postOverTor } from "./fetch.mjs";
 import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
 import { REGION_BUCKETS } from "../lib/directory.mjs";
+import { loadArtifactSet } from "../lib/zk-artifacts.mjs";
 import { isPrivHex, isEthAddress } from "../lib/config.mjs";
 import { applyNetworkEnv } from "../lib/network-record.mjs";
 
@@ -97,11 +101,17 @@ export async function resolveOperator(onion, env = process.env, { importEthers =
 //             REGION_BUCKETS). Omitted when unset/invalid. Deliberately too coarse to fingerprint.
 //   - proto : the envelope version range the gateway actually speaks (gateway.mjs PROTO_RANGE,
 //             the version-negotiation source of truth) — carried through, never hardcoded here.
+//   - artifacts: (T-HARD-8) the ZK artifact ids the gateway ACTUALLY verifies under, taken from
+//             the same RGOE_ZK_ARTIFACTS the gateway's verifyEnvelope loads (lib/zk-artifacts.mjs
+//             loadArtifactSet — fail-closed: a mis-pointed set aborts the heartbeat too, so a
+//             gateway never advertises ids it cannot verify). Advertised ONLY when the operator
+//             set RGOE_ZK_ARTIFACTS explicitly (the dual-VK window); an unconfigured gateway
+//             stays cap-free (its single built-in artifact is what a field-less envelope means).
 //
-// OPT-IN + OMIT-WHEN-UNCONFIGURED: with NEITHER a configured egress policy NOR a region,
-// buildGatewayCaps returns null, buildAnnounce attaches nothing, and the announce is
-// BYTE-IDENTICAL to a pre-T-FEAT-10 announce. proto rides along ONLY when caps are otherwise
-// non-empty, so it can never on its own force a non-identical announce.
+// OPT-IN + OMIT-WHEN-UNCONFIGURED: with NEITHER a configured egress policy NOR a region NOR an
+// explicit artifact set, buildGatewayCaps returns null, buildAnnounce attaches nothing, and the
+// announce is BYTE-IDENTICAL to a pre-T-FEAT-10 announce. proto rides along ONLY when caps are
+// otherwise non-empty, so it can never on its own force a non-identical announce.
 
 // Coarse allowed-port set from an RGOE_EGRESS_ALLOW spec (comma-separated `host:port` patterns,
 // same grammar as gateway.mjs makeEgressPolicy). Keeps only CONCRETE numeric ports — a wildcard
@@ -124,7 +134,7 @@ export function advertisedPorts(allowSpec) {
 // Build the raw caps object from env (injectable for tests; defaults to process.env). Returns
 // null when the gateway is UNCONFIGURED (no explicit egress policy, no valid region) so the
 // announce stays byte-identical to today. buildAnnounce canonicalizes + signs whatever we return.
-export function buildGatewayCaps(env = process.env) {
+export function buildGatewayCaps(env = process.env, { artifactIds = null } = {}) {
   const caps = {};
   // ports: advertised ONLY when the operator explicitly set an egress policy (env present). An
   // UNSET policy is the implicit :443 floor every gateway already meets (DEFAULT_EGRESS_PORT), so
@@ -137,8 +147,16 @@ export function buildGatewayCaps(env = process.env) {
   if (typeof env.RGOE_GATEWAY_REGION === "string" && REGION_BUCKETS.has(env.RGOE_GATEWAY_REGION)) {
     caps.region = env.RGOE_GATEWAY_REGION;
   }
+  // artifacts (T-HARD-8): opt-in via an EXPLICIT RGOE_ZK_ARTIFACTS. Loaded through the same
+  // fail-closed loader the gateway verifies with, so the ad can never name an id we don't hold.
+  // `artifactIds` is an injection seam (tests) that bypasses the file loads.
+  if (Array.isArray(artifactIds)) {
+    if (artifactIds.length) caps.artifacts = [...artifactIds];
+  } else if (env.RGOE_ZK_ARTIFACTS !== undefined && String(env.RGOE_ZK_ARTIFACTS).trim() !== "") {
+    caps.artifacts = loadArtifactSet({ env }).ids;
+  }
   // Nothing configured -> no caps -> byte-identical announce (proven in the selftest).
-  if (caps.ports === undefined && caps.region === undefined) return null;
+  if (caps.ports === undefined && caps.region === undefined && caps.artifacts === undefined) return null;
   // At least one real cap: advertise the proto range too (complete, and safe — it only ever
   // rides alongside already-present caps, never triggers caps on its own).
   caps.proto = { min: PROTO_RANGE.min, max: PROTO_RANGE.max };
@@ -245,7 +263,7 @@ export async function runHeartbeat({
   const caps = buildGatewayCaps(env);
   log(caps
     ? `capabilities advertised (signed): ${JSON.stringify(caps)}`
-    : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW and/or RGOE_GATEWAY_REGION to advertise)");
+    : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW, RGOE_GATEWAY_REGION and/or RGOE_ZK_ARTIFACTS to advertise)");
 
   const beat = makeBeat({
     announce: () => announce({ id, bootnode, op, weight, torHost, torPort, caps }),
