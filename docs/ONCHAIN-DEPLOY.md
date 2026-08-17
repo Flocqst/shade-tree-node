@@ -129,7 +129,21 @@ in the same run (see §6 for the manual path). The broadcast writes a receipt bu
 
 ## 7. Record the address into the fleet config
 
-The bootnode/gateway/lib find the contracts through env vars (see `docs/CONFIG.md`,
+**First, commit the record** (`network/<name>/contracts.json` is the canonical per-network
+truth; `network/README.md`). One command lifts address + tx hash + block from the broadcast
+receipt bundle into the committed record, validates it, and refuses a chain mismatch:
+
+```bash
+node scripts/record-deploy.mjs --network sepolia \
+  --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
+git diff network/sepolia/contracts.json   # contracts/deployTxs/deployBlocks.gatewayRegistry filled
+```
+
+From then on `RGOE_NETWORK=sepolia` supplies `RGOE_GATEWAY_REGISTRY` + `RGOE_RPC_URL` to the
+bootnode (`rgoe bootnode --network sepolia --admission stake`), `rgoe register-gateway`, and the
+client's stake re-verification, with explicit env still overriding.
+
+The bootnode/gateway/lib otherwise find the contracts through env vars (see `docs/CONFIG.md`,
 `docs/OPERATOR.md`). After a live deploy, wire the deployed `GatewayRegistry` address in:
 
 | var | where | purpose |

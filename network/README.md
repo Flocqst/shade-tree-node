@@ -1,14 +1,15 @@
 # network/
 
 Canonical deployment artifacts, one folder per network. Everything that identifies a
-live deployment — contract addresses, the gateway onion directory, deploy metadata —
-lives here and is committed, so the repo is the source of truth for "what is deployed
-where."
+live deployment — contract addresses, the fleet's discovery inputs, the gateway onion
+directory, deploy metadata — lives here and is committed, so the repo is the source of
+truth for "what is deployed where."
 
 ```
 network/
   <network-name>/            e.g. sepolia, mainnet, anvil-local
-    contracts.json           deployed contract addresses + chainId + deployer + block
+    contracts.json           deployed contract addresses + chainId + deployer + tx/block
+    bootnode.json            the fleet's discovery record: bootnode onion, pinned signer, admission
     directory.json           signed gateway fleet directory (onions, pubkeys, weights)
     README.md                human-readable deployment record
 ```
@@ -16,6 +17,119 @@ network/
 Local anvil deploys write `contracts/deployed.local.json` (gitignored) instead — only
 real networks get a committed `network/<name>/` record.
 
-The client points at a network with `RGOE_DIRECTORY=network/<name>/directory.json` and
-(for on-chain slashing) `RGOE_GROUP_CONTRACT` + `RGOE_RPC_URL` from that network's
-`contracts.json`.
+Records carry the **public discovery handles only**: onions, pubkeys, contract addresses.
+Never an IP, never a key. The validator (`lib/network-record.mjs`) rejects a record that
+puts an IP into a discovery field.
+
+## Pointing a component at a network: `RGOE_NETWORK`
+
+`RGOE_NETWORK=<name>` (or `rgoe --network <name>`) makes every component read the records
+under `network/<name>/` as **defaults** for the env vars it already consumes
+(`lib/network-record.mjs`, `applyNetworkEnv`). Explicit env / flags always win; the record
+only fills what is unset:
+
+| record | fills (when the value is non-null) |
+|---|---|
+| `bootnode.json` `onion` | `RGOE_BOOTNODE_ONION` (client discovery, heartbeat target, uptime probe) |
+| `bootnode.json` `signer` | `RGOE_DIR_SIGNER` (array → comma-joined rotation allowlist) |
+| `bootnode.json` `admission` | `RGOE_BOOTNODE_ADMISSION` |
+| `bootnode.json` `staticDirectory` | `RGOE_DIRECTORY` + `RGOE_DIR_SIGNER` — **only** when the record has no live bootnode onion (cold path) |
+| `contracts.json` `contracts.gatewayRegistry` | `RGOE_GATEWAY_REGISTRY` (bootnode stake admission, `rgoe register-gateway`, client stake re-verification) |
+| `contracts.json` `contracts.stakedReputationSet` | `RGOE_GROUP_CONTRACT` (gateway on-chain root + slashing target) |
+| `contracts.json` `rpcUrl` | `RGOE_RPC_URL` |
+
+Resolution order everywhere: **explicit env/flag > `network/<name>/` record > `contracts/deployed.local.json` (deployer-box cache) > dev default.**
+`rgoe` fails fast (exit 1) on an unknown network name or an invalid record; the library
+paths (`lib/gateway-registry.mjs`, `group/register-gateway.mjs`) treat an unresolvable
+record as "no default". Wired today: `bin/rgoe.mjs` (every command), `client/selection.mjs`
+(so `node client/shim.mjs` and the SDK honour it), `bootnode/heartbeat.mjs`,
+`lib/gateway-registry.mjs`, `group/register-gateway.mjs`, `scripts/uptime-probe.mjs`.
+
+```bash
+RGOE_NETWORK=sepolia RGOE_SECRET=<hex> rgoe client       # static directory + pinned signer from the record
+RGOE_NETWORK=sepolia rgoe heartbeat                       # announces to the record's bootnode onion (once live)
+RGOE_NETWORK=sepolia rgoe register-gateway --register-key <hex>   # once contracts.gatewayRegistry is recorded
+```
+
+## `contracts.json` schema
+
+```jsonc
+{
+  "network": "sepolia",                 // == the folder name ([a-z0-9-])
+  "chainId": 11155111,                  // number
+  "status": "live",                     // live | pending | retired
+  "release": "rln-v3",                  // free-form
+  "deployer": "0x…",                    // address | null
+  "rpcUrl": "https://…",                // public JSON-RPC used as RGOE_RPC_URL default
+  "params": { … },                      // free-form: bond, unbonding, …
+  "contracts": {                        // slot -> address | null (null = NOT deployed yet)
+    "stakedReputationSet": "0x…",
+    "hasher": "0x…",
+    "withdrawVerifier": "0x…",
+    "gatewayRegistry": null             // present-null until the GatewayRegistry broadcast lands
+  },
+  "deployTxs":    { "<slot>": "0x<64 hex>" | null, … },
+  "deployBlock":  11279842,             // block of the original deploy batch (number)
+  "deployBlocks": { "<slot>": 12345678, … },   // per-contract, for slots deployed later
+  "circuit": { … }, "note": "…", "liveIntegration": { … }   // documentation, not validated
+}
+```
+
+Rules enforced by `validateContractsRecord` (`lib/network-record.mjs`): every `contracts.*`
+value is a 0x 20-byte address **or `null`**; a missing slot means the same as null; a
+`deployTxs`/`deployBlocks` entry for a slot that is not an address is a contradiction and
+rejected; blocks are JSON numbers. A loader that needs an address calls
+`contractAddress(record, "gatewayRegistry")` and gets `null` for a pending slot — never a
+placeholder string.
+
+### Recording a deploy in one command
+
+`forge script … --broadcast` leaves the addresses in `contracts/deployed.local.json` and the
+tx hashes + receipts in `broadcast/<Script>.s.sol/<chainId>/run-latest.json` (both
+gitignored). Lift them into the committed record with:
+
+```bash
+node scripts/record-deploy.mjs --network sepolia \
+  --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
+# or:  rgoe record-deploy --network sepolia --from-broadcast …
+# manual: --contract gatewayRegistry --address 0x… --tx 0x… --block N
+# flags:  --all (every known CREATE in the bundle) --status live --force --dry-run
+```
+
+It refuses a chain-id mismatch, refuses to overwrite a slot that already holds a different
+address without `--force` (contracts are immutable), validates the merged record, and writes
+atomically. It never broadcasts anything.
+
+## `bootnode.json` schema
+
+```jsonc
+{
+  "network": "sepolia",
+  "status": "pending",                  // live | pending | retired
+  "onion": null,                        // bootnode v3 .onion  | null   -> RGOE_BOOTNODE_ONION
+  "signer": null,                       // 64-hex ed25519 | [hex, …] | null -> RGOE_DIR_SIGNER
+  "admission": "open",                  // open | stake  (what the bootnode unit enforces)
+  "staticDirectory": {                  // optional cold-path fallback (docs/INCIDENT.md #1)
+    "path": "directory.json",           //   relative to network/<name>/, no `..`
+    "signer": "189f…1321"               //   the STATIC directory's pinned signer
+  },
+  "deployedRef": null,                  // optional: git ref / release the fleet runs
+  "updated": "2026-08-17",              // optional
+  "note": "…"                           // optional; may not contain an IP
+}
+```
+
+Rules (`validateBootnodeRecord`): `status: live` **requires** non-null `onion` and `signer`
+(a live record without discovery inputs is a lie); `pending` tolerates nulls and is the
+committed template state before T-DEPLOY-1 (GO-LIVE row 7.1); `retired` supplies no defaults.
+`signer` as an array is the signer-rotation overlap allowlist (`client/selection.mjs`) and is
+joined with `,` into `RGOE_DIR_SIGNER`. `gatewayRegistry` may appear here as address|null
+for readability, but `contracts.json` is its canonical home.
+
+Onions and pubkeys are the discovery handle and belong here; **IPs never do**.
+
+## Static fallback
+
+The client points at a network with `RGOE_NETWORK=<name>` (above), or by hand with
+`RGOE_DIRECTORY=network/<name>/directory.json` + `RGOE_DIR_SIGNER` and (for on-chain
+slashing) `RGOE_GROUP_CONTRACT` + `RGOE_RPC_URL` from that network's `contracts.json`.

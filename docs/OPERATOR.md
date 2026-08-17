@@ -28,7 +28,7 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 Or, if the repo is already on the box:
@@ -46,7 +46,8 @@ It creates three `Restart=always` units:
 | `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`.
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, and `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref).
 
 Firewall: the gateway and bootnode are onion services and take **no inbound clearnet
 ports**. Inbound-22-only + outbound-allow (UFW) is correct. Never expose the loopback
@@ -182,21 +183,26 @@ Locally (non-bootstrapped) the same files live under `tor/hs*/identity.local.jso
 
 ### Backup
 
-**Manual for now** (no backup tooling is shipped). Copy the seed files off-box,
-encrypted. Example:
+`rgoe backup` / `rgoe restore` (`scripts/backup.mjs`, full guide in
+[BACKUP.md](./BACKUP.md)) encrypt the onion seeds (`identity.local.json`,
+`hs_ed25519_secret_key`) and the bootnode signer key into one tamper-evident file
+(scrypt + AES-256-GCM, Node crypto only, no `gpg` needed). The passphrase is read
+**only** from `RGOE_BACKUP_PASSPHRASE`, never from argv, never logged.
 
 ```bash
-sudo tar czf - \
-  /opt/rgoe/deploy-state/bootnode-hs/identity.local.json \
-  /opt/rgoe/deploy-state/gateway-hs/identity.local.json \
-  /opt/rgoe/deploy-state/bootnode-signer.key \
-  | gpg --symmetric --cipher-algo AES256 -o rgoe-keys-$(date +%F).tar.gz.gpg
-# then move rgoe-keys-*.tar.gz.gpg to an off-box, encrypted-at-rest location.
+export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+sudo -E node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state rgoe-keys-$(date +%F).rgoebak
+# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+
+# on a fresh box, before starting the units:
+sudo -E node /opt/rgoe/bin/rgoe.mjs restore rgoe-keys-<date>.rgoebak /opt/rgoe/deploy-state   # --force to overwrite
 ```
 
-Restore by placing the files back before starting the units; the onion address and
-pinned signer are preserved, so clients keep working. The operator EOA key is backed up
-with your normal wallet backups, not here.
+Restore lays the files back with `0600`/`0700` perms; the onion address and pinned
+signer are preserved, so clients keep working. To prove the restored key really is the
+same onion before cutting over, use `scripts/onion-identity.mjs`
+([ONION-IDENTITY.md](./ONION-IDENTITY.md)). The operator EOA key is backed up with your
+normal wallet backups, not here.
 
 ---
 
@@ -318,24 +324,37 @@ inbound handler only records locally, it never re-publishes).
 
 ## 6. Rotate or retire a gateway
 
-Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. There
-is **no `rgoe` wrapper for exit/withdraw yet (manual for now)** — use foundry `cast`
-against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
+Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. The
+`rgoe` wrappers (`group/exit-gateway.mjs`) drive `GatewayRegistry`
+(`contracts/GatewayRegistry.sol`); the equivalent raw `cast` calls are shown for reference.
+All three read the on-chain state first and refuse a call the contract would revert
+(`NotStaked` / `AlreadyExiting` / `NotExiting` / `StillBonded`), and every sending
+command takes `--dry-run` (prints target + calldata + an `eth_call` simulation, broadcasts
+nothing). Set `RGOE_RPC_URL` / `RGOE_GATEWAY_REGISTRY` (or `--rpc-url` / `--gateway-registry`).
+The operator key is the one that called `register()`; hand it over via `--account <name>`
+(Foundry encrypted keystore, `cast wallet import <name> --interactive`; password from
+`RGOE_KEYSTORE_PASSWORD` or a no-echo prompt), `--keystore <json>`, `--key-file <0600 file>`,
+or `RGOE_REGISTER_KEY` in the environment — never on the command line.
+
+0. Look before you leap (read-only, no key needed):
+
+   ```bash
+   rgoe gateway-status --operator 0x<operator> --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   ```
 
 1. Start the unbonding clock (operator-only). You stay slashable for the whole
    `UNBONDING` window, so you cannot exit-then-dodge a slash:
 
    ```bash
-   cast send 0x<GatewayRegistry> "initiateExit()" \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "initiateExit()" --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
-   Check when the bond becomes withdrawable:
-
-   ```bash
-   cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator> \
-     --rpc-url https://<rpc-endpoint>
-   ```
+   The command prints `withdrawable at <unix> (<ISO>)`; `rgoe gateway-status` shows the same
+   (raw: `cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator>`).
+   A stake-admission bootnode stops admitting this operator on its next refresh
+   (`RGOE_STAKE_CACHE_MS`), so do step 2 right away.
 
 2. Stop the units so the gateway stops announcing:
 
@@ -348,11 +367,14 @@ against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
    stops, the entry ages out and clients stop selecting it. Clients cache the
    last-known-good directory, so the fleet degrades gracefully.
 
-4. After the `UNBONDING` window, reclaim the bond:
+4. After the `UNBONDING` window, reclaim the bond (`--recipient` defaults to the operator
+   address; point it at a cold address if you like). Before the window elapses the
+   command refuses with `StillBonded until <ISO> — N s to go` and sends nothing:
 
    ```bash
-   cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
 **Rotating** an onion (new address, same operator/stake): mint a new identity
@@ -392,6 +414,50 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
 | `RGOE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
 | `RGOE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `RGOE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
+| `RGOE_ENVELOPE_TIMEOUT_MS` / `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
+| `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
+| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+
+### Endpoint hardening (T-HARD-4)
+
+Both listeners bound every lever an *unauthenticated* peer can pull. Defaults are on; you
+should not need to touch them unless you run an unusually large or slow fleet.
+
+**Gateway** (`gateway/gateway.mjs`):
+
+- **Envelope deadline** — the newline-terminated envelope must arrive within
+  `RGOE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
+  at a time does not extend it). Cut connections show as `drop reason=envelope-timeout` in the
+  metrics (`rgoe_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
+- **Relay idle timeout** — an established tunnel with no bytes in either direction for
+  `RGOE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
+  (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
+  simply reconnect; raise it if members legitimately hold idle connections longer.
+- **Connection caps** — `RGOE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
+  before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+  tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry
+  window cannot pin an unbounded number of idle tunnels. Both slots are released on close.
+- **Half-close crash fixed** — a client that sent a partial envelope and then FIN'd used to
+  crash the whole gateway process (uncaught `EPIPE` on the error reply). Fixed in the same
+  slice; `test/adversarial.selftest.mjs` scenario 6 exercises it.
+
+If a *legitimate* member trips `too-many-connections` (metric climbing under normal load), raise
+`RGOE_MAX_CONNS`; the per-nullifier cap should never be hit by an honest client (one request per
+nullifier, one tunnel each; a retry replaces a dead tunnel).
+
+**Bootnode** (`bootnode/server.mjs`):
+
+- **HTTP slow-client limits** — headers within 10 s, whole request within 30 s (`408`), keep-alive
+  idle 5 s, headers <= 8 KiB (`431`), enforced every second (Node's own defaults are 60 s / 300 s
+  / 16 KiB / checked every 30 s).
+- **Global announce bucket** — in front of the per-onion throttle's blind spot: an attacker
+  minting *fresh* onions could force one ed25519 verify per onion until the registry filled. Now
+  at most `RGOE_BOOTNODE_ANNOUNCE_BURST` (1000) reach verification in one instant, then
+  `RGOE_BOOTNODE_ANNOUNCE_RATE` (66.7/s). Overflow gets `429` + `Retry-After` and the heartbeat
+  simply retries at its next beat. Legit fleets never hit it at default cadence — the math is in
+  `docs/BOOTNODE.md` "Endpoint hardening". If your bootnode logs many `global-rate-limited`
+  rejects while the fleet is healthy, you are under an announce flood, not misconfigured.
 
 ### Capability advertisement (T-FEAT-10b)
 

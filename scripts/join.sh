@@ -24,7 +24,11 @@ elif [ -n "${1:-}" ]; then
   esac
 fi
 
-# Default verification target: assert egress really comes out of the droplet.
+# Default verification target: the PoC gateway droplet's clearnet IP. This is a
+# RECEIPT, not an endpoint: verify.sh compares the egress IP api.ipify.org observed
+# against it and prints PASS/FAIL. Keep it in sync with the default RGOE_ONION in
+# scripts/run-client.sh; override (or unset, to skip the assertion) when pointing at
+# a different gateway.
 export RGOE_EXPECT_IP="${RGOE_EXPECT_IP:-204.48.28.220}"
 
 echo "joining the gated egress as a member..."

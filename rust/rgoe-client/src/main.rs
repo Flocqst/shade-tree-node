@@ -260,7 +260,8 @@ SUBCOMMANDS:
           --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
                                           (comma = failover list; used by the CI harness).
         Envelope options:
-          --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf)
+          --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf;
+                      export it from your RGOE_SECRET with the JS CLI: `rgoe identity --out identity.json`)
           --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
           --target    host:port bound into the proof (the egress destination)
           --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;

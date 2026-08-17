@@ -43,6 +43,9 @@ async function main() {
   const help = rgoe(["help"]);
   ok(help.code === 0, "`rgoe help` exits 0");
   ok(/\bkeygen\b/.test(help.out) && /\bbootnode\b/.test(help.out), "`rgoe help` lists the commands (keygen, bootnode)");
+  ok(/\bidentity\b/.test(help.out) && /\bexit-gateway\b/.test(help.out) && /\bwithdraw-gateway\b/.test(help.out) && /\bgateway-status\b/.test(help.out),
+    "`rgoe help` lists identity, exit-gateway, withdraw-gateway, gateway-status (T-DEPLOY-5 GAP-4/GAP-12)");
+  ok(/\bjoin\b/.test(help.out) && /\bbackup\b/.test(help.out) && /\brestore\b/.test(help.out), "`rgoe help` lists join, backup, restore");
   // no args behaves as help too
   ok(rgoe([]).code === 0, "`rgoe` with no command exits 0 (prints help)");
 
@@ -70,6 +73,11 @@ async function main() {
   const bhelp = rgoe(["bootnode", "--help"], { timeout: 10_000 });
   ok(bhelp.code === 0, "`rgoe bootnode --help` exits 0 (never starts the service)");
   ok(/bootnode/.test(bhelp.out), "`rgoe bootnode --help` prints the bootnode command help");
+  // the on-chain exit commands must never reach a chain from --help either
+  const ehelp = rgoe(["exit-gateway", "--help"], { timeout: 10_000 });
+  ok(ehelp.code === 0 && /initiateExit|unbonding/i.test(ehelp.out), "`rgoe exit-gateway --help` exits 0 (no RPC touched)");
+  const ihelp = rgoe(["identity", "--help"], { timeout: 10_000 });
+  ok(ihelp.code === 0 && /--out/.test(ihelp.out), "`rgoe identity --help` exits 0 and names --out");
 
   // --- live flag plumbing: keygen mints an onion into a positional dir --------
   // Proves BOTH positional passthrough (<hsDir>) and the module-parsed --label flag (which is
@@ -105,12 +113,30 @@ async function main() {
     ["shim-port", "RGOE_SHIM_PORT"],
     ["directory", "RGOE_DIRECTORY"],
     ["dir-signer", "RGOE_DIR_SIGNER"],
+    ["network", "RGOE_NETWORK"],
   ];
   for (const [flag, env] of pairs) {
     // matches:  port: "RGOE_BOOTNODE_PORT"   or   "shim-port": "RGOE_SHIM_PORT"
     const re = new RegExp(`(?:"${flag}"|\\b${flag})\\s*:\\s*"${env}"`);
     ok(re.test(src), `FLAG_ENV maps --${flag} -> ${env}`);
   }
+
+  // --- --network / RGOE_NETWORK (lib/network-record.mjs) --------------------------------------
+  // `record-deploy` has no config role and its --dry-run writes nothing, so it is the safe live
+  // command to prove the wrapper resolves network/<name>/ records into env before spawning.
+  console.log("\n--network (RGOE_NETWORK record resolution):");
+  const badNet = rgoe(["record-deploy", "--network", "no-such-network-zzz", "--address", "0x" + "ab".repeat(20), "--dry-run"]);
+  ok(badNet.code === 1 && /RGOE_NETWORK=no-such-network-zzz/.test(badNet.out) && /no such network/.test(badNet.out), "`--network <unknown>` fails fast in the wrapper before spawning");
+  const trav = rgoe(["record-deploy", "--network", "../lib", "--dry-run"]);
+  ok(trav.code === 1 && /bad network name/.test(trav.out), "`--network ../x` (traversal) is rejected");
+  // --force because network/sepolia already records a GatewayRegistry; --dry-run never writes.
+  const dry = rgoe(["record-deploy", "--network", "sepolia", "--address", "0x" + "ab".repeat(20), "--force", "--dry-run"]);
+  ok(dry.code === 0 && /supplied .*RGOE_/.test(dry.out) && /dry-run/.test(dry.out), "`--network sepolia` resolves record defaults (reports supplied vars) and runs the child");
+  ok(!/RGOE_BOOTNODE_ONION|RGOE_DIR_SIGNER=/.test(dry.out.replace(/supplied [^\n]*/g, "")), "resolved discovery values are never printed (only the var NAMES)");
+  const viaEnv = rgoe(["record-deploy", "--address", "0x" + "ab".repeat(20), "--force", "--dry-run"], { env: { RGOE_NETWORK: "sepolia" } });
+  ok(viaEnv.code === 0 && /supplied/.test(viaEnv.out), "RGOE_NETWORK from the environment works the same as --network");
+  const helpRd = rgoe(["record-deploy", "--help"]);
+  ok(helpRd.code === 0 && /record-deploy/.test(helpRd.out), "`rgoe record-deploy --help` is wired");
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: rgoe CLI selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

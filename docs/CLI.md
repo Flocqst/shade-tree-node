@@ -12,19 +12,29 @@ See `docs/CONFIG.md` for the full env-var reference and defaults.
 
 | Command | Script | What it does | Example |
 |---|---|---|---|
+| `join` | `group/join.mjs` | Guided front door. `rgoe join [member] [label]` self-enrolls a member (secret on stderr, commitment + next commands on stdout); `rgoe join gateway [hsDir]` mints an onion identity and prints the operator's next commands. Composes `enroll` / `keygen`; never reimplements crypto. | `rgoe join` / `rgoe join gateway tor/hs` |
 | `keygen` | `bootnode/keygen.mjs` | Mint an onion identity: a Tor v3 hidden-service key plus the announce-signing seed. Writes `hs_ed25519_secret_key`, `hs_ed25519_public_key`, `hostname`, and `identity.local.json` into `<hsDir>`. | `rgoe keygen tor/hs --label gw1` |
 | `bootnode` | `bootnode/server.mjs` | Run the discovery bootnode (an onion service); verifies gateway announces and serves a signed directory. Long-running. | `rgoe bootnode --port 8877 --admission stake --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `heartbeat` | `bootnode/heartbeat.mjs` | Keep this gateway announced on the bootnode; re-announces every interval. Long-running. | `rgoe heartbeat --bootnode <onion> --operator-key 0xKEY` |
 | `enroll` | `group/enroll.mjs` | Generate a member identity locally and print its secret + commitment (the secret never leaves the machine). | `rgoe enroll alice --commitment-only` |
+| `identity` | `group/identity.mjs` | Export the **Rust client's `--identity` file** `{identitySecret, leaf}` from your member secret (same derivation as the JS client, `lib/identity-file.mjs` → `lib/rln.mjs`; `leaf` is your `members.json` entry). Secret from `--secret-file` > `RGOE_SECRET` (`--secret`) > `./.secret`. Stdout = the JSON only; `--out <path>` writes it mode 0600 instead. The public leaf is echoed on stderr, never the secret. Derive with the fleet's `RGOE_SLOTS`. | `RGOE_SECRET=0x… rgoe identity --out identity.json` |
 | `register-member` | `group/register-onchain.mjs` | Stake a self-enrolled member commitment into `StakedReputationSet` (posts the bond). | `rgoe register-member 0xCOMMITMENT --rpc-url https://rpc.example --group-contract 0xSet` |
 | `register-gateway` | `group/register-gateway.mjs` | Stake a gateway operator bond into `GatewayRegistry` (binds to the operator address). | `rgoe register-gateway --gateway-registry 0xReg --register-key 0xKEY` |
+| `exit-gateway` | `group/exit-gateway.mjs exit` | Operator-side exit half of `GatewayRegistry` (rollback of `register-gateway`): call `initiateExit()` — leave the active set, start the `UNBONDING` clock, stay slashable until it elapses. Reads state first and refuses what would revert (`NotStaked`, second call = no-op). `--dry-run` prints target + calldata + an `eth_call` simulation and never broadcasts. Signer: `--key-file` / `--account` (Foundry keystore, `RGOE_KEYSTORE_PASSWORD`) / `--keystore` / `RGOE_REGISTER_KEY`; never on argv. | `rgoe exit-gateway --gateway-registry 0xReg --rpc-url https://rpc.example --account rgoe-operator --dry-run` |
+| `withdraw-gateway` | `group/exit-gateway.mjs withdraw` | After `UNBONDING`, call `withdraw(recipient)` to reclaim the bond (`--recipient`, default the operator address). Refuses `NotStaked` / `NotExiting` / `StillBonded` (prints the withdrawable time). Same `--dry-run` and signer options as `exit-gateway`. | `rgoe withdraw-gateway --recipient 0xCold --gateway-registry 0xReg --rpc-url https://rpc.example --account rgoe-operator` |
+| `gateway-status` | `group/exit-gateway.mjs status` | Read-only: an operator's stake state (`staked (active)` / `exiting` / `not staked`), `BOND`, `UNBONDING`, `withdrawableAt` and chain time. Needs no key: `--operator 0x…`. | `rgoe gateway-status --operator 0xOp --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `sign-directory` | `group/sign-directory.mjs` | Sign a static fleet directory for offline discovery; with no args mints example keys + file. | `rgoe sign-directory unsigned.json` |
 | `gateway` | `gateway/gateway.mjs` | Run the reputation-gated egress gateway (Tor onion, `:443` metadata-only tunnel). Long-running. | `rgoe gateway --group-contract 0xSet --rpc-url https://rpc.example` |
-| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` |
+| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` (or `--network sepolia`) |
 | `shim` | `client/shim.mjs` | Alias for `client`. | `rgoe shim --secret <hex> --onion <onion>` |
 | `doctor` | `scripts/doctor.mjs` | Check the local setup (node, tor, keys, deps). | `rgoe doctor` |
+| `record-deploy` | `scripts/record-deploy.mjs` | Record a broadcast contract deploy (address + tx + block) into `network/<name>/contracts.json` from Foundry's `run-latest.json` or explicit flags; never touches a chain. | `rgoe record-deploy --network sepolia --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json` |
+| `backup` | `scripts/backup.mjs backup` | Encrypt and back up secret key material (onion seeds + signer key) from a directory into one file. Passphrase only via `RGOE_BACKUP_PASSPHRASE` (never argv). See `docs/BACKUP.md`. | `RGOE_BACKUP_PASSPHRASE=… rgoe backup deploy-state keys.rgoebak` |
+| `restore` | `scripts/backup.mjs restore` | Restore an encrypted key backup into a directory (`--force` to overwrite). Passphrase via `RGOE_BACKUP_PASSPHRASE`. | `RGOE_BACKUP_PASSPHRASE=… rgoe restore keys.rgoebak deploy-state --force` |
 
-`keygen` takes a positional `<hsDir>` and an own `--label`; `register-member` takes a positional `<commitment>`; `sign-directory` takes an optional positional unsigned-list path. All other positionals are forwarded to the child module.
+`keygen` takes a positional `<hsDir>` and an own `--label`; `join` takes an optional role (`member` | `gateway`) and a label / `<hsDir>`; `register-member` takes a positional `<commitment>`; `sign-directory` takes an optional positional unsigned-list path; `backup` / `restore` take `<src> <dest>` positionals. All other positionals are forwarded to the child module.
+
+Module-parsed flags (passed through, not env-mapped): `identity --out --secret-file`; `exit-gateway` / `withdraw-gateway` / `gateway-status` `--dry-run --recipient --key-file --account --keystore` (`--operator`, `--rpc-url`, `--gateway-registry`, `--register-key` are env-mapped as usual); `restore --force`; `keygen --label`; `enroll --commitment-only`.
 
 ## Flags
 
@@ -32,6 +42,7 @@ Every `--flag` sets exactly one `RGOE_*` env var (from `FLAG_ENV` in `bin/rgoe.m
 
 | Flag | Env var | Group |
 |---|---|---|
+| `--network` | `RGOE_NETWORK` | global (fills unset vars from `network/<name>/`; see `docs/CONFIG.md`) |
 | `--rpc-url` | `RGOE_RPC_URL` | global |
 | `--tor-host` | `RGOE_TOR_HOST` | global |
 | `--tor-port` | `RGOE_TOR_PORT` | global |

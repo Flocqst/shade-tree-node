@@ -1,6 +1,6 @@
 # Plan: close the three PoC seams by adopting RLN
 
-**Status: P0–P3 BUILT + VERIFIED (2026-07-15). P4 (fleet + live Tor) pending.**
+**Status: P0–P4 BUILT + VERIFIED (2026-07-15; P4 fleet + live Tor confirmed, see progress list below). Historical migration plan; the result is the `rln-v3` release in `network/sepolia/contracts.json`.**
 Seams 1–3 from `network/sepolia/E2E-REPORT.md` §9 (membership-from-chain, real RLN circuit,
 real verifier/hasher) are closed by adopting the real Rate-Limiting-Nullifier circuit in
 place of the two-view Semaphore+JS-Shamir crypto.
