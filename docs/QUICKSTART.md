@@ -1,8 +1,8 @@
 # Quickstart
 
 Stand up the whole system — a discovery bootnode, a reputation-gated gateway, and a client —
-from scratch. Two paths: a **local loop** to understand the pieces, and a **live droplet** to
-actually run it.
+or just join the one that is running. Three paths: **join the live fleet** (what a member does),
+a **local loop** to understand the pieces, and a **live droplet** to run your own.
 
 Everything is one CLI: `rgoe <command> [--flags]`. Install it:
 
@@ -14,18 +14,32 @@ rgoe doctor        # checks node, tor, deps, keys
 
 Each `--flag` maps to an `RGOE_*` env var (see [CONFIG.md](CONFIG.md)); either works.
 
-## Path A: the live fleet on a droplet (one command)
+## Path A: join the live fleet (`RGOE_NETWORK=sepolia`)
 
-If you just want it running, rent a fresh Ubuntu 24.04 box and:
+The fleet went live on 2026-08-17 ([GO-LIVE-LOG-2026-08-17.md](GO-LIVE-LOG-2026-08-17.md)): a
+bootnode, two gateways (New York, San Francisco), stake admission, membership rooted on Sepolia.
+`RGOE_NETWORK=sepolia` reads the committed record under [`network/sepolia/`](../network/sepolia/README.md)
+(bootnode onion, pinned signer, contract addresses) so you set nothing else. You need a Tor
+SOCKS port: `bash scripts/start-tor-client.sh` starts one on 9260 (or `--tor-port 9050` for a
+system tor).
 
 ```bash
-ssh root@<droplet>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+# handed a member secret (a leaf in group/members.json):
+RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client --tor-port 9260
+curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json     # a gateway's IP, not yours
+
+# no secret? buy a leaf over HTTP 402 (a wallet holding the settle asset; no gas)...
+rgoe enroll
+rgoe pay --network sepolia --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret   # or --protocol mpp
+RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8 --tor-port 9260
+
+# ...or stake one (Sepolia ETH; tier 8 or 32):
+rgoe register-member <commitment> --limit 8 --network sepolia
 ```
 
-It installs Tor + Node, mints the onions, starts the bootnode + gateway + heartbeat as
-systemd units, and prints the bootnode onion, its pinned signer, and the client command. See
-[bootnode/deploy/README.md](../bootnode/deploy/README.md). Then jump to [Connect a client](#4-connect-a-client).
+The client fetches the signed directory over Tor, verifies it against the pinned signer, and
+rotates across the gateways per request. Member page: [JOIN.md](JOIN.md); buying: [PAYMENTS.md](PAYMENTS.md).
+Testnet, untrusted ZK artifacts, one operator: see the README "Status".
 
 ## Path B: the local loop (understand the pieces)
 
@@ -93,6 +107,21 @@ curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
 
 The IP returned is a gateway's, not yours; the gateway never learned your IP (no exit node);
 and your request carried a fresh RLN proof of membership, rate-limited without identifying you.
+
+## Path C: your own fleet on a droplet (one command)
+
+If you want to run one, rent a fresh Ubuntu 24.04 box and:
+
+```bash
+ssh root@<droplet>
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+```
+
+It installs Tor + Node, mints the onions, starts the bootnode + gateway + heartbeat as
+systemd units, and prints the bootnode onion, its pinned signer, and the client command. Opt-ins:
+`RGOE_BOOTNODE_ONION=<onion>` (gateway-only box joining an existing bootnode), `RGOE_REGISTRAR=1`
+(sell access over 402), `RGOE_HELIOS=1` (light-client root anchor). See
+[bootnode/deploy/README.md](../bootnode/deploy/README.md). Then connect as in [step 4](#4-connect-a-client), pointing `--bootnode` / `--dir-signer` at what it printed.
 
 ## On-chain mode (optional)
 
