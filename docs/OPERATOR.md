@@ -318,24 +318,37 @@ inbound handler only records locally, it never re-publishes).
 
 ## 6. Rotate or retire a gateway
 
-Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. There
-is **no `rgoe` wrapper for exit/withdraw yet (manual for now)** — use foundry `cast`
-against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
+Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. The
+`rgoe` wrappers (`group/exit-gateway.mjs`) drive `GatewayRegistry`
+(`contracts/GatewayRegistry.sol`); the equivalent raw `cast` calls are shown for reference.
+All three read the on-chain state first and refuse a call the contract would revert
+(`NotStaked` / `AlreadyExiting` / `NotExiting` / `StillBonded`), and every sending
+command takes `--dry-run` (prints target + calldata + an `eth_call` simulation, broadcasts
+nothing). Set `RGOE_RPC_URL` / `RGOE_GATEWAY_REGISTRY` (or `--rpc-url` / `--gateway-registry`).
+The operator key is the one that called `register()`; hand it over via `--account <name>`
+(Foundry encrypted keystore, `cast wallet import <name> --interactive`; password from
+`RGOE_KEYSTORE_PASSWORD` or a no-echo prompt), `--keystore <json>`, `--key-file <0600 file>`,
+or `RGOE_REGISTER_KEY` in the environment — never on the command line.
+
+0. Look before you leap (read-only, no key needed):
+
+   ```bash
+   rgoe gateway-status --operator 0x<operator> --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   ```
 
 1. Start the unbonding clock (operator-only). You stay slashable for the whole
    `UNBONDING` window, so you cannot exit-then-dodge a slash:
 
    ```bash
-   cast send 0x<GatewayRegistry> "initiateExit()" \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "initiateExit()" --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
-   Check when the bond becomes withdrawable:
-
-   ```bash
-   cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator> \
-     --rpc-url https://<rpc-endpoint>
-   ```
+   The command prints `withdrawable at <unix> (<ISO>)`; `rgoe gateway-status` shows the same
+   (raw: `cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator>`).
+   A stake-admission bootnode stops admitting this operator on its next refresh
+   (`RGOE_STAKE_CACHE_MS`), so do step 2 right away.
 
 2. Stop the units so the gateway stops announcing:
 
@@ -348,11 +361,14 @@ against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
    stops, the entry ages out and clients stop selecting it. Clients cache the
    last-known-good directory, so the fleet degrades gracefully.
 
-4. After the `UNBONDING` window, reclaim the bond:
+4. After the `UNBONDING` window, reclaim the bond (`--recipient` defaults to the operator
+   address; point it at a cold address if you like). Before the window elapses the
+   command refuses with `StillBonded until <ISO> — N s to go` and sends nothing:
 
    ```bash
-   cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
 **Rotating** an onion (new address, same operator/stake): mint a new identity
