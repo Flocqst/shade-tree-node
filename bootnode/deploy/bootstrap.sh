@@ -246,7 +246,13 @@ apt-get update -qq
 apt-get install -y -qq curl gnupg ca-certificates git apt-transport-https >/dev/null
 
 log "node 24"
-if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 18 ]; then
+# Node < 24 is upgraded, not tolerated: the units below run under
+# SystemCallFilter=@system-service, and Node 20's V8 calls pkey_alloc (syscall 330) at
+# startup, which that allowlist does not include -> every unit dies with SIGSYS
+# (status=31/SYS) in a restart loop. Observed on the 2026-08-17 go-live box (pre-installed
+# NodeSource 20.20.2); Node 24 starts clean under the same filter. See
+# docs/GO-LIVE-LOG-2026-08-17.md (Phase 1.3).
+if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 24 ]; then
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash - >/dev/null 2>&1
   apt-get install -y -qq nodejs >/dev/null
 fi

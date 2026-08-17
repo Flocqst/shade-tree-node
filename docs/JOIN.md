@@ -1,6 +1,24 @@
 # you've been handed a key
 
 > **Which path is this?** This is the original single-gateway PoC path (`scripts/join.sh`,
+> a pinned onion, the committed `group/members.json`). **The live fleet path is shorter and is
+> what you want today** — the bootnode fleet went live on 2026-08-17 (`docs/GO-LIVE-LOG-2026-08-17.md`),
+> and its discovery record is committed as `network/sepolia/bootnode.json`, so joining is:
+>
+> ```bash
+> npm install
+> bash scripts/start-tor-client.sh                    # laptop tor, SOCKS 9260 (or use system tor: RGOE_TOR_PORT=9050)
+> RGOE_SECRET=<your-secret> RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node bin/rgoe.mjs client
+> curl -x http://127.0.0.1:8888 https://api.ipify.org         # a fleet gateway's clean IP
+> ```
+>
+> `RGOE_NETWORK=sepolia` fills the bootnode onion + pinned signer from the record
+> (`network/README.md`); the client fetches the live signed directory over Tor and rotates
+> across every gateway it lists. Full member guide: [`docs/post/JOIN.md`](post/JOIN.md) /
+> [`docs/QUICKSTART.md`](QUICKSTART.md). Use the rest of this page only if the operator
+> handed you the PoC bundle and a secret for the PoC set.
+
+> **Which path is this?** This is the original single-gateway PoC path (`scripts/join.sh`,
 > a pinned onion, the committed `group/members.json`). The current fleet path — live
 > discovery through a bootnode, on-chain admission, the `rgoe` CLI — is
 > [`docs/post/JOIN.md`](post/JOIN.md) / [`docs/QUICKSTART.md`](QUICKSTART.md). Use this page
