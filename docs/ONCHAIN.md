@@ -113,14 +113,16 @@ requirements. Reference interface (see `contracts/StakedReputationSet.sol` for t
 commented reference implementation):
 
 ```solidity
-BOND        // fixed denomination, so stake amounts never fingerprint a member
+BOND        // fixed denomination of the DEFAULT tier (limit 8); one denomination PER TIER,
+            // so stake amounts never fingerprint a member within a tier
+bondFor(limit) / allowedLimits()   // the immutable tier table (T-FEAT-8b): limit => bond
 UNBONDING   // exit time-lock; must satisfy the ordering constraint below
-group       // the on-chain Semaphore/RLN group (Merkle root of commitments)
+currentRoot // the on-chain Semaphore/RLN group root (depth-20 Poseidon tree, storage slot 3)
 
-register(uint256 commitment) payable
-    // permissionless. msg.value == BOND. addMember(commitment); record the bond.
-    // The commitment binds the bond to a secret only its holder knows. Anyone may
-    // pay to register any commitment; only the secret-holder can ever spend or exit it.
+register(uint256 commitment, uint256 limit) payable     // register(commitment) == limit 8
+    // permissionless. msg.value == bondFor(limit). addMember(commitment); record the bond
+    // AND the tier. The commitment binds the bond to a secret only its holder knows. Anyone
+    // may pay to register any commitment; only the secret-holder can ever spend or exit it.
 
 initiateExit(bytes withdrawProof)
     // authorized by a ZK proof of knowledge of the secret behind `commitment`,
@@ -131,10 +133,11 @@ withdraw(bytes withdrawProof, address recipient)
     // after UNBONDING elapses and the bond was not slashed: pay BOND to `recipient`
     // (a fresh, caller-specified shielded address), delete the member.
 
-slash(uint256 commitment, uint256 secret, address receiver)
-    // permissionless. Verify the revealed secret matches the commitment
-    // (commitment == Poseidon(secret, ...)), pay BOND to `receiver`, remove the member.
-    // Callable by whoever reconstructed the secret — in practice the gateway.
+slash(uint256 commitment, uint256 secret, uint256 limit, address receiver)   // 3-arg == limit 8
+    // permissionless. Verify the revealed secret matches the commitment AT THE CLAIMED TIER
+    // (commitment == Poseidon2(Poseidon1(secret), limit), limit == the recorded tier), pay
+    // that tier's bond to `receiver`, remove the member. Callable by whoever reconstructed
+    // the secret — in practice the gateway (which resolves the tier via limitOf(commitment)).
 ```
 
 **Why authorization is a ZK proof, not `msg.sender`.** This is what makes R1 hold.
@@ -430,45 +433,72 @@ that reveals nothing, exactly as any staking system's account is linkable to its
 - **Circuit artifacts** → adopt the rate-limiting-nullifier circuit; do not hand-roll.
   This is the one heavy new artifact and it must be audited before any mainnet money.
 
-## Tiers on chain (T-FEAT-8 follow-up — NOT deployed)
+## Tiers on chain (T-FEAT-8b — DEPLOYED, rln-v4-tiers, 2026-08-17)
 
 Off chain, a reputation tier is the leaf's `userMessageLimit` (`docs/adr/0006-reputation-tiers.md`):
 `rateCommitment = Poseidon2(Poseidon1(identitySecret), limit)`, one tree for every tier, the
-circuit range-checking the private `messageId` under the private `limit`. The deployed
-`StakedReputationSet` (`network/sepolia/contracts.json`, `userMessageLimit: 8`) is immutable and
-its `RateCommitmentHasher` pins `K = 8`, so today:
+circuit range-checking the private `messageId` under the private `limit`. Since the rln-v4
+redeploy (`network/sepolia/contracts.json`, release `rln-v4-tiers`,
+`0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`) the contract side matches:
 
-- `register(commitment)` admits a leaf at ANY limit — the contract cannot see the limit inside
-  a leaf. Nothing stops a member from staking a tier-32 leaf; the gateway would honour it.
-- `slash(commitment, secret, receiver)` checks `hasher.commitmentOf(secret) == commitment`
-  with `K = 8`, so it can only slash tier-8 leaves. A tiered leaf on the on-chain root is
-  therefore **unslashable on chain** — which is why the gateway's slash resolver
-  (`resolveSlashLeaf`) falls back to the default tier's leaf in on-chain root mode and the
-  runbook says: on chain, default limit only, until this ships.
+1. **Tiered hasher.** `RateCommitmentHasher.commitmentOf(secret, limit) =
+   Poseidon2(Poseidon1(secret), limit)` for `1 <= limit <= 65535` (`MAX_LIMIT`, the
+   circuit's `LessThan(16)` soundness bound; `BadLimit` outside), and the one-argument
+   `commitmentOf(secret)` stays the byte-equivalent `K = 8` leaf. `ICommitmentHasher` declares
+   both overloads. Goldens: `test/StakedReputationSet.tiers.t.sol` vs `lib/tiers.selftest.mjs`
+   / `rust/rgoe-rln/tests/tree_parity.rs`.
+2. **Stake -> tier at admission.** `register(commitment, limit)` requires
+   `msg.value == bondFor(limit)` from a **fixed, small tier table set in the constructor**
+   (`extraLimits[]` / `extraBonds[]`; the default tier `8 => BOND` is always present; Sepolia:
+   `8 => 0.001 ETH, 32 => 0.004 ETH`) — one denomination PER TIER, so stake amounts still never
+   fingerprint a member within a tier (R1); the tier itself is public at registration (as it is
+   in `members.json`) and in the `MemberRegistered(commitment, index, limit)` event, but never
+   at proof time. **No owner, no setter**: the table is immutable, a new table is a new
+   deployment (the set stays permissionless and un-upgradeable, unlike an owner-governed
+   table which would add a key that can reprice or close tiers). `limitOf(commitment)` /
+   `allowedLimits()` / `bondFor(limit)` are the views; `Member` gained a `limit` field.
+   `register(commitment)` is `register(commitment, 8)`.
+3. **Tiered slash.** `slash(commitment, secret, limit, receiver)`: the slasher supplies the
+   reconstructed secret AND the tier; the contract requires `limit == m.limit` (`BadLimit`)
+   and `hasher.commitmentOf(secret, limit) == commitment` (`BadSecret`), then burns
+   `bondFor(limit)`. `slash(commitment, secret, receiver)` is the limit-8 claim, byte-equivalent
+   to rln-v3. `MemberSlashed(commitment, receiver, limit)`.
+4. **Exit-auth at a tier.** `IWithdrawVerifier.verify(commitment, limit, context, proof)`:
+   the set passes the RECORDED limit, and the real Groth16 `WithdrawVerifier` ties the
+   circuit's identity commitment to the leaf at that limit
+   (`Poseidon2(identityCommitment, limit) == commitment`); the same identity's proof for its
+   tier-32 leaf never authorizes its tier-8 leaf and vice-versa (the context binds the leaf).
+5. **Root reconstruction is unchanged** (a leaf is a leaf): `lib/root-provider.mjs` accepts
+   both event generations (rln-v3 topic0 without `limit`, rln-v4 with), so one provider reads
+   either deployment; `currentRoot` stays at storage slot 3 (the tier mappings are declared
+   after the tree state), so the light-client / freshness-window paths are untouched.
 
-The contract-side design (a redeploy — flagged for the human, never autonomous):
+**Gateway slash path (`gateway/gateway.mjs`).** `resolveSlashTier(secret)` names the leaf
++ tier locally (members.json leaves, `RGOE_TIERS`); in on-chain root mode (no local leaves)
+the on-chain slasher (`makeOnchainSlasher`) probes the contract once at startup
+(`DEFAULT_LIMIT()` => rln-v4 tiered ABI; else the rln-v3 three-argument ABI), unions
+`RGOE_TIERS` with `allowedLimits()`, and at slash time asks `limitOf(candidateLeaf)` for each
+tier's leaf of the reconstructed secret, then submits `slash(leaf, secret, limit, receiver)`.
+The startup log line `slash: on-chain … abi="rln-v4 tiered" tiers=[8,32]` says which. Live
+proof: the Sepolia rln-v4 run (`network/sepolia/integration-report-rln-v4.md`) slashed a
+tier-32 leaf at limit 32 from a gateway holding only roots (tx `0xfff760a6…494c`, block
+11510548) and showed limit 32 on a tier-8 leaf reverting `BadLimit`.
 
-1. **Tiered hasher.** `ICommitmentHasher.commitmentOf(secret, limit)` (or a `TieredRateCommitmentHasher`
-   with `commitmentOf(secret, limit) = Poseidon2(Poseidon1(secret), limit)`, `1 <= limit <= 65535`)
-   and `slash(commitment, secret, limit, receiver)`: the slasher supplies the reconstructed secret
-   AND the tier it resolved (`resolveSlashLeaf` already returns `{ commitment, limit }`); the
-   contract recomputes the leaf at that limit. No ZK change; the same `(commitment, secret)`
-   soundness argument (ADR 0005) holds per limit.
-2. **Stake -> allowed limit at admission.** `register(commitment, limit)` records `limit` next to
-   the bond and requires `msg.value == bondFor(limit)` from a fixed, small tier table (e.g. `8 =>
-   BOND`, `32 => 4*BOND`) — a fixed denomination PER TIER so stake amounts still never fingerprint
-   a member within a tier (R1); the tier itself is public at registration (as it is in
-   `members.json`) but never at proof time. `slash`/`withdraw` pay `bondFor(limit)`.
-   Alternatively keep `register(commitment)` limit-blind and let the operator's off-chain
-   admission decide (today's behaviour) — simpler, but then the contract cannot slash tiers.
-3. **Root reconstruction is unchanged** (`lib/root-provider.mjs` builds the tree from leaves;
-   a leaf is a leaf), and so are the light-client / freshness-window paths.
+**Honest limits.** (a) The tier is DECLARED at registration, not proven: a leaf built at X
+registered as Y != X is unslashable AND unexitable (the bond is locked forever), and the
+gateway still enforces the leaf's real budget X, so the mismatch buys nothing
+(`docs/CONTRACTS-AUDIT.md` §3). (b) The live fleet gateways' `RGOE_SLASH_CONTRACT` still
+points at the superseded rln-v3 set until their units are flipped (`docs/ONCHAIN-DEPLOY.md`
+§8); rln-v4 is what `RGOE_NETWORK=sepolia` resolves and what new stakes should use.
+(c) `MAX_LIMIT` is enforced on chain and in `lib/rln.mjs normLimit`; the table on Sepolia is
+{8, 32}, other tiers need a new deployment.
 
-Foundry: a `TieredRateCommitmentHasher` + `slash(.., limit, ..)` test that a tier-32 leaf slashes
-only with `limit = 32` and a tier-8 leaf only with `limit = 8` (the JS goldens in
-`lib/tiers.selftest.mjs` / `rust/rgoe-rln/tests/tree_parity.rs` `rate_commitment_tiers_*`).
-Contracts are deliberately UNTOUCHED in this slice: the deployed set is immutable and a
-tiered hasher only means something with the redeploy.
+Foundry: `test/StakedReputationSet.tiers.t.sol` (tier-32 leaf slashes only with limit 32,
+tier-8 only with 8, JS goldens, immutable-table validation, mixed-tier root == JS `newGroup`,
+real Groth16 exit proof at the recorded tier), the tier fuzz tests in
+`test/StakedReputationSet.fuzz.t.sol`, and the two-tier invariant handler
+(`test/StakedReputationSet.invariant.t.sol`, balance == Σ per-tier bonds). End to end:
+`test/onchain-tiers.selftest.mjs` (anvil, real gateway, real proofs, real slasher).
 
 ## Honest scope: what this does not solve
 

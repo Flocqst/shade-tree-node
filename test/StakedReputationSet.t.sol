@@ -40,7 +40,9 @@ contract StakedReputationSetTest is Cheats {
             UNBONDING,
             MIN_UNBONDING,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            new uint256[](0),
+            new uint256[](0)
         );
         commitA = hasher.commitmentOf(SECRET_A);
         commitB = hasher.commitmentOf(SECRET_B);
@@ -61,7 +63,9 @@ contract StakedReputationSetTest is Cheats {
             MIN_UNBONDING - 1, // below the F+E+C lower bound
             MIN_UNBONDING,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            new uint256[](0),
+            new uint256[](0)
         );
     }
 
@@ -72,7 +76,9 @@ contract StakedReputationSetTest is Cheats {
             UNBONDING,
             MIN_UNBONDING,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            new uint256[](0),
+            new uint256[](0)
         );
     }
 
@@ -82,7 +88,7 @@ contract StakedReputationSetTest is Cheats {
         set.register{value: BOND}(commitA);
         assertTrue(set.isActive(commitA), "A should be active");
         assertEq(set.activeCount(), 1);
-        (uint256 bond, uint64 index, uint64 exitAt) = set.members(commitA);
+        (uint256 bond, uint64 index, uint64 exitAt,) = set.members(commitA);
         assertEq(bond, BOND);
         assertEq(uint256(index), 0);
         assertEq(uint256(exitAt), 0);
@@ -109,8 +115,8 @@ contract StakedReputationSetTest is Cheats {
     function test_Register_AppendOnlyIndex() public {
         set.register{value: BOND}(commitA);
         set.register{value: BOND}(commitB);
-        (, uint64 idxA,) = set.members(commitA);
-        (, uint64 idxB,) = set.members(commitB);
+        (, uint64 idxA,,) = set.members(commitA);
+        (, uint64 idxB,,) = set.members(commitB);
         assertEq(uint256(idxA), 0);
         assertEq(uint256(idxB), 1);
         assertEq(uint256(set.nextIndex()), 2);
@@ -181,7 +187,7 @@ contract StakedReputationSetTest is Cheats {
 
         assertEq(RECIPIENT.balance - before, BOND, "recipient paid the bond");
         assertEq(address(set).balance, 0, "contract emptied");
-        (uint256 bond,,) = set.members(commitA);
+        (uint256 bond,,,) = set.members(commitA);
         assertEq(bond, 0, "member deleted");
     }
 
@@ -214,7 +220,7 @@ contract StakedReputationSetTest is Cheats {
         // revealing the identitySecret slashes the leaf
         set.slash(COMMIT_A_EXPECTED, SECRET_A, RECEIVER);
         assertEq(RECEIVER.balance - before, BOND, "revealed identitySecret pays out the bond");
-        (uint256 bond,,) = set.members(COMMIT_A_EXPECTED);
+        (uint256 bond,,,) = set.members(COMMIT_A_EXPECTED);
         assertEq(bond, 0, "slashed leaf deleted");
 
         // a WRONG secret does not hash to the leaf => BadSecret
@@ -230,7 +236,7 @@ contract StakedReputationSetTest is Cheats {
         set.slash(commitA, SECRET_A, RECEIVER);
 
         assertEq(RECEIVER.balance - before, BOND, "receiver paid the bond");
-        (uint256 bond,,) = set.members(commitA);
+        (uint256 bond,,,) = set.members(commitA);
         assertEq(bond, 0, "slashed member deleted");
         assertEq(set.activeCount(), 0, "activeCount decremented on slash of active member");
         assertFalse(set.isActive(commitA));
@@ -286,14 +292,14 @@ contract StakedReputationSetTest is Cheats {
         set.slash(commitB, SECRET_B, RECEIVER);
 
         // the middle leaf is deleted...
-        (uint256 bondB, , ) = set.members(commitB);
+        (uint256 bondB, , ,) = set.members(commitB);
         assertEq(bondB, 0, "middle member deleted");
         assertFalse(set.isActive(commitB));
         assertEq(set.activeCount(), 2, "one fewer active member");
 
         // ...but the survivors KEEP their original indices (zero-in-place, no renumber)...
-        (uint256 bondA, uint64 idxA, ) = set.members(commitA);
-        (uint256 bondC, uint64 idxC, ) = set.members(commitC);
+        (uint256 bondA, uint64 idxA, ,) = set.members(commitA);
+        (uint256 bondC, uint64 idxC, ,) = set.members(commitC);
         assertEq(bondA, BOND, "survivor A still bonded");
         assertEq(bondC, BOND, "survivor C still bonded");
         assertEq(uint256(idxA), 0, "survivor A keeps index 0");
@@ -302,7 +308,7 @@ contract StakedReputationSetTest is Cheats {
         // ...and the vacated index 1 is never reused: the next registration appends at 3.
         assertEq(uint256(set.nextIndex()), 3, "slash does not decrement/reuse nextIndex");
         set.register{value: BOND}(commitB); // re-register the same commitment
-        (, uint64 idxBnew, ) = set.members(commitB);
+        (, uint64 idxBnew, ,) = set.members(commitB);
         assertEq(uint256(idxBnew), 3, "re-registration appends at a FRESH index, not the vacated 1");
     }
 
@@ -410,7 +416,7 @@ contract StakedReputationSetTest is Cheats {
         uint256 rMiddleGone = set.currentRoot();
 
         set.register{value: BOND}(commitB); // re-append at index 3 (NOT the vacated 1)
-        (, uint64 idxNew,) = set.members(commitB);
+        (, uint64 idxNew,,) = set.members(commitB);
         assertEq(uint256(idxNew), 3, "re-register appends at fresh index 3");
         // the root must change (a new live leaf at index 3) and differ from the middle-gone root
         assertTrue(set.currentRoot() != rMiddleGone, "re-register moves the root (fresh leaf)");
@@ -427,7 +433,7 @@ contract StakedReputationSetTest is Cheats {
         // commitment was deleted, so it can be registered again (new leaf index)
         set.register{value: BOND}(commitA);
         assertTrue(set.isActive(commitA), "re-registered after withdraw");
-        (, uint64 idx,) = set.members(commitA);
+        (, uint64 idx,,) = set.members(commitA);
         assertEq(uint256(idx), 1, "re-registration gets a fresh append-only index");
     }
 

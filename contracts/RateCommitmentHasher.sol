@@ -14,7 +14,11 @@ import {PoseidonT3} from "./PoseidonT3.sol";
 ///     identityCommitment = Poseidon(1)([ identitySecret ])            // t=2 / single-input
 ///     rateCommitment     = Poseidon(2)([ identityCommitment, K ])     // t=3 / two-input   <-- leaf
 ///
-/// with the protocol-pinned per-member message limit `K = userMessageLimit = 8`.
+/// with the per-member message limit `userMessageLimit` — the member's reputation TIER
+/// (docs/adr/0006-reputation-tiers.md, T-FEAT-8b). The one-argument `commitmentOf(secret)`
+/// is the DEFAULT tier `K = 8` (byte-equivalent to the rln-v3 hasher, which pinned K); the
+/// two-argument `commitmentOf(secret, limit)` is the tiered leaf the redeployed
+/// `StakedReputationSet.slash(commitment, secret, limit, receiver)` recomputes.
 ///
 /// This is the value stored as the membership leaf in `StakedReputationSet`, so a
 /// slash — which reveals the member's `identitySecret` — recomputes exactly this and
@@ -46,13 +50,31 @@ contract RateCommitmentHasher is ICommitmentHasher {
     uint256 public constant FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    /// Protocol per-member message limit (RLN `userMessageLimit`), the second Poseidon(2)
-    /// input. Pinned to 8 across the circuit, rlnjs registration, and this contract.
+    /// DEFAULT per-member message limit (RLN `userMessageLimit`), the second Poseidon(2)
+    /// input of the one-argument form. 8 across the circuit defaults, rlnjs, and lib/rln.mjs
+    /// K_SLOTS; other tiers pass their limit explicitly.
     uint256 public constant K = 8;
+
+    /// Upper bound on a tier limit: the circuit's LessThan(16) range check is unsound at or
+    /// above 2^16 (lib/rln.mjs MAX_LIMIT); a leaf at such a limit must never be admitted.
+    uint256 public constant MAX_LIMIT = 65535;
+
+    error BadLimit();
 
     /// @return rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), K ]).
     function commitmentOf(uint256 identitySecret) external pure override returns (uint256) {
+        return _commitmentOf(identitySecret, K);
+    }
+
+    /// @return rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), limit ]),
+    ///         the tier-`limit` leaf (T-FEAT-8b). Reverts BadLimit outside [1, MAX_LIMIT].
+    function commitmentOf(uint256 identitySecret, uint256 limit) external pure override returns (uint256) {
+        if (limit == 0 || limit > MAX_LIMIT) revert BadLimit();
+        return _commitmentOf(identitySecret, limit);
+    }
+
+    function _commitmentOf(uint256 identitySecret, uint256 limit) internal pure returns (uint256) {
         uint256 identityCommitment = PoseidonT2.hash([identitySecret]);
-        return PoseidonT3.hash([identityCommitment, K]);
+        return PoseidonT3.hash([identityCommitment, limit]);
     }
 }

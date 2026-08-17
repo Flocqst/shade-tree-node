@@ -18,6 +18,7 @@ interface Vm {
     function expectRevert() external;
     function expectRevert(bytes4) external;
     function expectRevert(bytes calldata) external;
+    function expectEmit(bool, bool, bool, bool) external;
     function load(address, bytes32) external view returns (bytes32);
     function addr(uint256) external returns (address);
     function startBroadcast() external;

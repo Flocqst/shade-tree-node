@@ -30,7 +30,7 @@ import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
-import { reconstructSecret, resolveSlashLeaf, TIERS, K_SLOTS } from "../lib/rln.mjs";
+import { reconstructSecret, resolveSlashLeaf, deriveCommitments, TIERS, K_SLOTS } from "../lib/rln.mjs";
 import { makeRootProvider } from "../lib/root-provider.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
 import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
@@ -136,19 +136,25 @@ let localLeaves = null;
 // root set directly so a handler can be driven without initRoots()/members.json/a chain.
 export function _setRecentRoots(roots) { recentRoots = new Set(Array.from(roots || []).map(String)); }
 
-// deriveSlashLeaf(identitySecret) -> commitment (string): the leaf to slash. Reputation tiers
-// (T-FEAT-8) make the leaf depend on the member's PRIVATE limit, so try every tier this gateway
-// knows (RGOE_TIERS; always includes K) and pick the one present in the local set. Without
-// leaves (on-chain root mode) this is the default tier's leaf — exactly the pre-tier
-// deriveCommitment — with a warn naming the candidates, since the on-chain hasher pins K=8
-// today (docs/ONCHAIN.md "Tiers on chain").
-export function deriveSlashLeaf(identitySecret, { tiers = TIERS, leaves = localLeaves } = {}) {
+// resolveSlashTier(identitySecret) -> { commitment, limit, resolved }: the leaf to slash and
+// the tier it sits at. Reputation tiers (T-FEAT-8) make the leaf depend on the member's
+// PRIVATE limit, so try every tier this gateway knows (RGOE_TIERS; always includes K) and pick
+// the one present in the local set. Without leaves (on-chain root mode) the local resolution
+// falls back to the default tier's leaf (resolved:false); the on-chain slasher then finishes
+// the job against the tiered contract's `limitOf` (T-FEAT-8b, makeSlasher below).
+export function resolveSlashTier(identitySecret, { tiers = TIERS, leaves = localLeaves } = {}) {
   const hasLeaf = leaves ? (c) => leaves.has(String(c)) : null;
   const r = resolveSlashLeaf(identitySecret, { tiers, hasLeaf });
   if (!r.resolved && tiers.length > 1) {
-    log.warn("slash: tier of the over-spent leaf not resolvable locally; naming the default tier's leaf", { tiers, limit: r.limit, hasLeaves: !!leaves });
+    log.warn("slash: tier of the over-spent leaf not resolvable locally; naming the default tier's leaf" + (leaves ? "" : " (on-chain slasher resolves via limitOf)"), { tiers, limit: r.limit, hasLeaves: !!leaves });
   }
-  return r.commitment;
+  return r;
+}
+
+// deriveSlashLeaf(identitySecret) -> commitment (string): the leaf to slash (resolveSlashTier's
+// commitment). Kept as the string-returning form for callers/tests that only want the leaf.
+export function deriveSlashLeaf(identitySecret, opts = {}) {
+  return resolveSlashTier(identitySecret, opts).commitment;
 }
 
 async function initRoots() {
@@ -228,7 +234,7 @@ async function initRoots() {
 // window is deterministically testable without a real wall clock.
 export function makeSpentSet({
   reconstruct = reconstructSecret,
-  derive = deriveSlashLeaf,
+  derive = resolveSlashTier,
   slash,
   sharedTally = null,
   ttlMs = 2 * EPOCH_SECONDS * 1000,
@@ -291,8 +297,11 @@ export function makeSpentSet({
     let commitment = null;
     try {
       const secret = reconstruct(e.first, share); // identitySecret
-      commitment = derive(secret);                // rateCommitment leaf
-      if (slash) await slash(commitment, secret);
+      // `derive` returns either the leaf (string) or { commitment, limit, resolved } (tiers).
+      const d = derive(secret);
+      const tier = d && typeof d === "object" ? d : { commitment: d, limit: undefined, resolved: undefined };
+      commitment = tier.commitment;               // rateCommitment leaf
+      if (slash) await slash(commitment, secret, tier);
     } catch (err) {
       log.error("slash failed", { nullifier: String(nullifier).slice(0, 10) + "..", err: err.message });
     }
@@ -336,9 +345,9 @@ async function makeSlasher() {
 
   if (!key || !address) {
     log.info("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)");
-    return async (commitment, secret) => {
+    return async (commitment, secret, tier) => {
       // Log the (public) commitment leaf only; never any bytes of the reconstructed secret.
-      log.info("SLASH (dry-run)", { commitment: String(commitment).slice(0, 18) + ".." });
+      log.info("SLASH (dry-run)", { commitment: String(commitment).slice(0, 18) + "..", ...(tier && tier.limit != null ? { limit: tier.limit } : {}) });
     };
   }
 
@@ -352,16 +361,70 @@ async function makeSlasher() {
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
-  const contract = new ethers.Contract(address, ["function slash(uint256 commitment, uint256 secret, address receiver)"], wallet);
   const rcv = receiver || wallet.address;
-  log.info("slash: on-chain", { via: address, receiver: rcv });
-  return async (commitment, secret) => {
-    const tx = await contract.slash(commitment, secret, rcv);
+  return makeOnchainSlasher({ ethers, wallet, address, receiver: rcv });
+}
+
+// The on-chain slash submitter proper, over an ethers wallet. Exported (with `ethers` injected)
+// so gateway/onchain-tiers.selftest.mjs can drive it against a throwaway anvil.
+//
+// Two contract generations (docs/ONCHAIN.md "Tiers on chain"):
+//   rln-v3  slash(commitment, secret, receiver)          — hasher pins K=8; only tier-8 leaves
+//   rln-v4  slash(commitment, secret, limit, receiver)   — T-FEAT-8b tiered: the leaf is
+//           recomputed at the CLAIMED limit and that tier's bond burns; `limitOf(commitment)`
+//           names the tier a leaf was staked at; `allowedLimits()` is the admitted tier table.
+// Detected ONCE at startup by probing `DEFAULT_LIMIT()` (v4 only). Against v4 the tier is
+// resolved in this order: the local resolution (members.json leaves), else the contract's
+// own record — `limitOf` over the candidate leaves of every known tier (RGOE_TIERS ∪
+// allowedLimits()); a leaf the contract does not hold is not slashable on it anyway.
+export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) {
+  const ABI = [
+    "function slash(uint256 commitment, uint256 secret, address receiver)",
+    "function slash(uint256 commitment, uint256 secret, uint256 limit, address receiver)",
+    "function limitOf(uint256 commitment) view returns (uint256)",
+    "function allowedLimits() view returns (uint256[])",
+    "function DEFAULT_LIMIT() view returns (uint256)",
+  ];
+  const contract = new ethers.Contract(address, ABI, wallet);
+  let tiered = false;
+  let tiers = TIERS.slice();
+  try {
+    await contract.DEFAULT_LIMIT();
+    tiered = true;
+    const onChain = (await contract.allowedLimits()).map(Number);
+    tiers = Array.from(new Set([...tiers, ...onChain])).sort((a, b) => a - b);
+  } catch {
+    tiered = false; // rln-v3 shape (or unreachable: probed again lazily below on first slash)
+  }
+  log.info("slash: on-chain", { via: address, receiver, abi: tiered ? "rln-v4 tiered" : "rln-v3 (default tier only)", tiers: tiered ? tiers : [K_SLOTS] });
+
+  return async (commitment, secret, tier) => {
+    let limit = tier && tier.resolved ? Number(tier.limit) : null;
+    let leaf = commitment;
+    if (tiered && limit == null) {
+      // The local set could not name the tier (on-chain root mode holds roots, not leaves):
+      // ask the contract which candidate leaf of this secret it actually holds.
+      const cands = deriveCommitments(secret, tiers);
+      for (const c of cands) {
+        const l = Number(await contract.limitOf(c.commitment));
+        if (l !== 0) { limit = l; leaf = c.commitment; break; }
+      }
+      if (limit == null) {
+        // Not staked at any known tier on this contract: submit the default-tier claim so the
+        // revert (NotMember) is on record — same outcome as rln-v3 for an unknown leaf.
+        limit = tier && tier.limit != null ? Number(tier.limit) : K_SLOTS;
+        log.warn("slash: leaf not held by the contract at any known tier; submitting the default-tier claim", { tiers, limit });
+      }
+    }
+    const tx = tiered
+      ? await contract["slash(uint256,uint256,uint256,address)"](leaf, secret, limit, receiver)
+      : await contract["slash(uint256,uint256,address)"](leaf, secret, receiver);
     // "SLASH tx <hash>" substring preserved for scripts/integration-sepolia.mjs's regex.
-    log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(commitment).slice(0, 18) + ".." });
+    log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(leaf).slice(0, 18) + "..", ...(tiered ? { limit } : {}) });
     const rcpt = await tx.wait();
     // "SLASH mined block <n>" substring preserved for scripts/integration-sepolia.mjs's regex.
-    log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(commitment).slice(0, 18) + ".." });
+    log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(leaf).slice(0, 18) + "..", ...(tiered ? { limit } : {}) });
+    return { hash: tx.hash, block: rcpt.blockNumber, limit: tiered ? limit : K_SLOTS, commitment: leaf };
   };
 }
 

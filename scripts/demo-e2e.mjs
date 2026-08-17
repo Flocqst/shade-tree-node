@@ -41,8 +41,8 @@ const ABI = [
   "function BOND() view returns (uint256)",
   "function UNBONDING() view returns (uint256)",
   "function activeCount() view returns (uint256)",
-  "function members(uint256) view returns (uint256 bond, uint64 index, uint64 exitInitiatedAt)",
-  "function register(uint256 commitment) payable",
+  "function members(uint256) view returns (uint256 bond, uint64 index, uint64 exitInitiatedAt, uint32 limit)",
+  "function register(uint256 commitment) payable", // == register(commitment, 8): the default tier (T-FEAT-8b)
   "function initiateExit(uint256 commitment, bytes proof)",
   "function withdraw(uint256 commitment, address recipient, bytes proof)",
   "function slash(uint256 commitment, uint256 secret, address receiver)",

@@ -35,9 +35,10 @@ contract MockWithdrawVerifier is IWithdrawVerifier {
     }
 
     /// @dev proof = abi.encode(uint256 secret). Returns true iff the secret hashes to
-    ///      `commitment`. Returns false (rather than reverting) on a malformed proof so
-    ///      the caller sees a clean BadProof, per the IWithdrawVerifier contract.
-    function verify(uint256 commitment, bytes32 /*context*/, bytes calldata proof)
+    ///      `commitment` at the member's recorded tier `limit` (T-FEAT-8b). Returns false
+    ///      (rather than reverting) on a malformed proof so the caller sees a clean
+    ///      BadProof, per the IWithdrawVerifier contract.
+    function verify(uint256 commitment, uint256 limit, bytes32 /*context*/, bytes calldata proof)
         external
         view
         override
@@ -45,6 +46,6 @@ contract MockWithdrawVerifier is IWithdrawVerifier {
     {
         if (proof.length != 32) return false;
         uint256 secret = abi.decode(proof, (uint256));
-        return hasher.commitmentOf(secret) == commitment;
+        return hasher.commitmentOf(secret, limit) == commitment;
     }
 }

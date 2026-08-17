@@ -44,6 +44,7 @@ export const CONTRACT_SLOTS = {
   MockCommitmentHasher: "hasher",
   WithdrawVerifier: "withdrawVerifier",
   MockWithdrawVerifier: "withdrawVerifier",
+  WithdrawGroth16Verifier: "withdrawGroth16Verifier", // the snarkJS-exported pairing verifier WithdrawVerifier wraps (rln-v4)
 };
 
 export function parseArgs(rawArgv) {

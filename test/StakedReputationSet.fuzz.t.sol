@@ -31,7 +31,9 @@ contract StakedReputationSetFuzzTest is FuzzBase {
             UNBONDING,
             MIN_UNBONDING,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            new uint256[](0),
+            new uint256[](0)
         );
         vm.deal(address(this), 1_000 ether);
     }
@@ -56,7 +58,7 @@ contract StakedReputationSetFuzzTest is FuzzBase {
 
         assertTrue(set.isActive(commit), "exact bond admits the leaf");
         assertEq(set.activeCount(), 1);
-        (uint256 bond, uint64 index, uint64 exitAt) = set.members(commit);
+        (uint256 bond, uint64 index, uint64 exitAt,) = set.members(commit);
         assertEq(bond, BOND, "bond recorded");
         assertEq(uint256(index), 0);
         assertEq(uint256(exitAt), 0);
@@ -134,7 +136,7 @@ contract StakedReputationSetFuzzTest is FuzzBase {
         set.slash(commit, secret, RECEIVER);
 
         assertEq(RECEIVER.balance - before, BOND, "revealed secret pays out");
-        (uint256 bond,,) = set.members(commit);
+        (uint256 bond,,,) = set.members(commit);
         assertEq(bond, 0, "slashed leaf deleted");
         assertEq(set.activeCount(), 0);
         assertEq(address(set).balance, 0, "no bond left behind");
@@ -152,6 +154,74 @@ contract StakedReputationSetFuzzTest is FuzzBase {
 
         assertTrue(set.isActive(commit), "wrong secret is a no-op");
         assertEq(address(set).balance, BOND);
+    }
+
+    // ---- tiers (T-FEAT-8b): a fresh two-tier set per test ---------------------
+
+    uint256 constant BOND32 = 4 * BOND;
+
+    function _tieredSet() internal returns (StakedReputationSet t) {
+        uint256[] memory l = new uint256[](1);
+        uint256[] memory b = new uint256[](1);
+        l[0] = 32;
+        b[0] = BOND32;
+        t = new StakedReputationSet(
+            BOND, UNBONDING, MIN_UNBONDING, IWithdrawVerifier(address(verifier)), ICommitmentHasher(address(hasher)), l, b
+        );
+    }
+
+    /// For ANY secret and either admitted tier: only exactly bondFor(limit) admits, the
+    /// recorded limit is the one staked, and the leaf is the tiered hasher's output.
+    function testFuzz_register_tierBondAdmits(uint256 rawSecret, bool tier32, uint256 rawWei) public {
+        StakedReputationSet t = _tieredSet();
+        uint256 secret = _secret(rawSecret);
+        uint256 limit = tier32 ? 32 : 8;
+        uint256 due = t.bondFor(limit);
+        uint256 commit = hasher.commitmentOf(secret, limit);
+
+        uint256 wrongWei = _bound(rawWei, 0, 10 * BOND);
+        vmf.assume(wrongWei != due);
+        vm.expectRevert(StakedReputationSet.BadBond.selector);
+        t.register{value: wrongWei}(commit, limit);
+
+        t.register{value: due}(commit, limit);
+        assertTrue(t.isActive(commit), "tier bond admits the leaf");
+        assertEq(t.limitOf(commit), limit, "recorded limit == staked limit");
+        assertEq(address(t).balance, due);
+    }
+
+    /// For ANY secret and tier: the slash succeeds ONLY at the recorded limit (any other
+    /// admitted-or-not limit reverts and changes nothing) and pays exactly that tier's bond.
+    function testFuzz_slash_onlyAtRecordedLimit(uint256 rawSecret, bool tier32, uint256 rawOther, bool exiting) public {
+        StakedReputationSet t = _tieredSet();
+        uint256 secret = _secret(rawSecret);
+        uint256 limit = tier32 ? 32 : 8;
+        uint256 due = t.bondFor(limit);
+        uint256 commit = hasher.commitmentOf(secret, limit);
+        t.register{value: due}(commit, limit);
+        if (exiting) t.initiateExit(commit, _proof(secret));
+
+        uint256 other = _bound(rawOther, 0, 70_000);
+        vmf.assume(other != limit);
+        vm.expectRevert(StakedReputationSet.BadLimit.selector);
+        t.slash(commit, secret, other, RECEIVER);
+        assertEq(address(t).balance, due, "wrong-limit slash is a no-op");
+
+        uint256 before = RECEIVER.balance;
+        t.slash(commit, secret, limit, RECEIVER);
+        assertEq(RECEIVER.balance - before, due, "pays exactly the tier bond");
+        assertEq(address(t).balance, 0);
+        assertEq(t.limitOf(commit), 0);
+    }
+
+    /// The tiered hasher never collides across tiers for the same secret, and equals the
+    /// legacy one-argument hasher at limit 8.
+    function testFuzz_hasher_tiersDistinctAndDefaultEqual(uint256 rawSecret, uint256 rawLimit) public view {
+        uint256 secret = _secret(rawSecret);
+        uint256 limit = _bound(rawLimit, 1, 65535);
+        vmf.assume(limit != 8);
+        assertEq(hasher.commitmentOf(secret, 8), hasher.commitmentOf(secret), "two-arg at 8 == one-arg");
+        assertTrue(hasher.commitmentOf(secret, limit) != hasher.commitmentOf(secret, 8), "tiers never collide");
     }
 
     receive() external payable {}

@@ -8,23 +8,42 @@ source of truth the client/gateway read (`RGOE_NETWORK=sepolia`, see `network/RE
 
 ## Staking contracts
 
-Status: **live** — release `rln-v3`, deployed at block 11279842 by
-`0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7`. Params: bond 0.001 ETH, unbonding 300s,
-`userMessageLimit` 8. [`contracts.json`](contracts.json) is the source of truth.
+Status: **live** — release `rln-v4-tiers`, deployed 2026-08-17 (blocks 11510538–11510541) by
+the fleet operator hot key `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02`. Params: tiers
+{8: 0.001 ETH, 32: 0.004 ETH} (`bondFor(limit)`), unbonding 300s (min 270), `DEFAULT_LIMIT` 8,
+on-chain root at storage slot 3. [`contracts.json`](contracts.json) is the source of truth.
+Live integration (two tiers, on-chain root mode, tier-32 slash):
+[`integration-report-rln-v4.md`](integration-report-rln-v4.md).
 
 | Contract | Address |
 |---|---|
-| StakedReputationSet | [`0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`](https://sepolia.etherscan.io/address/0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC) |
-| RateCommitmentHasher (`hasher`) | `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D` |
-| MockWithdrawVerifier (`withdrawVerifier`) | `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2` |
-| GatewayRegistry | [`0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`](https://sepolia.etherscan.io/address/0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868) — deployed 2026-08-17 at block 11509783, tx `0x1ae812c1…3ad5dc`, owner `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key); BOND 0.001 ETH, unbonding 300s / min 270s (verified via `cast`: `BOND()`, `owner()`). Receipt bundle: [`gateway-registry-broadcast.json`](gateway-registry-broadcast.json); recorded with `rgoe record-deploy --network sepolia --from-broadcast …`. `RGOE_NETWORK=sepolia` now supplies `RGOE_GATEWAY_REGISTRY` (`docs/ONCHAIN-DEPLOY.md` §7). |
+| StakedReputationSet (tiered, on-chain tree) | [`0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`](https://sepolia.etherscan.io/address/0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25) — tx `0xa565fd77…3ba03`, block 11510541 |
+| RateCommitmentHasher (`hasher`, tiered `commitmentOf(secret, limit)`) | `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` |
+| WithdrawVerifier (`withdrawVerifier`, REAL Groth16 exit-auth) | `0x522409038aA03FFF998d33C60A37486975695351` over `WithdrawGroth16Verifier` `0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E` (untrusted dev VK, T-HARD-1) |
+| PoseidonT2 / PoseidonT3 (linked libraries) | `0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55` / `0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022` (from the rln-v3 deploy, reused) |
+| GatewayRegistry | [`0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`](https://sepolia.etherscan.io/address/0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868) — deployed 2026-08-17 at block 11509783, tx `0x1ae812c1…3ad5dc`, owner `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key); BOND 0.001 ETH, unbonding 300s / min 270s (verified via `cast`: `BOND()`, `owner()`). Receipt bundle: [`gateway-registry-broadcast.json`](gateway-registry-broadcast.json); recorded with `rgoe record-deploy --network sepolia --from-broadcast …`. `RGOE_NETWORK=sepolia` now supplies `RGOE_GATEWAY_REGISTRY` (`docs/ONCHAIN-DEPLOY.md` §7). Unchanged by the rln-v4 redeploy. |
 
-**Superseded (history only, do not use):** the pre-RLN deployment at block 11274471 —
-StakedReputationSet `0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC`, MockCommitmentHasher
-`0xB9c051d12750395e7541Da149e216B1542b343d2`, MockWithdrawVerifier
-`0xac506585D70F8DA91C38CF271938Ee956f7CB862` — whose hasher was `Poseidon(secret)` rather than
-the real RLN rateCommitment. An intermediate RLN deploy `0x7c5bcfD3…8c6E` was abandoned mid-test
-(see `contracts.json` `note`).
+Receipt bundle: [`rln-v4-broadcast.json`](rln-v4-broadcast.json). `RGOE_NETWORK=sepolia`
+resolves `RGOE_GROUP_CONTRACT` to the rln-v4 set. Stake at a tier with
+`rgoe register-member <leaf> --limit 8|32 --network sepolia` (`docs/CLI.md`).
+
+**Superseded (history only, do not stake there):**
+
+- **rln-v3** (2026-07-15, block 11279842, deployer `0x3261DaF3…2ff7`): StakedReputationSet
+  `0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`, RateCommitmentHasher (K pinned to 8)
+  `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D`, MockWithdrawVerifier
+  `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2`. No on-chain tree (slot 3 = 0, so the light
+  provider yielded no root — the finding that filed T-DEV-9c) and no tiers. Superseded by
+  rln-v4-tiers; **the LIVE fleet gateways' slashing (`RGOE_SLASH_CONTRACT`) still points here
+  until their units are flipped** (`docs/ONCHAIN-DEPLOY.md` §8). Its live integration:
+  [`integration-report-rln.md`](integration-report-rln.md); kept under `superseded.rln-v3` in
+  `contracts.json`.
+- the pre-RLN deployment at block 11274471 — StakedReputationSet
+  `0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC`, MockCommitmentHasher
+  `0xB9c051d12750395e7541Da149e216B1542b343d2`, MockWithdrawVerifier
+  `0xac506585D70F8DA91C38CF271938Ee956f7CB862` — whose hasher was `Poseidon(secret)` rather than
+  the real RLN rateCommitment. An intermediate RLN deploy `0x7c5bcfD3…8c6E` was abandoned mid-test
+  (see `contracts.json` `superseded.rln-v3.note`).
 
 ## Bootnode
 

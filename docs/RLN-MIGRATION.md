@@ -1,6 +1,6 @@
 # Plan: close the three PoC seams by adopting RLN
 
-**Status: P0–P4 BUILT + VERIFIED (2026-07-15; P4 fleet + live Tor confirmed, see progress list below). Historical migration plan; the result is the `rln-v3` release in `network/sepolia/contracts.json`.**
+**Status: P0–P4 BUILT + VERIFIED (2026-07-15; P4 fleet + live Tor confirmed, see progress list below). Historical migration plan; the result was the `rln-v3` release, superseded 2026-08-17 by **`rln-v4-tiers`** (P5 below) in `network/sepolia/contracts.json`.**
 Seams 1–3 from `network/sepolia/E2E-REPORT.md` §9 (membership-from-chain, real RLN circuit,
 real verifier/hasher) are closed by adopting the real Rate-Limiting-Nullifier circuit in
 place of the two-view Semaphore+JS-Shamir crypto.
@@ -17,6 +17,20 @@ Progress:
 - **P4 fleet + live Tor** — all 3 DO gateways (egress-01, egress-02, rgoe-03) re-provisioned
   onto the RLN branch (rlnjs installed, wired to `0xdAE242AE…20FC`); live round-trip over Tor
   confirmed, rotating across all three, laptop IP absent from every gateway log. ✓
+
+- **P5 rln-v4-tiers (2026-08-17, T-DEV-9c + T-FEAT-8b)** — the member set redeployed at
+  `0xFe48De8b…9d25` with the T-DEV-9 ON-CHAIN incremental tree (`currentRoot` at slot 3, so
+  `LightClientRootProvider` reads a real root; the rln-v3 set predated it and proved slot 3 = 0)
+  and ON-CHAIN reputation tiers (`register(commitment, limit)` at `bondFor(limit)`, tiered
+  `RateCommitmentHasher.commitmentOf(secret, limit)`, `slash(commitment, secret, limit, receiver)`,
+  real Groth16 exit-auth taking the recorded limit; table {8: 0.001 ETH, 32: 0.004 ETH}).
+  Live integration PASS at two tiers: stake tier 8 + tier 32 → on-chain root == JS root →
+  gateway in on-chain root mode → tier-32 over-spend → `slash(.., 32, ..)` burns the tier-32
+  bond (`0xfff760a6…494c`, block 11510548). `network/sepolia/integration-report-rln-v4.md`.
+  Members from rln-v3 do NOT migrate (the set is a fresh contract; re-stake, at a tier). The
+  fleet units still point their slashing at rln-v3 until flipped (`docs/ONCHAIN-DEPLOY.md` §8).
+  `lib/root-provider.mjs` reads both event generations, `group/register-onchain.mjs` /
+  `gateway/gateway.mjs` detect the contract generation, so one codebase serves either. ✓
 
 Two live-only bugs were found + fixed during P3-live (both slipped past every offline gate):
 a shared-snarkjs reentrancy race (serialized behind a mutex in `lib/rln.mjs`) and a stale
@@ -102,8 +116,10 @@ section below._
 2. **Artifacts:** build locally — no published bundle exists. circom-rln **v1.0.0** (commit
    `17f0fed`), dev Groth16 setup, artifacts hash-pinned under `circuits/rln/`. **Testnet-only**
    (untrusted ceremony). Mainnet needs a real ceremony + audit.
-3. **Rate model:** `userMessageLimit = K_SLOTS = 8`. Confirm the RLN nullifier/messageId maps
-   onto our spent-set the same way the current slot nullifier does.
+3. **Rate model:** `userMessageLimit = K_SLOTS = 8` by default; since T-FEAT-8 the per-leaf
+   limit IS the reputation tier (`docs/adr/0006-reputation-tiers.md`) and since rln-v4 the
+   contract records/prices/slashes it (`docs/ONCHAIN.md` "Tiers on chain"). The RLN
+   nullifier/messageId maps onto our spent-set the same way the earlier slot nullifier did.
 4. **Withdraw/exit:** **graft** our time-locked exit (`initiateExit`/`withdraw`, `U ≥ F+E+C`)
    onto the new leaf, keeping the working economic layer; adopt the real Groth16 `Verifier.sol`
    only for the membership/slash proof. Do NOT swap in RLN.sol wholesale (loses our timelock).

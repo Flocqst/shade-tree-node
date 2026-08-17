@@ -11,14 +11,22 @@
 // fund from a well-known anvil dev key.
 //
 // Usage:
-//   node group/register-onchain.mjs <commitment>
+//   node group/register-onchain.mjs <commitment> [--limit N]
 //   node group/enroll.mjs --commitment-only | node group/register-onchain.mjs
+//   rgoe register-member <commitment> --limit 32
+//
+// Reputation tiers (T-FEAT-8b, docs/adr/0006-reputation-tiers.md): `--limit N` (or RGOE_LIMIT)
+// is the tier the commitment was ENROLLED at (`rgoe enroll --limit N`); the rln-v4 set records
+// it and prices the bond per tier (`bondFor(limit)`), so the amount is read from the contract
+// for that tier. Default = 8 (the pre-tier K). Against an rln-v3 set (no tiers) only the
+// default tier is admitted: `register(commitment)` at `BOND()`.
 //
 // Config (all overridable by env; defaults read contracts/deployed.local.json):
 //   RGOE_RPC_URL        JSON-RPC endpoint         (default: deployed.rpcUrl or anvil)
 //   RGOE_GROUP_CONTRACT StakedReputationSet addr  (default: deployed.StakedReputationSet)
 //   RGOE_REGISTER_KEY   funding private key       (default: anvil account #0)
-//   RGOE_BOND           bond in wei               (default: deployed.bond or on-chain BOND())
+//   RGOE_LIMIT          tier limit (== --limit)   (default: 8)
+//   RGOE_BOND           bond in wei               (default: on-chain bondFor(limit) / BOND())
 //
 // NB: needs the `ethers` dependency (see final report). Imported lazily so this
 // file still parses without it.
@@ -26,6 +34,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { normLimit, K_SLOTS } from "../lib/rln.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -41,8 +50,17 @@ async function readDeployed() {
   }
 }
 
+// --limit <n> | --limit=<n> (or RGOE_LIMIT): the tier the leaf was enrolled at.
+const argv = process.argv.slice(2);
+let limitArg = process.env.RGOE_LIMIT || null;
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--limit") { limitArg = argv[i + 1]; argv.splice(i, 2); break; }
+  if (argv[i].startsWith("--limit=")) { limitArg = argv[i].slice("--limit=".length); argv.splice(i, 1); break; }
+}
+const LIMIT = normLimit(limitArg == null || limitArg === "" ? K_SLOTS : limitArg); // throws on a bad tier
+
 async function readCommitment() {
-  const arg = process.argv[2];
+  const arg = argv[0];
   if (arg && !arg.startsWith("--")) return arg.trim();
   // else read a single commitment from stdin (pipe from enroll --commitment-only)
   const chunks = [];
@@ -77,20 +95,37 @@ async function main() {
   const wallet = new ethers.Wallet(key, provider);
   const abi = [
     "function register(uint256 commitment) payable",
+    "function register(uint256 commitment, uint256 limit) payable",
     "function BOND() view returns (uint256)",
+    "function bondFor(uint256 limit) view returns (uint256)",
     "function isActive(uint256 commitment) view returns (bool)",
   ];
   const contract = new ethers.Contract(address, abi, wallet);
 
-  const bond = process.env.RGOE_BOND ?? deployed.bond ?? (await contract.BOND());
+  // rln-v4 (tiered) vs rln-v3: probe bondFor(limit). A v3 set has no such function.
+  let tiered = true;
+  let tierBond = 0n;
+  try { tierBond = await contract.bondFor(LIMIT); } catch { tiered = false; }
+  if (tiered && tierBond === 0n) {
+    console.error(`tier ${LIMIT} is not admitted by ${address} (bondFor(${LIMIT}) == 0); enroll at an admitted tier`);
+    process.exit(1);
+  }
+  if (!tiered && LIMIT !== BigInt(K_SLOTS)) {
+    console.error(`contract ${address} has no tier table (rln-v3): only --limit ${K_SLOTS} can be staked there`);
+    process.exit(1);
+  }
+  const bond = process.env.RGOE_BOND ?? deployed.bond ?? (tiered ? tierBond : await contract.BOND());
 
-  console.log(`register(${commitment})`);
-  console.log(`  contract: ${address}`);
+  console.log(tiered ? `register(${commitment}, ${LIMIT})` : `register(${commitment})`);
+  console.log(`  contract: ${address}${tiered ? "" : " (rln-v3, default tier only)"}`);
   console.log(`  rpc:      ${rpcUrl}`);
   console.log(`  from:     ${wallet.address}`);
+  console.log(`  limit:    ${LIMIT}`);
   console.log(`  bond:     ${bond} wei`);
 
-  const tx = await contract.register(commitment, { value: bond });
+  const tx = tiered
+    ? await contract["register(uint256,uint256)"](commitment, LIMIT, { value: bond })
+    : await contract["register(uint256)"](commitment, { value: bond });
   console.log(`  tx:       ${tx.hash}  (waiting for confirmation...)`);
   const rcpt = await tx.wait();
   console.log(`  mined in block ${rcpt.blockNumber}; member staked and admitted to the on-chain root.`);

@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Cheats} from "../../test/Cheats.sol";
 import {StakedReputationSet, IWithdrawVerifier, ICommitmentHasher} from "../StakedReputationSet.sol";
 import {GatewayRegistry} from "../GatewayRegistry.sol";
-import {MockCommitmentHasher} from "../MockCommitmentHasher.sol";
+import {RateCommitmentHasher} from "../RateCommitmentHasher.sol";
 import {MockWithdrawVerifier} from "../MockWithdrawVerifier.sol";
 import {WithdrawGroth16Verifier} from "../WithdrawGroth16Verifier.sol";
 import {WithdrawVerifier} from "../WithdrawVerifier.sol";
@@ -40,10 +40,20 @@ import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 ///   RGOE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270)
 ///   RGOE_GATEWAY_OWNER     GatewayRegistry slashing/gov address  (0 => deployer)
 ///   RGOE_DEPLOY_STAKED     1 = also deploy StakedReputationSet   (1)
+///   RGOE_DEPLOY_REGISTRY   1 = deploy GatewayRegistry; 0 = keep an existing one and only
+///                          record RGOE_GATEWAY_REGISTRY (addr) in the JSON     (1)
+///                          (the rln-v4 Sepolia redeploy: the live registry stays as is)
 ///   RGOE_WITHDRAW_VERIFIER pre-deployed IWithdrawVerifier addr   (0 => deploy per below)
 ///   RGOE_DEPLOY_REAL_VERIFIER 1 = deploy REAL Groth16 verifier   (0 => deploy Mock)
 ///                          (only when RGOE_WITHDRAW_VERIFIER unset; testnet-only VK)
-///   RGOE_COMMITMENT_HASHER pre-deployed ICommitmentHasher addr   (0 => deploy Mock)
+///   RGOE_COMMITMENT_HASHER pre-deployed ICommitmentHasher addr   (0 => deploy RateCommitmentHasher)
+///                          (must implement the TIERED commitmentOf(secret, limit); the
+///                          rln-v3 hasher 0x08F9a754… pins K=8 and cannot be reused)
+///   RGOE_TIER_LIMITS       extra admitted tiers, comma-separated   ("" => default tier 8 only)
+///                          e.g. "32" or "32,64"; ascending, distinct, 1..65535, != 8
+///   RGOE_TIER_BONDS_WEI    bond of each extra tier, comma-separated, same length as
+///                          RGOE_TIER_LIMITS; each nonzero            (required with RGOE_TIER_LIMITS)
+///                          The default tier 8 always costs RGOE_BOND_WEI.
 ///   RGOE_RPC_URL           endpoint, recorded into the JSON      ("http://127.0.0.1:8545")
 ///   RGOE_DEPLOY_OUT        JSON output path                      ("contracts/deployed.local.json")
 contract DeployRegistry is Cheats {
@@ -62,13 +72,7 @@ contract DeployRegistry is Cheats {
         uint256 minUnbonding = vm.envOr("RGOE_MIN_UNBONDING", uint256(270)); // F+E+C
         address gwOwner = vm.envOr("RGOE_GATEWAY_OWNER", address(0)); // 0 => deployer
         bool deployStaked = vm.envOr("RGOE_DEPLOY_STAKED", uint256(1)) != 0;
-        address verifierAddr = vm.envOr("RGOE_WITHDRAW_VERIFIER", address(0));
-        address hasherAddr = vm.envOr("RGOE_COMMITMENT_HASHER", address(0));
-        // Opt-in: when no pre-deployed verifier address is given, deploy the REAL Groth16
-        // exit-auth verifier (T-DEV-1) instead of the revealed-secret Mock. Default 0 keeps
-        // the Mock so the local demo (scripts/demo-e2e.mjs, which authorizes by revealing the
-        // secret) still works. The REAL verifier is TESTNET-ONLY until T-HARD-1 (untrusted VK).
-        bool realVerifier = vm.envOr("RGOE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
+        bool deployRegistry = vm.envOr("RGOE_DEPLOY_REGISTRY", uint256(1)) != 0;
 
         console.log("== DeployRegistry ==");
         console.log("chainid    ", block.chainid);
@@ -80,45 +84,19 @@ contract DeployRegistry is Cheats {
 
         // ---- GatewayRegistry: the gateway-operator stake ---------------------
         // owner (slasher/governance) defaults to the deployer when 0 (ctor enforces it).
-        GatewayRegistry gwReg = new GatewayRegistry(bond, unbonding, minUnbonding, gwOwner);
-        gatewayRegistry = address(gwReg);
+        // RGOE_DEPLOY_REGISTRY=0 keeps a live registry untouched and just records its address.
+        if (deployRegistry) {
+            GatewayRegistry gwReg = new GatewayRegistry(bond, unbonding, minUnbonding, gwOwner);
+            gatewayRegistry = address(gwReg);
+        } else {
+            gatewayRegistry = vm.envOr("RGOE_GATEWAY_REGISTRY", address(0));
+            console.log("GatewayRegistry: not deployed (RGOE_DEPLOY_REGISTRY=0); recording", gatewayRegistry);
+        }
 
         // ---- StakedReputationSet: the member admission set (optional) --------
         if (deployStaked) {
-            // Wire the real ZK verifier + hasher if their addresses were supplied;
-            // otherwise deploy the in-repo mocks (TESTNET ONLY — not zero-knowledge).
-            if (hasherAddr == address(0)) {
-                MockCommitmentHasher mockHasher = new MockCommitmentHasher();
-                hasherAddr = address(mockHasher);
-                console.log("WARNING: deployed MockCommitmentHasher (testnet-only, not ZK)");
-            }
-            if (verifierAddr == address(0)) {
-                if (realVerifier) {
-                    // REAL Groth16 exit-auth verifier (T-DEV-1). Genuine ZK proof of knowledge
-                    // of the identity secret; nothing revealed in calldata.
-                    WithdrawGroth16Verifier groth16 = new WithdrawGroth16Verifier();
-                    WithdrawVerifier realV = new WithdrawVerifier(groth16);
-                    verifierAddr = address(realV);
-                    console.log("deployed WithdrawVerifier (REAL Groth16 exit-auth)");
-                    console.log("  WARNING: testnet-only VK (untrusted dev setup, T-HARD-1 pending)");
-                } else {
-                    MockWithdrawVerifier mockVerifier =
-                        new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
-                    verifierAddr = address(mockVerifier);
-                    console.log("WARNING: deployed MockWithdrawVerifier (testnet-only, secret revealed in calldata)");
-                }
-            }
-
-            StakedReputationSet set = new StakedReputationSet(
-                bond,
-                unbonding,
-                minUnbonding,
-                IWithdrawVerifier(verifierAddr),
-                ICommitmentHasher(hasherAddr)
-            );
-            stakedReputationSet = address(set);
-            withdrawVerifier = verifierAddr;
-            commitmentHasher = hasherAddr;
+            (stakedReputationSet, withdrawVerifier, commitmentHasher) =
+                _deploySet(bond, unbonding, minUnbonding);
         }
 
         vm.stopBroadcast();
@@ -136,6 +114,94 @@ contract DeployRegistry is Cheats {
         _writeDeployment(
             gatewayRegistry, stakedReputationSet, commitmentHasher, withdrawVerifier, deployStaked
         );
+    }
+
+    /// Deploy the member admission set: hasher + exit-auth verifier (pre-deployed addresses
+    /// from env, else fresh) + the tiered StakedReputationSet (T-FEAT-8b tier table from
+    /// RGOE_TIER_LIMITS / RGOE_TIER_BONDS_WEI). Split out of run() to keep the stack shallow.
+    function _deploySet(uint256 bond, uint256 unbonding, uint256 minUnbonding)
+        internal
+        returns (address set, address verifierAddr, address hasherAddr)
+    {
+        verifierAddr = vm.envOr("RGOE_WITHDRAW_VERIFIER", address(0));
+        hasherAddr = vm.envOr("RGOE_COMMITMENT_HASHER", address(0));
+        // Opt-in: when no pre-deployed verifier address is given, deploy the REAL Groth16
+        // exit-auth verifier (T-DEV-1) instead of the revealed-secret Mock. Default 0 keeps
+        // the Mock so the local demo (scripts/demo-e2e.mjs, which authorizes by revealing the
+        // secret) still works. The REAL verifier is TESTNET-ONLY until T-HARD-1 (untrusted VK).
+        bool realVerifier = vm.envOr("RGOE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
+        // T-FEAT-8b tier table (extra tiers beyond the default limit 8 => RGOE_BOND_WEI).
+        uint256[] memory extraLimits = _parseUintList(vm.envOr("RGOE_TIER_LIMITS", string("")));
+        uint256[] memory extraBonds = _parseUintList(vm.envOr("RGOE_TIER_BONDS_WEI", string("")));
+        require(extraLimits.length == extraBonds.length, "RGOE_TIER_LIMITS / RGOE_TIER_BONDS_WEI length mismatch");
+        console.log("tier 8 bond", bond);
+        for (uint256 i = 0; i < extraLimits.length; i++) {
+            console.log("tier       ", extraLimits[i]);
+            console.log("  bond     ", extraBonds[i]);
+        }
+
+        // Wire the real ZK verifier + hasher if their addresses were supplied; otherwise deploy
+        // the in-repo ones. The hasher is the REAL Poseidon rate-commitment hasher (tiered,
+        // T-FEAT-8b); only the exit-auth verifier has a Mock (TESTNET ONLY — not zero-knowledge).
+        if (hasherAddr == address(0)) {
+            RateCommitmentHasher h = new RateCommitmentHasher();
+            hasherAddr = address(h);
+            console.log("deployed RateCommitmentHasher (tiered Poseidon rate-commitment hasher)");
+        }
+        if (verifierAddr == address(0)) {
+            if (realVerifier) {
+                // REAL Groth16 exit-auth verifier (T-DEV-1). Genuine ZK proof of knowledge
+                // of the identity secret; nothing revealed in calldata.
+                WithdrawGroth16Verifier groth16 = new WithdrawGroth16Verifier();
+                WithdrawVerifier realV = new WithdrawVerifier(groth16);
+                verifierAddr = address(realV);
+                console.log("deployed WithdrawVerifier (REAL Groth16 exit-auth)");
+                console.log("  WARNING: testnet-only VK (untrusted dev setup, T-HARD-1 pending)");
+            } else {
+                MockWithdrawVerifier mockVerifier =
+                    new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
+                verifierAddr = address(mockVerifier);
+                console.log("WARNING: deployed MockWithdrawVerifier (testnet-only, secret revealed in calldata)");
+            }
+        }
+
+        StakedReputationSet s = new StakedReputationSet(
+            bond,
+            unbonding,
+            minUnbonding,
+            IWithdrawVerifier(verifierAddr),
+            ICommitmentHasher(hasherAddr),
+            extraLimits,
+            extraBonds
+        );
+        set = address(s);
+    }
+
+    /// Parse "a,b,c" (decimal, no spaces) into a uint256[]; "" => empty. Reverts on any
+    /// non-digit so a typo in the tier table fails the deploy instead of admitting a bad tier.
+    function _parseUintList(string memory csv) internal pure returns (uint256[] memory out) {
+        bytes memory b = bytes(csv);
+        if (b.length == 0) return out;
+        uint256 n = 1;
+        for (uint256 i = 0; i < b.length; i++) if (b[i] == ",") n++;
+        out = new uint256[](n);
+        uint256 k = 0;
+        uint256 acc = 0;
+        bool any = false;
+        for (uint256 i = 0; i < b.length; i++) {
+            if (b[i] == ",") {
+                require(any, "RGOE_TIER_*: empty list item");
+                out[k++] = acc;
+                acc = 0;
+                any = false;
+            } else {
+                require(b[i] >= "0" && b[i] <= "9", "RGOE_TIER_*: digits only");
+                acc = acc * 10 + (uint8(b[i]) - 48);
+                any = true;
+            }
+        }
+        require(any, "RGOE_TIER_*: empty list item");
+        out[k] = acc;
     }
 
     /// Record the addresses to a JSON file the gateway/lib read to find the contracts.

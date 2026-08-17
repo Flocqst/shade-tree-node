@@ -50,9 +50,12 @@ changes on a new ceremony and must move as a set per circuit.
 Not in the repo, needed for the ceremony: the `.r1cs` files (`snarkjs zkey verify` needs
 them) and the phase-1 `.ptau` (~300 MB). Both are reproducible; §2 pins their hashes.
 
-Currently deployed on Sepolia against these untrusted artifacts (`network/sepolia/contracts.json`):
-`withdrawVerifier 0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2`, `stakedReputationSet
-0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`. Testnet only; superseded by §6.
+Currently deployed on Sepolia against these untrusted artifacts (`network/sepolia/contracts.json`,
+release `rln-v4-tiers`, 2026-08-17): `withdrawVerifier 0x522409038aA03FFF998d33C60A37486975695351`
+(the REAL Groth16 `WithdrawVerifier` over `WithdrawGroth16Verifier 0x6B26a9B6…507E`, VK = this
+untrusted dev phase-2), `stakedReputationSet 0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`.
+(rln-v3, superseded: `withdrawVerifier 0x5A6FD01d…dbDB2` (mock), `stakedReputationSet
+0xdAE242AE…20FC`.) Testnet only; superseded by §6.
 
 ---
 
