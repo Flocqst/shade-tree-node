@@ -23,8 +23,8 @@ import { RgoeClient, cleanUp } from "./client/rgoe-client.mjs";
 
 const rgoe = new RgoeClient({
   secret,                                   // enrolled member secret (or RGOE_SECRET)
-  directory: "…/network/sepolia/directory.json",
-  dirSigner: "189f4511…1321",               // pins the directory signer
+  directory: "…/network/sepolia/directory-bootnode.json",   // a signed directory (the live fleet's cold-path export)
+  dirSigner: "d79f78c3…3a73",               // pins the directory signer (network/sepolia/bootnode.json)
   torPort: 9260,                            // client Tor SOCKS
   // or: onion: "…"  to pin a single gateway instead of fleet rotation
 });
@@ -42,6 +42,11 @@ cleanUp();  // terminate snarkjs workers so the process can exit
 - `connect("host:443")` → the raw duplex tunnel, if you want your own protocol.
 - Each call rotates gateway + slot and reuses one proof across failover.
 
+Simplest form against the live fleet: run with `RGOE_NETWORK=sepolia` in the environment and
+construct `new RgoeClient({ secret, torPort })`; the SDK honours the record too
+(`client/selection.mjs` applies it before reading env), so the bootnode onion + signer come
+from `network/sepolia/bootnode.json` and the client discovers the fleet live over Tor.
+
 Runnable example: `examples/agent-fetch.mjs`. Verified live end to end (returns rotating
 fleet gateway IPs, laptop IP absent from gateway logs).
 
@@ -52,24 +57,23 @@ Use this when the client is a **stock tool** you can't change (browser, curl, an
 `RgoeClient`:
 
 ```bash
-RGOE_SECRET=0x… \
-RGOE_DIRECTORY=$PWD/network/sepolia/directory.json \
-RGOE_DIR_SIGNER=189f4511…1321 \
-RGOE_TOR_PORT=9260 \
-node client/shim.mjs
+RGOE_SECRET=0x… RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node client/shim.mjs   # = `rgoe client --network sepolia`
 # then: curl -x http://127.0.0.1:8888 https://api.ipify.org
 ```
 
-Env: `RGOE_SECRET`, `RGOE_ONION` (pin) **or** `RGOE_DIRECTORY`+`RGOE_DIR_SIGNER` (fleet),
-`RGOE_TOR_HOST`/`RGOE_TOR_PORT`. **Gotcha:** in fleet mode you must set `RGOE_DIR_SIGNER` or
-the shim silently falls back to a stale local `tor/hs/hostname`.
+`RGOE_NETWORK=sepolia` is the default way in since the 2026-08-17 go-live: it fills the
+discovery inputs (the live bootnode onion + pinned signer, and the contract addresses) from the
+committed record `network/sepolia/bootnode.json` (`network/README.md`,
+`docs/GO-LIVE-LOG-2026-08-17.md`), and the shim discovers the fleet through the bootnode over
+Tor. Add `RGOE_LIMIT=32` (`--limit 32`) if your leaf is a tier-32 one; a bought leaf is found in
+the paid set automatically (`docs/PAYMENTS.md`). Explicit env still wins over the record.
 
-Shortcut: `RGOE_NETWORK=sepolia` (or `rgoe client --network sepolia`) fills the discovery
-inputs from the committed record `network/sepolia/bootnode.json` — the live bootnode onion +
-pinned signer (status `live` since the 2026-08-17 go-live, `docs/GO-LIVE-LOG-2026-08-17.md`) —
-so the shim line above becomes `RGOE_SECRET=0x… RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node client/shim.mjs`
-(the shim then discovers the fleet through the bootnode instead of a static file). Explicit env
-still wins over the record (`network/README.md`).
+Env, if you want to set the pieces yourself: `RGOE_SECRET`, then one discovery source:
+`RGOE_BOOTNODE_ONION`+`RGOE_DIR_SIGNER` (live fleet), `RGOE_DIRECTORY`+`RGOE_DIR_SIGNER` (a
+static signed directory, e.g. the cold path `network/sepolia/directory-bootnode.json`), or
+`RGOE_ONION` (pin one gateway); plus `RGOE_TOR_HOST`/`RGOE_TOR_PORT`. **Gotcha:** in
+directory mode you must set `RGOE_DIR_SIGNER` or the shim silently falls back to a stale local
+`tor/hs/hostname`.
 
 ## Planned — stock HTTP CONNECT + `Proxy-Authorization` (no custom client at all)
 
