@@ -12,13 +12,15 @@
 //
 // Config:
 //   RGOE_RPC_URL           JSON-RPC endpoint            (default: deployed.rpcUrl or anvil)
-//   RGOE_GATEWAY_REGISTRY  GatewayRegistry address      (default: deployed.gatewayRegistry)
+//   RGOE_GATEWAY_REGISTRY  GatewayRegistry address      (default: network/<RGOE_NETWORK>/contracts.json
+//                                                        contracts.gatewayRegistry, else deployed.gatewayRegistry)
 //   RGOE_REGISTER_KEY      operator private key         (default: anvil account #1)
 //   RGOE_BOND              bond in wei                  (default: on-chain BOND())
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { networkDefault } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -31,11 +33,12 @@ async function readDeployed() {
 
 async function main() {
   const deployed = await readDeployed();
-  const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
-  const address = process.env.RGOE_GATEWAY_REGISTRY || deployed.gatewayRegistry || deployed.GatewayRegistry;
+  // Resolution: explicit env > committed network record (RGOE_NETWORK) > deployer-local cache.
+  const rpcUrl = process.env.RGOE_RPC_URL || networkDefault("RGOE_RPC_URL") || deployed.rpcUrl || "http://127.0.0.1:8545";
+  const address = process.env.RGOE_GATEWAY_REGISTRY || networkDefault("RGOE_GATEWAY_REGISTRY") || deployed.gatewayRegistry || deployed.GatewayRegistry;
   const key = process.env.RGOE_REGISTER_KEY || ANVIL_KEY_1;
   if (!address) {
-    console.error("no GatewayRegistry address: set RGOE_GATEWAY_REGISTRY or write contracts/deployed.local.json");
+    console.error("no GatewayRegistry address: set RGOE_GATEWAY_REGISTRY, or RGOE_NETWORK=<name> with contracts.gatewayRegistry recorded, or write contracts/deployed.local.json");
     process.exit(1);
   }
 

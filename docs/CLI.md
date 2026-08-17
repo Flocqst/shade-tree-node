@@ -20,9 +20,10 @@ See `docs/CONFIG.md` for the full env-var reference and defaults.
 | `register-gateway` | `group/register-gateway.mjs` | Stake a gateway operator bond into `GatewayRegistry` (binds to the operator address). | `rgoe register-gateway --gateway-registry 0xReg --register-key 0xKEY` |
 | `sign-directory` | `group/sign-directory.mjs` | Sign a static fleet directory for offline discovery; with no args mints example keys + file. | `rgoe sign-directory unsigned.json` |
 | `gateway` | `gateway/gateway.mjs` | Run the reputation-gated egress gateway (Tor onion, `:443` metadata-only tunnel). Long-running. | `rgoe gateway --group-contract 0xSet --rpc-url https://rpc.example` |
-| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` |
+| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` (or `--network sepolia`) |
 | `shim` | `client/shim.mjs` | Alias for `client`. | `rgoe shim --secret <hex> --onion <onion>` |
 | `doctor` | `scripts/doctor.mjs` | Check the local setup (node, tor, keys, deps). | `rgoe doctor` |
+| `record-deploy` | `scripts/record-deploy.mjs` | Record a broadcast contract deploy (address + tx + block) into `network/<name>/contracts.json` from Foundry's `run-latest.json` or explicit flags; never touches a chain. | `rgoe record-deploy --network sepolia --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json` |
 
 `keygen` takes a positional `<hsDir>` and an own `--label`; `register-member` takes a positional `<commitment>`; `sign-directory` takes an optional positional unsigned-list path. All other positionals are forwarded to the child module.
 
@@ -32,6 +33,7 @@ Every `--flag` sets exactly one `RGOE_*` env var (from `FLAG_ENV` in `bin/rgoe.m
 
 | Flag | Env var | Group |
 |---|---|---|
+| `--network` | `RGOE_NETWORK` | global (fills unset vars from `network/<name>/`; see `docs/CONFIG.md`) |
 | `--rpc-url` | `RGOE_RPC_URL` | global |
 | `--tor-host` | `RGOE_TOR_HOST` | global |
 | `--tor-port` | `RGOE_TOR_PORT` | global |

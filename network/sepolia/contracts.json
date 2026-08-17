@@ -14,14 +14,18 @@
   "contracts": {
     "stakedReputationSet": "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC",
     "hasher": "0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D",
-    "withdrawVerifier": "0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2"
+    "withdrawVerifier": "0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2",
+    "gatewayRegistry": null
   },
   "deployTxs": {
     "stakedReputationSet": "0xace20aff70f087d2752869bf4e63bae3105d2ddcad58179d224415b398342831",
     "hasher": "0x0ce3dea566a4ba0b9de11f9d26a4d3db26b05ede3c85a2ca78f6bfe7400ceeb1",
-    "withdrawVerifier": "0x115ba74c97ab5651392a358c996064b3cbea114d5997400d52ffe7ca051f3cbe"
+    "withdrawVerifier": "0x115ba74c97ab5651392a358c996064b3cbea114d5997400d52ffe7ca051f3cbe",
+    "gatewayRegistry": null
   },
   "deployBlock": 11279842,
+  "deployBlocks": {},
+  "pending": "contracts.gatewayRegistry is null: GatewayRegistry is NOT yet deployed on Sepolia (docs/GO-LIVE.md GAP-2 / Phase 3). After the broadcast, `node scripts/record-deploy.mjs --network sepolia --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json` fills contracts/deployTxs/deployBlocks.gatewayRegistry.",
   "circuit": {
     "family": "rate-limiting-nullifier / circom-rln v1.0.0",
     "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",

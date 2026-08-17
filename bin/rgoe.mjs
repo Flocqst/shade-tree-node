@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { validateConfig, formatErrors } from "../lib/config.mjs";
+import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -23,6 +24,7 @@ const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 // harmless where unused, and keeps the surface small and uniform.
 const FLAG_ENV = {
   // global
+  network: "RGOE_NETWORK",
   "rpc-url": "RGOE_RPC_URL",
   "tor-host": "RGOE_TOR_HOST",
   "tor-port": "RGOE_TOR_PORT",
@@ -76,6 +78,7 @@ const COMMANDS = {
   // passphrase is passed only via RGOE_BACKUP_PASSPHRASE (never on argv), inherited into the child.
   backup:            { script: "scripts/backup.mjs", prepend: ["backup"],  help: "encrypt & back up secret key material (onion seeds + signer key): rgoe backup <srcDir> <outFile> (RGOE_BACKUP_PASSPHRASE)" },
   restore:           { script: "scripts/backup.mjs", prepend: ["restore"], help: "restore an encrypted key backup: rgoe restore <inFile> <destDir> [--force] (RGOE_BACKUP_PASSPHRASE)" },
+  "record-deploy":   { script: "scripts/record-deploy.mjs", help: "record a broadcast contract deploy into network/<name>/contracts.json: rgoe record-deploy --network sepolia --from-broadcast <run-latest.json>" },
 };
 
 // command -> config ROLE (lib/config.mjs). Before spawning a service we validate the effective
@@ -114,10 +117,11 @@ function parse(argv) {
 function topHelp() {
   console.log(`rgoe ${pkg.version} — reputation-gated onion egress\n`);
   console.log("usage: rgoe <command> [--flags] [args]\n");
-  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor", "backup", "restore"];
+  const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "register-member", "register-gateway", "sign-directory", "gateway", "client", "doctor", "backup", "restore", "record-deploy"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);
+  console.log(`--network <name> (RGOE_NETWORK) fills unset discovery/contract vars from network/<name>/{bootnode,contracts}.json.`);
 }
 
 function main() {
@@ -141,6 +145,20 @@ function main() {
     const envKey = FLAG_ENV[flag];
     if (envKey) env[envKey] = val;
     else { passthrough.push(`--${flag}`); if (val !== "true") passthrough.push(val); }
+  }
+
+  // RGOE_NETWORK=<name> (or --network): fill any discovery / contract var that is still UNSET from
+  // the committed network/<name>/{bootnode,contracts}.json records (lib/network-record.mjs). Flags
+  // and explicit env were applied above, so they win; the record is only the default. A missing
+  // or invalid record is a hard error here (never spawn a service pointed at a half-read record).
+  if (env.RGOE_NETWORK) {
+    try {
+      const filled = applyNetworkEnv(env);
+      if (filled.length) console.error(`rgoe ${cmd}: network "${env.RGOE_NETWORK}" supplied ${filled.join(", ")}`);
+    } catch (e) {
+      console.error(`rgoe ${cmd}: RGOE_NETWORK=${env.RGOE_NETWORK}: ${e.message}`);
+      process.exit(1);
+    }
   }
 
   // Fail fast on invalid config BEFORE spawning a service: print exactly which RGOE_* var is

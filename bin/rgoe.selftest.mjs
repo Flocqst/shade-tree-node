@@ -105,12 +105,29 @@ async function main() {
     ["shim-port", "RGOE_SHIM_PORT"],
     ["directory", "RGOE_DIRECTORY"],
     ["dir-signer", "RGOE_DIR_SIGNER"],
+    ["network", "RGOE_NETWORK"],
   ];
   for (const [flag, env] of pairs) {
     // matches:  port: "RGOE_BOOTNODE_PORT"   or   "shim-port": "RGOE_SHIM_PORT"
     const re = new RegExp(`(?:"${flag}"|\\b${flag})\\s*:\\s*"${env}"`);
     ok(re.test(src), `FLAG_ENV maps --${flag} -> ${env}`);
   }
+
+  // --- --network / RGOE_NETWORK (lib/network-record.mjs) --------------------------------------
+  // `record-deploy` has no config role and its --dry-run writes nothing, so it is the safe live
+  // command to prove the wrapper resolves network/<name>/ records into env before spawning.
+  console.log("\n--network (RGOE_NETWORK record resolution):");
+  const badNet = rgoe(["record-deploy", "--network", "no-such-network-zzz", "--address", "0x" + "ab".repeat(20), "--dry-run"]);
+  ok(badNet.code === 1 && /RGOE_NETWORK=no-such-network-zzz/.test(badNet.out) && /no such network/.test(badNet.out), "`--network <unknown>` fails fast in the wrapper before spawning");
+  const trav = rgoe(["record-deploy", "--network", "../lib", "--dry-run"]);
+  ok(trav.code === 1 && /bad network name/.test(trav.out), "`--network ../x` (traversal) is rejected");
+  const dry = rgoe(["record-deploy", "--network", "sepolia", "--address", "0x" + "ab".repeat(20), "--dry-run"]);
+  ok(dry.code === 0 && /supplied .*RGOE_/.test(dry.out) && /dry-run/.test(dry.out), "`--network sepolia` resolves record defaults (reports supplied vars) and runs the child");
+  ok(!/RGOE_BOOTNODE_ONION|RGOE_DIR_SIGNER=/.test(dry.out.replace(/supplied [^\n]*/g, "")), "resolved discovery values are never printed (only the var NAMES)");
+  const viaEnv = rgoe(["record-deploy", "--address", "0x" + "ab".repeat(20), "--dry-run"], { env: { RGOE_NETWORK: "sepolia" } });
+  ok(viaEnv.code === 0 && /supplied/.test(viaEnv.out), "RGOE_NETWORK from the environment works the same as --network");
+  const helpRd = rgoe(["record-deploy", "--help"]);
+  ok(helpRd.code === 0 && /record-deploy/.test(helpRd.out), "`rgoe record-deploy --help` is wired");
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: rgoe CLI selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

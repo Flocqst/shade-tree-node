@@ -1,20 +1,36 @@
 # Sepolia deployment record
 
 The live deployment on Ethereum Sepolia (chainId 11155111). Machine-readable artifacts
-alongside: [`contracts.json`](contracts.json) (staking contract addresses),
-[`directory.json`](directory.json) (signed gateway fleet). This README is the
-human-readable index; the JSON files are the source of truth the client/gateway read.
+alongside: [`contracts.json`](contracts.json) (contract addresses + deploy tx/block),
+[`bootnode.json`](bootnode.json) (fleet discovery record), [`directory.json`](directory.json)
+(signed gateway fleet). This README is the human-readable index; the JSON files are the
+source of truth the client/gateway read (`RGOE_NETWORK=sepolia`, see `network/README.md`).
 
 ## Staking contracts
 
-Status: **live** — deployed at block 11274471 by
+Status: **live** (`release: rln-v3`) — deployed at block 11279842 by
 `0x3261DaF3672Dc8E6063b6960C161Fdc8a6Fc2ff7`. Params: bond 0.001 ETH, unbonding 300s.
+Supersedes the pre-RLN deployment `0x35719A47…98EC` (block 11274471); see the `note` in
+`contracts.json`.
 
 | Contract | Address |
 |---|---|
-| StakedReputationSet | [`0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC`](https://sepolia.etherscan.io/address/0x35719A477655A5Aaac7A2aAA11A3167eFa3398EC) |
-| MockCommitmentHasher | `0xB9c051d12750395e7541Da149e216B1542b343d2` |
-| MockWithdrawVerifier | `0xac506585D70F8DA91C38CF271938Ee956f7CB862` |
+| StakedReputationSet | [`0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`](https://sepolia.etherscan.io/address/0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC) |
+| RateCommitmentHasher | `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D` |
+| MockWithdrawVerifier | `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2` |
+| GatewayRegistry | **not deployed** (`contracts.gatewayRegistry: null`; docs/GO-LIVE.md GAP-2 / Phase 3). Record it after the broadcast with `rgoe record-deploy --network sepolia --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json`. |
+
+## Bootnode
+
+[`bootnode.json`](bootnode.json) is the committed discovery record (`{onion, signer,
+admission, staticDirectory}`; schema in `network/README.md`). Status: **pending** — the
+existing gateway fleet below is discovered through the static signed `directory.json`
+(the record's `staticDirectory` carries that directory's pinned signer, so
+`RGOE_NETWORK=sepolia` already resolves `RGOE_DIRECTORY` + `RGOE_DIR_SIGNER`). No bootnode
+onion for the existing fleet is recorded in this repo. When the T-DEPLOY-1 bootnode is
+live (docs/GO-LIVE.md row 7.1), set `onion` + `signer` to the NEW fleet's values,
+`admission` to what its unit enforces, and `status: live` — onions and pubkeys only, never
+IPs.
 
 ## Gateway fleet
 

@@ -10,6 +10,8 @@ Files:
 - `grafana-dashboard.json` -- importable Grafana dashboard (`$datasource` / `$job` / `$instance`
   template vars).
 - `alerts.yml` -- Prometheus alerting rules grounded in `docs/SLO.md`.
+- `uptime/` -- scheduler bundle for the external uptime probe (systemd timer+service, crontab
+  line, env template) + `.github/workflows/uptime-probe.yml`; see `UPTIME.md`.
 - this README -- how to scrape, import, and load the rules.
 
 ## The metrics these are built on
