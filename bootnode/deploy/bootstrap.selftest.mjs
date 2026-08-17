@@ -21,6 +21,12 @@
 //      other files byte-identical to the default; missing/invalid companions rejected up front;
 //      RGOE_HELIOS=0 == default (golden unchanged, i.e. the sidecar is opt-in).
 //
+//   7. RGOE_REGISTRAR=1 (T-FEAT-7, opt-in): a rgoe-registrar.service (hardened, loopback, operator
+//      key NOT rendered), an EXTRA HiddenServicePort inside the bootnode HS block (same onion), the
+//      bootnode unit advertising the offer (RGOE_REGISTRAR_ADVERTISE=1 + RGOE_PAY_*), everything
+//      else byte-identical; companions validated up front; incompatible with gateway-only mode;
+//      RGOE_REGISTRAR=0 == default (golden unchanged).
+//
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
 // Exit 0 = every check passed; nonzero = a check failed (prints which). Needs bash on PATH.
@@ -247,6 +253,53 @@ async function main() {
     const helGw = render(work, "helios-gw-only", { ...HEL, RGOE_BOOTNODE_ONION: ONION });
     const helGwFiles = await readAll(helGw.out);
     ok(helGw.status === 0 && [...helGwFiles.keys()].join(",") === "etc/systemd/system/rgoe-gateway.service,etc/systemd/system/rgoe-heartbeat.service,etc/systemd/system/rgoe-helios.service,etc/tor/torrc.d-rgoe" && helGwFiles.get("etc/systemd/system/rgoe-helios.service") === hu, "gateway-only + helios: gateway + heartbeat + helios units, helios unit identical");
+
+    // ---------------------------------------------------------------- 7. 402 registrar (opt-in)
+    console.log("RGOE_REGISTRAR (T-FEAT-7):");
+    const REG = { RGOE_REGISTRAR: "1", RGOE_PAID_ACCESS_CONTRACT: "0x1111111111111111111111111111111111111111", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=100000,32=400000", RGOE_RPC_URL: "https://rpc.example/v1/KEY" };
+    const reg1 = render(work, "registrar", REG);
+    ok(reg1.status === 0 && /registrar=1/.test(reg1.stdout), `RGOE_REGISTRAR=1 renders (${(reg1.stdout || "").trim()})`);
+    const regFiles = await readAll(reg1.out);
+    ok([...regFiles.keys()].join(",") === "etc/systemd/system/rgoe-bootnode.service,etc/systemd/system/rgoe-gateway.service,etc/systemd/system/rgoe-heartbeat.service,etc/systemd/system/rgoe-registrar.service,etc/tor/torrc.d-rgoe",
+      `emits torrc + 3 units + rgoe-registrar.service (${[...regFiles.keys()].join(", ")})`);
+    const rgT = hsBlocks(regFiles.get("etc/tor/torrc.d-rgoe"));
+    ok(rgT.length === 2 && rgT[0].dir === "/var/lib/tor/rgoe-bootnode" && rgT[0].lines.join("|") === "HiddenServicePort 80 127.0.0.1:8877|HiddenServicePort 8878 127.0.0.1:8878|HiddenServicePoWDefensesEnabled 0", "bootnode HS block: port 80 + EXTRA port 8878 -> 127.0.0.1:8878, then the PoW line (registrar rides the bootnode onion)");
+    ok(rgT[1].lines.join("|") === "HiddenServicePort 80 127.0.0.1:8443|HiddenServicePoWDefensesEnabled 0", "gateway HS block unchanged");
+    const ru = regFiles.get("etc/systemd/system/rgoe-registrar.service");
+    ok(/^ExecStart=\/usr\/bin\/node \/opt\/rgoe\/payments\/registrar\.mjs$/m.test(ru) && unitEnv(ru, "RGOE_REGISTRAR_PORT") === "8878" && unitEnv(ru, "RGOE_PAID_ACCESS_CONTRACT") === REG.RGOE_PAID_ACCESS_CONTRACT && unitEnv(ru, "RGOE_PAY_ASSET") === REG.RGOE_PAY_ASSET && unitEnv(ru, "RGOE_PAY_PRICES") === REG.RGOE_PAY_PRICES && unitEnv(ru, "RGOE_RPC_URL") === REG.RGOE_RPC_URL && unitEnv(ru, "RGOE_REGISTRAR_STORE") === "/opt/rgoe/deploy-state/registrar-state.json" && unitEnv(ru, "RGOE_REGISTRAR_ONION")?.endsWith(".onion"), "registrar unit: ExecStart payments/registrar.mjs + port/contract/asset/prices/rpc/store/onion env");
+    ok(unitEnv(ru, "RGOE_REGISTRAR_KEY") === null && !/RGOE_REGISTRAR_KEY/.test(ru) && unitEnv(ru, "RGOE_PAY_TO") === null, "operator key NOT rendered (drop-in only); no RGOE_PAY_TO unless given");
+    ok(/^User=rgoe$/m.test(ru) && /^NoNewPrivileges=true$/m.test(ru) && /^ProtectSystem=strict$/m.test(ru) && /^CapabilityBoundingSet=$/m.test(ru) && /^SystemCallFilter=@system-service$/m.test(ru) && /^Restart=always$/m.test(ru) && !/MemoryDenyWriteExecute/.test(ru), "registrar unit: same sandbox as the other Node units (no W^X: V8 JIT)");
+    const bnR = regFiles.get("etc/systemd/system/rgoe-bootnode.service");
+    ok(unitEnv(bnR, "RGOE_REGISTRAR_ADVERTISE") === "1" && unitEnv(bnR, "RGOE_REGISTRAR_PORT") === "8878" && unitEnv(bnR, "RGOE_PAY_ASSET") === REG.RGOE_PAY_ASSET && unitEnv(bnR, "RGOE_PAY_PRICES") === REG.RGOE_PAY_PRICES && unitEnv(bnR, "RGOE_PAY_CHAIN_ID") === "11155111", "bootnode unit advertises the offer (RGOE_REGISTRAR_ADVERTISE=1 + port/asset/prices/chain)");
+    const stripBn = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_(REGISTRAR_ADVERTISE|REGISTRAR_PORT|PAY_ASSET|PAY_PRICES|PAY_CHAIN_ID)=/.test(l)).join("\n");
+    ok(stripBn(bnR) === got.get("etc/systemd/system/rgoe-bootnode.service"), "bootnode unit otherwise byte-identical to the default");
+    for (const f of ["etc/systemd/system/rgoe-gateway.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(regFiles.get(f) === got.get(f), `registrar=1 leaves ${f} byte-identical`);
+    const regPT = render(work, "registrar-payto", { ...REG, RGOE_PAY_TO: "0x2222222222222222222222222222222222222222", RGOE_REGISTRAR_PORT: "9878", RGOE_PAY_CHAIN_ID: "1" });
+    const ruPT = await readFile(join(regPT.out, "etc/systemd/system/rgoe-registrar.service"), "utf8");
+    ok(regPT.status === 0 && unitEnv(ruPT, "RGOE_PAY_TO") === "0x2222222222222222222222222222222222222222" && unitEnv(ruPT, "RGOE_REGISTRAR_PORT") === "9878" && hsBlocks(await readFile(join(regPT.out, "etc/tor/torrc.d-rgoe"), "utf8"))[0].lines[1] === "HiddenServicePort 9878 127.0.0.1:9878" && unitEnv(await readFile(join(regPT.out, "etc/systemd/system/rgoe-bootnode.service"), "utf8"), "RGOE_PAY_CHAIN_ID") === "1", "RGOE_PAY_TO / RGOE_REGISTRAR_PORT / RGOE_PAY_CHAIN_ID passthrough (unit + torrc + advert)");
+    const rgBad = [
+      [{ ...REG, RGOE_PAID_ACCESS_CONTRACT: "" }, /needs RGOE_PAID_ACCESS_CONTRACT/],
+      [{ ...REG, RGOE_PAY_ASSET: "usdc" }, /needs RGOE_PAY_ASSET/],
+      [{ ...REG, RGOE_PAY_PRICES: "8=free" }, /needs RGOE_PAY_PRICES/],
+      [{ ...REG, RGOE_PAY_PRICES: "" }, /needs RGOE_PAY_PRICES/],
+      [{ ...REG, RGOE_RPC_URL: "" }, /needs RGOE_RPC_URL/],
+      [{ ...REG, RGOE_PAY_TO: "0x12" }, /RGOE_PAY_TO must be/],
+      [{ ...REG, RGOE_REGISTRAR_PORT: "80" }, /RGOE_REGISTRAR_PORT must be/],
+      [{ ...REG, RGOE_PAY_CHAIN_ID: "sepolia" }, /RGOE_PAY_CHAIN_ID must be/],
+      [{ ...REG, RGOE_BOOTNODE_ONION: ONION }, /needs the bootnode on this box/],
+      [{ RGOE_REGISTRAR: "maybe" }, /RGOE_REGISTRAR must be 1 or 0/],
+    ];
+    for (const [env, re] of rgBad) {
+      const r = render(work, "registrar-bad", env);
+      ok(r.status !== 0 && re.test(r.stderr), `rejected up front: ${JSON.stringify(Object.fromEntries(Object.entries(env).filter(([k, v]) => REG[k] !== v)))}`);
+    }
+    for (const off of ["0", "false", "off"]) {
+      const r = render(work, `registrar-${off}`, { RGOE_REGISTRAR: off });
+      const files = await readAll(r.out);
+      ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `RGOE_REGISTRAR=${off} == default (opt-in; golden untouched)`);
+    }
+    const regHel = render(work, "registrar-helios", { ...REG, ...HEL });
+    ok(regHel.status === 0 && (await readAll(regHel.out)).size === 6, "composes with RGOE_HELIOS=1 (6 files)");
 
     // ---------------------------------------------------------------- 5. other guards
     console.log("guards:");

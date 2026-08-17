@@ -46,6 +46,13 @@ resolves `RGOE_GROUP_CONTRACT` to the rln-v4 set. Stake at a tier with
   the real RLN rateCommitment. An intermediate RLN deploy `0x7c5bcfD3…8c6E` was abandoned mid-test
   (see `contracts.json` `superseded.rln-v3.note`).
 
+## Payments: settle asset + registrar (T-FEAT-7)
+
+| what | value |
+|---|---|
+| settle asset (`payAsset`) | **tUSD** "Test USD" (`test/Eip3009Token.sol`, EIP-3009, 6 decimals, version `"1"`) at [`0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8`](https://sepolia.etherscan.io/address/0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8) — deployed 2026-08-17 by the fleet operator key, tx `0x9561fa31…b234`, block 11511028. Circle's Sepolia USDC `0x1c7D4B19…7238` was verified EIP-3009-capable (`TRANSFER_WITH_AUTHORIZATION_TYPEHASH`, `authorizationState`, `DOMAIN_SEPARATOR == EIP712{USDC,2}`), but its faucet is captcha-gated; real USDC is the one-env swap `RGOE_PAY_ASSET`. `RGOE_NETWORK=sepolia` supplies `RGOE_PAY_ASSET`. |
+| registrar (`registrar`) | `http://<bootnode onion>:8878/` (the bootnode onion in `bootnode.json`, virtual port 8878), protocols `x402` (v2: `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`) + `mpp` (`WWW-Authenticate: Payment` / `Authorization: Payment` / `Payment-Receipt`, method `evm`, intent `charge`, `type=authorization`), prices tier 8 = `100000` (0.10 tUSD), tier 32 = `400000` (0.40 tUSD), payTo = the operator `0xc8606C75…7f02`. Advertised in the bootnode `/health` `pay` block. `RGOE_NETWORK=sepolia` supplies `RGOE_REGISTRAR_PORT`; `rgoe pay --network sepolia --limit 8` buys a leaf into the PaidAccessSet above. Live receipts: `docs/GO-LIVE-LOG-2026-08-17.md` "(payments)". |
+
 ## Bootnode
 
 [`bootnode.json`](bootnode.json) is the committed discovery record (`{onion, signer,
@@ -112,6 +119,13 @@ export RGOE_SECRET=<your enrolled secret>
 bash scripts/start-tor-client.sh                           # laptop tor on SOCKS 9260
 RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node bin/rgoe.mjs client   # bootnode onion + signer from bootnode.json
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # a gateway's clean IP
+```
+
+Buy a leaf instead of being enrolled (T-FEAT-7; a wallet holding tUSD, no ETH needed):
+
+```bash
+RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node bin/rgoe.mjs pay --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret
+RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node bin/rgoe.mjs pay --limit 32 --protocol mpp  --key-file buyer.key --secret-file ./.secret
 ```
 
 Legacy static-directory fleet:

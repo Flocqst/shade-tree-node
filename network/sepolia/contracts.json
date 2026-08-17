@@ -78,6 +78,29 @@
     "events": "Inserted(uint256 indexed commitment, uint256 limit, uint256 index, uint256 root) / Slashed(uint256 indexed commitment, uint256 limit, uint256 index, uint256 root) — the root is the post-update currentRoot; NOTE topic0 differs from the staked set’s MemberRegistered/MemberSlashed (an event-replay root provider needs these two topics; the light-client provider reads slot 3 unchanged)",
     "broadcast": "network/sepolia/paid-access-broadcast.json"
   },
+  "payAsset": {
+    "address": "0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8",
+    "name": "Test USD",
+    "symbol": "tUSD",
+    "version": "1",
+    "decimals": 6,
+    "kind": "test-eip3009",
+    "deployTx": "0x9561fa319ec38468d691c46f22968a276901ee59c996a64d30746fdd3f3bb234",
+    "deployBlock": 11511028,
+    "note": "T-FEAT-7 settle asset for the 402 registrar (docs/PAYMENTS.md 'Settle asset on Sepolia'): test/Eip3009Token.sol deployed by the fleet operator key on 2026-08-17 (payments/deploy-test-asset.mjs; deployGas 920680; DOMAIN_SEPARATOR 0x465cc07f28239bb35feb83fca06051491bbfdb53c66e009a931c6d21c6c2e7e1 == EIP712Domain{'Test USD','1',11155111,addr}). Same EIP-3009 surface as USDC (transferWithAuthorization / authorizationState / cancelAuthorization); owner-only mint, NOT for value. Circle's Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 was verified EIP-3009-capable but its faucet is captcha-gated; switching the registrar to it is the one-env change RGOE_PAY_ASSET."
+  },
+  "registrar": {
+    "port": 8878,
+    "protocols": [
+      "x402",
+      "mpp"
+    ],
+    "prices": {
+      "8": "100000",
+      "32": "400000"
+    },
+    "note": "T-FEAT-7: the operator's 402 registrar (payments/registrar.mjs) rides the bootnode onion (bootnode.json onion) on virtual port 8878: GET /pay/quote?limit=8 -> 402 with PAYMENT-REQUIRED (x402 v2) + WWW-Authenticate: Payment (MPP evm/charge type=authorization); POST /pay settles the buyer's EIP-3009 authorization in payAsset from the operator key and inserts the leaf into contracts.paidAccessSet. Prices are payAsset atomic units per tier (0.10 / 0.40 tUSD). Advertised in the bootnode's /health `pay` block. Deployed by bootstrap.sh RGOE_REGISTRAR=1 (bootnode/deploy/README.md)."
+  },
   "circuit": {
     "family": "rate-limiting-nullifier / circom-rln v1.0.0",
     "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",

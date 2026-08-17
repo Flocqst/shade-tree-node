@@ -61,10 +61,28 @@ the script exits before installing anything on a bad one.
 | `RGOE_HELIOS_PORT` | `8546` | sidecar loopback RPC port (1024..65535); `8545` is left free for a local node. `RGOE_HELIOS_RPC_URL` on the gateway follows it. |
 | `RGOE_HELIOS_CHECKPOINT` | *(unset)* | weak-subjectivity checkpoint: a recent **finalized** beacon block root (`0x` + 64 hex, e.g. `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second source). Unset = helios `--load-external-fallback` (fetches one from public checkpoint services). Pinning is the more trust-minimized bootstrap. |
 | `RGOE_HELIOS_VERSION` / `RGOE_HELIOS_SHA256` | `0.11.1` / *(pinned table)* | release to install; a version without a pinned sha256 in `bootstrap.sh` must pass `RGOE_HELIOS_SHA256=<sha256 of helios_linux_<arch>.tar.gz>` — there is no unpinned download. Unsupported arch (only amd64/arm64 are pinned) ⇒ the script stops and tells you to install `helios` at `/usr/local/bin/helios` by hand and re-run. |
+| `RGOE_REGISTRAR` | `0` | **Opt-in 402 registrar** (T-FEAT-7, `docs/PAYMENTS.md` "Shipped 2026-08-17"): `1` = render + start a hardened `rgoe-registrar.service` (`payments/registrar.mjs` on `127.0.0.1:RGOE_REGISTRAR_PORT`; same sandbox as the other Node units; order store under `deploy-state/`), publish it as an **extra virtual port of the bootnode onion** (`HiddenServicePort <port> 127.0.0.1:<port>` inside the bootnode HS block, so buyers reach `http://<bootnode-onion>:<port>/pay/quote`), and set `RGOE_REGISTRAR_ADVERTISE=1` (+ asset/prices/chain) on `rgoe-bootnode.service` so `/health` carries `pay: {port, protocols, asset, chain, tiers}`. Bootnode box only (refused with `RGOE_BOOTNODE_ONION`). Re-running with `0` disables and removes the unit. The unit is **enabled but not started** until the operator key drop-in exists (see below). Also accepts `true/false/yes/no/on/off`. |
+| `RGOE_PAID_ACCESS_CONTRACT` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: `PaidAccessSet` address the registrar inserts into (`network/sepolia/contracts.json` `contracts.paidAccessSet`). |
+| `RGOE_PAY_ASSET` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: EIP-3009 stablecoin address (Sepolia USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`, or the test tUSD in `contracts.json` `payAsset`). |
+| `RGOE_PAY_PRICES` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: `<limit>=<atomic amount>[,…]`, e.g. `8=100000,32=400000`. |
+| `RGOE_RPC_URL` | *(unset)* | **required with `RGOE_REGISTRAR=1`** (and with `RGOE_HELIOS=1`): the JSON-RPC the registrar settles/inserts through. |
+| `RGOE_PAY_TO` / `RGOE_REGISTRAR_PORT` / `RGOE_PAY_CHAIN_ID` | *(operator address)* / `8878` / `11155111` | stablecoin recipient / loopback+onion port / chain id advertised in `/health`. |
 | `RGOE_RENDER_ONLY` | *(unset)* | `<dir>`: **render mode** — write the torrc include + units under `<dir>/etc/…` with placeholder onions and exit; no root, no apt, no tor/node install, no clone, no `systemctl`. `bootstrap.sh --render <dir>` is the same. This is what `bootstrap.selftest.mjs` drives. |
 
 `RGOE_GW_OPERATOR_KEY` (staked bootnodes) is a secret and deliberately **not** a tunable: add it
-to the heartbeat unit by hand after staking (see "Turn on staking").
+to the heartbeat unit by hand after staking (see "Turn on staking"). Likewise
+`RGOE_REGISTRAR_KEY` (the 402 registrar's operator key): after `RGOE_REGISTRAR=1`, install it as a
+0600 drop-in via stdin and start the unit —
+
+```bash
+install -d -m 0755 /etc/systemd/system/rgoe-registrar.service.d
+printf '[Service]\nEnvironment=RGOE_REGISTRAR_KEY=%s\n' "$(cat /path/to/key)" \
+  | install -m 0600 /dev/stdin /etc/systemd/system/rgoe-registrar.service.d/operator.conf
+systemctl daemon-reload && systemctl restart rgoe-registrar
+curl --socks5-hostname 127.0.0.1:9050 "http://<bootnode-onion>:8878/pay/quote?limit=8"   # 402 + both challenges
+```
+
+(`docs/OPERATOR.md` "Selling access via 402" has the full runbook.)
 
 ### Add a second gateway to an existing bootnode
 

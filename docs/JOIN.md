@@ -72,6 +72,32 @@ curl -x http://127.0.0.1:8888 "https://www.google.com/search?q=zk+proofs"
 
 Your traffic goes: your laptop, into Tor, to a rendezvous point, to the server's hidden service. The server checks your proof and then makes the request from its own clean IP. The server never sees your IP. Google never sees Tor. Your search stays inside TLS the whole way, so the server sees only `www.google.com:443`, never the query.
 
+## buy access (no key handed to you)
+
+If the operator sells access instead of handing out keys, you buy your own leaf. You need a
+wallet that holds the fleet's stablecoin on its chain (Sepolia today; the fleet's `/health` on
+the bootnode says which asset and what the tiers cost) — **no ETH, no gas**: you only sign, the
+operator submits and pays. Then:
+
+```bash
+rgoe enroll                                     # your secret + your commitment, locally; keep the secret
+rgoe pay --network sepolia --limit 8 \
+  --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
+# -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
+RGOE_NETWORK=sepolia rgoe client --secret <your secret>     # egress as usual
+```
+
+`--dry-run` shows the operator's 402 challenge and the exact authorization you would sign, and
+signs nothing. Tier 32 = a bigger per-epoch budget (`--limit 32`, priced higher).
+
+Read this before you pay: **the payment is public.** On chain, your wallet address pays the
+operator's address the tier's price, and the operator inserts your leaf right after. Nobody can
+tell which of your later requests are yours (the gateway sees a zero-knowledge proof, not your
+leaf, and every request has a fresh nullifier) — but "this address bought access from this
+operator" is visible to anyone. If that matters to you, pay from a **fresh address** funded
+through a large shared pool (Railgun, Privacy Pools, a CEX withdrawal — your call, the protocol
+does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
+
 ## what your key actually is
 
 It is a bearer credential. Whoever holds it can browse as a member until the set is rotated, so keep it to yourself. It is not tied to your name anywhere, but it is yours.
