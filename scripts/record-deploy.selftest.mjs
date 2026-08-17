@@ -69,6 +69,12 @@ function main() {
     const noRc = bundle(); noRc.receipts = [];
     ok(deploymentsFromBroadcast(noRc).gatewayRegistry.block === null, "no receipt -> block null (address + tx still recorded)");
     ok(CONTRACT_SLOTS.StakedReputationSet === "stakedReputationSet" && CONTRACT_SLOTS.WithdrawVerifier === "withdrawVerifier", "slot map covers the record's contracts");
+    ok(CONTRACT_SLOTS.PaidAccessSet === "paidAccessSet", "slot map covers the T-FEAT-7 PaidAccessSet");
+    const paidB = bundle();
+    paidB.transactions.push({ hash: TX2, transactionType: "CREATE", contractName: "PaidAccessSet", contractAddress: SET });
+    paidB.receipts.push({ transactionHash: TX2, blockNumber: "0x64", contractAddress: SET });
+    const dp = deploymentsFromBroadcast(paidB);
+    ok(dp.paidAccessSet && dp.paidAccessSet.address === SET && dp.paidAccessSet.tx === TX2 && dp.paidAccessSet.block === 100, "CREATE PaidAccessSet -> paidAccessSet slot with address + tx + block");
   }
 
   console.log("\napplyDeployment:");
@@ -156,6 +162,12 @@ function main() {
     writeFileSync(bpath, JSON.stringify(two));
     const all = recordDeploy({ network: "testnet", fromBroadcast: bpath, all: true }, { root, ...quiet });
     ok(all.record.contracts.gatewayRegistry === REG && all.record.contracts.stakedReputationSet === SET && all.record.deployBlocks.stakedReputationSet === 100, "--all records every known CREATE");
+    // a paidAccessSet added to a record that never had the slot: address + tx + block appear, nothing else moves
+    const paidOnly = { chain: 31337, transactions: [{ hash: TX1, transactionType: "CREATE", contractName: "PaidAccessSet", contractAddress: REG }], receipts: [{ transactionHash: TX1, blockNumber: "0x2a", contractAddress: REG }] };
+    writeFileSync(bpath, JSON.stringify(paidOnly));
+    const pa = recordDeploy({ network: "testnet", fromBroadcast: bpath, contract: "paidAccessSet" }, { root, ...quiet });
+    ok(pa.record.contracts.paidAccessSet === REG && pa.record.deployTxs.paidAccessSet === TX1 && pa.record.deployBlocks.paidAccessSet === 42, "--contract paidAccessSet fills a NEW slot with address + tx + block");
+    ok(pa.record.contracts.stakedReputationSet === SET && validateContractsRecord(pa.record).ok, "existing slots untouched; merged record validates");
 
     // pre-existing invalid record refused
     writeFileSync(recPath, JSON.stringify({ network: "testnet", chainId: "x", contracts: {} }));

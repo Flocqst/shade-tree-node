@@ -66,7 +66,8 @@ RGOE_NETWORK=sepolia rgoe register-gateway --register-key <hex>   # once contrac
     "stakedReputationSet": "0x…",
     "hasher": "0x…",
     "withdrawVerifier": "0x…",
-    "gatewayRegistry": null             // present-null until the GatewayRegistry broadcast lands
+    "gatewayRegistry": null,            // present-null until the GatewayRegistry broadcast lands
+    "paidAccessSet": "0x…"              // T-FEAT-7 paid-access membership tree (docs/PAYMENTS.md); optional
   },
   "deployTxs":    { "<slot>": "0x<64 hex>" | null, … },
   "deployBlock":  11279842,             // block of the original deploy batch (number)
@@ -82,6 +83,12 @@ rejected; blocks are JSON numbers. A loader that needs an address calls
 `contractAddress(record, "gatewayRegistry")` and gets `null` for a pending slot — never a
 placeholder string.
 
+`RGOE_NETWORK=<name>` resolves `contracts.stakedReputationSet` → `RGOE_GROUP_CONTRACT`,
+`contracts.paidAccessSet` → `RGOE_PAID_ACCESS_CONTRACT` (the gateway unions both roots),
+`contracts.gatewayRegistry` → `RGOE_GATEWAY_REGISTRY` and `rpcUrl` → `RGOE_RPC_URL`; a null /
+missing slot supplies no default. Free-form documentation keys (`gatewayRegistry`,
+`paidAccessSet`, `liveIntegration`, …) are not validated.
+
 ### Recording a deploy in one command
 
 `forge script … --broadcast` leaves the addresses in `contracts/deployed.local.json` and the
@@ -93,6 +100,7 @@ node scripts/record-deploy.mjs --network sepolia \
   --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
 # or:  rgoe record-deploy --network sepolia --from-broadcast …
 # manual: --contract gatewayRegistry --address 0x… --tx 0x… --block N
+# a new slot next to a live release (T-FEAT-7): --contract paidAccessSet --from-broadcast broadcast/DeployPaidAccess.s.sol/<chainId>/run-latest.json
 # flags:  --all (every known CREATE in the bundle) --status live --force --dry-run
 ```
 

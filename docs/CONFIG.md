@@ -90,7 +90,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
-| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
+| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_PAID_ACCESS_CONTRACT` from `contracts.paidAccessSet`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
 | `RGOE_RPC_URL` | `http://127.0.0.1:8545` (register scripts try `deployed.rpcUrl` first) | JSON-RPC endpoint for all on-chain reads/writes. | gateway-registry, root-provider, gateway slasher, register-* | `--rpc-url` |
 | `RGOE_TOR_HOST` | `127.0.0.1` | Local Tor SOCKS host. | heartbeat, client, selection | `--tor-host` |
 | `RGOE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |
