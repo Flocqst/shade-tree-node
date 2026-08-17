@@ -1,5 +1,11 @@
 # Status update (2026-06-07)
 
+> **Historical snapshot** of the June 2026 single-gateway PoC (pinned onion, cached
+> Semaphore proof, `members.json`). Everything under "What is not built" here has since
+> shipped or been redesigned: real RLN per-request proofs, on-chain stake + slashing, the
+> bootnode fleet, and encrypted key backup. For the current picture read `README.md`,
+> the status map at the top of [`ROADMAP.md`](ROADMAP.md), and [`SHIP-PLAN.md`](SHIP-PLAN.md).
+
 Where the reputation-gated onion egress stands: live and verified. This is the
 short version of what works, what is missing, and how to actually use it from your
 own machine. For the full writeup see the [README](../README.md) and

@@ -28,7 +28,7 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 Or, if the repo is already on the box:
@@ -46,7 +46,8 @@ It creates three `Restart=always` units:
 | `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`.
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, and `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref).
 
 Firewall: the gateway and bootnode are onion services and take **no inbound clearnet
 ports**. Inbound-22-only + outbound-allow (UFW) is correct. Never expose the loopback
@@ -182,21 +183,26 @@ Locally (non-bootstrapped) the same files live under `tor/hs*/identity.local.jso
 
 ### Backup
 
-**Manual for now** (no backup tooling is shipped). Copy the seed files off-box,
-encrypted. Example:
+`rgoe backup` / `rgoe restore` (`scripts/backup.mjs`, full guide in
+[BACKUP.md](./BACKUP.md)) encrypt the onion seeds (`identity.local.json`,
+`hs_ed25519_secret_key`) and the bootnode signer key into one tamper-evident file
+(scrypt + AES-256-GCM, Node crypto only, no `gpg` needed). The passphrase is read
+**only** from `RGOE_BACKUP_PASSPHRASE`, never from argv, never logged.
 
 ```bash
-sudo tar czf - \
-  /opt/rgoe/deploy-state/bootnode-hs/identity.local.json \
-  /opt/rgoe/deploy-state/gateway-hs/identity.local.json \
-  /opt/rgoe/deploy-state/bootnode-signer.key \
-  | gpg --symmetric --cipher-algo AES256 -o rgoe-keys-$(date +%F).tar.gz.gpg
-# then move rgoe-keys-*.tar.gz.gpg to an off-box, encrypted-at-rest location.
+export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+sudo -E node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state rgoe-keys-$(date +%F).rgoebak
+# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+
+# on a fresh box, before starting the units:
+sudo -E node /opt/rgoe/bin/rgoe.mjs restore rgoe-keys-<date>.rgoebak /opt/rgoe/deploy-state   # --force to overwrite
 ```
 
-Restore by placing the files back before starting the units; the onion address and
-pinned signer are preserved, so clients keep working. The operator EOA key is backed up
-with your normal wallet backups, not here.
+Restore lays the files back with `0600`/`0700` perms; the onion address and pinned
+signer are preserved, so clients keep working. To prove the restored key really is the
+same onion before cutting over, use `scripts/onion-identity.mjs`
+([ONION-IDENTITY.md](./ONION-IDENTITY.md)). The operator EOA key is backed up with your
+normal wallet backups, not here.
 
 ---
 
@@ -318,24 +324,37 @@ inbound handler only records locally, it never re-publishes).
 
 ## 6. Rotate or retire a gateway
 
-Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. There
-is **no `rgoe` wrapper for exit/withdraw yet (manual for now)** — use foundry `cast`
-against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
+Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. The
+`rgoe` wrappers (`group/exit-gateway.mjs`) drive `GatewayRegistry`
+(`contracts/GatewayRegistry.sol`); the equivalent raw `cast` calls are shown for reference.
+All three read the on-chain state first and refuse a call the contract would revert
+(`NotStaked` / `AlreadyExiting` / `NotExiting` / `StillBonded`), and every sending
+command takes `--dry-run` (prints target + calldata + an `eth_call` simulation, broadcasts
+nothing). Set `RGOE_RPC_URL` / `RGOE_GATEWAY_REGISTRY` (or `--rpc-url` / `--gateway-registry`).
+The operator key is the one that called `register()`; hand it over via `--account <name>`
+(Foundry encrypted keystore, `cast wallet import <name> --interactive`; password from
+`RGOE_KEYSTORE_PASSWORD` or a no-echo prompt), `--keystore <json>`, `--key-file <0600 file>`,
+or `RGOE_REGISTER_KEY` in the environment — never on the command line.
+
+0. Look before you leap (read-only, no key needed):
+
+   ```bash
+   rgoe gateway-status --operator 0x<operator> --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   ```
 
 1. Start the unbonding clock (operator-only). You stay slashable for the whole
    `UNBONDING` window, so you cannot exit-then-dodge a slash:
 
    ```bash
-   cast send 0x<GatewayRegistry> "initiateExit()" \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "initiateExit()" --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
-   Check when the bond becomes withdrawable:
-
-   ```bash
-   cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator> \
-     --rpc-url https://<rpc-endpoint>
-   ```
+   The command prints `withdrawable at <unix> (<ISO>)`; `rgoe gateway-status` shows the same
+   (raw: `cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator>`).
+   A stake-admission bootnode stops admitting this operator on its next refresh
+   (`RGOE_STAKE_CACHE_MS`), so do step 2 right away.
 
 2. Stop the units so the gateway stops announcing:
 
@@ -348,11 +367,14 @@ against `GatewayRegistry` (`contracts/GatewayRegistry.sol`).
    stops, the entry ages out and clients stop selecting it. Clients cache the
    last-known-good directory, so the fleet degrades gracefully.
 
-4. After the `UNBONDING` window, reclaim the bond:
+4. After the `UNBONDING` window, reclaim the bond (`--recipient` defaults to the operator
+   address; point it at a cold address if you like). Before the window elapses the
+   command refuses with `StillBonded until <ISO> — N s to go` and sends nothing:
 
    ```bash
-   cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> \
-     --private-key 0x<operator-key> --rpc-url https://<rpc-endpoint>
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint>
    ```
 
 **Rotating** an onion (new address, same operator/stake): mint a new identity

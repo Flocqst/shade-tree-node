@@ -178,7 +178,8 @@ function main() {
     // and prove the writing path via the temp root through the API above.
     const help = cli(["--help"]);
     ok(help.status === 0 && /usage/.test(help.stdout), "--help exits 0");
-    const dry = cli(["--network", "sepolia", "--address", REG, "--tx", TX1, "--block", "42", "--dry-run"]);
+    // --force: network/sepolia already records a GatewayRegistry; --dry-run guarantees no write.
+    const dry = cli(["--network", "sepolia", "--address", REG, "--tx", TX1, "--block", "42", "--force", "--dry-run"]);
     ok(dry.status === 0 && /dry-run/.test(dry.stdout) && /gatewayRegistry = /.test(dry.stdout), "CLI --dry-run against network/sepolia exits 0 and prints the slot");
     ok(JSON.parse(readFileSync(join(HERE, "..", "network", "sepolia", "contracts.json"), "utf8")).contracts.gatewayRegistry !== REG, "CLI --dry-run did not touch the committed sepolia record");
     const bad = cli(["--network", "sepolia", "--address", "0x12"]);

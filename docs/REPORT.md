@@ -1,6 +1,8 @@
 # Reputation-gated onion egress: build, deployment, and validation
 
-**Status: live and verified, both ends.** A clean-IP egress, reachable only
+**Status: historical report of the June 2026 single-gateway PoC (live and verified at
+the time, both ends).** The current system (RLN per-request proofs, on-chain stake,
+bootnode fleet) is described in `README.md` and `docs/ROADMAP.md`. A clean-IP egress, reachable only
 through Tor, that forwards to the clearnet for clients who prove in zero knowledge
 that they belong to a curated set, and drops everyone else before a byte leaves.
 

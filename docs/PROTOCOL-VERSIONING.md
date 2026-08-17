@@ -29,10 +29,13 @@ Today both ranges are exactly `{3}`.
 
 `selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANGE)` in `client/rgoe-client.mjs`:
 
-- **Gateway range unknown (`null`)** — the common case today, since the directory does not yet
-  carry the range: the client optimistically emits **its own max**. A genuine mismatch then
-  surfaces as an explicit reject (below) carrying the gateway's real range, which the client
-  records on `this.gatewayRange` for the next attempt.
+- **Gateway range unknown (`null`)** — the common case today: `RgoeClient` starts with no
+  gateway range unless the caller passes one, so the client optimistically emits **its own
+  max**. A genuine mismatch then surfaces as an explicit reject (below) carrying the gateway's
+  real range, which the client records on `this.gatewayRange` for the next attempt. A gateway
+  that advertises signed capabilities (T-FEAT-10/10b, `bootnode/heartbeat.mjs`) also carries
+  its `caps.proto = {min,max}` in the directory entry, and capability-aware selection
+  (`client/selection.mjs` `gatewayMeetsRequirement`, `req.proto`) can filter on it before dialing.
 - **Ranges overlap:** returns `min(clientMax, gatewayMax)` — the **highest** both sides accept.
 - **Ranges disjoint:** returns `{ ok:false, reason:"no-mutual-version:client=<lo>-<hi>,gateway=<lo>-<hi>" }`.
   The client **fails closed** (throws `version negotiation failed: …`) before proving or dialing.

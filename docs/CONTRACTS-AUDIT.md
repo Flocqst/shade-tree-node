@@ -21,6 +21,7 @@ Solc: `0.8.24`, optimizer on, 200 runs (`foundry.toml`). Two contracts carry the
 | `GatewayRegistry` | `GatewayRegistry.sol` | Gateway-operator bond keyed by operator **address**; owner-gated slash. The gateway-side dual of the member stake, deliberately minimal and optional. | **Local-only.** Not present in `network/sepolia/contracts.json`. Deploy params mirrored in `test/GatewayRegistry.t.sol`. |
 | `RateCommitmentHasher` | `RateCommitmentHasher.sol` | Real Poseidon `commitmentOf(secret) = Poseidon(2)([Poseidon(1)([secret]), 8])`, the RLN rate-commitment leaf. Implements `ICommitmentHasher`. | **Live on Sepolia** as `hasher` `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D`. |
 | `MockCommitmentHasher` | `MockCommitmentHasher.sol` | Deprecated-name alias: empty subclass of `RateCommitmentHasher` kept so the deploy script keeps compiling. Fully correct rate-commitment hasher. | Alias only; the live `hasher` is the rate-commitment hasher. |
+| `WithdrawVerifier` (+ `WithdrawGroth16Verifier`) | `WithdrawVerifier.sol` / `WithdrawGroth16Verifier.sol` | The **real** ZK exit/withdraw authorizer (T-DEV-1): Groth16 proof of knowledge of the identity secret behind a leaf, `context` reduced into the field as the circuit's public `address` input (binds exit vs. withdraw-to-recipient), then `Poseidon(2)([identityCommitment, 8]) == commitment` ties it to the registered leaf. Implements `IWithdrawVerifier`. Foundry: `test/WithdrawVerifier.t.sol`. | Built + tested; **not yet deployed** — Sepolia `rln-v3` still wires the mock (section 3). |
 | `MockWithdrawVerifier` | `MockWithdrawVerifier.sol` | Demo exit/withdraw authorizer. Accepts a **revealed** secret (`proof == abi.encode(secret)`), returns true iff `hasher.commitmentOf(secret) == commitment`. Implements `IWithdrawVerifier`. NOT zero-knowledge. | **Live on Sepolia** as `withdrawVerifier` `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2`. Placeholder; see section 3. |
 | `PoseidonT2` / `PoseidonT3` | `PoseidonT2.sol` / `PoseidonT3.sol` | Vendored Poseidon permutation libraries (t=2 single-input, t=3 two-input) over BN254. Called by `RateCommitmentHasher.commitmentOf`. | Deployed transitively with the hasher. Machine-generated field arithmetic; out of scope for hand review. |
 | `RlnGroth16Verifier` (`Groth16Verifier`) | `RlnGroth16Verifier.sol` | snarkJS-exported Groth16 verifier for the deployed RLN membership artifacts. **NOT wired into `StakedReputationSet`** in this build; membership proofs are verified off-chain by the gateway against `circuits/rln/verification_key.json`. | Kept verbatim as provenance. Out of scope for hand review (generated; do not edit). |
@@ -126,10 +127,15 @@ would slash the wrong leaf (silent `BadSecret`). Pinned on-chain by `test/Poseid
   (`proof == abi.encode(secret)`), not a zero-knowledge proof, and it **ignores `context`**
   (the recipient-binding parameter). A production build swaps it for a real Groth16 exit
   verifier that (a) is zero-knowledge and (b) checks `context` to bind the proof to the
-  exact action + recipient. Real Groth16 exit-auth is task **T-DEV-1**. Until then, exit /
-  withdraw authorization is "knowledge of the secret", and recipient-redirection protection
-  is not actually enforced on Sepolia even though `StakedReputationSet.withdraw` computes and
-  passes `context = keccak256("RGOE_WITHDRAW", commitment, recipient)`.
+  exact action + recipient. The real verifier is **built** (T-DEV-1:
+  `contracts/WithdrawVerifier.sol` + `contracts/WithdrawGroth16Verifier.sol`,
+  `test/WithdrawVerifier.t.sol`) but the **live Sepolia `rln-v3` deployment still points at
+  the mock** (`network/sepolia/contracts.json` `withdrawVerifier`); redeploying with the real
+  one is part of the human-gated go-live (T-HARD-1 artifacts + `docs/GO-LIVE.md`). Until then,
+  on Sepolia exit / withdraw authorization is "knowledge of the secret", and
+  recipient-redirection protection is not actually enforced even though
+  `StakedReputationSet.withdraw` computes and passes
+  `context = keccak256("RGOE_WITHDRAW", commitment, recipient)`.
 - **ZK artifacts come from an untrusted ceremony.** `circuits/rln/` was built with a local,
   untrusted phase-2 (two hard-coded entropy contributions + a fixed beacon;
   `circuits/rln/ARTIFACTS.md` "Trust / honesty note"). Fine for testnet. A real deployment
