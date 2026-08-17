@@ -1,8 +1,10 @@
 # ADR 0006: Reputation tiers are per-leaf `userMessageLimit`s in one tree
 
-- Status: Accepted (JS + Rust clients and gateway shipped; on-chain tier admission is a follow-up)
-- Date: 2026-08-17
-- Task: T-FEAT-8 (docs/SHIP-PLAN.md) — reputation-weighted rate budget
+- Status: Accepted and fully shipped — JS + Rust clients and gateway (T-FEAT-8, PR #39) AND
+  on-chain tier admission / tiered slash (T-FEAT-8b, live on Sepolia as `rln-v4-tiers`,
+  `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, 2026-08-17; `docs/ONCHAIN.md` "Tiers on chain")
+- Date: 2026-08-17 (on-chain follow-up landed the same day)
+- Task: T-FEAT-8 / T-FEAT-8b (docs/SHIP-PLAN.md) — reputation-weighted rate budget
 
 ## Context
 
@@ -82,18 +84,21 @@ the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
   can stay). There is no "upgrade in place".
 - A member must run its client with the limit its leaf was enrolled with (`RGOE_LIMIT`,
   identity-file `limit`, `--k`); a mismatch fails at prove time, never on the wire.
-- **On chain, tiers are not admitted yet.** `StakedReputationSet` is immutable and its
-  `RateCommitmentHasher` pins `K = 8`, so (1) on-chain `register` admits leaves at any
-  limit (a leaf is opaque to the contract) but (2) `slash(commitment, secret)` recomputes
-  `Poseidon2(Poseidon1(secret), 8)` and can therefore only slash tier-8 leaves. Tiered
-  members on the on-chain root are unslashable until the follow-up in `docs/ONCHAIN.md`
-  "Tiers on chain" ships (a `slash(commitment, secret, limit)` / tiered hasher + a
-  stake-amount -> allowed-limit admission rule) — a redeploy, flagged for the human. Until
-  then tiers are safe to use on `members.json` gateways (dry-run / local slash resolves the
-  tier) and, on chain, only at the default limit.
+- **On chain, tiers are admitted since rln-v4-tiers (T-FEAT-8b).** The redeployed
+  `StakedReputationSet` records the tier at `register(commitment, limit)` and requires that
+  tier's fixed bond (`bondFor(limit)`, an immutable constructor table — no owner), the
+  `RateCommitmentHasher` is tiered (`commitmentOf(secret, limit)`), and
+  `slash(commitment, secret, limit, receiver)` recomputes the leaf at the CLAIMED limit and
+  burns that tier's bond; the exit-auth verifier receives the recorded limit. The rln-v3 set
+  (hasher pinned K=8, unslashable tiered leaves) is superseded and only remains the live
+  fleet's slash target until its units are flipped. Tier changes are still re-enrolment
+  (a new leaf, a new stake); the table on Sepolia is {8, 32}.
 - The gateway's `RGOE_TIERS` is bookkeeping for the slash path, not a policy: proof
-  verification does not consult it, and an unknown-tier over-spend still slashes (the
-  default leaf, with a warn).
+  verification does not consult it. Against rln-v4 the on-chain slasher unions it with the
+  contract's `allowedLimits()` and resolves the tier of a reconstructed secret via
+  `limitOf(candidateLeaf)` (`gateway/gateway.mjs makeOnchainSlasher`), so an over-spend at
+  ANY admitted tier slashes the right leaf even from a gateway that holds only roots; against
+  rln-v3 an unknown-tier over-spend still slashes the default leaf (with a warn).
 
 ## Alternatives considered
 
@@ -122,4 +127,7 @@ the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
 - `rust/rgoe-client/src/main.rs` (`IdentityFile.limit`, `--k`), `rust/rgoe-client/src/slotcursor.rs`
   (`MAX_LIMIT`), `rust/rgoe-rln/src/tree.rs` (`rate_commitment`), `rust/rgoe-rln/tests/tree_parity.rs`.
 - Tests: `lib/tiers.selftest.mjs` (fast), `test/reputation-tiers.selftest.mjs` (real proofs).
-- `docs/ONCHAIN.md` "Tiers on chain" — the contract-side follow-up.
+- `docs/ONCHAIN.md` "Tiers on chain" — the contract side (shipped: `contracts/StakedReputationSet.sol`,
+  `contracts/RateCommitmentHasher.sol`, `contracts/WithdrawVerifier.sol`,
+  `test/StakedReputationSet.tiers.t.sol`, `test/onchain-tiers.selftest.mjs`,
+  `network/sepolia/integration-report-rln-v4.md`).

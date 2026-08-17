@@ -39,6 +39,20 @@ pragma solidity ^0.8.24;
 // (proven in test/StakedReputationSet.t.sol::test_Root_* against the lib/rln-removal-parity
 // golden). The gas cost is 20 Poseidon(2) hashes per membership change; see the note by
 // `_updateLeaf`.
+//
+// T-FEAT-8b (reputation tiers on chain, docs/adr/0006-reputation-tiers.md, docs/ONCHAIN.md
+// "Tiers on chain"): a tier IS the leaf's private RLN `userMessageLimit`, so the leaf is
+// `Poseidon2(Poseidon1(identitySecret), limit)`. This contract now RECORDS the limit a member
+// staked at and prices admission per tier: `register(commitment, limit)` requires exactly
+// `bondFor(limit)` (a FIXED denomination per tier, so amounts still never fingerprint a member
+// within a tier, R1) from an immutable tier table fixed at construction (no owner, no
+// governance key — the set stays permissionless and un-upgradeable), and
+// `slash(commitment, secret, limit, receiver)` recomputes the leaf at the CLAIMED limit through
+// the tiered hasher, so a tier-32 leaf slashes only with limit 32 and burns the tier-32 bond.
+// The one-argument `register(commitment)` / three-argument `slash(..)` overloads are the
+// DEFAULT_LIMIT (= 8, the pre-tier K) path and stay byte-equivalent to the rln-v3 behaviour.
+// The exit-auth verifier receives the recorded limit so a real Groth16 exit proof ties the
+// revealed identity commitment to the leaf at that member's tier (contracts/WithdrawVerifier.sol).
 
 import {PoseidonT3} from "./PoseidonT3.sol";
 
@@ -46,22 +60,36 @@ import {PoseidonT3} from "./PoseidonT3.sol";
 /// Used to authorize exit and withdrawal without revealing which member (R1/R2).
 /// `context` binds the proof to this action (e.g. keccak(action, recipient)) so a
 /// withdrawal authorization cannot be replayed for a different recipient.
+/// `limit` is the member's recorded tier (RLN userMessageLimit): the leaf is
+/// Poseidon2(Poseidon1(secret), limit), so a verifier that ties the proof to the leaf needs it.
 interface IWithdrawVerifier {
-    function verify(uint256 commitment, bytes32 context, bytes calldata proof) external view returns (bool);
+    function verify(uint256 commitment, uint256 limit, bytes32 context, bytes calldata proof)
+        external
+        view
+        returns (bool);
 }
 
-/// Recomputes the identity commitment from a revealed secret, so `slash` can check
-/// that a reconstructed secret really belongs to the commitment it claims (R3).
-/// commitment == hash(secret) for the Semaphore/RLN identity scheme in use.
+/// Recomputes the RLN rate commitment (the tree leaf) from a revealed secret and a tier
+/// limit, so `slash` can check that a reconstructed secret really belongs to the leaf it
+/// claims (R3): commitment == Poseidon2(Poseidon1(secret), limit). The one-argument form is
+/// the DEFAULT_LIMIT (8) leaf, byte-equivalent to the pre-tier hasher.
 interface ICommitmentHasher {
     function commitmentOf(uint256 secret) external view returns (uint256);
+    function commitmentOf(uint256 secret, uint256 limit) external view returns (uint256);
 }
 
 contract StakedReputationSet {
     // ---- immutable parameters -------------------------------------------------
 
-    uint256 public immutable BOND;      // fixed denomination; amounts never fingerprint (R1)
+    uint256 public immutable BOND;      // bond of the DEFAULT_LIMIT tier; fixed per tier (R1)
     uint256 public immutable UNBONDING; // exit time-lock in seconds (R4)
+
+    /// The pre-tier per-member message limit (RLN userMessageLimit K = 8): the tier the
+    /// one-argument `register`/`slash` overloads use, always admitted, bond == BOND.
+    uint256 public constant DEFAULT_LIMIT = 8;
+    /// App-level upper bound on a tier limit: the circuit range-checks messageId with
+    /// LessThan(16), which is NOT sound for a limit >= 2^16 (lib/rln.mjs MAX_LIMIT).
+    uint256 public constant MAX_LIMIT = 65535;
 
     IWithdrawVerifier public immutable withdrawVerifier;
     ICommitmentHasher public immutable hasher;
@@ -69,14 +97,15 @@ contract StakedReputationSet {
     // ---- membership state -----------------------------------------------------
 
     struct Member {
-        uint256 bond;             // staked amount (== BOND while active); 0 once gone
+        uint256 bond;             // staked amount (== bondFor(limit) while held); 0 once gone
         uint64  index;           // append-only leaf index, for off-chain tree rebuild
         uint64  exitInitiatedAt; // 0 while active; timestamp once exiting
+        uint32  limit;           // the tier (RLN userMessageLimit) the leaf was staked at
     }
 
-    mapping(uint256 => Member) public members; // commitment => Member
-    uint64 public nextIndex;                    // append-only leaf counter
-    uint256 public activeCount;                 // members currently staked
+    mapping(uint256 => Member) public members; // commitment => Member   (storage slot 0)
+    uint64 public nextIndex;                    // append-only leaf counter (slot 1)
+    uint256 public activeCount;                 // members currently staked (slot 2)
 
     // ---- on-chain incremental Merkle tree (T-DEV-9) ---------------------------
     //
@@ -115,14 +144,29 @@ contract StakedReputationSet {
     // "never written" — exactly the length-based default the JS @zk-kit tree uses.
     mapping(uint256 => mapping(uint256 => uint256)) private _treeNode;
 
-    // ---- events (off-chain tree + gateway root refresh) -----------------------
+    // ---- tier table (T-FEAT-8b) — declared AFTER the tree so currentRoot stays at slot 3 --
+    //
+    // limit => bond (0 = tier not admitted). Fixed at construction: a small, public table
+    // (e.g. 8 => BOND, 32 => 4*BOND) with ONE denomination per tier, so a stake amount
+    // reveals the tier (public at registration anyway, as in members.json) but never the
+    // member within it (R1). No owner can add/remove tiers or change a bond after deploy.
+    mapping(uint256 => uint256) private _bondOf;
+    uint256[] private _allowedLimits; // ascending, distinct; always contains DEFAULT_LIMIT
 
-    event MemberRegistered(uint256 indexed commitment, uint64 indexed index);
+    // ---- events (off-chain tree + gateway root refresh) -----------------------
+    //
+    // T-FEAT-8b: `MemberRegistered`/`MemberSlashed` carry the tier limit (non-indexed), so an
+    // off-chain reader can rebuild the tier table of the set from the log alone. Their
+    // topic0 therefore differs from the rln-v3 events; lib/root-provider.mjs accepts both.
+
+    event MemberRegistered(uint256 indexed commitment, uint64 indexed index, uint256 limit);
     event MemberExiting(uint256 indexed commitment, uint64 exitInitiatedAt, uint64 withdrawableAt);
     event MemberWithdrawn(uint256 indexed commitment, address indexed recipient);
-    event MemberSlashed(uint256 indexed commitment, address indexed receiver);
+    event MemberSlashed(uint256 indexed commitment, address indexed receiver, uint256 limit);
 
     error BadBond();
+    error BadLimit();
+    error BadTierTable();
     error UnbondingTooShort();
     error AlreadyMember();
     error NotMember();
@@ -133,17 +177,23 @@ contract StakedReputationSet {
     error BadSecret();
     error PayoutFailed();
 
-    /// @param bond        the fixed stake denomination.
+    /// @param bond        the stake denomination of the DEFAULT_LIMIT (8) tier.
     /// @param unbonding   exit time-lock; must be >= minUnbonding.
     /// @param minUnbonding lower bound = F + E + C (see docs/ONCHAIN.md). Passed in so
     ///                     the gateway operator pins it to their own epoch/freshness
     ///                     parameters and the contract refuses an unsafe value.
+    /// @param extraLimits additional admitted tiers (RLN userMessageLimit values), each in
+    ///                     [1, MAX_LIMIT], distinct, != DEFAULT_LIMIT, in ascending order.
+    /// @param extraBonds  the fixed bond of each extra tier (same length, each nonzero).
+    ///                     Empty arrays = the pre-tier single-tier set (limit 8 only).
     constructor(
         uint256 bond,
         uint256 unbonding,
         uint256 minUnbonding,
         IWithdrawVerifier _withdrawVerifier,
-        ICommitmentHasher _hasher
+        ICommitmentHasher _hasher,
+        uint256[] memory extraLimits,
+        uint256[] memory extraBonds
     ) {
         if (bond == 0) revert BadBond();
         if (unbonding < minUnbonding) revert UnbondingTooShort();
@@ -151,6 +201,21 @@ contract StakedReputationSet {
         UNBONDING = unbonding;
         withdrawVerifier = _withdrawVerifier;
         hasher = _hasher;
+
+        // Tier table: DEFAULT_LIMIT first, then the extras (validated, ascending, distinct).
+        if (extraLimits.length != extraBonds.length) revert BadTierTable();
+        _bondOf[DEFAULT_LIMIT] = bond;
+        _allowedLimits.push(DEFAULT_LIMIT);
+        uint256 prev = 0;
+        for (uint256 i = 0; i < extraLimits.length; i++) {
+            uint256 lim = extraLimits[i];
+            if (lim == 0 || lim > MAX_LIMIT || lim == DEFAULT_LIMIT) revert BadLimit();
+            if (lim <= prev || _bondOf[lim] != 0) revert BadTierTable(); // ascending + distinct
+            if (extraBonds[i] == 0) revert BadBond();
+            _bondOf[lim] = extraBonds[i];
+            _allowedLimits.push(lim);
+            prev = lim;
+        }
 
         // Initialize the incremental tree's zero subtree roots and the empty-tree root.
         // _zeroes[0] = keccak256(GROUP_ID) >> 8 (Semaphore v3 `hash(id)` leaf zero value).
@@ -204,21 +269,52 @@ contract StakedReputationSet {
         return _zeroes[0];
     }
 
+    // ---- tier table views (T-FEAT-8b) ------------------------------------------
+
+    /// The bond a member of tier `limit` posts (and gets back / loses); 0 = tier not admitted.
+    function bondFor(uint256 limit) public view returns (uint256) {
+        return _bondOf[limit];
+    }
+
+    /// The admitted tiers, ascending; always starts with DEFAULT_LIMIT.
+    function allowedLimits() external view returns (uint256[] memory) {
+        return _allowedLimits;
+    }
+
+    /// The tier `commitment` was staked at, or 0 if it holds no bond (active or exiting).
+    /// The gateway's slash path uses this to name the tier of a reconstructed secret's leaf
+    /// (lib/rln.mjs resolveSlashLeaf) before calling `slash(.., limit, ..)`.
+    function limitOf(uint256 commitment) external view returns (uint256) {
+        Member storage m = members[commitment];
+        return m.bond == 0 ? 0 : uint256(m.limit);
+    }
+
     // ---- register (R1) --------------------------------------------------------
 
-    /// Permissionless. Post BOND for a commitment. The commitment's secret is
+    /// Permissionless. Post the tier's bond for a commitment. The commitment's secret is
     /// generated locally by the member and never revealed here, so registering
-    /// reveals nothing but a pseudonymous leaf and a fixed stake amount. Fund this
-    /// from a Layer-0 shielded (e.g. Railgun) fresh address for max anonymity.
-    function register(uint256 commitment) external payable {
-        if (msg.value != BOND) revert BadBond();
+    /// reveals nothing but a pseudonymous leaf, its tier, and that tier's fixed stake
+    /// amount. Fund this from a Layer-0 shielded (e.g. Railgun) fresh address for max
+    /// anonymity. `limit` MUST be the userMessageLimit the leaf was derived with, else the
+    /// member's proofs open a leaf the contract cannot slash at this tier and its exit
+    /// proofs fail; the contract cannot see inside the leaf, so it trusts the declared tier
+    /// exactly as far as the bond it prices (docs/ONCHAIN.md "Tiers on chain").
+    function register(uint256 commitment, uint256 limit) public payable {
+        uint256 bond = _bondOf[limit];
+        if (bond == 0) revert BadLimit();
+        if (msg.value != bond) revert BadBond();
         if (_exists(commitment)) revert AlreadyMember();
 
         uint64 index = nextIndex++;
-        members[commitment] = Member({bond: BOND, index: index, exitInitiatedAt: 0});
+        members[commitment] = Member({bond: bond, index: index, exitInitiatedAt: 0, limit: uint32(limit)});
         activeCount++;
-        emit MemberRegistered(commitment, index);
+        emit MemberRegistered(commitment, index, limit);
         _updateLeaf(index, commitment); // append the leaf; refresh currentRoot
+    }
+
+    /// The pre-tier entry point: register at DEFAULT_LIMIT for exactly BOND.
+    function register(uint256 commitment) external payable {
+        register(commitment, DEFAULT_LIMIT);
     }
 
     // ---- exit + withdraw (R2, R4) --------------------------------------------
@@ -233,7 +329,7 @@ contract StakedReputationSet {
         if (m.exitInitiatedAt != 0) revert AlreadyExiting();
 
         bytes32 context = keccak256(abi.encodePacked("RGOE_EXIT", commitment));
-        if (!withdrawVerifier.verify(commitment, context, proof)) revert BadProof();
+        if (!withdrawVerifier.verify(commitment, uint256(m.limit), context, proof)) revert BadProof();
 
         m.exitInitiatedAt = uint64(block.timestamp);
         activeCount--; // no longer in the admission set, though still slashable
@@ -252,7 +348,7 @@ contract StakedReputationSet {
         if (block.timestamp < uint256(m.exitInitiatedAt) + UNBONDING) revert StillBonded();
 
         bytes32 context = keccak256(abi.encodePacked("RGOE_WITHDRAW", commitment, recipient));
-        if (!withdrawVerifier.verify(commitment, context, proof)) revert BadProof();
+        if (!withdrawVerifier.verify(commitment, uint256(m.limit), context, proof)) revert BadProof();
 
         uint256 amount = m.bond;
         delete members[commitment];
@@ -269,18 +365,26 @@ contract StakedReputationSet {
     /// (commitment, secret) pair is the authorization: it only exists after a genuine
     /// rate violation, so honest members are never slashable. Works whether the member
     /// is active or mid-unbonding, which is what closes the "exit to dodge slash"
-    /// escape (R4). Pays the bond to `receiver` (the gateway / a treasury).
-    function slash(uint256 commitment, uint256 secret, address receiver) external {
+    /// escape (R4). Pays the member's tier bond to `receiver` (the gateway / a treasury).
+    ///
+    /// T-FEAT-8b: `limit` is the tier the slasher resolved for the leaf (the gateway's
+    /// resolveSlashLeaf, or `limitOf(commitment)`). The leaf is recomputed at THAT limit,
+    /// so the (commitment, secret, limit) triple must be consistent — a wrong limit is a
+    /// different Poseidon output and reverts BadSecret; and it must equal the recorded tier
+    /// (a leaf staked at 32 is, by construction, never Poseidon2(.., 8) of any secret, so this
+    /// second check is belt-and-braces: BadLimit names the mismatch precisely).
+    function slash(uint256 commitment, uint256 secret, uint256 limit, address receiver) public {
         Member storage m = members[commitment];
         if (m.bond == 0) revert NotMember();
-        if (hasher.commitmentOf(secret) != commitment) revert BadSecret();
+        if (uint256(m.limit) != limit) revert BadLimit();
+        if (hasher.commitmentOf(secret, limit) != commitment) revert BadSecret();
 
         uint256 amount = m.bond;
         bool wasActive = m.exitInitiatedAt == 0;
         uint64 idx = m.index; // capture before delete for the tree update
         delete members[commitment];
         if (wasActive) activeCount--;
-        emit MemberSlashed(commitment, receiver);
+        emit MemberSlashed(commitment, receiver, limit);
         // Zero the leaf ONLY if the member was still in the admission set. A slash of an
         // already-exiting member left the tree at initiateExit; re-zeroing would be a no-op
         // here but is skipped to mirror reconstructRoot (which ignores a removal event for a
@@ -289,6 +393,11 @@ contract StakedReputationSet {
 
         (bool ok, ) = receiver.call{value: amount}("");
         if (!ok) revert PayoutFailed();
+    }
+
+    /// The pre-tier entry point: slash a DEFAULT_LIMIT leaf (byte-equivalent to rln-v3).
+    function slash(uint256 commitment, uint256 secret, address receiver) external {
+        slash(commitment, secret, DEFAULT_LIMIT, receiver);
     }
 
     // ---- views ---------------------------------------------------------------

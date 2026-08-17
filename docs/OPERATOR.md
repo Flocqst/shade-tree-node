@@ -457,7 +457,7 @@ light-client sidecar so the root is verified against Ethereum consensus instead:
 RGOE_HELIOS=1 \
 RGOE_HELIOS_CONSENSUS_RPC=https://lodestar-sepolia.chainsafe.io \   # a beacon API with the light-client endpoints
 RGOE_RPC_URL=<execution RPC that serves eth_getProof at finalized> \
-RGOE_GROUP_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC \
+RGOE_GROUP_CONTRACT=0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25 \   # rln-v4-tiers (on-chain root; network/sepolia/contracts.json)
   sudo bash bootnode/deploy/bootstrap.sh          # composes with RGOE_BOOTNODE_ONION (gateway-only)
 journalctl -u rgoe-helios -f                       # 'consensus client in sync with checkpoint', then 'finalized block number=…'
 journalctl -u rgoe-gateway | grep stateRootSource  # expect: helios (sync-committee verified)

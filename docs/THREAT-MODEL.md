@@ -330,10 +330,11 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
   channel), but it is **opt-in and fail-open**: a fleet without it lets a malicious gateway fan a
   captured envelope to peers (each accepts it once), and a member spreading requests across `N`
   gateways gets up to `N`× its intended budget.
-- **Exit-auth verifier is a mock on the live testnet (T-DEV-1).** The real Groth16 exit-auth
-  verifier is built (`contracts/WithdrawVerifier.sol`, `test/WithdrawVerifier.t.sol`), but the
-  live Sepolia `rln-v3` deployment still wires `MockWithdrawVerifier`, so on that deployment the
-  ZK authorization of a member exit/withdraw is not real until the redeploy in the go-live runbook.
+- **Exit-auth verifier — real since rln-v4-tiers (2026-08-17).** The live Sepolia set
+  (`0xFe48De8b…9d25`) wires the real Groth16 `WithdrawVerifier` (`contracts/WithdrawVerifier.sol`,
+  taking the member's recorded tier); only its VK is still the untrusted dev phase-2 (T-HARD-1),
+  and the superseded rln-v3 set (`0xdAE242AE…20FC`, still the fleet's slash target) keeps the
+  mock.
 - **RLN leaf-removal parity (T-DEV-2) — closed.** `reconstructRoot` now follows the contract's
   zero-in-place convention (`lib/root-provider.mjs`, three-way JS/Solidity/Rust proof); listed so
   the history of the caveat is not lost.

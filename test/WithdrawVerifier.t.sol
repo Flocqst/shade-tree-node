@@ -54,7 +54,9 @@ contract WithdrawVerifierTest is Cheats {
             UNBONDING,
             MIN_UNBONDING,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            new uint256[](0),
+            new uint256[](0)
         );
 
         // The leaf is computed on-chain from the (public) demo secret, exactly as a
@@ -83,30 +85,30 @@ contract WithdrawVerifierTest is Cheats {
 
     function test_Verifier_AcceptsValidExitProof_Directly() public view {
         bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
-        assertTrue(verifier.verify(commitA, ctx, exitProof), "real exit proof must verify");
+        assertTrue(verifier.verify(commitA, 8, ctx, exitProof), "real exit proof must verify");
     }
 
     function test_Verifier_RejectsTamperedProof_Directly() public view {
         bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
-        assertFalse(verifier.verify(commitA, ctx, _tamper(exitProof)), "tampered proof must not verify");
+        assertFalse(verifier.verify(commitA, 8, ctx, _tamper(exitProof)), "tampered proof must not verify");
     }
 
     function test_Verifier_RejectsWrongCommitment_Directly() public view {
         // Same valid proof, but claimed against a different leaf => leaf check fails.
         bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
         uint256 otherLeaf = hasher.commitmentOf(222);
-        assertFalse(verifier.verify(otherLeaf, ctx, exitProof), "proof must not verify against another leaf");
+        assertFalse(verifier.verify(otherLeaf, 8, ctx, exitProof), "proof must not verify against another leaf");
     }
 
     function test_Verifier_RejectsWrongContext_Directly() public view {
         // The exit proof is bound to the EXIT context; a different context => false.
         bytes32 wrongCtx = keccak256(abi.encodePacked("RGOE_WITHDRAW", commitA, RECIPIENT));
-        assertFalse(verifier.verify(commitA, wrongCtx, exitProof), "proof bound to exit ctx must fail other ctx");
+        assertFalse(verifier.verify(commitA, 8, wrongCtx, exitProof), "proof bound to exit ctx must fail other ctx");
     }
 
     function test_Verifier_RejectsMalformedProof_Directly() public view {
         bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
-        assertFalse(verifier.verify(commitA, ctx, hex"deadbeef"), "malformed proof => clean false");
+        assertFalse(verifier.verify(commitA, 8, ctx, hex"deadbeef"), "malformed proof => clean false");
     }
 
     // ---- initiateExit through StakedReputationSet ----------------------------
@@ -142,7 +144,7 @@ contract WithdrawVerifierTest is Cheats {
         set.withdraw(commitA, RECIPIENT, withdrawProof);
         assertEq(RECIPIENT.balance - before, BOND, "recipient paid the bond via ZK-authorized withdraw");
         assertEq(address(set).balance, 0, "contract emptied");
-        (uint256 bond,,) = set.members(commitA);
+        (uint256 bond,,,) = set.members(commitA);
         assertEq(bond, 0, "member deleted");
     }
 

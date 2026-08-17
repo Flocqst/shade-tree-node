@@ -13,8 +13,10 @@ import {PoseidonT3} from "./PoseidonT3.sol";
 ///
 /// ================================ HOW IT MAPS ================================
 /// The membership leaf stored in `StakedReputationSet` is the RLN **rate commitment**
-///     commitment = Poseidon(2)([ Poseidon(1)([identitySecret]), K ])          (K = 8)
-/// (see RateCommitmentHasher / circuits/rln/ARTIFACTS.md).
+///     commitment = Poseidon(2)([ Poseidon(1)([identitySecret]), limit ])
+/// where `limit` is the member's tier (userMessageLimit; 8 for the default tier — see
+/// RateCommitmentHasher / circuits/rln/ARTIFACTS.md / docs/adr/0006-reputation-tiers.md).
+/// The set passes the tier it RECORDED for the leaf at registration (T-FEAT-8b).
 ///
 /// The `withdraw` circuit (circom-rln) proves knowledge of `identitySecret` such that
 /// its public output equals the inner identity commitment, and binds a public
@@ -24,11 +26,11 @@ import {PoseidonT3} from "./PoseidonT3.sol";
 /// It does NOT itself hash to the rate commitment — so this wrapper closes that gap by
 /// recomputing the leaf from the circuit's identity-commitment output:
 ///
-///   verify(commitment, context, proof):
+///   verify(commitment, limit, context, proof):
 ///     1. decode proof -> (a, b, c, identityCommitment)
 ///     2. addr = uint256(context) % FIELD                      // bind the action
 ///     3. require Groth16.verifyProof(a, b, c, [identityCommitment, addr])
-///     4. require Poseidon(2)([identityCommitment, K]) == commitment   // tie to the leaf
+///     4. require Poseidon(2)([identityCommitment, limit]) == commitment   // tie to the leaf
 ///
 /// Step 2 binds the proof to THIS action (exit vs. withdraw-to-a-specific-recipient):
 /// `context` is the `keccak256` the contract computes, reduced into the BN254 scalar
@@ -56,8 +58,8 @@ contract WithdrawVerifier is IWithdrawVerifier {
     uint256 public constant FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    /// RLN per-member message limit (userMessageLimit); the second Poseidon(2) input of
-    /// the rate commitment. Pinned to 8 across the circuit, rlnjs, and RateCommitmentHasher.
+    /// DEFAULT RLN per-member message limit (userMessageLimit); the second Poseidon(2)
+    /// input of the default-tier rate commitment. The set passes each member's own limit.
     uint256 public constant K = 8;
 
     /// The exact number of ABI-encoded words a well-formed `proof` occupies:
@@ -71,14 +73,15 @@ contract WithdrawVerifier is IWithdrawVerifier {
     }
 
     /// @param commitment the membership leaf (RLN rate commitment) being acted on.
+    /// @param limit      the tier (userMessageLimit) the set recorded for that leaf.
     /// @param context    action binding (keccak256 the contract computed); reduced into
     ///                   the field and required to equal the proof's public `address`.
     /// @param proof      abi.encode(uint256[2] a, uint256[2][2] b, uint256[2] c,
     ///                   uint256 identityCommitment). `identityCommitment` is the
     ///                   circuit's public output = Poseidon(1)([identitySecret]).
     /// @return true iff the Groth16 proof verifies for [identityCommitment, addr] AND
-    ///         Poseidon(2)([identityCommitment, K]) == commitment.
-    function verify(uint256 commitment, bytes32 context, bytes calldata proof)
+    ///         Poseidon(2)([identityCommitment, limit]) == commitment.
+    function verify(uint256 commitment, uint256 limit, bytes32 context, bytes calldata proof)
         external
         view
         override
@@ -98,7 +101,7 @@ contract WithdrawVerifier is IWithdrawVerifier {
         if (!groth16.verifyProof(a, b, c, pubSignals)) return false;
 
         // ...and the identity commitment the circuit reveals must reconstruct THIS leaf.
-        if (PoseidonT3.hash([identityCommitment, K]) != commitment) return false;
+        if (PoseidonT3.hash([identityCommitment, limit]) != commitment) return false;
 
         return true;
     }

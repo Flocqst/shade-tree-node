@@ -23,8 +23,10 @@ as **addresses** so a real pre-deployed RLN/Groth16 verifier can be wired in.
 | contract | constructor args | role |
 |---|---|---|
 | `GatewayRegistry` | `bond, unbonding, minUnbonding, owner` | gateway-operator stake the bootnode reads for `stake`-mode admission; `owner` is the slashing/governance authority (`0` ⇒ deployer). |
-| `StakedReputationSet` | `bond, unbonding, minUnbonding, withdrawVerifier, hasher` | member admission set (register / ZK-exit / time-locked withdraw / slash). Skipped when `RGOE_DEPLOY_STAKED=0`. |
-| `MockWithdrawVerifier`, `MockCommitmentHasher` | — | **testnet-only** fallbacks, deployed **only** when `RGOE_WITHDRAW_VERIFIER` / `RGOE_COMMITMENT_HASHER` are unset. The mocks are **not** zero-knowledge (the secret is revealed in calldata); the script prints a `WARNING` when it deploys them. For a real deployment, pre-deploy the RLN/Groth16 verifier + rate-commitment hasher and pass their addresses. |
+| `StakedReputationSet` | `bond, unbonding, minUnbonding, withdrawVerifier, hasher, extraLimits[], extraBonds[]` | member admission set (register at a tier / ZK-exit / time-locked withdraw / tiered slash) with the on-chain root (`currentRoot`, slot 3). `bond` is the DEFAULT tier (limit 8); `extraLimits/extraBonds` are the other admitted tiers (T-FEAT-8b, `RGOE_TIER_LIMITS` / `RGOE_TIER_BONDS_WEI`). Skipped when `RGOE_DEPLOY_STAKED=0`; `GatewayRegistry` skipped when `RGOE_DEPLOY_REGISTRY=0` (its address then comes from `RGOE_GATEWAY_REGISTRY` for the record). |
+| `RateCommitmentHasher` | — | the real tiered Poseidon rate-commitment hasher (`commitmentOf(secret, limit)`), deployed when `RGOE_COMMITMENT_HASHER` is unset. Links the external `PoseidonT2` / `PoseidonT3` libraries (deployed alongside, or reused via `--libraries`, see §5). |
+| `WithdrawGroth16Verifier` + `WithdrawVerifier` | — | the REAL Groth16 exit-auth verifier (T-DEV-1), deployed when `RGOE_WITHDRAW_VERIFIER` is unset and `RGOE_DEPLOY_REAL_VERIFIER=1`. VK = the untrusted dev phase-2 (testnet-only until T-HARD-1). |
+| `MockWithdrawVerifier` | — | **testnet-only** fallback, deployed **only** when `RGOE_WITHDRAW_VERIFIER` is unset and `RGOE_DEPLOY_REAL_VERIFIER` is not `1`. NOT zero-knowledge (the secret is revealed in calldata); the script prints a `WARNING` when it deploys it. |
 
 `minUnbonding` is the `F + E + C` lower bound (freshness window + epoch + slash-confirmation
 margin) both constructors enforce, so a misconfigured short unbonding window is rejected
@@ -42,8 +44,12 @@ or any L2 by changing only `--rpc-url` and the env.
 | `RGOE_MIN_UNBONDING` | `270` | `F+E+C` lower bound the constructors enforce. |
 | `RGOE_GATEWAY_OWNER` | `0` (⇒ deployer) | `GatewayRegistry` slashing / governance address. Set to a DAO/multisig for a persistent deployment. |
 | `RGOE_DEPLOY_STAKED` | `1` | `1` = also deploy `StakedReputationSet`; `0` = `GatewayRegistry` only. |
-| `RGOE_WITHDRAW_VERIFIER` | `0` (⇒ deploy Mock) | pre-deployed `IWithdrawVerifier` address. |
-| `RGOE_COMMITMENT_HASHER` | `0` (⇒ deploy Mock) | pre-deployed `ICommitmentHasher` address. |
+| `RGOE_DEPLOY_REGISTRY` | `1` | `0` = do NOT deploy a `GatewayRegistry`; record `RGOE_GATEWAY_REGISTRY` instead (a member-set-only redeploy next to a live registry, e.g. rln-v4). |
+| `RGOE_TIER_LIMITS` | `""` (default tier 8 only) | extra admitted tiers, comma-separated userMessageLimits (`"32"`, `"32,64"`): ascending, distinct, `1..65535`, `!= 8`. |
+| `RGOE_TIER_BONDS_WEI` | `""` | the bond of each extra tier, wei, same length as `RGOE_TIER_LIMITS`, each nonzero (Sepolia rln-v4: `4000000000000000` for tier 32). Tier 8 always costs `RGOE_BOND_WEI`. |
+| `RGOE_WITHDRAW_VERIFIER` | `0` (⇒ deploy) | pre-deployed `IWithdrawVerifier` address (must take `(commitment, limit, context, proof)`). |
+| `RGOE_DEPLOY_REAL_VERIFIER` | `0` | `1` = deploy the REAL Groth16 `WithdrawVerifier` when `RGOE_WITHDRAW_VERIFIER` is unset (else the Mock). |
+| `RGOE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | pre-deployed `ICommitmentHasher` address (must implement the TIERED `commitmentOf(secret, limit)`; the rln-v3 hasher `0x08F9a754…ae6D` pins K=8 and cannot be reused). |
 | `RGOE_RPC_URL` | `http://127.0.0.1:8545` | endpoint; also recorded into the output JSON. |
 | `RGOE_DEPLOY_OUT` | `contracts/deployed.local.json` | JSON output path. Point at a scratch file for simulation; leave default for the real deploy so the gateway/lib pick the addresses up. |
 
@@ -109,6 +115,32 @@ in the same run (see §6 for the manual path). The broadcast writes a receipt bu
 
 **`GatewayRegistry`-only** (skip the member set): add `RGOE_DEPLOY_STAKED=0`.
 
+**Member-set-only redeploy next to a live registry (how rln-v4 was deployed, 2026-08-17):**
+
+```bash
+export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+RGOE_DEPLOY_STAKED=1 RGOE_DEPLOY_REGISTRY=0 \
+RGOE_GATEWAY_REGISTRY=0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868 \
+RGOE_DEPLOY_REAL_VERIFIER=1 \
+RGOE_BOND_WEI=1000000000000000 RGOE_TIER_LIMITS=32 RGOE_TIER_BONDS_WEI=4000000000000000 \
+RGOE_UNBONDING=300 RGOE_MIN_UNBONDING=270 \
+RGOE_DEPLOY_OUT=./cache/sepolia-rln-v4.local.json \
+forge script contracts/script/DeployRegistry.s.sol:DeployRegistry \
+  --rpc-url "$RGOE_RPC_URL" --private-key "$K" \
+  --libraries contracts/PoseidonT2.sol:PoseidonT2:0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55 \
+  --libraries contracts/PoseidonT3.sol:PoseidonT3:0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022 \
+  --broadcast --slow
+```
+
+Simulate first (drop `--broadcast`), then broadcast. Notes from that run: `--libraries` reuses
+the Poseidon libraries the rln-v3 deploy left on Sepolia (their runtime bytecode was compared
+with `forge inspect … deployedBytecode` vs `cast code` first — identical apart from the
+library's own PUSH20 self-address; saves ~5.4M gas); `--slow` waits for each receipt (the
+deployer key was in concurrent use by `rgoe register-gateway`); `RGOE_DEPLOY_OUT` must stay
+under the repo (`foundry.toml` `fs_permissions`); `$K` is loaded into the shell from SOPS and
+never echoed. Cost: 4 CREATEs, 3.37M gas, ~0.0036 ETH at ~1.0 gwei
+(`network/sepolia/rln-v4-broadcast.json`).
+
 ## 6. Verify on the explorer
 
 1. Note the deployed addresses from the `== Logs ==` block (also in
@@ -122,10 +154,17 @@ in the same run (see §6 for the manual path). The broadcast writes a receipt bu
        "$RGOE_BOND_WEI" "$RGOE_UNBONDING" "$RGOE_MIN_UNBONDING" "$RGOE_GATEWAY_OWNER")
    ```
    For `StakedReputationSet` the constructor signature is
-   `c(uint256,uint256,uint256,address,address)` (bond, unbonding, minUnbonding,
-   withdrawVerifier, hasher).
+   `c(uint256,uint256,uint256,address,address,uint256[],uint256[])` (bond, unbonding,
+   minUnbonding, withdrawVerifier, hasher, extraLimits, extraBonds), and it links the two
+   Poseidon libraries (`--libraries …` as at deploy).
 4. Sanity-read the on-chain params: `cast call <GatewayRegistry> "BOND()(uint256)" --rpc-url "$RGOE_RPC_URL"`
-   and `"owner()(address)"` should echo what you deployed with.
+   and `"owner()(address)"` should echo what you deployed with; for the set,
+   `"currentRoot()(uint256)"` (a fresh set == the empty depth-20 root
+   `10354334201938752428558948798274962999644820234654929486063894213598717249307`),
+   `"allowedLimits()(uint256[])"`, `"bondFor(uint256)(uint256)" 32`, `"withdrawVerifier()(address)"`,
+   `"hasher()(address)"`, `"ROOT_STORAGE_SLOT()(uint256)"` (3), and
+   `cast call <hasher> "commitmentOf(uint256,uint256)(uint256)" 111 32` ==
+   `15363698809722346745616993869789510363416645981863858152379739283427647190637` (the JS golden).
 
 ## 7. Record the address into the fleet config
 
@@ -137,7 +176,17 @@ receipt bundle into the committed record, validates it, and refuses a chain mism
 node scripts/record-deploy.mjs --network sepolia \
   --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
 git diff network/sepolia/contracts.json   # contracts/deployTxs/deployBlocks.gatewayRegistry filled
+# a member-set redeploy: record every CREATE (set, hasher, verifiers), overwriting the old slots
+node scripts/record-deploy.mjs --network sepolia --all --force \
+  --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
 ```
+
+For a redeploy of an existing slot, then hand-edit the free-form keys: bump `release`, move
+the previous addresses under `superseded.<old-release>`, and refresh `params` / `note` /
+`liveIntegration` (see the rln-v4-tiers record). `RGOE_NETWORK=sepolia` resolves
+`RGOE_GROUP_CONTRACT` to whatever `contracts.stakedReputationSet` says, so the record IS the
+switch for every `--network` caller; the FLEET units (agent-devops group vars) are flipped
+separately (§8).
 
 From then on `RGOE_NETWORK=sepolia` supplies `RGOE_GATEWAY_REGISTRY` + `RGOE_RPC_URL` to the
 bootnode (`rgoe bootnode --network sepolia --admission stake`), `rgoe register-gateway`, and the
@@ -182,6 +231,17 @@ This is the on-chain half of the deploy; the fleet half is the OpenTofu + Ansibl
 
 Keep the contract address in the agent-devops inventory (group vars) as the single source of
 truth for the fleet; `contracts/deployed.local.json` stays the deployer-box local cache.
+
+**Flipping the fleet to a new member set (rln-v3 → rln-v4-tiers).** The live gateways slash
+against `RGOE_SLASH_CONTRACT` (rln-v3 `0xdAE242AE…20FC` at the time of writing) and gate on
+`group/members.json`; the rln-v4 set `0xFe48De8b…9d25` is live and recorded but the units were
+deliberately NOT flipped in the same change (that is a live-fleet config change: agent-devops
+group vars `RGOE_SLASH_CONTRACT` (+ `RGOE_GROUP_CONTRACT` for on-chain root mode) → re-render
+→ restart, per `docs/DEPLOYMENT.md`; never a hand-ssh edit). Until then a member staked on
+rln-v4 is admitted by an rln-v4-rooted gateway and slashable there, while the fleet's
+members.json gateways keep slashing tier-8 leaves on rln-v3. The gateway auto-detects which
+contract generation it talks to (`slash: on-chain … abi=…` at startup), so the flip needs no
+code change.
 See `docs/DEPLOYMENT.md` for the full topology and the fleet SAFETY notes (targeted
 `tofu apply` only).
 

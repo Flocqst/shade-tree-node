@@ -31,12 +31,20 @@ contract Deploy is Cheats {
 
         MockCommitmentHasher hasher = new MockCommitmentHasher();
         MockWithdrawVerifier verifier = new MockWithdrawVerifier(ICommitmentHasher(address(hasher)));
+        // Local demo: the default tier (limit 8, BOND) plus tier 32 at 4*BOND (T-FEAT-8b),
+        // so the anvil selftests can stake at both tiers.
+        uint256[] memory extraLimits = new uint256[](1);
+        uint256[] memory extraBonds = new uint256[](1);
+        extraLimits[0] = 32;
+        extraBonds[0] = 4 * bond;
         StakedReputationSet set = new StakedReputationSet(
             bond,
             unbonding,
             minUnbonding,
             IWithdrawVerifier(address(verifier)),
-            ICommitmentHasher(address(hasher))
+            ICommitmentHasher(address(hasher)),
+            extraLimits,
+            extraBonds
         );
 
         // Gateway operator stake (optional at the bootnode; deployed so the on-chain path exists).

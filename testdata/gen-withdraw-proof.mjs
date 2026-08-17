@@ -32,12 +32,14 @@ const vkey = JSON.parse(readFileSync(join(ROOT, "circuits/rln/withdraw_verificat
 
 // BN254 scalar field; must match WithdrawVerifier.FIELD.
 const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const K = 8n; // RLN userMessageLimit; must match WithdrawVerifier.K / RateCommitmentHasher.K
+const K = 8n; // default RLN userMessageLimit; must match WithdrawVerifier.K / RateCommitmentHasher.K
+const K32 = 32n; // a second reputation tier (T-FEAT-8b, docs/adr/0006-reputation-tiers.md)
 
 // Demo member: identity secret 111 (public SECRET_A). Leaf = RLN rate commitment.
 const SECRET = 111n;
 const identityCommitment = poseidon1([SECRET]);
-const commitment = poseidon2([identityCommitment, K]); // == the membership leaf
+const commitment = poseidon2([identityCommitment, K]); // == the membership leaf (tier 8)
+const commitment32 = poseidon2([identityCommitment, K32]); // the SAME identity's tier-32 leaf
 
 // The recipient the withdraw proof is bound to (matches the Foundry test's RECIPIENT).
 const RECIPIENT = getAddress("0x000000000000000000000000000000000000bEEF");
@@ -101,6 +103,15 @@ async function main() {
     recipient: RECIPIENT,
     exit: await proveFor(exitCtx),
     withdraw: await proveFor(withdrawCtx),
+    // T-FEAT-8b: the exit proof for the same identity's TIER-32 leaf. The circuit is
+    // identical (it proves Poseidon1(secret)); only the action context differs, because the
+    // context binds the leaf being acted on. test/StakedReputationSet.tiers.t.sol feeds it
+    // through a set that recorded limit 32 for that leaf.
+    tier32: {
+      limit: Number(K32),
+      commitment: commitment32.toString(),
+      exit: await proveFor(ctxExit(commitment32)),
+    },
   };
 
   const path = join(__dir, "withdraw-proof.json");
@@ -110,6 +121,7 @@ async function main() {
   console.log("identityCommitment:", out.identityCommitment);
   console.log("exit.address      :", out.exit.address);
   console.log("withdraw.address  :", out.withdraw.address);
+  console.log("tier32.commitment :", out.tier32.commitment);
 
   // snarkjs spins up worker threads; exit explicitly so the script terminates.
   process.exit(0);

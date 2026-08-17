@@ -42,7 +42,7 @@ const alice = keys[0], bob = keys[1]; // secrets whose identity leaves are in me
 const provider = new ethers.JsonRpcProvider(RPC);
 const ABI = [
   "function BOND() view returns (uint256)",
-  "function members(uint256) view returns (uint256 bond, uint64 index, uint64 exitInitiatedAt)",
+  "function members(uint256) view returns (uint256 bond, uint64 index, uint64 exitInitiatedAt)", // rln-v3 shape (this script targets the rln-v3 run; rln-v4 tiers: scripts/integration-tiers.mjs)
   "function register(uint256 commitment) payable",
   "function activeCount() view returns (uint256)",
 ];

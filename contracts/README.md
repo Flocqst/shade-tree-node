@@ -9,14 +9,27 @@ The admission gate: a fixed-bond, refundable, slashable, time-locked-exit stakin
 contract adapted from the Rate-Limiting-Nullifier `RLN.sol` registry shape. Reference
 implementation, **unaudited, testnet-only**.
 
-Two pieces are deliberately abstracted behind interfaces and still need real wiring:
+Two pieces are abstracted behind interfaces (both have real implementations in this dir):
 
-- `IWithdrawVerifier` — the ZK proof that authorizes `initiateExit` / `withdraw`
-  without revealing the member (proof of knowledge of the identity secret, bound to a
-  per-action context). Wire to the RLN / Semaphore verifier artifacts.
-- `ICommitmentHasher` — recomputes `commitment == hash(secret)` so `slash` can check a
-  reconstructed secret against its commitment. Wire to the Poseidon hasher for the
-  identity scheme in use.
+- `IWithdrawVerifier` — `verify(commitment, limit, context, proof)`: the ZK proof that
+  authorizes `initiateExit` / `withdraw` without revealing the member (proof of knowledge of
+  the identity secret, bound to a per-action context, tied to the leaf at the member's
+  RECORDED tier). Real: `WithdrawVerifier.sol` (Groth16); demo: `MockWithdrawVerifier.sol`.
+- `ICommitmentHasher` — `commitmentOf(secret, limit)` (and the default-tier
+  `commitmentOf(secret)`) recomputes the RLN rate-commitment leaf so `slash` can check a
+  reconstructed secret against its commitment at the claimed tier. Real:
+  `RateCommitmentHasher.sol` (Poseidon over BN254).
+
+**Reputation tiers on chain (T-FEAT-8b, rln-v4-tiers).** A tier is the leaf's private
+`userMessageLimit` (`docs/adr/0006-reputation-tiers.md`). The set records it:
+`register(commitment, limit)` requires `bondFor(limit)` from an immutable constructor table
+(`extraLimits[]` / `extraBonds[]`, default tier `8 => BOND` always present, no owner /
+setter), `limitOf(commitment)` / `allowedLimits()` are the views,
+`slash(commitment, secret, limit, receiver)` recomputes the leaf at the claimed limit
+(`BadLimit` if it is not the recorded one, `BadSecret` if the secret does not hash to the
+leaf there) and burns that tier's bond, and the events carry the limit. The one-argument
+`register` / three-argument `slash` overloads are the limit-8 path, byte-equivalent to the
+rln-v3 contract. `docs/ONCHAIN.md` "Tiers on chain".
 
 The Merkle root is maintained **off chain** in this reference: members and indices live
 in a mapping and are emitted as events (`MemberRegistered` / `MemberExiting` /
@@ -58,8 +71,10 @@ Local `anvil` (or a mainnet fork) first, then Sepolia L1, then L1 mainnet, per
 ONCHAIN.md (we target Ethereum L1, not an L2). A Foundry or Hardhat script should:
 
 1. deploy the verifier + hasher (real RLN artifacts, or mocks for local e2e),
-2. deploy `StakedReputationSet(bond, unbonding, minUnbonding, verifier, hasher)`,
+2. deploy `StakedReputationSet(bond, unbonding, minUnbonding, verifier, hasher, extraLimits, extraBonds)`,
 3. point the gateway/shim at it via `RGOE_GROUP_CONTRACT` / `RGOE_RPC_URL` /
    `RGOE_GROUP_ID`.
 
-Toolchain (Foundry vs Hardhat) and the local `anvil` script are not committed yet.
+Foundry: `script/Deploy.s.sol` (local anvil demo stack, tiers {8, 32}) and
+`contracts/script/DeployRegistry.s.sol` (the persistent env-parameterised deployer,
+`docs/ONCHAIN-DEPLOY.md`; `RGOE_TIER_LIMITS` / `RGOE_TIER_BONDS_WEI` for the tier table).

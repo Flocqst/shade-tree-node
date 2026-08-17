@@ -73,6 +73,7 @@ export function deriveCommitment(secret) { return "COMMIT(" + secret + ")"; }
 export const K_SLOTS = 8;
 export const TIERS = [8];
 export function resolveSlashLeaf(secret) { return { commitment: deriveCommitment(secret), limit: 8, resolved: true }; } // T-FEAT-8 (mock)
+export function deriveCommitments(secret, tiers = TIERS) { return tiers.map((limit) => ({ limit, commitment: deriveCommitment(secret) })); } // T-FEAT-8b (mock)
 `;
 
 const LOADER = `

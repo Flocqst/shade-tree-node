@@ -17,12 +17,12 @@ Solc: `0.8.24`, optimizer on, 200 runs (`foundry.toml`). Two contracts carry the
 
 | Contract | File | Purpose | Deployment status |
 |---|---|---|---|
-| `StakedReputationSet` | `StakedReputationSet.sol` | Member admission gate: fixed-bond, refundable, slashable, time-locked-exit stake keyed by RLN rate-commitment (anonymous leaf). | **Live on Sepolia** `0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC` (`network/sepolia/contracts.json`, status `live`, release `rln-v3`). |
+| `StakedReputationSet` | `StakedReputationSet.sol` | Member admission gate: per-tier fixed-bond, refundable, slashable, time-locked-exit stake keyed by RLN rate-commitment (anonymous leaf), with the depth-20 Poseidon incremental tree ON CHAIN (`currentRoot` at storage slot 3, T-DEV-9) and a reputation-tier table fixed at construction (`register(commitment, limit)` / `bondFor(limit)` / `slash(commitment, secret, limit, receiver)`, T-FEAT-8b). No owner. | **Live on Sepolia** `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25` (`network/sepolia/contracts.json`, status `live`, release `rln-v4-tiers`, 2026-08-17). Superseded: `0xdAE242AE…20FC` (`rln-v3`, no on-chain tree, hasher pinned K=8; still the live fleet's slash target until its units are flipped). |
 | `GatewayRegistry` | `GatewayRegistry.sol` | Gateway-operator bond keyed by operator **address**; owner-gated slash. The gateway-side dual of the member stake, deliberately minimal and optional. | **Local-only.** Not present in `network/sepolia/contracts.json`. Deploy params mirrored in `test/GatewayRegistry.t.sol`. |
-| `RateCommitmentHasher` | `RateCommitmentHasher.sol` | Real Poseidon `commitmentOf(secret) = Poseidon(2)([Poseidon(1)([secret]), 8])`, the RLN rate-commitment leaf. Implements `ICommitmentHasher`. | **Live on Sepolia** as `hasher` `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D`. |
+| `RateCommitmentHasher` | `RateCommitmentHasher.sol` | Real Poseidon rate-commitment hasher, TIERED: `commitmentOf(secret, limit) = Poseidon(2)([Poseidon(1)([secret]), limit])` (`1 <= limit <= 65535`, else `BadLimit`) and the byte-equivalent default `commitmentOf(secret)` at `K = 8`. Implements `ICommitmentHasher` (both overloads). | **Live on Sepolia** as `hasher` `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` (rln-v4). Superseded: `0x08F9a754…ae6D` (K pinned). |
 | `MockCommitmentHasher` | `MockCommitmentHasher.sol` | Deprecated-name alias: empty subclass of `RateCommitmentHasher` kept so the deploy script keeps compiling. Fully correct rate-commitment hasher. | Alias only; the live `hasher` is the rate-commitment hasher. |
-| `WithdrawVerifier` (+ `WithdrawGroth16Verifier`) | `WithdrawVerifier.sol` / `WithdrawGroth16Verifier.sol` | The **real** ZK exit/withdraw authorizer (T-DEV-1): Groth16 proof of knowledge of the identity secret behind a leaf, `context` reduced into the field as the circuit's public `address` input (binds exit vs. withdraw-to-recipient), then `Poseidon(2)([identityCommitment, 8]) == commitment` ties it to the registered leaf. Implements `IWithdrawVerifier`. Foundry: `test/WithdrawVerifier.t.sol`. | Built + tested; **not yet deployed** — Sepolia `rln-v3` still wires the mock (section 3). |
-| `MockWithdrawVerifier` | `MockWithdrawVerifier.sol` | Demo exit/withdraw authorizer. Accepts a **revealed** secret (`proof == abi.encode(secret)`), returns true iff `hasher.commitmentOf(secret) == commitment`. Implements `IWithdrawVerifier`. NOT zero-knowledge. | **Live on Sepolia** as `withdrawVerifier` `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2`. Placeholder; see section 3. |
+| `WithdrawVerifier` (+ `WithdrawGroth16Verifier`) | `WithdrawVerifier.sol` / `WithdrawGroth16Verifier.sol` | The **real** ZK exit/withdraw authorizer (T-DEV-1): Groth16 proof of knowledge of the identity secret behind a leaf, `context` reduced into the field as the circuit's public `address` input (binds exit vs. withdraw-to-recipient), then `Poseidon(2)([identityCommitment, limit]) == commitment` ties it to the registered leaf at the tier the SET recorded (`verify(commitment, limit, context, proof)`, T-FEAT-8b). Implements `IWithdrawVerifier`. Foundry: `test/WithdrawVerifier.t.sol`, `test/StakedReputationSet.tiers.t.sol::test_RealVerifier_TiedToRecordedLimit`. | **Live on Sepolia** (rln-v4) as `withdrawVerifier` `0x522409038aA03FFF998d33C60A37486975695351` over `withdrawGroth16Verifier` `0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E`. VK is the untrusted dev phase-2 (T-HARD-1). |
+| `MockWithdrawVerifier` | `MockWithdrawVerifier.sol` | Demo exit/withdraw authorizer. Accepts a **revealed** secret (`proof == abi.encode(secret)`), returns true iff `hasher.commitmentOf(secret, limit) == commitment`. Implements `IWithdrawVerifier`. NOT zero-knowledge. | Local anvil demo only (`script/Deploy.s.sol`); was live as `withdrawVerifier` `0x5A6FD01d…dbDB2` on the superseded rln-v3. |
 | `PoseidonT2` / `PoseidonT3` | `PoseidonT2.sol` / `PoseidonT3.sol` | Vendored Poseidon permutation libraries (t=2 single-input, t=3 two-input) over BN254. Called by `RateCommitmentHasher.commitmentOf`. | Deployed transitively with the hasher. Machine-generated field arithmetic; out of scope for hand review. |
 | `RlnGroth16Verifier` (`Groth16Verifier`) | `RlnGroth16Verifier.sol` | snarkJS-exported Groth16 verifier for the deployed RLN membership artifacts. **NOT wired into `StakedReputationSet`** in this build; membership proofs are verified off-chain by the gateway against `circuits/rln/verification_key.json`. | Kept verbatim as provenance. Out of scope for hand review (generated; do not edit). |
 
@@ -64,14 +64,16 @@ where `wasActive = exitInitiatedAt == 0`. The `wasActive` guard is what prevents
 double-decrement when an already-exiting stake is slashed
 (`StakedReputationSet.slash` / `GatewayRegistry.slash`).
 
-**I2. Contract ETH balance == (live bonds) × BOND. No wei created or destroyed.**
+**I2. Contract ETH balance == Σ live bonds (per tier). No wei created or destroyed.**
 Live = bond still held (active OR exiting). Encoded:
-`invariant_ethEqualsSumOfLiveBonds` in both suites (`balance == ghostLive * BOND`).
-Source: the only inflow is `register` which requires `msg.value == BOND`
-(`if (msg.value != BOND) revert BadBond()`); the only outflows are `withdraw` and
-`slash`, each paying exactly the recorded `amount == m.bond == BOND` and deleting the
-record first. There is no other `payable` function and no `receive`/`fallback`, so ETH
-cannot enter except through `register`.
+`invariant_ethEqualsSumOfLiveBonds` in both suites (registry: `balance == ghostLive * BOND`;
+set: `balance == ghostLiveWei`, the handler's pool mixing tier-8 (`BOND`) and tier-32
+(`4*BOND`) leaves since T-FEAT-8b). Source: the only inflow is `register(commitment, limit)`
+which requires `msg.value == bondFor(limit)` exactly (`BadLimit` for an unadmitted tier,
+`BadBond` otherwise); the only outflows are `withdraw` and `slash`, each paying exactly the
+recorded `amount == m.bond == bondFor(m.limit)` and deleting the record first. There is no
+other `payable` function and no `receive`/`fallback`, so ETH cannot enter except through
+`register`.
 
 **I3. A slashed or withdrawn stake cannot be re-withdrawn (delete-before-payout, CEI).**
 Both `withdraw` and `slash` execute `delete members[commitment]` /
@@ -92,11 +94,14 @@ Confirmed by `test_owner_can_slash_while_exiting` (registry) and
 `test_Slash_WorksDuringUnbonding_AndBlocksLaterWithdraw` (set), and by the fuzz test
 `testFuzz_slash_anyStakedPays(address,bool exiting)`.
 
-**I5. BOND is the only accepted deposit.**
-`register` reverts unless `msg.value == BOND` exactly (not `>=`, not `<=`). Both over- and
-under-payment revert `BadBond`. No other function is `payable`. Confirmed by
-`test_Register_RequiresExactBond` and `testFuzz_register_wrongBondReverts` (any
-`value != BOND` reverts and leaves zero contract balance).
+**I5. `bondFor(limit)` is the only accepted deposit for tier `limit`.**
+`register(commitment, limit)` reverts `BadLimit` unless `bondFor(limit) != 0` (the tier is
+in the immutable table) and `BadBond` unless `msg.value == bondFor(limit)` exactly (not
+`>=`, not `<=`). The one-argument `register(commitment)` is `register(commitment, 8)` and
+requires `BOND` (`bondFor(8) == BOND` always). No other function is `payable`. Confirmed by
+`test_Register_RequiresExactBond`, `testFuzz_register_wrongBondReverts` (any `value != BOND`
+reverts and leaves zero contract balance), `test_Register_Tier32_RequiresTierBond`,
+`test_Register_UnadmittedTier_Reverts`, `testFuzz_register_tierBondAdmits`.
 
 **I6. The onion is NEVER stored on chain.**
 `GatewayRegistry` keys the stake by operator **address** and stores only
@@ -113,40 +118,78 @@ higher index. Confirmed by `test_Register_AppendOnlyIndex` and
 `test_ReRegister_AfterWithdraw` (re-register yields index 1). This backs the off-chain
 tree rebuild in `lib/root-provider.mjs`.
 
-**I8. Membership leaf == the crypto side's rate commitment.**
-`RateCommitmentHasher.commitmentOf(s) == Poseidon(2)([Poseidon(1)([s]), 8])` must equal
-`poseidon-lite`'s `poseidon2([poseidon1([s]), 8n])`. If these drift, a reconstructed secret
-would slash the wrong leaf (silent `BadSecret`). Pinned on-chain by `test/Poseidon.t.sol`
-(five JS↔Solidity vectors) and `test_Slash_RateCommitmentLeaf_RevealedSecret_Pays`.
+**I8. Membership leaf == the crypto side's rate commitment, at the member's tier.**
+`RateCommitmentHasher.commitmentOf(s, limit) == Poseidon(2)([Poseidon(1)([s]), limit])` must
+equal `poseidon-lite`'s `poseidon2([poseidon1([s]), BigInt(limit)])` (`lib/rln.mjs
+deriveCommitment(s, limit)`), and `commitmentOf(s) == commitmentOf(s, 8)`. If these drift, a
+reconstructed secret would slash the wrong leaf (silent `BadSecret`). Pinned on-chain by
+`test/Poseidon.t.sol` (five JS↔Solidity vectors at K=8), `test_Slash_RateCommitmentLeaf_RevealedSecret_Pays`,
+and `test/StakedReputationSet.tiers.t.sol` (`test_Hasher_MatchesJsTierGoldens`: 111/222/1 at 32
+and 64; `testFuzz_hasher_tiersDistinctAndDefaultEqual`).
+
+**I9. A leaf slashes ONLY at its recorded tier, and burns exactly that tier's bond.**
+`slash(commitment, secret, limit, receiver)` reverts `NotMember` (no bond), `BadLimit`
+(`m.limit != limit`), then `BadSecret` (`hasher.commitmentOf(secret, limit) != commitment`),
+in that order; the payout is `m.bond == bondFor(m.limit)`. The three-argument `slash` is
+the `limit = 8` claim. Because `Poseidon2(x, 32)` is never `Poseidon2(y, 8)` for the leaf
+the set holds, a wrong tier is unreachable through the hasher check alone; the explicit
+`BadLimit` names it. Encoded: `test_Slash_Tier32_OnlyWithLimit32_BurnsTierBond`,
+`test_Slash_Tier8_OnlyWithLimit8`, `testFuzz_slash_onlyAtRecordedLimit` (any other limit,
+0..70000, reverts and is a no-op), and the invariant handler's `slash` (the OTHER tier's
+claim must revert before the right one succeeds, every call). Live: the Sepolia rln-v4
+integration slashed a tier-32 leaf at limit 32 and proved (static call) that limit 32 on a
+tier-8 leaf reverts `BadLimit` (`network/sepolia/integration-report-rln-v4.md`).
+
+**I10. The tier table is immutable and well-formed; `currentRoot` stays at slot 3.**
+The constructor rejects a limit of 0, `> MAX_LIMIT` (65535, the circuit's `LessThan(16)`
+soundness bound), a duplicate of `DEFAULT_LIMIT`, a non-ascending or duplicate extra, a zero
+bond, and a length mismatch (`test_Constructor_RejectsBadTierTables`); there is no setter
+and no owner, so no tier can be added, removed, or repriced after deployment (a new table is
+a new deployment). The tier mappings are declared AFTER the tree state so
+`ROOT_STORAGE_SLOT == 3` is unchanged (`test_Root_KnownStorageSlot`,
+`test_Root_StorageSlotUnchangedByTierTable`, `test_Root_MixedTiers_EqualsJsNewGroup`, which
+also pins a two-tier tree's root to the JS `newGroup` golden).
+
+**I11. On-chain root == off-chain reconstruction, across both event generations.**
+`currentRoot` after any register / exit / slash sequence equals `lib/root-provider.mjs
+reconstructRoot` over the emitted events (zero-in-place removal at the leaf's immutable
+index): `test_Root_RegisterThreeSlashMiddle_EqualsReconstructRoot` (rln-v3-style single tier)
+and `test_Root_MixedTiers_EqualsJsNewGroup` (rln-v4, mixed tiers). rln-v4's
+`MemberRegistered(commitment, index, limit)` / `MemberSlashed(commitment, receiver, limit)`
+have a different topic0 from rln-v3's; the reconstruction accepts both and treats them
+identically (`lib/root-provider.selftest.mjs` §8), and the anvil end-to-end suite
+`test/onchain-tiers.selftest.mjs` checks on-chain `currentRoot()` == NodeRootProvider
+(events) == LightClientRootProvider (eth_getProof of slot 3) == JS `groupFromIdentities`.
 
 ---
 
 ## 3. Known limitations / not-yet-real
 
-- **`MockWithdrawVerifier` is a placeholder.** It accepts a REVEALED secret in calldata
-  (`proof == abi.encode(secret)`), not a zero-knowledge proof, and it **ignores `context`**
-  (the recipient-binding parameter). A production build swaps it for a real Groth16 exit
-  verifier that (a) is zero-knowledge and (b) checks `context` to bind the proof to the
-  exact action + recipient. The real verifier is **built** (T-DEV-1:
-  `contracts/WithdrawVerifier.sol` + `contracts/WithdrawGroth16Verifier.sol`,
-  `test/WithdrawVerifier.t.sol`) but the **live Sepolia `rln-v3` deployment still points at
-  the mock** (`network/sepolia/contracts.json` `withdrawVerifier`); redeploying with the real
-  one is part of the human-gated go-live (T-HARD-1 artifacts + `docs/GO-LIVE.md`). Until then,
-  on Sepolia exit / withdraw authorization is "knowledge of the secret", and
-  recipient-redirection protection is not actually enforced even though
-  `StakedReputationSet.withdraw` computes and passes
-  `context = keccak256("RGOE_WITHDRAW", commitment, recipient)`.
+- **`MockWithdrawVerifier` is a local-demo placeholder** (revealed secret in calldata, ignores
+  `context`). Since rln-v4 (2026-08-17) the **live Sepolia set wires the real Groth16
+  `WithdrawVerifier`** (`network/sepolia/contracts.json` `withdrawVerifier` /
+  `withdrawGroth16Verifier`), so on chain exit / withdraw authorization is a genuine
+  proof-of-knowledge bound to the action + recipient — but its VK is still the untrusted dev
+  phase-2 (T-HARD-1): trustworthy for testnet only. The mock remains only in
+  `script/Deploy.s.sol` (anvil demo, `scripts/demo-e2e.mjs`).
+- **The tier a leaf is staked at is DECLARED, not proven.** `register(commitment, limit)`
+  cannot look inside `commitment`; it prices and records the tier the registrant names. A
+  member whose leaf was built at limit X but who declares Y != X gets a leaf the contract can
+  never slash (`hasher.commitmentOf(secret, Y) != leaf` => `BadSecret`) — but ALSO one it can
+  never exit or withdraw (the verifier ties the proof to the leaf at the RECORDED limit Y), so
+  the bond is locked forever, i.e. forfeited without a slash tx. The gateway still enforces the
+  leaf's REAL budget X (the circuit does, not the contract), so the mismatch never buys extra
+  requests: an over-spend is still dropped `over-spend-slashed`; only the on-chain burn degrades
+  to a permanent lock. Documented in `docs/ONCHAIN.md` "Tiers on chain"; a leaf-tier proof at
+  registration is a possible follow-up, not a soundness gap.
 - **ZK artifacts come from an untrusted ceremony.** `circuits/rln/` was built with a local,
   untrusted phase-2 (two hard-coded entropy contributions + a fixed beacon;
   `circuits/rln/ARTIFACTS.md` "Trust / honesty note"). Fine for testnet. A real deployment
   needs a proper multi-party phase-2 and regenerated `rln_final.zkey` + verifier +
   `verification_key.json` together. Hardening this is task **T-HARD-1**.
-- **RLN leaf-removal parity is unverified against an on-chain slash.** The off-chain tree
-  rebuild `reconstructRoot` (`lib/root-provider.mjs`) removes leaves on
-  `MemberExiting` / `MemberWithdrawn` / `MemberSlashed` events. That the JS reconstruction
-  and an on-chain slash agree on which leaf leaves the set is task **T-DEV-2**
-  (JS↔chain leaf-removal parity). The event-driven removal is unit-tested in JS
-  (`lib/root-provider.selftest.mjs`) but not cross-checked against a live slash tx here.
+- **RLN leaf-removal parity is now verified against an on-chain slash** (I11): the anvil
+  end-to-end suite and the live Sepolia rln-v4 run both compare `currentRoot()` after the
+  slash with the JS zero-in-place tree (`network/sepolia/integration-report-rln-v4.md`).
 - **`owner` is a single key.** `GatewayRegistry.owner` is one address with sole slash +
   ownership-transfer authority. `transferOwnership` is a plain single-step transfer (no
   two-step accept, no timelock). A DAO / timelock / fraud-proof verifier is a future drop-in
@@ -255,7 +298,7 @@ the harness declares its own cheatcode interface in `test/Cheats.sol` / `test/Fu
 
 ```
 forge build
-forge test                 # full suite: 53 tests, 7 suites, all green
+forge test                 # full suite: 92 tests, 9 suites, all green (2026-08-17, T-FEAT-8b)
 forge test -vvv            # traces on failure
 forge test --match-contract StakedReputationSetInvariantTest
 forge snapshot             # gas snapshot
@@ -270,9 +313,15 @@ Fuzz + invariant depth is set inline, not in `foundry.toml`:
   `targetSelectors()` returning the local `FuzzSelector` struct (ABI-shape match to
   `StdInvariant.FuzzSelector`; see `test/FuzzHelpers.sol`).
 
-Last local run in this environment: **53 passed, 0 failed, 0 skipped**; both
-`invariant_ethEqualsSumOfLiveBonds` and the `activeCount` invariants green at 4096 calls,
-0 reverts.
+Last local run in this environment (2026-08-17): **92 passed, 0 failed, 0 skipped**; both
+`invariant_ethEqualsSumOfLiveBonds` (now per-tier wei) and the `activeCount` invariants
+green at 4096 calls, 0 reverts; the tiers suite `test/StakedReputationSet.tiers.t.sol` (17)
+and the tier fuzz tests (`testFuzz_register_tierBondAdmits`, `testFuzz_slash_onlyAtRecordedLimit`,
+`testFuzz_hasher_tiersDistinctAndDefaultEqual`, 256 runs each) green. Gas (forge, optimizer
+200): `register(commitment, limit)` ~1.28M (20 Poseidon2 for the on-chain tree; same as the
+one-argument form), `slash(.., limit, ..)` ~0.92M, `initiateExit` ~0.92M, `withdraw` ~90k,
+`RateCommitmentHasher.commitmentOf(s, limit)` ~55.8k. Live Sepolia rln-v4: register 1,283,077 /
+921,848 gas, slash 919,847 gas at ~1.0 gwei.
 
 Static analysis: run `slither .` if installed (see section 6). A `slither.config.json` is
 committed at the repo root: it forces the Foundry framework (so solc 0.8.24 from

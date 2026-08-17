@@ -6,7 +6,7 @@ Ethereum testnet and a DigitalOcean gateway fleet, using the `~/agent-devops` Op
 Ansible repo. Grounded in live recon, not aspiration. The current bring-up path is the
 one-command `bootnode/deploy/bootstrap.sh` (see `docs/OPERATOR.md`, `docs/QUICKSTART.md`)
 and the human-gated first live deployment is `docs/GO-LIVE.md`; the live contract
-addresses are in `network/sepolia/contracts.json` (release `rln-v3`), which supersedes the
+addresses are in `network/sepolia/contracts.json` (release `rln-v4-tiers`, 2026-08-17; rln-v3 under `superseded`), which supersedes the
 addresses this file's checklist was written against.
 
 ## Topology

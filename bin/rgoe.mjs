@@ -68,7 +68,7 @@ const COMMANDS = {
   join:              { script: "group/join.mjs",            help: "guided front door: `rgoe join [member]` or `rgoe join gateway` — make an identity + print the next commands" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
   identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: rgoe identity [--out <path>] [--secret-file <path>] (secret: --secret-file | RGOE_SECRET | ./.secret)" },
-  "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: rgoe register-member <commitment>" },
+  "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: rgoe register-member <commitment> [--limit N] (tier; default 8)" },
   "register-gateway":{ script: "group/register-gateway.mjs", help: "stake a gateway operator bond into GatewayRegistry" },
   // exit/withdraw/status share one script (group/exit-gateway.mjs); `prepend` selects the mode.
   "exit-gateway":    { script: "group/exit-gateway.mjs", prepend: ["exit"],     help: "start the GatewayRegistry unbonding clock for this operator (leave the active set; stay slashable for UNBONDING): rgoe exit-gateway [--dry-run]" },
