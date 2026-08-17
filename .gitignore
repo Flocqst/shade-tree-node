@@ -37,3 +37,7 @@ coverage/
 # Mutation testing (T-TEST-10) — Stryker sandbox + HTML report are disposable
 .stryker-tmp/
 reports/mutation/
+
+# go-live receipts (contain droplet/laptop IPs) and encrypted key backups (.rgoebak) — local only
+golive/
+backups/

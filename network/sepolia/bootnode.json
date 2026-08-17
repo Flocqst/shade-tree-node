@@ -3,12 +3,13 @@
   "status": "live",
   "onion": "kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion",
   "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73",
-  "admission": "open",
+  "admission": "stake",
+  "gatewayRegistry": "0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868",
   "staticDirectory": {
     "path": "directory-bootnode.json",
     "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73"
   },
-  "deployedRef": "main@cb237e070f07c5a97928ad1c1831ddad9e7bfc9f",
+  "deployedRef": "main@d8a6530146b13986870eb42299ace1118ebfb0b9",
   "updated": "2026-08-17",
-  "note": "LIVE since 2026-08-17 (docs/GO-LIVE-LOG-2026-08-17.md, T-DEPLOY-1): bootnode + gateway-1 (region na) on droplet-1, admission open, onion PoW off (RGOE_ENABLE_POW=0), membership root = committed group/members.json (PoC fallback). staticDirectory is the bootnode's own signed /directory export (same signer) for the cold path when the bootnode is dark; the LEGACY static fleet directory.json (signer 189f...1321) is untouched next to it. Onions and pubkeys only, never IPs."
+  "note": "LIVE since 2026-08-17 (docs/GO-LIVE-LOG-2026-08-17.md, T-DEPLOY-1 + T-DEPLOY-2 + Phase 3): bootnode + gateway-1 (region na, nyc) on droplet-1, gateway-2 (region na, sfo) on droplet-2 announcing to the same bootnode (gateway-only bootstrap mode). Admission STAKE since 2026-08-17 (later): RGOE_STAKE_MODE=onchain against gatewayRegistry, one staked operator backs both onions via the heartbeat operator auth; on-chain slashing enabled on both gateways. Onion PoW off (RGOE_ENABLE_POW=0), membership root = committed group/members.json (PoC fallback). staticDirectory is the bootnode's own signed /directory export (same signer, 2 gateways) for the cold path when the bootnode is dark; the LEGACY static fleet directory.json (signer 189f...1321) is untouched next to it. Onions and pubkeys only, never IPs."
 }
