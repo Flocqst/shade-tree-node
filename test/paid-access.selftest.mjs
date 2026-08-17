@@ -113,9 +113,10 @@ async function main() {
     const hasher = deployed.hasher;
     const { ethers } = await import("ethers");
     const provider = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
-    // A DIFFERENT key than the forge broadcast (key 0): sharing one account across forge + ethers
-    // raced on the nonce in CI ("nonce has already been used").
-    const deployer = new ethers.Wallet(ANVIL_KEY_5, provider);
+    // A DIFFERENT key than the forge broadcast (key 0), behind a NonceManager: CI's anvil answered
+    // eth_getTransactionCount("pending") stale right after a mined tx, so back-to-back deploys from
+    // one account raced on the nonce ("nonce has already been used"); local nonce tracking sidesteps it.
+    const deployer = new ethers.NonceManager(new ethers.Wallet(ANVIL_KEY_5, provider));
     // PoseidonT3 (external library) + the linked PaidAccessSet, from the forge artifacts (the deploy
     // script above already built the tree; build if the artifact is missing).
     const readArtifact = (rel) => JSON.parse(readFileSync(join(ROOT, "out", rel), "utf8"));
