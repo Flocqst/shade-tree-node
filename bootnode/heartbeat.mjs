@@ -7,7 +7,7 @@
 // bootnode onion over Tor, every RGOE_BOOTNODE_HEARTBEAT seconds.
 //
 // Config:
-//   RGOE_BOOTNODE_ONION     the bootnode to announce to (required)
+//   RGOE_BOOTNODE_ONION     the bootnode to announce to (required; or via RGOE_NETWORK, see lib/network-record.mjs)
 //   RGOE_GW_IDENTITY        path to the onion identity.local.json { onion, seed }
 //                           (bootnode/keygen.mjs; default tor/hs/identity.local.json)
 //   RGOE_GW_WEIGHT          selection weight advertised                    (default 100)
@@ -36,6 +36,7 @@ import { postOverTor } from "./fetch.mjs";
 import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
 import { REGION_BUCKETS } from "../lib/directory.mjs";
 import { isPrivHex, isEthAddress } from "../lib/config.mjs";
+import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -180,9 +181,12 @@ export async function announceIfHealthy({ announce, egress, enabled = egressChec
 }
 
 // The runtime knobs main() reads. Throws (fail fast) when the bootnode is unset.
+// RGOE_NETWORK=<name>: default the bootnode onion (and registry/rpc) from network/<name>/*.json
+// first; explicit env still wins (lib/network-record.mjs applyNetworkEnv fills only unset vars).
 export function heartbeatConfig(env = process.env) {
+  applyNetworkEnv(env);
   const bootnode = env.RGOE_BOOTNODE_ONION;
-  if (!bootnode) throw new Error("set RGOE_BOOTNODE_ONION (the bootnode to announce to)");
+  if (!bootnode) throw new Error("set RGOE_BOOTNODE_ONION (the bootnode to announce to), or RGOE_NETWORK=<name> with a live network/<name>/bootnode.json");
   return {
     bootnode,
     intervalSec: Number(env.RGOE_BOOTNODE_HEARTBEAT || 300),

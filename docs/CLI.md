@@ -25,9 +25,10 @@ See `docs/CONFIG.md` for the full env-var reference and defaults.
 | `gateway-status` | `group/exit-gateway.mjs status` | Read-only: an operator's stake state (`staked (active)` / `exiting` / `not staked`), `BOND`, `UNBONDING`, `withdrawableAt` and chain time. Needs no key: `--operator 0x…`. | `rgoe gateway-status --operator 0xOp --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `sign-directory` | `group/sign-directory.mjs` | Sign a static fleet directory for offline discovery; with no args mints example keys + file. | `rgoe sign-directory unsigned.json` |
 | `gateway` | `gateway/gateway.mjs` | Run the reputation-gated egress gateway (Tor onion, `:443` metadata-only tunnel). Long-running. | `rgoe gateway --group-contract 0xSet --rpc-url https://rpc.example` |
-| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` |
+| `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. | `rgoe client --secret <hex> --bootnode <onion> --dir-signer <hex>` (or `--network sepolia`) |
 | `shim` | `client/shim.mjs` | Alias for `client`. | `rgoe shim --secret <hex> --onion <onion>` |
 | `doctor` | `scripts/doctor.mjs` | Check the local setup (node, tor, keys, deps). | `rgoe doctor` |
+| `record-deploy` | `scripts/record-deploy.mjs` | Record a broadcast contract deploy (address + tx + block) into `network/<name>/contracts.json` from Foundry's `run-latest.json` or explicit flags; never touches a chain. | `rgoe record-deploy --network sepolia --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json` |
 | `backup` | `scripts/backup.mjs backup` | Encrypt and back up secret key material (onion seeds + signer key) from a directory into one file. Passphrase only via `RGOE_BACKUP_PASSPHRASE` (never argv). See `docs/BACKUP.md`. | `RGOE_BACKUP_PASSPHRASE=… rgoe backup deploy-state keys.rgoebak` |
 | `restore` | `scripts/backup.mjs restore` | Restore an encrypted key backup into a directory (`--force` to overwrite). Passphrase via `RGOE_BACKUP_PASSPHRASE`. | `RGOE_BACKUP_PASSPHRASE=… rgoe restore keys.rgoebak deploy-state --force` |
 
@@ -41,6 +42,7 @@ Every `--flag` sets exactly one `RGOE_*` env var (from `FLAG_ENV` in `bin/rgoe.m
 
 | Flag | Env var | Group |
 |---|---|---|
+| `--network` | `RGOE_NETWORK` | global (fills unset vars from `network/<name>/`; see `docs/CONFIG.md`) |
 | `--rpc-url` | `RGOE_RPC_URL` | global |
 | `--tor-host` | `RGOE_TOR_HOST` | global |
 | `--tor-port` | `RGOE_TOR_PORT` | global |

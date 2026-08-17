@@ -7,7 +7,8 @@ as release `rln-v3` (`network/sepolia/contracts.json`; the live deployment still
 `MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3); the gateway reads the root
 through `lib/root-provider.mjs` (`RGOE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
 `light` provider whose stateRoot validation is still open, T-DEV-9b); `contracts/GatewayRegistry.sol`
-exists but is not yet deployed on Sepolia. Read the design below for the reasoning; read
+is deployed on Sepolia at `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (block 11509783,
+`network/sepolia/contracts.json`). Read the design below for the reasoning; read
 `docs/CONTRACTS-AUDIT.md` for the invariants as implemented. This is ROADMAP-v1 item #2 ("On-chain reputation
 set") sharpened on two axes the roadmap deliberately left open:
 

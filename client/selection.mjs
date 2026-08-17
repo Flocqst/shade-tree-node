@@ -23,8 +23,15 @@ import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGH
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
+import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// RGOE_NETWORK=<name>: fill discovery inputs (RGOE_BOOTNODE_ONION / RGOE_DIR_SIGNER, or the static
+// RGOE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
+// snapshot the env. Explicit env always wins (applyNetworkEnv only fills unset keys). Done here, not
+// only in bin/rgoe.mjs, so `node client/shim.mjs` and the SDK (client/rgoe-client.mjs) honour it too.
+applyNetworkEnv(process.env);
 
 // Two directory SOURCES, same signed shape and same pinned-signer verification:
 //   - RGOE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor

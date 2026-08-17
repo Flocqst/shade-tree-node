@@ -58,7 +58,7 @@ Read by `client/shim.mjs` / `client/rgoe-client.mjs` (proxy + library) and `clie
 | `RGOE_ONION` | (unset) | Pin a single gateway onion (skips directory selection). `.onion` suffix optional. | client | `--onion` |
 | `RGOE_DIRECTORY` | (unset) | Path to a static signed directory JSON (offline discovery). | client selection | `--directory` |
 | `RGOE_DIR_SIGNER` | (unset; no default — directory mode is off unless set) | Pinned ed25519 public key of the directory signer (bootnode signer, or the static directory signer). | client selection | `--dir-signer` |
-| `RGOE_BOOTNODE_ONION` | (unset) | Bootnode onion to fetch the live signed directory from over Tor. Wins over `RGOE_DIRECTORY` if both set. | client selection | `--bootnode` |
+| `RGOE_BOOTNODE_ONION` | (unset; or from `network/<RGOE_NETWORK>/bootnode.json`) | Bootnode onion to fetch the live signed directory from over Tor. Wins over `RGOE_DIRECTORY` if both set. | client selection | `--bootnode` |
 | `RGOE_DIRECTORY_CACHE` | `cache/bootnode-directory.lkg` (bootnode) or `<RGOE_DIRECTORY>.lkg` (file), else none | Last-known-good directory cache path. | client selection | (none) |
 | `RGOE_DIRECTORY_REFRESH_MS` | `300000` (5 min) | How often to refresh the loaded directory. | client selection | (none) |
 | `RGOE_SHIM_PORT` | `8888` | Local HTTP-CONNECT proxy listen port (on `127.0.0.1`). | shim | `--shim-port` |
@@ -72,7 +72,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `RGOE_STAKE_MODE` | auto: `onchain` if `RGOE_GATEWAY_REGISTRY` set, else `mock` | StakeVerifier source: `onchain` (eth_call `isStaked`) or `mock` (chainless dev). | gateway-registry | `--stake-mode` |
-| `RGOE_GATEWAY_REGISTRY` | (unset; register scripts fall back to `deployed.local.json`) | `GatewayRegistry` contract address (required for `onchain` stake mode and `register-gateway`). | gateway-registry, register-gateway | `--gateway-registry` |
+| `RGOE_GATEWAY_REGISTRY` | (unset; falls back to `network/<RGOE_NETWORK>/contracts.json` `contracts.gatewayRegistry`, then `deployed.local.json`) | `GatewayRegistry` contract address (required for `onchain` stake mode and `register-gateway`). | gateway-registry, register-gateway | `--gateway-registry` |
 | `RGOE_STAKE_ALLOWLIST` | (unset → everyone staked) | Comma-separated operator addresses treated as staked in `mock` mode; empty means open dev (all staked). | gateway-registry (mock) | `--stake-allowlist` |
 | `RGOE_STAKE_CACHE_MS` | `15000` | TTL of the on-chain `isStaked` result cache (keeps heartbeat storms cheap). | gateway-registry (onchain) | (none) |
 | `RGOE_FRESHNESS_ROOTS` | `2` | Current root plus how many prior roots are still accepted (freshness window ring). | root-provider | (none) |
@@ -86,6 +86,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
+| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
 | `RGOE_RPC_URL` | `http://127.0.0.1:8545` (register scripts try `deployed.rpcUrl` first) | JSON-RPC endpoint for all on-chain reads/writes. | gateway-registry, root-provider, gateway slasher, register-* | `--rpc-url` |
 | `RGOE_TOR_HOST` | `127.0.0.1` | Local Tor SOCKS host. | heartbeat, client, selection | `--tor-host` |
 | `RGOE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |
