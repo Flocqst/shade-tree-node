@@ -41,3 +41,4 @@ reports/mutation/
 # go-live receipts (contain droplet/laptop IPs) and encrypted key backups (.rgoebak) — local only
 golive/
 backups/
+contracts/paid-access.local.json

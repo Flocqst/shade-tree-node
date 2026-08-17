@@ -1,4 +1,4 @@
-# On-chain deploy runbook: persistent `GatewayRegistry` + `StakedReputationSet`
+# On-chain deploy runbook: persistent `GatewayRegistry` + `StakedReputationSet` (+ `PaidAccessSet`, §9)
 
 Task: **T-DEPLOY-7** — a persistent on-chain deployment of the stake contracts, wired to
 the live fleet (Sepolia or a chosen L2).
@@ -244,6 +244,63 @@ contract generation it talks to (`slash: on-chain … abi=…` at startup), so t
 code change.
 See `docs/DEPLOYMENT.md` for the full topology and the fleet SAFETY notes (targeted
 `tofu apply` only).
+
+## 9. PaidAccessSet (T-FEAT-7 Layer 1, `contracts/script/DeployPaidAccess.s.sol`)
+
+The paid-access membership tree of `docs/PAYMENTS.md` (`docs/ONCHAIN.md` "Paid access set"):
+operator-inserted after an off-chain HTTP 402 settlement, no funds on chain, same tree / leaf /
+hasher / slot-3 root as the staked set. Deployed NEXT TO a live staked set (it never replaces
+it; the gateway unions both roots).
+
+| var | default | meaning |
+|---|---|---|
+| `RGOE_PAY_LIMITS` | `8,32` | tiers this set admits (comma-separated userMessageLimits; ascending, distinct, `1..65535`, must include `8`). No prices: pricing lives on the 402 rail. |
+| `RGOE_PAY_OPERATOR` | `0` (⇒ deployer) | the registrar / insert authority (`insert`, `insertBatch`, `setOperator`). Rotate later with the two-step `setOperator` / `acceptOperator`. |
+| `RGOE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | the TIERED hasher; on Sepolia reuse the live rln-v4 one `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586`. |
+| `RGOE_RPC_URL` / `RGOE_DEPLOY_OUT` | as §2 | output JSON default `contracts/paid-access.local.json` (gitignored). |
+
+Simulate, then broadcast (how Sepolia was deployed, 2026-08-17):
+
+```bash
+export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+RGOE_PAY_LIMITS=8,32 \
+RGOE_COMMITMENT_HASHER=0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586 \
+RGOE_DEPLOY_OUT=./cache/sepolia-paid-access.local.json \
+forge script contracts/script/DeployPaidAccess.s.sol:DeployPaidAccess \
+  --rpc-url "$RGOE_RPC_URL" --private-key "$K" \
+  --libraries contracts/PoseidonT2.sol:PoseidonT2:0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55 \
+  --libraries contracts/PoseidonT3.sol:PoseidonT3:0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022 \
+  --broadcast --slow
+```
+
+Pass BOTH `--libraries` (the script also compiles `RateCommitmentHasher`, so without the
+PoseidonT2 link forge would deploy a fresh PoseidonT2 even though the hasher is reused —
+the dry run showed an extra 3.2M-gas CREATE2 until it was linked). Result: one CREATE,
+2,071,319 gas (~0.0022 ETH at ~1.08 gwei), `network/sepolia/paid-access-broadcast.json`.
+
+Verify (`cast call <addr> … --rpc-url "$RGOE_RPC_URL"`): `"currentRoot()(uint256)"` == the
+empty depth-20 root `10354334201938752428558948798274962999644820234654929486063894213598717249307`
+== `cast storage <addr> 3`, `"allowedLimits()(uint256[])"`, `"DEFAULT_LIMIT()(uint256)"` 8,
+`"ROOT_STORAGE_SLOT()(uint256)"` 3, `"operator()(address)"`, `"hasher()(address)"`,
+`"leafCount()(uint256)"` 0, `"isAllowedLimit(uint256)(bool)" 16` false, balance 0. Constructor
+signature for explorer verification: `c(address,address,uint256[])` (operator, hasher, limits),
+linking PoseidonT3.
+
+Record: `rgoe record-deploy --network sepolia --contract paidAccessSet --from-broadcast
+broadcast/DeployPaidAccess.s.sol/11155111/run-latest.json` fills `contracts.paidAccessSet` +
+`deployTxs` + `deployBlocks` (the release name stays; hand-add the free-form `paidAccessSet`
+block as in the Sepolia record). From then on `RGOE_NETWORK=sepolia` supplies
+`RGOE_PAID_ACCESS_CONTRACT`.
+
+Smoke (operator key): `cast send <addr> "insert(uint256,uint256)" <leaf> 8 --private-key …`,
+then `currentRoot()` == `lib/rln.mjs newGroup([leaf]).root`, `limitOf(leaf)` 8, `leafCount()`
+1; negatives by static call (`--from` a non-operator ⇒ `NotOperator`, tier 16 ⇒ `BadLimit`,
+re-insert ⇒ `AlreadyInserted`, `slash` at the other tier ⇒ `BadLimit`, wrong secret ⇒
+`BadSecret`). The Sepolia run: `network/sepolia/integration-report-paid-access.md`.
+
+Rotating the registrar key: `cast send <addr> "setOperator(address)" <new>` from the current
+operator, then `cast send <addr> "acceptOperator()"` from the new one; `pendingOperator()`
+shows the nomination in between; `setOperator(0x0)` cancels.
 
 ---
 
