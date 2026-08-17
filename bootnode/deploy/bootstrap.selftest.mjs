@@ -15,6 +15,11 @@
 //      the gateway unit is byte-identical to the default one, a malformed onion is rejected.
 //   4. RGOE_GATEWAY_REGION passthrough into the heartbeat unit; invalid bucket rejected.
 //   5. Nothing outside <dir> is touched (the render dir is the only side effect).
+//   6. RGOE_HELIOS=1 (T-DEV-9b, opt-in): a 4th unit rgoe-helios.service (hardened, loopback-only,
+//      endpoints via env not argv, W^X on) and the gateway unit ordered after it carrying
+//      RGOE_ROOT_PROVIDER=light + RGOE_HELIOS_RPC_URL + RGOE_RPC_URL + RGOE_GROUP_CONTRACT; the
+//      other files byte-identical to the default; missing/invalid companions rejected up front;
+//      RGOE_HELIOS=0 == default (golden unchanged, i.e. the sidecar is opt-in).
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -187,6 +192,61 @@ async function main() {
     ok(regT.get("etc/tor/torrc.d-rgoe") === torrc && regT.get("etc/systemd/system/rgoe-bootnode.service") === got.get("etc/systemd/system/rgoe-bootnode.service"), "region does not touch torrc / bootnode unit");
     const regBad = render(work, "region-bad", { RGOE_GATEWAY_REGION: "mars" });
     ok(regBad.status !== 0 && /RGOE_GATEWAY_REGION must be one of/.test(regBad.stderr), "invalid region bucket rejected");
+
+    // ---------------------------------------------------------------- 6. helios sidecar (opt-in)
+    console.log("RGOE_HELIOS sidecar (T-DEV-9b):");
+    const HEL = { RGOE_HELIOS: "1", RGOE_HELIOS_CONSENSUS_RPC: "https://beacon.example/", RGOE_RPC_URL: "https://rpc.example/v1/KEY", RGOE_GROUP_CONTRACT: "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC" };
+    const hel = render(work, "helios", HEL);
+    ok(hel.status === 0 && /helios=1/.test(hel.stdout), `RGOE_HELIOS=1 renders (${(hel.stdout || "").trim()})`);
+    const helFiles = await readAll(hel.out);
+    ok([...helFiles.keys()].join(",") === "etc/systemd/system/rgoe-bootnode.service,etc/systemd/system/rgoe-gateway.service,etc/systemd/system/rgoe-heartbeat.service,etc/systemd/system/rgoe-helios.service,etc/tor/torrc.d-rgoe",
+      `emits torrc + 3 units + rgoe-helios.service (${[...helFiles.keys()].join(", ")})`);
+    const hu = helFiles.get("etc/systemd/system/rgoe-helios.service");
+    ok(/^ExecStart=\/usr\/local\/bin\/helios ethereum --network sepolia --rpc-bind-ip 127\.0\.0\.1 --rpc-port 8546 --data-dir \/opt\/rgoe\/deploy-state\/helios --load-external-fallback$/m.test(hu), "helios ExecStart: sepolia, loopback bind, port 8546, data-dir under deploy-state, external checkpoint fallback (no RGOE_HELIOS_CHECKPOINT)");
+    ok(unitEnv(hu, "EXECUTION_RPC") === HEL.RGOE_RPC_URL && unitEnv(hu, "CONSENSUS_RPC") === HEL.RGOE_HELIOS_CONSENSUS_RPC, "helios endpoints passed via EXECUTION_RPC / CONSENSUS_RPC env (not argv)");
+    ok(!/ExecStart=.*(rpc\.example|beacon\.example)/.test(hu), "no endpoint URL on the helios command line (API keys stay out of `ps`)");
+    ok(/^User=rgoe$/m.test(hu) && /^MemoryDenyWriteExecute=true$/m.test(hu) && /^NoNewPrivileges=true$/m.test(hu) && /^ProtectSystem=strict$/m.test(hu) && /^CapabilityBoundingSet=$/m.test(hu) && /^SystemCallFilter=@system-service$/m.test(hu) && /^Restart=always$/m.test(hu), "helios unit: sandbox lines + W^X (Rust binary) + Restart=always");
+    ok(unitEnv(hu, "CHECKPOINT") === null, "no CHECKPOINT env when RGOE_HELIOS_CHECKPOINT unset");
+    const gwH = helFiles.get("etc/systemd/system/rgoe-gateway.service");
+    ok(/^After=network-online\.target tor\.service rgoe-helios\.service$/m.test(gwH) && /^Wants=network-online\.target rgoe-helios\.service$/m.test(gwH), "gateway unit ordered after + wants rgoe-helios.service");
+    ok(unitEnv(gwH, "RGOE_ROOT_PROVIDER") === "light" && unitEnv(gwH, "RGOE_HELIOS_RPC_URL") === "http://127.0.0.1:8546" && unitEnv(gwH, "RGOE_RPC_URL") === HEL.RGOE_RPC_URL && unitEnv(gwH, "RGOE_GROUP_CONTRACT") === HEL.RGOE_GROUP_CONTRACT, "gateway unit: RGOE_ROOT_PROVIDER=light + RGOE_HELIOS_RPC_URL + RGOE_RPC_URL + RGOE_GROUP_CONTRACT");
+    const stripGw = (u) => u.split("\n").filter((l) => !/^(After=|Wants=|Environment=RGOE_(GROUP_CONTRACT|RPC_URL|ROOT_PROVIDER|HELIOS_RPC_URL)=)/.test(l)).join("\n");
+    ok(stripGw(gwH) === stripGw(got.get("etc/systemd/system/rgoe-gateway.service")), "gateway unit otherwise identical to the default (sandbox, exec, restart)");
+    for (const f of ["etc/tor/torrc.d-rgoe", "etc/systemd/system/rgoe-bootnode.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(helFiles.get(f) === got.get(f), `helios=1 leaves ${f} byte-identical`);
+    // companions + checkpoint + port + network
+    const helCp = render(work, "helios-cp", { ...HEL, RGOE_HELIOS_CHECKPOINT: "0x" + "ab".repeat(32), RGOE_HELIOS_PORT: "9545", RGOE_HELIOS_NETWORK: "mainnet" });
+    const huCp = await readFile(join(helCp.out, "etc/systemd/system/rgoe-helios.service"), "utf8");
+    ok(helCp.status === 0 && unitEnv(huCp, "CHECKPOINT") === "0x" + "ab".repeat(32) && /--network mainnet --rpc-bind-ip 127\.0\.0\.1 --rpc-port 9545 /.test(huCp) && !/--load-external-fallback/.test(huCp), "pinned checkpoint -> CHECKPOINT env, no external fallback; port + network passthrough");
+    ok(unitEnv(await readFile(join(helCp.out, "etc/systemd/system/rgoe-gateway.service"), "utf8"), "RGOE_HELIOS_RPC_URL") === "http://127.0.0.1:9545", "gateway RGOE_HELIOS_RPC_URL follows RGOE_HELIOS_PORT");
+    // guards
+    const bad = [
+      [{ ...HEL, RGOE_HELIOS_CONSENSUS_RPC: "" }, /needs RGOE_HELIOS_CONSENSUS_RPC/],
+      [{ ...HEL, RGOE_HELIOS_CONSENSUS_RPC: "beacon.example" }, /needs RGOE_HELIOS_CONSENSUS_RPC/],
+      [{ ...HEL, RGOE_RPC_URL: "" }, /needs RGOE_RPC_URL/],
+      [{ ...HEL, RGOE_RPC_URL: "https://x/;rm -rf /" }, /needs RGOE_RPC_URL/],
+      [{ ...HEL, RGOE_GROUP_CONTRACT: "" }, /needs RGOE_GROUP_CONTRACT/],
+      [{ ...HEL, RGOE_GROUP_CONTRACT: "0x1234" }, /needs RGOE_GROUP_CONTRACT/],
+      [{ ...HEL, RGOE_HELIOS_NETWORK: "goerli" }, /RGOE_HELIOS_NETWORK must be/],
+      [{ ...HEL, RGOE_HELIOS_PORT: "80" }, /RGOE_HELIOS_PORT must be/],
+      [{ ...HEL, RGOE_HELIOS_PORT: "abc" }, /RGOE_HELIOS_PORT must be/],
+      [{ ...HEL, RGOE_HELIOS_CHECKPOINT: "0x1234" }, /RGOE_HELIOS_CHECKPOINT must be/],
+      [{ ...HEL, RGOE_HELIOS_VERSION: "latest" }, /RGOE_HELIOS_VERSION must look like/],
+      [{ ...HEL, RGOE_HELIOS_SHA256: "nothex" }, /RGOE_HELIOS_SHA256 must be/],
+      [{ RGOE_HELIOS: "maybe" }, /RGOE_HELIOS must be 1 or 0/],
+    ];
+    for (const [env, re] of bad) {
+      const r = render(work, "helios-bad", env);
+      ok(r.status !== 0 && re.test(r.stderr), `rejected up front: ${JSON.stringify(Object.fromEntries(Object.entries(env).filter(([k, v]) => HEL[k] !== v)))}`);
+    }
+    for (const off of ["0", "false", "off"]) {
+      const r = render(work, `helios-${off}`, { RGOE_HELIOS: off });
+      const files = await readAll(r.out);
+      ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `RGOE_HELIOS=${off} == default (opt-in; golden untouched)`);
+    }
+    // composes with gateway-only
+    const helGw = render(work, "helios-gw-only", { ...HEL, RGOE_BOOTNODE_ONION: ONION });
+    const helGwFiles = await readAll(helGw.out);
+    ok(helGw.status === 0 && [...helGwFiles.keys()].join(",") === "etc/systemd/system/rgoe-gateway.service,etc/systemd/system/rgoe-heartbeat.service,etc/systemd/system/rgoe-helios.service,etc/tor/torrc.d-rgoe" && helGwFiles.get("etc/systemd/system/rgoe-helios.service") === hu, "gateway-only + helios: gateway + heartbeat + helios units, helios unit identical");
 
     // ---------------------------------------------------------------- 5. other guards
     console.log("guards:");

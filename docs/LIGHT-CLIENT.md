@@ -1,15 +1,113 @@
 # Light-client integration: trust-minimized reads of the reputation root
 
-**Status: protocol design, for review; partly built.** `LightClientRootProvider`
-(`lib/root-provider.mjs`, `RGOE_ROOT_PROVIDER=light`) now verifies the contract's `currentRoot`
+**Status: built (option A, sidecar), opt-in.** `LightClientRootProvider`
+(`lib/root-provider.mjs`, `RGOE_ROOT_PROVIDER=light`) verifies the contract's `currentRoot`
 storage slot against a block header's `stateRoot` via an EIP-1186 `eth_getProof` MPT proof
-(SHIP-PLAN T-DEV-9); what remains open is validating that `stateRoot` itself through a beacon /
-Helios light client instead of trusting the RPC's header (T-DEV-9b, `docs/ONCHAIN.md` "what it
-does not yet do"). The default is still the trusted-node provider (`RGOE_ROOT_PROVIDER=node`),
-which is the right default for a solo operator; this doc is the design for the *other* provider, so an operator who does not
-run a full node can still read the reputation-set root without trusting an RPC. It is
-written to be reviewed by someone who knows the Helios internals, so it front-loads the
-trust model and collects the open questions at the end.
+(SHIP-PLAN T-DEV-9), and since T-DEV-9b the `stateRoot` itself can be anchored to the beacon
+sync committee instead of the RPC's header: set `RGOE_HELIOS_RPC_URL` to a LOCAL
+[a16z/helios](https://github.com/a16z/helios) verifying JSON-RPC and the provider takes the
+header from it (`lib/helios-root.mjs`, `makeHeliosTrustedStateRoot`), cross-checks the RPC's
+header against it, and rejects with a precise reason if they differ. Then the whole chain
+sync-committee → stateRoot → account proof → storage proof → root is verified end to end and
+the RPC is a dumb pipe. Unset, behaviour is unchanged (RPC-trusted stateRoot) and the gateway
+logs so at startup. The **Decision, how-to and receipt** section below is the operator part;
+the default is still the trusted-node provider (`RGOE_ROOT_PROVIDER=node`), which is the right
+default for a solo operator; the rest of this doc is the design for the *other* provider, so an
+operator who does not run a full node can still read the reputation-set root without trusting
+an RPC. It is written to be reviewed by someone who knows the Helios internals, so it
+front-loads the trust model and collects the open questions at the end.
+
+## Decision, how-to and receipt (T-DEV-9b)
+
+**Decision: option A, Helios as a local verifying RPC sidecar**, feeding the existing
+`trustedStateRoot(blockTag)` hook of `LightClientRootProvider`. Not B (embedding the Rust
+crate into a Node process is not on the table today; it becomes the natural home only under
+the Rust rewrite) and not C (hand-rolled sync-committee verification: maximal surface for no
+gain). The pieces:
+
+| piece | where |
+|---|---|
+| the hook implementation | `lib/helios-root.mjs` — `makeHeliosTrustedStateRoot({ rpcUrl, chainId?, upstreamRpcUrl? })` → `trustedStateRoot(tag)` = Helios `eth_getBlockByNumber(tag,false)` → `{ stateRoot, number, hash }`; first use checks Helios `eth_chainId` against `RGOE_HELIOS_CHAIN_ID` (else the RPC's own `eth_chainId`); unreachable / mismatch / null block / malformed header all **throw** (fail closed, reason names `helios`) |
+| wiring | `lib/root-provider.mjs` — `RGOE_HELIOS_RPC_URL` set ⇒ `LightClientRootProvider` installs the hook, anchors the proof to Helios' `stateRoot`, and **cross-checks** the RPC's header for the same block number: `stateRoot mismatch at block N: RPC (…) claims X but the anchor (helios (sync-committee verified)) attests Y` ⇒ rejected before any proof is fetched. `describe().stateRootSource` and the gateway startup log say `helios (sync-committee verified)` vs `rpc header (TRUSTED, not verified; …)`. Results carry `stateRootVerified: true|false`. `RGOE_HELIOS_RPC_URL` with `RGOE_ROOT_PROVIDER=node` is refused (would look verified without being so) |
+| tests | `lib/helios-root.selftest.mjs` (fake Helios + fake RPC in-process: hook honoured, chainId mismatch, unreachable, RPC-lies-about-stateRoot both stale-honest and self-consistent-fake, tag mapping, "Helios lies" boundary, node-mode guard), `lib/root-provider-light.selftest.mjs` §8 |
+| sidecar | `bootnode/deploy/bootstrap.sh` `RGOE_HELIOS=1` (opt-in, default render unchanged): installs the **pinned** release `helios 0.11.1` (`helios_linux_{amd64,arm64}.tar.gz`, sha256 `339bf4ce…62ddb` / `20132e1f…5dab6`, verified before install; other versions need `RGOE_HELIOS_SHA256`), renders `rgoe-helios.service` (loopback `127.0.0.1:8546`, endpoints via `EXECUTION_RPC`/`CONSENSUS_RPC` env, same sandbox as the other units + `MemoryDenyWriteExecute`), and points the gateway unit at it (`RGOE_ROOT_PROVIDER=light`, `RGOE_HELIOS_RPC_URL`, `RGOE_RPC_URL`, `RGOE_GROUP_CONTRACT`, ordered after the sidecar). `bootnode/deploy/README.md` has the tunables |
+
+**How-to (by hand, any box).** Helios 0.11.1 CLI (checked against the README and
+`helios ethereum --help` on 2026-08-17):
+
+```bash
+# 1. install the pinned release (linux; darwin_{arm64,amd64} tarballs exist too) and verify it
+curl -fsSLo helios.tgz https://github.com/a16z/helios/releases/download/0.11.1/helios_linux_amd64.tar.gz
+echo "339bf4ce73073c53790e41e3217b6d91f0e5d8571132b9e88689997613162ddb  helios.tgz" | sha256sum -c
+tar xzf helios.tgz && install -m 0755 helios /usr/local/bin/helios      # tarball = the single `helios` binary
+# 2. run it: consensus (beacon API with the light-client endpoints) + execution (must serve eth_getProof)
+helios ethereum --network sepolia \
+  --consensus-rpc https://lodestar-sepolia.chainsafe.io \
+  --execution-rpc "$RGOE_RPC_URL" \
+  --rpc-bind-ip 127.0.0.1 --rpc-port 8546 --data-dir /var/lib/rgoe-helios \
+  --checkpoint 0x<recent FINALIZED beacon block root>     # or --load-external-fallback
+# 3. point the gateway at it
+export RGOE_ROOT_PROVIDER=light RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546 RGOE_GROUP_CONTRACT=0x… RGOE_RPC_URL=…
+```
+
+Flags: `-n/--network mainnet|sepolia|holesky`, `-c/--consensus-rpc`, `-e/--execution-rpc`,
+`-w/--checkpoint`, `-p/--rpc-port` (default 8545), `-b/--rpc-bind-ip` (default 127.0.0.1),
+`-d/--data-dir`, `-f/--fallback`, `-l/--load-external-fallback`, `-s/--strict-checkpoint-age`;
+each URL/checkpoint flag also reads an env var of the same name (`EXECUTION_RPC`,
+`CONSENSUS_RPC`, `CHECKPOINT`, …), which is what the systemd unit uses so keys stay out of
+`ps`. Notes from the live run that an operator will hit:
+
+- **Sepolia has no default consensus RPC in Helios**; you must pass one. On 2026-08-17
+  `https://lodestar-sepolia.chainsafe.io` synced; `https://ethereum-sepolia-beacon-api.publicnode.com`
+  failed with `sync failed err=invalid sync committee period` (its light-client `updates`
+  endpoint did not satisfy Helios). Mainnet defaults to lightclientdata.org.
+- **Checkpoint.** `--load-external-fallback` lets Helios fetch a checkpoint from public
+  services; a pinned `--checkpoint` (a recent *finalized* beacon block root, e.g.
+  `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second
+  source) is the more trust-minimized bootstrap. `RGOE_HELIOS_CHECKPOINT` in bootstrap.sh.
+- **Public execution RPCs have short `eth_getProof` windows.** The provider proves the root at
+  the *finalized* block (≥64 slots behind head); publicnode / tenderly / 1rpc serve proofs only
+  ~32 blocks back (publicnode inconsistently across backends), so `eth_getProof: distance to
+  target block exceeds maximum proof window` is what you get most of the time. `RGOE_RPC_URL`
+  for the light provider must be an RPC that serves proofs at finalized (own node, or an
+  archive-capable provider such as Alchemy/Infura). This is an availability limit of the RPC,
+  not a trust issue; the last-known-good root keeps gating meanwhile.
+- **Helios' own head lags** (`latest` errors `out of sync: N seconds behind` while it catches
+  up; "inconsistent block history detected" warnings on the public consensus endpoint). Read
+  at **finalized** (`RGOE_CONFIRMATIONS=0`, the default); a `head-N` hex tag is served only
+  inside Helios' recent window.
+- **After a good read, a lying RPC does not stall the gate.** `withCache` returns the
+  last-known-good verified root flagged `stale:true` with the mismatch reason in `error`; a
+  provider with no good read yet throws (gateway start fails closed). The lying value is never
+  surfaced either way.
+
+**Receipt (live, 2026-08-17, this Mac).** `helios 0.11.1` (`helios_darwin_arm64.tar.gz`,
+sha256 `fc88981c7fe12e1010115b7bfe61909cfae36f65177325562c57daa0eb30ae8c`) run for ~20 min
+against Sepolia with `--consensus-rpc https://lodestar-sepolia.chainsafe.io`,
+`--execution-rpc https://ethereum-sepolia-rpc.publicnode.com`, checkpoint
+`0x79c0ea030b4f2ba9bf03f1188c4bdc8a263e6b8f1c4bc3bd1d24c1274552ceac` (that moment's
+finalized header root); it reported `consensus client in sync with checkpoint` and followed
+four finality advances (11510059 → 11510090 → 11510122 → 11510152). The real
+`makeRootProvider()` (`RGOE_ROOT_PROVIDER=light`, `RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546`,
+`RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
+`RGOE_GROUP_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`) returned, e.g.:
+
+```
+describe: {"provider":"light","mode":"proof","stateRootSource":"helios (sync-committee verified)","stateRootVerified":true,…}
+currentRoots: {"roots":[],"observedAtBlock":11510152,"finalized":true,"verified":true,"stateRootVerified":true}
+helios chainId: 11155111 | helios finalized: 11510152
+  hash      0xc63b49eb3e10b8c9491e630442b02e7e70437f7de37c7e8ac8c2e6136611c7de
+  stateRoot 0xe49f49e70514365cc36433bdcd38ffc1cbc8e5f7b1c87367023435c52ccf4d43   (RPC header for 11510152: identical)
+```
+
+(also at 11510090 / stateRoot `0xcb0a4fba…7d8c3b` and 11510122 / `0xc9a8f412…3a50a`; each
+succeeded only on the retries where publicnode's backend served the finalized-block proof, see
+above). `roots: []` is correct and is itself a finding: the account + storage proof verified
+against the sync-committee-attested stateRoot proves slot 3 of the **live rln-v3 contract is
+0** — that deployment (block 11279842, 2026-07-15) predates T-DEV-9's on-chain incremental
+tree, so it has no `currentRoot` slot yet. The light provider is end-to-end verified against
+Sepolia; it will surface a real root once `StakedReputationSet` is redeployed with the
+T-DEV-9 contract (not tracked as a task at the time of writing; flagged in the T-DEV-9b PR).
 
 Context: the gateway is a Tor onion-service egress that admits only members of a
 reputation set, where membership is an on-chain Semaphore/RLN group (docs/ONCHAIN.md).
@@ -143,13 +241,18 @@ the same `C ≈ 13 min` slash-confirmation margin that sizes the unbonding bound
 1. **Checkpoint source.** What is the right weak-subjectivity checkpoint source for an
    unattended gateway — a pinned checkpoint at bundle time, a checkpoint-sync endpoint, a
    small set cross-checked? This is the biggest residual trust and the thing most worth an
-   expert opinion.
+   expert opinion. *As shipped:* `RGOE_HELIOS_CHECKPOINT` (operator-pinned finalized root)
+   or, unset, Helios' `--load-external-fallback`; still open which to make the default.
 2. **Sidecar vs embedded.** For the Rust gateway, is embedding Helios as a crate the
    intended integration, or is the local-RPC-proxy deployment (option A) preferred even
    in-process? Any gotchas running Helios headless/long-lived next to a Tor daemon.
+   *As shipped:* sidecar (option A); the ~20-min live run showed head lag and cache-reset
+   warnings on a public consensus endpoint but finality advanced cleanly.
 3. **`eth_call` vs explicit `eth_getProof`.** Is executing `root()` via Helios's local
    verified execution sufficient, or is an explicit storage-slot `eth_getProof` preferable
    for auditability (a single proof against a known slot vs trusting local EVM execution)?
+   *As shipped:* explicit `eth_getProof` from the RPC, anchored to Helios' header — Helios
+   is used only for the header, so its execution path is not in the trust chain at all.
 4. **Finalized-state read latency and freshness.** Any reason the freshness window `F`
    should be sized around light-client head-follow lag rather than just the epoch, e.g. if
    finalized state lags enough to matter for enrollment UX.

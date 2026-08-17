@@ -141,7 +141,9 @@ async function initRoots() {
     };
     await refresh();
     provider.onChange?.(() => refresh().catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
-    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", recentRoots: recentRoots.size });
+    // stateRoot source is logged verbatim so an operator can see whether the admission root is
+    // anchored to the sync committee (RGOE_HELIOS_RPC_URL) or merely RPC-trusted (T-DEV-9b).
+    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", recentRoots: recentRoots.size, ...(provider.describe ? { stateRootSource: provider.describe().stateRootSource } : {}) });
     return { count: null };
   }
   // PoC fallback: members.json is the root source; refresh on file change.

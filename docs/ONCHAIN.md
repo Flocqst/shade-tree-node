@@ -6,7 +6,8 @@ secret reconstruction, on-chain incremental tree + `currentRoot` accessor) is li
 as release `rln-v3` (`network/sepolia/contracts.json`; the live deployment still points at
 `MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3); the gateway reads the root
 through `lib/root-provider.mjs` (`RGOE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
-`light` provider whose stateRoot validation is still open, T-DEV-9b); `contracts/GatewayRegistry.sol`
+`light` provider, whose stateRoot is anchored to the beacon sync committee when the opt-in Helios
+sidecar is on, `RGOE_HELIOS_RPC_URL`, T-DEV-9b); `contracts/GatewayRegistry.sol`
 is deployed on Sepolia at `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (block 11509783,
 `network/sepolia/contracts.json`). Read the design below for the reasoning; read
 `docs/CONTRACTS-AUDIT.md` for the invariants as implemented. This is ROADMAP-v1 item #2 ("On-chain reputation
@@ -284,15 +285,29 @@ the off-chain `reconstructRoot`, so the two roots are equal by construction (pin
 provider can instead reconstruct the tree from `Member*` events, because there you already
 trust the node's log view. Both paths now work against the same contract.
 
-*Honest scope of the shipped light client.* `LightClientRootProvider` verifies the account
+*Trust chain of the shipped light client.* `LightClientRootProvider` verifies the account
 + storage Merkle-Patricia proofs from `eth_getProof` against a block's `stateRoot`, so a
-hostile RPC cannot forge the root's **value**. What it does not yet do is validate that
-`stateRoot` against the beacon sync committee (the actual Helios step) — by default the
-state root is fetched from the RPC at a confirmed depth and *trusted*. That header
-validation is the filed follow-up **T-DEV-9b**; a `trustedStateRoot(blockTag)` injection
-hook is already in place so a Helios sidecar can supply a consensus-verified root and close
-the last trust gap. A `RGOE_LIGHT_MODE=storageat` fallback (trusts the RPC for the value,
-no proof) exists for RPCs without `eth_getProof` and is clearly the weaker mode.
+hostile RPC cannot forge the root's **value**. Where that `stateRoot` comes from is the last
+link, and it is a switch (T-DEV-9b, `docs/LIGHT-CLIENT.md` "Decision, how-to and receipt"):
+
+- `RGOE_HELIOS_RPC_URL` **unset** (default): the header is fetched from the RPC at the
+  confirmed depth and *trusted*. The gateway logs `stateRootSource: rpc header (TRUSTED, not
+  verified; …)` at startup and results carry `stateRootVerified:false`. A lying RPC can pair a
+  fake header with a proof consistent with it (the `THREAT-MODEL.md` "RPC lies about the
+  stateRoot" lever).
+- `RGOE_HELIOS_RPC_URL` **set** to a local Helios verifying RPC (`lib/helios-root.mjs`,
+  sidecar via `bootnode/deploy/bootstrap.sh RGOE_HELIOS=1`): the header comes from Helios,
+  i.e. it chains to a beacon **sync-committee**-signed execution payload; the RPC's header for
+  the same block is only cross-checked and a divergence is rejected with a precise
+  `stateRoot mismatch` reason. Now the whole chain — sync committee → `stateRoot` → account
+  proof → storage proof → root — is verified end to end and there is **no RPC trust** left:
+  the RPC can withhold, not lie. The residual trust is the sync committee (2/3-honest) plus
+  Helios' weak-subjectivity checkpoint. Startup logs `stateRootSource: helios (sync-committee
+  verified)`; results carry `stateRootVerified:true`.
+
+A `RGOE_LIGHT_MODE=storageat` fallback (trusts the RPC for the value, no proof) exists for RPCs
+without `eth_getProof` and is clearly the weaker mode (the Helios anchor does not help it).
+Live receipt against the Sepolia contract with a Helios anchor: `docs/LIGHT-CLIENT.md`.
 
 Both providers read at a **confirmation depth**, and this is what ties back to the
 unbonding constraint. Reading *finalized* state means a reorg can never retroactively

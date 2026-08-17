@@ -93,6 +93,17 @@ pinned to a confirmation depth for reorg safety (`RGOE_CONFIRMATIONS`,
 default settings — that is an operator config. The **onion is never on chain**
 (`contracts/GatewayRegistry.sol`): only an operator *address* stakes, so the fleet stays
 un-enumerable and one stake can rotate across many onions.
+*Lever: the RPC lies about the admission root.* With `RGOE_ROOT_PROVIDER=node` the RPC is
+trusted for the root outright (event reconstruction; the solo-staker's own node). With
+`RGOE_ROOT_PROVIDER=light` the root's slot **value** is proven by EIP-1186 proofs, so the only
+remaining lie is the block `stateRoot` the proof is anchored to (a fake header + a proof
+consistent with it admits the attacker's tree). **That lever is closed when `RGOE_HELIOS_RPC_URL`
+is set** (T-DEV-9b, `lib/helios-root.mjs`): the header comes from a local Helios verifying RPC
+(beacon sync-committee signed), the RPC's header is cross-checked and a divergence is rejected
+with a precise `stateRoot mismatch` reason; Helios unreachable / wrong chain fails closed. The
+RPC can then only withhold (the last-known-good root keeps gating). Residual trust: the sync
+committee (2/3-honest, ~512 validators / ~27h) and Helios' weak-subjectivity checkpoint —
+`docs/LIGHT-CLIENT.md`. Unset, the gateway logs `stateRootSource: rpc header (TRUSTED, …)`.
 
 **The admission ceremony.**
 Trusted as the Sybil-resistance root (whatever adds a leaf). The RLN proof *gates* membership; it
