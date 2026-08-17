@@ -4,8 +4,9 @@ Auditor's guide and written invariants for the Solidity contracts in `contracts/
 Reference implementation, unaudited, testnet-only. This document is prep for an external
 review (task T-HARD-6); it does not modify any source.
 
-Scope: `contracts/*.sol`. Design rationale lives in `docs/ONCHAIN.md`; this file is the
-audit map, the invariant list, and the run instructions.
+Scope: `contracts/*.sol`. Design rationale lives in `docs/ONCHAIN.md` (and `docs/PAYMENTS.md`
+for the paid-access set); this file is the audit map, the invariant list, and the run
+instructions.
 
 Solc: `0.8.24`, optimizer on, 200 runs (`foundry.toml`). Two contracts carry the built-in
 0.8 checked-arithmetic guarantee; `RlnGroth16Verifier.sol` is a snarkJS export pinned to
@@ -18,6 +19,7 @@ Solc: `0.8.24`, optimizer on, 200 runs (`foundry.toml`). Two contracts carry the
 | Contract | File | Purpose | Deployment status |
 |---|---|---|---|
 | `StakedReputationSet` | `StakedReputationSet.sol` | Member admission gate: per-tier fixed-bond, refundable, slashable, time-locked-exit stake keyed by RLN rate-commitment (anonymous leaf), with the depth-20 Poseidon incremental tree ON CHAIN (`currentRoot` at storage slot 3, T-DEV-9) and a reputation-tier table fixed at construction (`register(commitment, limit)` / `bondFor(limit)` / `slash(commitment, secret, limit, receiver)`, T-FEAT-8b). No owner. | **Live on Sepolia** `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25` (`network/sepolia/contracts.json`, status `live`, release `rln-v4-tiers`, 2026-08-17). Superseded: `0xdAE242AE…20FC` (`rln-v3`, no on-chain tree, hasher pinned K=8; still the live fleet's slash target until its units are flipped). |
+| `PaidAccessSet` | `PaidAccessSet.sol` | The PAID-ACCESS membership tree (T-FEAT-7 Layer 1, `docs/PAYMENTS.md`): the staked set's structural sibling — same depth-20 Poseidon incremental tree ON CHAIN (`currentRoot` at slot 3), same leaf via the same tiered hasher, same immutable allowed-tier table, same zero-in-place `slash(commitment, secret, limit, receiver)` — but NO funds: `insert` / `insertBatch` are `onlyOperator` and not payable (payment settles OFF chain over HTTP 402 rails; the operator/registrar inserts after settlement), no exit / withdraw / sweep / receive, `slash` pays nothing. `operator` rotates by two-step `setOperator` / `acceptOperator`. | **Live on Sepolia** `0x4e8C2Bf5d3c5454A04837401095fce2646484111` (`contracts.paidAccessSet`, deployed 2026-08-17 block 11510873 next to rln-v4; hasher + Poseidon libraries reused). Smoke: `network/sepolia/integration-report-paid-access.md`. |
 | `GatewayRegistry` | `GatewayRegistry.sol` | Gateway-operator bond keyed by operator **address**; owner-gated slash. The gateway-side dual of the member stake, deliberately minimal and optional. | **Local-only.** Not present in `network/sepolia/contracts.json`. Deploy params mirrored in `test/GatewayRegistry.t.sol`. |
 | `RateCommitmentHasher` | `RateCommitmentHasher.sol` | Real Poseidon rate-commitment hasher, TIERED: `commitmentOf(secret, limit) = Poseidon(2)([Poseidon(1)([secret]), limit])` (`1 <= limit <= 65535`, else `BadLimit`) and the byte-equivalent default `commitmentOf(secret)` at `K = 8`. Implements `ICommitmentHasher` (both overloads). | **Live on Sepolia** as `hasher` `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` (rln-v4). Superseded: `0x08F9a754…ae6D` (K pinned). |
 | `MockCommitmentHasher` | `MockCommitmentHasher.sol` | Deprecated-name alias: empty subclass of `RateCommitmentHasher` kept so the deploy script keeps compiling. Fully correct rate-commitment hasher. | Alias only; the live `hasher` is the rate-commitment hasher. |
@@ -42,6 +44,12 @@ Solc: `0.8.24`, optimizer on, 200 runs (`foundry.toml`). Two contracts carry the
   tampering, downtime) is a subjective off-chain judgment, so slashing authority is a
   governance role rather than a cryptographic predicate. `register` / `initiateExit` /
   `withdraw` on the registry remain permissionless / operator-only.
+- `PaidAccessSet.insert` / `insertBatch` / `setOperator` are **operator-gated** (`onlyOperator`:
+  `if (msg.sender != operator) revert NotOperator()`), the second deliberate asymmetry: whether a
+  buyer has PAID is settled off chain (402 rail), so admission is the registrar's attestation, not
+  a cryptographic predicate — the trust PAYMENTS.md names (operator honors a payment / a valid
+  proof) and no more. `slash` stays **permissionless** and cryptographically gated exactly like the
+  staked set's; `acceptOperator` is gated to the nominee.
 - `GatewayRegistry` keys by operator **address** on purpose: a gateway serves a public
   egress IP and is not anonymous, so `msg.sender` keying is honest and lets the operator
   manage the bond with an ordinary key. `owner` is a single key; a DAO / timelock is future
@@ -161,6 +169,49 @@ identically (`lib/root-provider.selftest.mjs` §8), and the anvil end-to-end sui
 `test/onchain-tiers.selftest.mjs` checks on-chain `currentRoot()` == NodeRootProvider
 (events) == LightClientRootProvider (eth_getProof of slot 3) == JS `groupFromIdentities`.
 
+**I12. `PaidAccessSet` never holds ETH.**
+No function is `payable`; there is no `receive` and no `fallback`, so a plain transfer and a
+value-carrying call both revert (`test_NoFunds_EthCannotEnter`), and no function sends value.
+Balance is 0 at every state (`invariant_noFundsEver`, `testFuzz_sequence_matchesReference`).
+Payment lives on the 402 rail; the chain never sees it. `slash` therefore has nothing to burn:
+it zeroes the leaf and pays nothing (`test_Slash_RequiresRecordedTierAndSecret_MovesNothing`,
+`testFuzz_slash_onlyAtRecordedTier` — which also shows the REFERENCE staked set DID pay for the
+same op).
+
+**I13. Only the current operator inserts; the tier table is immutable; duplicates are policy.**
+`insert` / `insertBatch` revert `NotOperator` for any other caller (`test_Insert_OnlyOperator`,
+`testFuzz_insert_onlyOperator(address)`, and the invariant handler tries a stranger AND the
+non-current identity before every insert), `BadLimit` for a tier not in the constructor table
+(`isAllowedLimit`; `test_Insert_UnlistedTierReverts`, `testFuzz_insert_unlistedLimitReverts`
+over 0..70000), `AlreadyInserted` for a LIVE commitment at any tier; a SLASHED commitment may be
+re-inserted and gets a FRESH index (`test_Insert_DuplicatePolicy`). `insertBatch` is
+all-or-nothing, one `Inserted` per leaf, array order == index order, and equals the same
+singles (`test_InsertBatch_AllOrNothing_EmitsPerLeaf`, `testFuzz_insertBatch_equalsSingles`).
+The constructor rejects an empty table, limit 0 / > `MAX_LIMIT`, non-ascending / duplicate,
+a table without `DEFAULT_LIMIT` (8), and a zero hasher (`test_Constructor_RejectsBadTables`);
+there is no setter.
+
+**I14. `leafCount == inserts` (append-only), `liveCount == inserts − slashes`, `root == the
+staked set's root for the same leaves`, `currentRoot` at slot 3.**
+`nextIndex` only increments (`_insert`), so `leafCount()` counts every appended leaf, slashed
+ones included (their index is never reused); `liveCount` is `++` in `_insert`, `--` in `slash`
+(guarded by `l.limit != 0`, so never underflows). The tree code is a verbatim copy of the staked
+set's; `test_Root_ParityWithStakedReputationSet` and the fuzz / invariant suites drive a
+`StakedReputationSet` REFERENCE through the same register/slash sequence and assert equal roots
+after every step (`invariant_rootEqualsReference`, `testFuzz_sequence_matchesReference`), the
+JS goldens are pinned (`test_Root_MatchesJsGoldens`: `newGroup([A8,B32,C8,D32])` and minus index
+2), and `vm.load(addr, bytes32(3)) == currentRoot()` is asserted after inserts AND after an
+operator rotation (`test_Root_StorageSlot3`; the operator lives after the tree in storage).
+
+**I15. Operator transfer is two-step and un-hijackable.**
+`setOperator(to)` only records `pendingOperator` (`onlyOperator`); the role moves only when
+`to` itself calls `acceptOperator()` (`NotPendingOperator` for anyone else, including after a
+cancel with `setOperator(0)` and after a completed transfer — no replay), and `pendingOperator`
+is cleared on accept (`test_Operator_TwoStepTransfer`, `testFuzz_operator_twoStep(address,
+address)`, `invariant_operatorIsGhost` across random rotations between two identities). No
+timelock: a compromised operator key can rotate away immediately (a rotation is also the
+recovery path), which is the accepted single-key limitation (section 3).
+
 ---
 
 ## 3. Known limitations / not-yet-real
@@ -197,6 +248,14 @@ identically (`lib/root-provider.selftest.mjs` §8), and the anvil end-to-end sui
 - **Re-registration allowed.** A withdrawn or slashed commitment is `delete`d, so it can be
   re-registered (`test_ReRegister_AfterSlash`). Harmless for an append-only tree and a
   slashed secret is already public; add a burned-commitment set to forbid it outright.
+- **`PaidAccessSet` admission is an operator attestation.** Whether a leaf was PAID for is
+  decided off chain (402 rail + registrar); the contract records only that the operator inserted
+  it. A dishonest or compromised operator key can insert unpaid leaves (griefing the anonymity
+  set is the worst case: every inserted leaf still has its own RLN budget and is slashable) or
+  decline to insert paid ones (the PAYMENTS.md trust). No timelock on operator rotation; the
+  operator is a single key until rotated to a multisig. The tier is DECLARED at insert exactly
+  as at `register` (same lock-not-slash consequence for a mismatch; the registrar should derive
+  the tier from what was paid for).
 - **No explicit reentrancy guard.** Safe today by construction (CEI + delete-before-call;
   section 4), but add a guard before mainnet as defense in depth (`contracts/README.md`).
 
@@ -272,6 +331,39 @@ burn bond to a receiver.
   BEFORE any state change; a hostile hasher is a config-trust assumption, not a reentrancy
   vector (it cannot move funds and runs pre-delete).
 
+**`PaidAccessSet.insert(commitment, limit)` / `insertBatch(commitments[], limits[])`** —
+operator-gated, NOT payable.
+- Access: `onlyOperator` (`NotOperator`) first.
+- Guards: `_allowed[limit]` (`BadLimit`), `leaves[commitment].limit == 0` (`AlreadyInserted`);
+  batch: `commitments.length != 0 && == limits.length` (`BadBatch`), then per leaf; any revert
+  unwinds the whole batch.
+- Effects: `nextIndex++`, `leaves[c] = {index, limit}`, `liveCount++`, `_updateLeaf` (20
+  Poseidon2 library calls — `PoseidonT3` is a linked external library, i.e. `DELEGATECALL` into
+  known code; a config-trust assumption shared with the staked set, not a reentrancy vector),
+  then `emit Inserted(.., currentRoot)`. No value, no calls to arbitrary addresses.
+- Overflow: `nextIndex` `uint64` / `liveCount` checked; `uint32(limit)` is safe because
+  `limit <= MAX_LIMIT = 65535` is enforced by the table.
+
+**`PaidAccessSet.slash(commitment, secret, limit, receiver)`** — permissionless, secret-gated.
+- Same gate order as the staked set: `NotInserted` (`l.limit == 0`), `BadLimit`
+  (`l.limit != limit`), `BadSecret` (`hasher.commitmentOf(secret, limit) != commitment`, an
+  external `view` call BEFORE any state change).
+- Effects: `delete leaves[c]`, `liveCount--` (guarded by `l.limit != 0`, cannot underflow),
+  `_updateLeaf(idx, _zeroes[0])`, `emit Slashed`. **No payout**: `receiver` is unused (kept for
+  call-shape parity), so there is no `.call{value:}` and no reentrancy surface at all here.
+
+**`PaidAccessSet.setOperator(to)` / `acceptOperator()`**
+- `setOperator`: `onlyOperator`; writes `pendingOperator = to` (0 cancels), emits. No call.
+- `acceptOperator`: `msg.sender != 0 && == pendingOperator` (`NotPendingOperator`); sets
+  `operator = msg.sender`, clears `pendingOperator`, emits. No call. Two-step so a wrong `to`
+  cannot brick issuance (contrast GR `transferOwnership`, single-step).
+- Storage: `operator` / `pendingOperator` are declared AFTER the tree and the tier table, so
+  slot 3 is untouched (`test_Root_StorageSlot3` asserts it across a rotation).
+
+**Views** (`PaidAccessSet`: `isAllowedLimit`, `allowedLimits`, `leafCount`, `liveCount`,
+`commitmentOf`, `limitOf`, `leaves`, `currentRoot`, `treeZeroValue`, `operator`,
+`pendingOperator`, `hasher`) are read-only.
+
 **`transferOwnership` (GR only, `transferOwnership(address to)`)**
 - Access: `if (msg.sender != owner) revert NotOwner()`.
 - Effect: `emit OwnerTransferred(owner, to); owner = to`. Single-step (limitation, section
@@ -298,9 +390,10 @@ the harness declares its own cheatcode interface in `test/Cheats.sol` / `test/Fu
 
 ```
 forge build
-forge test                 # full suite: 92 tests, 9 suites, all green (2026-08-17, T-FEAT-8b)
+forge test                 # full suite: 117 tests, 12 suites, all green (2026-08-17, T-FEAT-7 Layer 1)
 forge test -vvv            # traces on failure
 forge test --match-contract StakedReputationSetInvariantTest
+forge test --match-contract PaidAccessSet     # unit (14) + fuzz (7) + invariants (4)
 forge snapshot             # gas snapshot
 ```
 
@@ -313,7 +406,14 @@ Fuzz + invariant depth is set inline, not in `foundry.toml`:
   `targetSelectors()` returning the local `FuzzSelector` struct (ABI-shape match to
   `StdInvariant.FuzzSelector`; see `test/FuzzHelpers.sol`).
 
-Last local run in this environment (2026-08-17): **92 passed, 0 failed, 0 skipped**; both
+Last local run in this environment (2026-08-17, after T-FEAT-7 Layer 1): **117 passed, 0 failed,
+0 skipped** (the 92 pre-existing + 25 `PaidAccessSet`: 14 unit, 7 fuzz at 256 runs, 4 invariants
+at 4096 calls — `invariant_noFundsEver`, `invariant_leafCountEqualsInserts`,
+`invariant_rootEqualsReference`, `invariant_operatorIsGhost` — all green). Gas (forge, optimizer
+200): `PaidAccessSet` deploy 2,071,378 (4,839 bytes; libraries linked), `insert` ~1.26M
+(20 Poseidon2; median 0.90M on a warm path), `insertBatch` ~1.26M per leaf (max observed
+6.17M for 6), `slash` ~0.91M, `setOperator` ~47.7k, `acceptOperator` ~28.3k. Live Sepolia:
+deploy 2,071,319, `insert(leaf, 8)` 1,263,222 gas at ~1.08 gwei. Earlier (rln-v4): **92 passed**; both
 `invariant_ethEqualsSumOfLiveBonds` (now per-tier wei) and the `activeCount` invariants
 green at 4096 calls, 0 reverts; the tiers suite `test/StakedReputationSet.tiers.t.sol` (17)
 and the tier fuzz tests (`testFuzz_register_tierBondAdmits`, `testFuzz_slash_onlyAtRecordedLimit`,
