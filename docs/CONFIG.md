@@ -86,11 +86,38 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | `RGOE_KEYSTORE_PASSWORD` | (unset → interactive prompt on a TTY) | Password for the Foundry-style encrypted keystore selected with `--account <name>` (`~/.foundry/keystores/<name>`, dir overridable via `FOUNDRY_KEYSTORES`) or `--keystore <path>`. Env only, never argv. | exit-gateway, withdraw-gateway, gateway-status | (none) |
 | `RGOE_BOND` | on-chain `BOND()` (member also tries `deployed.bond`) | Bond amount in wei to stake. | register-onchain, register-gateway | `--bond` |
 
+## Registrar (402 payments, T-FEAT-7)
+
+Read by `payments/registrar.mjs` (the operator's HTTP-402 service that sells membership leaves over x402 + MPP and inserts them into `PaidAccessSet`; `docs/PAYMENTS.md` "Shipped 2026-08-17") and by `rgoe pay` (`group/pay.mjs`, the buyer). Published on the bootnode onion as an extra port (`bootstrap.sh` `RGOE_REGISTRAR=1`).
+
+| Env var | Default | Controls | Component | Flag |
+|---|---|---|---|---|
+| `RGOE_REGISTRAR_KEY` | (required) | Operator hot key: submits `transferWithAuthorization` (the buyer's signed EIP-3009 authorization) and `PaidAccessSet.insert`; pays all gas. Secret: unit drop-in / env only, never argv. | registrar | (none) |
+| `RGOE_PAID_ACCESS_CONTRACT` | `network/<RGOE_NETWORK>/contracts.json` `contracts.paidAccessSet` | The `PaidAccessSet` the registrar inserts into (must list every sold tier in `allowedLimits()`; checked at boot). | registrar, gateway | (none) |
+| `RGOE_PAY_ASSET` | `network/<RGOE_NETWORK>/contracts.json` `payAsset.address` | The EIP-3009 stablecoin buyers pay in (Sepolia USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`, or the test tUSD). Probed at boot: `name()`/`version()`/`decimals()`, and the computed EIP-712 domain MUST equal on-chain `DOMAIN_SEPARATOR()` (fail-closed). | registrar | (none) |
+| `RGOE_PAY_ASSET_NAME` / `RGOE_PAY_ASSET_VERSION` | token `name()` / `version()` | EIP-712 domain overrides for a token whose `version()` is missing or differs from its domain. | registrar | (none) |
+| `RGOE_PAY_PRICES` | (required) | Price per tier in the asset's atomic units: `8=100000,32=400000` (= 0.10 / 0.40 with 6 decimals). Limits 1..65535, one price per tier; the price IS the tier's public fingerprint, so keep it fixed. | registrar; bootnode advert | (none) |
+| `RGOE_PAY_TO` | the operator key's address | Recipient of the stablecoin (`payTo` in x402, `recipient` in MPP). | registrar | (none) |
+| `RGOE_REGISTRAR_PORT` | `8878` (or `contracts.json` `registrar.port`) | Loopback listen port == the onion virtual port. | registrar, `rgoe pay` (`--registrar-port`) | (none) |
+| `RGOE_REGISTRAR_ONION` | (unset → `127.0.0.1`) | This registrar's onion: becomes the x402 `resource.url` host and the MPP `realm` (`RGOE_REGISTRAR_REALM` overrides the realm alone). | registrar | (none) |
+| `RGOE_REGISTRAR_STORE` | `payments/registrar-state.local.json` | JSON order store (idempotency by `(asset, from, nonce)`, settle→insert crash recovery, the MPP challenge-binding secret). Atomic writes, mode 0600. | registrar | (none) |
+| `RGOE_PAY_TIMEOUT` | `600` | Challenge validity in seconds: x402 `maxTimeoutSeconds`, MPP `expires`; the client sets `validBefore = now + this`. | registrar | (none) |
+| `RGOE_PAY_SETTLE_BUFFER` | `20` | Seconds of `validBefore` headroom a payment must still have when it arrives (so the settle tx can mine); less → `402 expired`. | registrar | (none) |
+| `RGOE_PAY_CONFIRMATIONS` | `1` | Confirmations to wait after the settle tx and after the insert tx. | registrar | (none) |
+| `RGOE_REGISTRAR_PAY_RATE` / `RGOE_REGISTRAR_PAY_BURST` | `1` / `10` | Token bucket in front of `POST /pay` *with* a payment header (signature verify + RPC reads); over → `429` + `Retry-After`. Same bucket code as the bootnode's announce bucket. | registrar | (none) |
+| `RGOE_REGISTRAR_QUOTE_RATE` / `RGOE_REGISTRAR_QUOTE_BURST` | `20` / `100` | Token bucket in front of quotes (`GET /pay/quote`). | registrar | (none) |
+| `RGOE_REGISTRAR_MAX_INFLIGHT` | `8` | Concurrent settlements; over → `503` + `Retry-After`. Operator txs are serialized regardless (one key, one nonce sequence). | registrar | (none) |
+| `RGOE_REGISTRAR_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` / `_CONN_CHECK_MS` | `10000` / `30000` / `5000` / `8192` / `1000` | HTTP slow-client limits, same semantics and defaults as the bootnode's (`RGOE_BOOTNODE_*`). Body cap is fixed at 4 KiB. | registrar | (none) |
+| `RGOE_REGISTRAR_ADVERTISE` | (unset) | On the **bootnode**: `1` = add `pay: {port, protocols:["x402","mpp"], asset, chain, tiers}` to `GET /health`, composed from `RGOE_REGISTRAR_PORT` + `RGOE_PAY_ASSET` + `RGOE_PAY_PRICES` + `RGOE_PAY_CHAIN_ID` (`11155111`); or a JSON object literal passed through. Unset = `/health` unchanged. | bootnode | (none) |
+| `RGOE_PAY_KEY` | (unset) | **Buyer** wallet key for `rgoe pay` (holds the stablecoin; needs no ETH). Alternatives: `--key-file <path>` (raw hex) or `--account <keystore.json>` + `RGOE_PAY_PASSPHRASE`. Never argv. | `rgoe pay` | `--key-file` / `--account` |
+| `RGOE_PAY_PROTOCOL` | `x402` | `rgoe pay` rail: `x402` or `mpp`. | `rgoe pay` | `--protocol` |
+| `RGOE_REGISTRAR_URL` | (unset) | `rgoe pay` direct URL (no Tor; tests / a local registrar). Production goes through Tor to `RGOE_BOOTNODE_ONION:RGOE_REGISTRAR_PORT`. | `rgoe pay` | `--registrar-url` |
+
 ## Common
 
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
-| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_PAID_ACCESS_CONTRACT` from `contracts.paidAccessSet`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
+| `RGOE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`RGOE_BOOTNODE_ONION`, `RGOE_DIR_SIGNER`, `RGOE_BOOTNODE_ADMISSION`, or the static `RGOE_DIRECTORY` fallback) and `contracts.json` (`RGOE_GATEWAY_REGISTRY`, `RGOE_GROUP_CONTRACT`, `RGOE_PAID_ACCESS_CONTRACT` from `contracts.paidAccessSet`, `RGOE_PAY_ASSET` from `payAsset.address`, `RGOE_REGISTRAR_PORT` from `registrar.port`, `RGOE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `rgoe` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
 | `RGOE_RPC_URL` | `http://127.0.0.1:8545` (register scripts try `deployed.rpcUrl` first) | JSON-RPC endpoint for all on-chain reads/writes. | gateway-registry, root-provider, gateway slasher, register-* | `--rpc-url` |
 | `RGOE_TOR_HOST` | `127.0.0.1` | Local Tor SOCKS host. | heartbeat, client, selection | `--tor-host` |
 | `RGOE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |
@@ -108,6 +135,7 @@ Read only by the one-command droplet bring-up (not by any `rgoe` process). They 
 | `RGOE_GATEWAY_REGION` | (unset) | Written into the heartbeat unit (see Bootnode/heartbeat rows above). |
 | `RGOE_ADMISSION` | `open` | Becomes `RGOE_BOOTNODE_ADMISSION` on the bootnode unit. |
 | `RGOE_REPO` / `RGOE_REF` / `RGOE_DIR` / `RGOE_BOOTNODE_PORT` / `RGOE_GATEWAY_PORT` | see script header | Clone source, install dir, loopback backend ports. |
+| `RGOE_REGISTRAR` | `0` | `1` = render + start `rgoe-registrar.service` (the 402 registrar) on this bootnode box, publish it as an extra `HiddenServicePort RGOE_REGISTRAR_PORT` of the bootnode onion, and make the bootnode advertise it in `/health`. Companions (all required with `1`): `RGOE_PAID_ACCESS_CONTRACT`, `RGOE_PAY_ASSET`, `RGOE_PAY_PRICES`, `RGOE_RPC_URL`; optional `RGOE_PAY_TO`, `RGOE_REGISTRAR_PORT`, `RGOE_PAY_CHAIN_ID`. The operator key is a secret → a 0600 drop-in, never a tunable (`docs/OPERATOR.md` "Selling access via 402"). |
 | `RGOE_RENDER_ONLY` | (unset) | `<dir>`: render the torrc + units under `<dir>/etc/…` and exit (no root, nothing installed); `--render <dir>` is the same. |
 
 ## Demo / test only

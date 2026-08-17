@@ -21,6 +21,7 @@ interface Vm {
     function expectEmit(bool, bool, bool, bool) external;
     function load(address, bytes32) external view returns (bytes32);
     function addr(uint256) external returns (address);
+    function sign(uint256, bytes32) external pure returns (uint8, bytes32, bytes32);
     function startBroadcast() external;
     function startBroadcast(uint256) external;
     function stopBroadcast() external;

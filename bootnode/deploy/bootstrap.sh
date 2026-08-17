@@ -58,6 +58,27 @@
 #                                own is the more trust-minimized choice, docs/LIGHT-CLIENT.md)
 #     RGOE_HELIOS_VERSION        release tag to install         (default: 0.11.1, sha256-pinned below;
 #                                another version needs RGOE_HELIOS_SHA256=<sha256 of the tarball>)
+#   RGOE_REGISTRAR   1 | 0              (default: 0) OPT-IN 402 registrar (T-FEAT-7, docs/PAYMENTS.md
+#                    "Shipped 2026-08-17"): sell membership leaves for a stablecoin over x402 + MPP.
+#                    =1 renders + starts a hardened rgoe-registrar.service (payments/registrar.mjs on
+#                    127.0.0.1:RGOE_REGISTRAR_PORT), publishes it as an EXTRA PORT of the bootnode
+#                    onion (HiddenServicePort <port> 127.0.0.1:<port> inside the bootnode HS block, so
+#                    buyers reach it at http://<bootnode-onion>:<port>/), and makes the bootnode
+#                    advertise it in GET /health (`pay: {...}`). Needs the bootnode on this box
+#                    (not gateway-only mode). The OPERATOR KEY is a secret and deliberately NOT a
+#                    tunable: after bootstrap, add it as a 0600 drop-in
+#                    /etc/systemd/system/rgoe-registrar.service.d/operator.conf
+#                    (Environment=RGOE_REGISTRAR_KEY=0x…; docs/OPERATOR.md "Selling access via 402").
+#                    Default OFF: the default render is byte-identical to before.
+#                    Companions, read only when RGOE_REGISTRAR=1:
+#     RGOE_PAID_ACCESS_CONTRACT  PaidAccessSet address the registrar inserts into            (REQUIRED)
+#     RGOE_PAY_ASSET             EIP-3009 stablecoin address (Sepolia USDC 0x1c7D…7238, or the
+#                                test tUSD from network/sepolia/contracts.json payAsset)      (REQUIRED)
+#     RGOE_PAY_PRICES            per-tier price in atomic units, "8=100000,32=400000"       (REQUIRED)
+#     RGOE_RPC_URL               execution JSON-RPC the registrar settles/inserts through   (REQUIRED)
+#     RGOE_PAY_TO                stablecoin recipient        (default: unset = the operator key's address)
+#     RGOE_REGISTRAR_PORT        loopback + onion port       (default: 8878)
+#     RGOE_PAY_CHAIN_ID          chain id the bootnode advertises in /health (default: 11155111 Sepolia)
 #   RGOE_RENDER_ONLY <dir>   (default: unset) RENDER mode for tests/review: write the torrc
 #                    include + systemd units under <dir>/etc/... and exit WITHOUT touching the
 #                    host (no root, no apt, no tor/node install, no clone, no systemctl). Onions
@@ -89,6 +110,13 @@ RGOE_HELIOS_CHECKPOINT="${RGOE_HELIOS_CHECKPOINT:-}"
 RGOE_HELIOS_VERSION="${RGOE_HELIOS_VERSION:-0.11.1}"
 RGOE_HELIOS_SHA256="${RGOE_HELIOS_SHA256:-}"
 HELIOS_BIN=/usr/local/bin/helios
+RGOE_REGISTRAR="${RGOE_REGISTRAR:-0}"
+RGOE_PAID_ACCESS_CONTRACT="${RGOE_PAID_ACCESS_CONTRACT:-}"
+RGOE_PAY_ASSET="${RGOE_PAY_ASSET:-}"
+RGOE_PAY_PRICES="${RGOE_PAY_PRICES:-}"
+RGOE_PAY_TO="${RGOE_PAY_TO:-}"
+RGOE_REGISTRAR_PORT="${RGOE_REGISTRAR_PORT:-8878}"
+RGOE_PAY_CHAIN_ID="${RGOE_PAY_CHAIN_ID:-11155111}"
 # Pinned sha256 of the a16z/helios 0.11.1 release tarballs (github.com/a16z/helios/releases/tag/0.11.1),
 # computed 2026-08-17 from the downloaded assets. Another RGOE_HELIOS_VERSION must bring its own
 # RGOE_HELIOS_SHA256 (no unpinned download, ever).
@@ -146,6 +174,27 @@ if [ "$RGOE_HELIOS" = "1" ]; then
   { [ -z "$RGOE_HELIOS_SHA256" ] || [[ "$RGOE_HELIOS_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; } || die "RGOE_HELIOS_SHA256 must be 64 hex chars"
 fi
 
+case "$RGOE_REGISTRAR" in
+  1|true|yes|on)   RGOE_REGISTRAR=1 ;;
+  0|false|no|off)  RGOE_REGISTRAR=0 ;;
+  *) die "RGOE_REGISTRAR must be 1 or 0 (got '$RGOE_REGISTRAR')" ;;
+esac
+if [ "$RGOE_REGISTRAR" = "1" ]; then
+  [ "$WITH_BOOTNODE" = "1" ] || die "RGOE_REGISTRAR=1 needs the bootnode on this box (the registrar is published on the bootnode onion); unset RGOE_BOOTNODE_ONION"
+  [[ "$RGOE_PAID_ACCESS_CONTRACT" =~ ^0x[0-9a-fA-F]{40}$ ]] \
+    || die "RGOE_REGISTRAR=1 needs RGOE_PAID_ACCESS_CONTRACT=<0x PaidAccessSet address>"
+  [[ "$RGOE_PAY_ASSET" =~ ^0x[0-9a-fA-F]{40}$ ]] \
+    || die "RGOE_REGISTRAR=1 needs RGOE_PAY_ASSET=<0x EIP-3009 stablecoin address>"
+  [[ "$RGOE_PAY_PRICES" =~ ^[1-9][0-9]{0,4}=[1-9][0-9]*(,[1-9][0-9]{0,4}=[1-9][0-9]*)*$ ]] \
+    || die "RGOE_REGISTRAR=1 needs RGOE_PAY_PRICES=<limit>=<atomic-amount>[,...] (e.g. 8=100000,32=400000)"
+  [[ "$RGOE_RPC_URL" =~ ^(https?|wss?)://[A-Za-z0-9._~:/?#@!$\&*+,=%-]+$ ]] \
+    || die "RGOE_REGISTRAR=1 needs RGOE_RPC_URL=<execution JSON-RPC URL>"
+  { [ -z "$RGOE_PAY_TO" ] || [[ "$RGOE_PAY_TO" =~ ^0x[0-9a-fA-F]{40}$ ]]; } || die "RGOE_PAY_TO must be a 0x address"
+  { [[ "$RGOE_REGISTRAR_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$RGOE_REGISTRAR_PORT" -ge 1024 ] && [ "$RGOE_REGISTRAR_PORT" -le 65535 ]; } \
+    || die "RGOE_REGISTRAR_PORT must be a port in 1024..65535 (got '$RGOE_REGISTRAR_PORT')"
+  [[ "$RGOE_PAY_CHAIN_ID" =~ ^[1-9][0-9]{0,15}$ ]] || die "RGOE_PAY_CHAIN_ID must be a positive integer"
+fi
+
 # --- renderers: the ONLY places torrc / unit text is produced (live + render mode share them) ---
 # torrc include: one HiddenServiceDir block per onion this box publishes. The PoW line is a
 # per-service option, so it sits INSIDE each block right after its HiddenServicePort.
@@ -155,6 +204,8 @@ render_torrc() {  # $1 = output file
       echo "# rgoe: two onion services (bootnode + gateway). PoW defense: RGOE_ENABLE_POW=${RGOE_ENABLE_POW}."
       echo "HiddenServiceDir /var/lib/tor/rgoe-bootnode"
       echo "HiddenServicePort 80 127.0.0.1:${RGOE_BOOTNODE_PORT}"
+      # The 402 registrar rides the SAME onion on an extra virtual port (RGOE_REGISTRAR=1).
+      [ "$RGOE_REGISTRAR" = "1" ] && echo "HiddenServicePort ${RGOE_REGISTRAR_PORT} 127.0.0.1:${RGOE_REGISTRAR_PORT}"
       echo "HiddenServicePoWDefensesEnabled ${RGOE_ENABLE_POW}"
     else
       echo "# rgoe: gateway-only box (bootnode is remote: ${RGOE_BOOTNODE_ONION}). PoW defense: RGOE_ENABLE_POW=${RGOE_ENABLE_POW}."
@@ -222,9 +273,51 @@ Environment=RGOE_BOOTNODE_PORT=${RGOE_BOOTNODE_PORT}
 Environment=RGOE_BOOTNODE_ADMISSION=${RGOE_ADMISSION}
 Environment=RGOE_BOOTNODE_SIGNER_KEY=${RGOE_DIR}/deploy-state/bootnode-signer.key
 Environment=RGOE_BOOTNODE_STORE=${RGOE_DIR}/deploy-state/bootnode-state.json
+EOF
+    if [ "$RGOE_REGISTRAR" = "1" ]; then
+      # Advertise the registrar in GET /health (`pay: {port, protocols, asset, chain, tiers}`).
+      echo "Environment=RGOE_REGISTRAR_ADVERTISE=1"
+      echo "Environment=RGOE_REGISTRAR_PORT=${RGOE_REGISTRAR_PORT}"
+      echo "Environment=RGOE_PAY_ASSET=${RGOE_PAY_ASSET}"
+      echo "Environment=RGOE_PAY_PRICES=${RGOE_PAY_PRICES}"
+      echo "Environment=RGOE_PAY_CHAIN_ID=${RGOE_PAY_CHAIN_ID}"
+    fi
+    cat <<EOF
 ExecStart=${NODE_BIN} ${RGOE_DIR}/bootnode/server.mjs
 Restart=always
 RestartSec=3
+EOF
+    render_sandbox
+  } > "$1"
+}
+
+# The 402 registrar (T-FEAT-7): a loopback Node service that sells membership leaves over x402 +
+# MPP and inserts them into the PaidAccessSet from the operator key. Same sandbox as the other
+# units; its order store lives under deploy-state (the one writable path). RGOE_REGISTRAR_KEY is a
+# SECRET and is NOT rendered here: add it as a 0600 drop-in after bootstrap (see the header).
+render_registrar_unit() {  # $1 = output file
+  {
+    cat <<EOF
+[Unit]
+Description=rgoe 402 registrar (sell membership leaves: x402 + MPP -> PaidAccessSet)
+After=network-online.target tor.service
+Wants=network-online.target
+[Service]
+User=${RUN_USER}
+WorkingDirectory=${RGOE_DIR}
+Environment=RGOE_REGISTRAR_PORT=${RGOE_REGISTRAR_PORT}
+Environment=RGOE_REGISTRAR_ONION=${BN_ONION}
+Environment=RGOE_REGISTRAR_STORE=${RGOE_DIR}/deploy-state/registrar-state.json
+Environment=RGOE_PAID_ACCESS_CONTRACT=${RGOE_PAID_ACCESS_CONTRACT}
+Environment=RGOE_PAY_ASSET=${RGOE_PAY_ASSET}
+Environment=RGOE_PAY_PRICES=${RGOE_PAY_PRICES}
+Environment=RGOE_RPC_URL=${RGOE_RPC_URL}
+EOF
+    [ -z "$RGOE_PAY_TO" ] || echo "Environment=RGOE_PAY_TO=${RGOE_PAY_TO}"
+    cat <<EOF
+ExecStart=${NODE_BIN} ${RGOE_DIR}/payments/registrar.mjs
+Restart=always
+RestartSec=5
 EOF
     render_sandbox
   } > "$1"
@@ -349,7 +442,8 @@ if [ -n "$RGOE_RENDER_ONLY" ]; then
   render_gateway_unit   "$out/etc/systemd/system/rgoe-gateway.service"
   render_heartbeat_unit "$out/etc/systemd/system/rgoe-heartbeat.service"
   [ "$RGOE_HELIOS" = "1" ] && render_helios_unit "$out/etc/systemd/system/rgoe-helios.service"
-  echo "rendered to $out (mode: $([ "$WITH_BOOTNODE" = "1" ] && echo bootnode+gateway || echo gateway-only), pow=${RGOE_ENABLE_POW}, helios=${RGOE_HELIOS})"
+  [ "$RGOE_REGISTRAR" = "1" ] && render_registrar_unit "$out/etc/systemd/system/rgoe-registrar.service"
+  echo "rendered to $out (mode: $([ "$WITH_BOOTNODE" = "1" ] && echo bootnode+gateway || echo gateway-only), pow=${RGOE_ENABLE_POW}, helios=${RGOE_HELIOS}, registrar=${RGOE_REGISTRAR})"
   exit 0
 fi
 
@@ -493,6 +587,21 @@ render_heartbeat_unit /etc/systemd/system/rgoe-heartbeat.service
 systemctl daemon-reload
 systemctl enable --now rgoe-heartbeat >/dev/null 2>&1 || systemctl restart rgoe-heartbeat
 
+if [ "$RGOE_REGISTRAR" = "1" ]; then
+  log "402 registrar on ${BN_ONION}:${RGOE_REGISTRAR_PORT} (x402 + MPP)"
+  render_registrar_unit /etc/systemd/system/rgoe-registrar.service
+  systemctl daemon-reload
+  if [ -f /etc/systemd/system/rgoe-registrar.service.d/operator.conf ]; then
+    systemctl enable --now rgoe-registrar >/dev/null 2>&1 || systemctl restart rgoe-registrar
+  else
+    systemctl enable rgoe-registrar >/dev/null 2>&1 || true
+    echo "rgoe-registrar: NOT started — add the operator key drop-in first (see the summary below), then: systemctl start rgoe-registrar"
+  fi
+elif [ -f /etc/systemd/system/rgoe-registrar.service ]; then
+  systemctl disable --now rgoe-registrar >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/rgoe-registrar.service
+fi
+
 if [ "$WITH_BOOTNODE" = "1" ]; then
   log "waiting for the bootnode signer + onion descriptors (~15s)…"
   sleep 15
@@ -508,14 +617,25 @@ rgoe fleet is up.
   admission      : ${RGOE_ADMISSION}
   onion PoW      : ${RGOE_ENABLE_POW}   (RGOE_ENABLE_POW; 0 = off)
   helios sidecar : ${RGOE_HELIOS}   (RGOE_HELIOS; 1 = admission root anchored to the sync committee, journalctl -u rgoe-helios)
+  402 registrar  : ${RGOE_REGISTRAR}   (RGOE_REGISTRAR; 1 = http://${BN_ONION}:${RGOE_REGISTRAR_PORT}/pay/quote sells leaves via x402 + MPP)
+$([ "$RGOE_REGISTRAR" = "1" ] && cat <<REG
 
+Registrar operator key (settles EIP-3009 transfers + inserts leaves; pays gas) — a SECRET, so it is
+NOT a bootstrap tunable. Install it as a 0600 drop-in via stdin (never in argv/log), then start:
+  install -d -m 0755 /etc/systemd/system/rgoe-registrar.service.d
+  printf '[Service]\\nEnvironment=RGOE_REGISTRAR_KEY=%s\\n' "\$(cat /path/to/key)" \\
+    | install -m 0600 /dev/stdin /etc/systemd/system/rgoe-registrar.service.d/operator.conf
+  systemctl daemon-reload && systemctl restart rgoe-registrar
+  curl --socks5-hostname 127.0.0.1:9050 "http://${BN_ONION}:${RGOE_REGISTRAR_PORT}/pay/quote?limit=8"   # expect 402 + PAYMENT-REQUIRED + WWW-Authenticate: Payment
+REG
+)
 Clients connect with (pin the signer!):
   rgoe client --secret <member-hex> \\
     --bootnode ${BN_ONION} \\
     --dir-signer ${SIGNER}
 
 Check it:
-  systemctl status rgoe-bootnode rgoe-gateway rgoe-heartbeat$([ "$RGOE_HELIOS" = "1" ] && echo " rgoe-helios")
+  systemctl status rgoe-bootnode rgoe-gateway rgoe-heartbeat$([ "$RGOE_HELIOS" = "1" ] && echo " rgoe-helios")$([ "$RGOE_REGISTRAR" = "1" ] && echo " rgoe-registrar")
   curl --socks5-hostname 127.0.0.1:9050 http://${BN_ONION}/health   # after ~30s of descriptor propagation
 ========================================================================
 EOF

@@ -264,13 +264,15 @@ Server: `bootnode/server.mjs:151` `makeServer`. All responses
 
 | Method | Path | Success | Source |
 | --- | --- | --- | --- |
-| GET | `/health` | `200 { ok:true, count, admission, signer }` | `:155` |
+| GET | `/health` | `200 { ok:true, count, admission, signer[, pay] }` | `:155` |
 | GET | `/directory` | `200 <signed directory>` (section 4.1) | `:158` |
 | GET | `/gateway/<onion>` | `200 <stored announce rec>` (section 3) | `:162` |
 | POST | `/announce` | `200 { ok:true, onion, staked, ttl }` | `:167` |
 
 - `/health`: `count` = live entry count; `admission` = `"open"|"stake"`; `signer` = pinned
-  signer pubkey hex.
+  signer pubkey hex; `pay` (T-FEAT-7, ONLY when `RGOE_REGISTRAR_ADVERTISE` is set) =
+  `{ port, protocols:["x402","mpp"], asset, chain:"eip155:<id>", tiers:{"<limit>":"<amount>"} }`,
+  the discovery pointer to the operator's 402 registrar on this same onion (section 5.4).
 - `/gateway/<onion>`: `<onion>` is `decodeURIComponent`-ed; the registry appends `.onion` if
   absent (`:131` `record`). Returns the exact stored announce for zero-trust re-verification.
 - `/announce`: request body is the announce record JSON (section 3). `ttl` in the reply is
@@ -315,6 +317,38 @@ signature verify (`:87`,`:88`):
 The signed `/directory` response is bounded transitively by `maxEntries` (one gateway object
 per live entry); there is no separate byte-cap on the response. See ambiguity note in the
 report.
+
+### 5.4 Registrar HTTP API (402 rails, T-FEAT-7) — `payments/registrar.mjs` `makeServer`
+
+The operator's payment endpoint, published as an EXTRA virtual port of the bootnode onion
+(`http://<bootnode-onion>:8878/`, loopback `127.0.0.1:RGOE_REGISTRAR_PORT`). Both machine-payment
+dialects on one route set; wire formats in `payments/wire.mjs`, exact headers/fields in
+`docs/PAYMENTS.md` "Headers (both rails, exact)".
+
+| Method | Path | Success | Notes |
+| --- | --- | --- | --- |
+| GET | `/pay/quote[?limit=N]` | `402` + `PAYMENT-REQUIRED` (x402 v2 `PaymentRequired`, one `accepts[]` entry per offered tier) + one `WWW-Authenticate: Payment …` per tier (MPP `evm`/`charge`, `credentialTypes:["authorization"]`) + `application/problem+json` body `{ type:"…/payment-required", …, pay:{protocols, chain, chainId, asset, assetName, assetVersion, decimals, payTo, tiers, maxTimeoutSeconds, routes, offered} }`, `Cache-Control: no-store` | `?limit` narrows to one tier; unknown tier → `400 { err:"unknown-limit", tiers }` |
+| POST | `/pay` (no payment header) | the same `402`; the MPP challenges carry `digest="sha-256=:…:"` over the request body (RFC 9530) | the MPP challenge step for a bodied request; body `{ commitment, limit }` |
+| POST | `/pay` + `PAYMENT-SIGNATURE: <b64 PaymentPayload>` | `200 { ok:true, protocol:"x402", state:"inserted", asset, payer, nonce, commitment, limit, settleTx, insertTx, leafIndex, root, replayed }` + `PAYMENT-RESPONSE: <b64 { success:true, transaction:<settleTx>, network, payer }>` | body `{ commitment:<decimal field element>, limit:<tier> }`; `limit` must equal the tier `accepted.amount` prices |
+| POST | `/pay` + `Authorization: Payment <b64url credential>` | `200 { …same…, protocol:"mpp" }` + `Payment-Receipt: <b64url { status:"success", method:"evm", challengeId, reference:<settleTx>, timestamp, chainId }>` | credential `payload.type` MUST be `"authorization"` (EIP-3009); `nonce == keccak256(id ‖ realm)`; body must match the challenge `digest` |
+| GET | `/pay/status/<nonce>` | `200 { ok:true, orders:[{ state, asset, payer, nonce, commitment, limit, settleTx, insertTx, leafIndex, root }] }` | `state` ∈ `settling|settled|inserted|failed`; `404 not-found`; `400 bad-nonce` |
+| GET | `/health` | `200 { ok:true, pay:{…offer…}, paidAccessSet, leafCount, root, orders }` | |
+| GET | `/metrics` | Prometheus text | `rgoe_registrar_quotes_total{route}`, `rgoe_registrar_payments_total{protocol,result,reason}`, `rgoe_registrar_txs_total{kind,result}`, `rgoe_registrar_orders`, `rgoe_registrar_inflight` |
+
+Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
+
+| Status | When | Body / headers |
+| --- | --- | --- |
+| 402 | x402: payload rejected (`invalid_payment_payload`, `invalid_x402_version`, `invalid_scheme`, `invalid_network`, `invalid_exact_evm_payload_*`, `insufficient_funds`, `expired`, `not-yet-valid`, `bad-signature`, `nonce-used` (chain), `settle-failed`, `limit-mismatch`) | fresh `PAYMENT-REQUIRED` + `PAYMENT-RESPONSE { success:false, errorReason }` |
+| 402 | MPP: `malformed-credential`, `invalid-challenge` (HMAC/realm/digest/offer drift), `payment-expired`, `verification-failed` (type/nonce/to/value/signature…), `payment-insufficient` | fresh `WWW-Authenticate: Payment …` + `application/problem+json { type:"https://paymentauth.org/problems/<code>", title, status:402, detail, pay }` |
+| 400 | bad JSON / bad body (`bad-body`, `bad-commitment`, `unknown-limit`); MPP `method-unsupported` | `{ ok:false, err }` / problem |
+| 409 | `nonce-used` (same authorization, different commitment), `already-member` (commitment live in the set — refused BEFORE settlement), `in-progress` | `{ ok:false, err, detail }` |
+| 413 / 431 / 408 | body > 4 KiB / headers > `maxHeaderSize` / slow client (`HTTP_LIMITS`, T-HARD-4) | |
+| 429 | quote or pay token bucket empty | `{ err:"rate-limited" }` + `Retry-After` |
+| 502 / 503 | `rpc-error`, `insert-failed` (settled; retried on boot / on an identical re-POST) / `busy` (in-flight cap) | `Retry-After: 5` on 503 |
+
+Idempotency: an identical re-POST of a finished order returns `200` with `replayed:true` and the
+stored receipt (no second settle/insert).
 
 ## 6. Egress envelope v3
 

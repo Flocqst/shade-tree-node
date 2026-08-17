@@ -497,6 +497,69 @@ admitted yet: `StakedReputationSet`'s hasher pins `K = 8`, so a tiered leaf stak
 cannot be slashed there until the follow-up in `docs/ONCHAIN.md` "Tiers on chain" ships —
 use tiers on `members.json` gateways, or only at the default limit on chain.
 
+### Selling access via 402 (T-FEAT-7)
+
+Members can *buy* a leaf instead of being enrolled by hand: `docs/PAYMENTS.md` "Shipped
+2026-08-17". You run a **registrar** (`payments/registrar.mjs`) next to the bootnode; it speaks
+both HTTP-402 rails (x402 v2 and MPP), takes a stablecoin (EIP-3009: the buyer signs, *you*
+submit and pay gas), and inserts the buyer's commitment into the on-chain `PaidAccessSet`
+(`contracts/PaidAccessSet.sol`, operator-insert-only). Your gateways trust that set's root next
+to the staked set's (`RGOE_PAID_ACCESS_CONTRACT` on the gateway unit; the multi-root gateway,
+T-FEAT-7 2/3), so a buyer egresses with the ordinary RLN proof.
+
+**You are the facilitator.** Nothing is outsourced: the registrar verifies the typed-data
+signature and submits the transfer from your key. It needs ETH for gas (one settle tx ≈ 60k gas +
+one insert ≈ 1.26M gas per sale on Sepolia), the stablecoin arrives at `RGOE_PAY_TO`
+(default: the operator address).
+
+Deploy (bootnode box; `bootstrap.sh` is idempotent, re-run it with the tunables):
+
+```bash
+RGOE_REGISTRAR=1 \
+RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111 \   # network/sepolia/contracts.json contracts.paidAccessSet
+RGOE_PAY_ASSET=<stablecoin>            \   # Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238, or contracts.json payAsset (tUSD)
+RGOE_PAY_PRICES=8=100000,32=400000     \   # atomic units per tier (0.10 / 0.40 with 6 decimals)
+RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com \
+  sudo -E bash bootnode/deploy/bootstrap.sh
+# the operator key is a SECRET: 0600 drop-in via stdin, never argv / unit file / log
+sudo install -d -m 0755 /etc/systemd/system/rgoe-registrar.service.d
+printf '[Service]\nEnvironment=RGOE_REGISTRAR_KEY=%s\n' "$(cat /path/to/operator.key)" \
+  | sudo install -m 0600 /dev/stdin /etc/systemd/system/rgoe-registrar.service.d/operator.conf
+sudo systemctl daemon-reload && sudo systemctl restart rgoe-registrar
+journalctl -u rgoe-registrar -n 5   # "registrar up on 127.0.0.1:8878 operator=0x… asset=… tiers=…"
+curl -sS -D - --socks5-hostname 127.0.0.1:9050 "http://<bootnode-onion>:8878/pay/quote?limit=8" -o /dev/null | grep -i "^HTTP\|payment-required\|www-authenticate"
+```
+
+What bootstrap did: `HiddenServicePort 8878 127.0.0.1:8878` inside the bootnode's HS block (the
+registrar rides the bootnode onion; no new identity), `rgoe-registrar.service` (same sandbox as
+the other units; store at `deploy-state/registrar-state.json`), and
+`RGOE_REGISTRAR_ADVERTISE=1` on `rgoe-bootnode.service` so `GET /health` carries `pay:{port,
+protocols, asset, chain, tiers}` (how a client discovers "this fleet sells access, here").
+The registrar refuses to start if the token's on-chain `DOMAIN_SEPARATOR()` does not match its
+computed EIP-712 domain or if `PaidAccessSet.allowedLimits()` lacks a sold tier.
+
+Day 2:
+
+- `GET /health` on `:8878` = the offer + `leafCount` + `root`; `/metrics` =
+  `rgoe_registrar_payments_total{protocol,result,reason}`, `rgoe_registrar_txs_total{kind,result}`,
+  `rgoe_registrar_orders`, `rgoe_registrar_inflight`.
+- Log lines: `registrar: settle tx sent payer=… value=… settleTx=…` → `registrar: leaf inserted
+  commitment=… limit=… leafIndex=… insertTx=… root=…`. Never a key, never a signature.
+- A crash between settle and insert is repaired on the next boot (`registrar: recovery
+  resumed=1`) or by the buyer re-POSTing the same authorization (idempotent, no second charge).
+  `GET /pay/status/<nonce>` shows any order's public state.
+- Change prices / asset / payTo: edit the unit env (or re-run bootstrap) and restart; every
+  outstanding MPP challenge is retired automatically (its HMAC no longer matches the offer) and
+  x402 payments for the old amount are refused (`value_mismatch`).
+- Rate limits: `RGOE_REGISTRAR_PAY_RATE/_BURST` (default 1/s, 10) in front of paid POSTs,
+  `RGOE_REGISTRAR_QUOTE_RATE/_BURST` (20/s, 100) for quotes, `RGOE_REGISTRAR_MAX_INFLIGHT` (8)
+  concurrent settlements; the same slow-client HTTP limits as the bootnode.
+- Rotate the operator: `PaidAccessSet.setOperator(new)` + `acceptOperator()` from the new key,
+  then swap the drop-in and restart. Real USDC instead of the test token: change
+  `RGOE_PAY_ASSET` (one env), restart.
+
+Buyer side: `docs/JOIN.md` "Buy access" / `rgoe pay --help`.
+
 ### Endpoint hardening (T-HARD-4)
 
 Both listeners bound every lever an *unauthenticated* peer can pull. Defaults are on; you
