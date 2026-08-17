@@ -18,13 +18,16 @@ import {
 
 const SECRET = "12345678901234567890"; // fixed app seed secret (field element)
 const EPOCH = 42n;
-const MESSAGE_ID = 3; // slot i, 0<=i<K
+// Reputation tier (T-FEAT-8): RGOE_INTEROP_LIMIT / RGOE_INTEROP_SLOT let run.sh also drive a
+// tier-32 leaf at a slot >= 8 (the leaf commits to the limit; default = K_SLOTS, slot 3).
+const LIMIT = Number(process.env.RGOE_INTEROP_LIMIT || K_SLOTS);
+const MESSAGE_ID = Number(process.env.RGOE_INTEROP_SLOT || 3); // slot i, 0<=i<LIMIT
 const TARGET = "example.com:443";
 const NONCE = process.argv[2] || "0123456789abcdef0123456789abcdef";
 
 const identity = identityFor(SECRET);
 const identitySecret = identitySecretOf(identity);
-const leaf = rateCommitmentOf(identity);
+const leaf = rateCommitmentOf(identity, LIMIT);
 const group = newGroup([leaf]); // single-member group; member at index 0
 const index = group.indexOf(leaf);
 const mp = group.generateMerkleProof(index);
@@ -34,7 +37,7 @@ const x = calculateSignalHash(signal);
 const extNull = externalNullifierFor(EPOCH);
 
 // rlnjs reference proof (its own public signals) for the SAME inputs.
-const ref = await proveForSlot(SECRET, EPOCH, MESSAGE_ID, signal, { group });
+const ref = await proveForSlot(SECRET, EPOCH, MESSAGE_ID, signal, { group, limit: LIMIT });
 
 // arity-2 IMT siblings are flat field elements; normalize defensively.
 const pathElements = mp.siblings.map((s) => (Array.isArray(s) ? s[0] : s)).map(String);
@@ -44,7 +47,7 @@ console.log(JSON.stringify({
   secret: SECRET,
   epoch: String(EPOCH),
   rlnIdentifier: String(RLN_IDENTIFIER),
-  userMessageLimit: String(K_SLOTS),
+  userMessageLimit: String(LIMIT),
   messageId: String(MESSAGE_ID),
   target: TARGET,
   nonce: NONCE,

@@ -11,6 +11,7 @@ claim is traceable to a source file, contract, or existing doc.
 | [0003](0003-bootnode-is-a-cache-not-a-trust-root.md) | The bootnode is a cache, not a trust root | Every entry is self-authenticating (the onion IS its key, re-derived by clients) and stake is re-checkable on chain, so a hostile bootnode can only omit a gateway, never inject one. |
 | [0004](0004-rln-over-slot-scheme.md) | Real RLN over the public-slot scheme | Chose real circom-rln Groth16 (fresh per-request share, over-spend reconstructs the secret and slashes) over the ROADMAP-v1 #1 public-slot scheme, which was simpler but leaked the slot histogram and had no slashing. |
 | [0005](0005-governed-gateway-slash.md) | Gateway slashing governed, member slashing permissionless | Member over-spend is a cryptographic proof, so its slash is permissionless; gateway misbehavior is subjective, so its slash is owner-governed (swappable for a DAO / fraud-proof). |
+| [0006](0006-reputation-tiers.md) | Reputation tiers are per-leaf `userMessageLimit`s in one tree | The tier IS the leaf's private `userMessageLimit` (circom-rln already hashes it into the leaf and range-checks `messageId` under it), so two tiers with different `K` are proven in ZK, enforced by the root + nullifier set, and unclaimable — with no circuit change, no wire change, and no tier leak; on-chain tier admission/slash is a flagged follow-up. |
 
 ## Format
 

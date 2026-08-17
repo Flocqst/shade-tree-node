@@ -260,8 +260,9 @@ SUBCOMMANDS:
           --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
                                           (comma = failover list; used by the CI harness).
         Envelope options:
-          --identity  JSON { identitySecret, leaf } (the member's derived secret + leaf;
-                      export it from your RGOE_SECRET with the JS CLI: `rgoe identity --out identity.json`)
+          --identity  JSON { identitySecret, leaf[, limit] } (the member's derived secret + leaf;
+                      export it from your RGOE_SECRET with the JS CLI: `rgoe identity --out identity.json`;
+                      `limit` = the leaf's reputation-tier userMessageLimit, T-FEAT-8, default 8)
           --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway)
           --target    host:port bound into the proof (the egress destination)
           --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;
@@ -274,7 +275,8 @@ SUBCOMMANDS:
                       (signed caps.artifacts) that exclude ours, egress fails closed with
                       `no-mutual-artifact:...` BEFORE proving.
           --epoch     epoch to prove for (default: floor(now/RGOE_EPOCH_SECONDS), K=120s)
-          --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit (default 8)
+          --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit / tier (default:
+                      the identity file's `limit`, else 8; must be the leaf's enrolled limit)
           --slot-cursor  persist a per-epoch slot cursor (or RGOE_SLOT_CURSOR) so
                       consecutive egress runs in one epoch advance 0,1,…,K-1 (distinct
                       nullifiers) and reset on epoch roll; --slot overrides it
@@ -576,6 +578,10 @@ mod live {
         #[serde(rename = "identitySecret")]
         identity_secret: String,
         leaf: String,
+        /// Optional tier limit (T-FEAT-8): the `userMessageLimit` this leaf was enrolled
+        /// with. `rgoe identity` writes it only for a non-default tier; absent => K_SLOTS.
+        #[serde(default)]
+        limit: Option<u64>,
     }
 
     #[derive(Deserialize)]
@@ -1086,25 +1092,6 @@ mod live {
         let epoch = take_flag(rest, "--epoch")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(current_epoch);
-        let k = take_flag(rest, "--k")
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(slotcursor::K_SLOTS);
-        // Slot resolution (parity with makeSlotPool, client/rgoe-client.mjs):
-        //   1. explicit `--slot <i>` always wins and leaves any cursor untouched.
-        //   2. otherwise, if a persisted cursor is configured (`--slot-cursor <f>` or
-        //      RGOE_SLOT_CURSOR), advance it: consecutive egress runs in one epoch get
-        //      distinct slots 0,1,…,K-1 (distinct nullifiers), resetting on epoch roll.
-        //   3. with no cursor and no `--slot`, preserve the historical default of slot 0.
-        let slot = match take_flag(rest, "--slot").and_then(|s| s.parse::<u64>().ok()) {
-            Some(explicit) => explicit,
-            None => match slot_cursor_path(rest) {
-                Some(path) => slotcursor::next_slot(Some(&path), epoch, k),
-                None => 0,
-            },
-        };
-        let rln_identifier = take_flag(rest, "--rln-identifier").unwrap_or_else(|| "1".to_string());
-        let nonce = take_flag(rest, "--nonce").unwrap_or_else(gen_nonce);
-
         let identity: IdentityFile = match load_json(&identity_path) {
             Ok(v) => v,
             Err(e) => {
@@ -1119,6 +1106,46 @@ mod live {
                 return ExitCode::from(2);
             }
         };
+        // K = this member's tier limit (T-FEAT-8): `--k` wins, else the identity file's `limit`
+        // (written by `rgoe identity --limit N` for a non-default tier), else the app default 8.
+        // It MUST be the limit the member's leaf was enrolled with — the prover looks the leaf
+        // up in `members`, so a wrong K fails there ("member_leaf not present"), never on the wire.
+        let k = match take_flag(rest, "--k") {
+            Some(s) => match s.parse::<u64>() {
+                Ok(n) => n,
+                Err(_) => {
+                    eprintln!("egress (live): --k must be an integer (got {s:?})");
+                    return ExitCode::from(2);
+                }
+            },
+            None => identity.limit.unwrap_or(slotcursor::K_SLOTS),
+        };
+        if k < 1 || k > slotcursor::MAX_LIMIT {
+            eprintln!(
+                "egress (live): K={k} out of range 1..{} (RLN(20,16) range check is 16-bit)",
+                slotcursor::MAX_LIMIT
+            );
+            return ExitCode::from(2);
+        }
+        // Slot resolution (parity with makeSlotPool, client/rgoe-client.mjs):
+        //   1. explicit `--slot <i>` always wins and leaves any cursor untouched.
+        //   2. otherwise, if a persisted cursor is configured (`--slot-cursor <f>` or
+        //      RGOE_SLOT_CURSOR), advance it: consecutive egress runs in one epoch get
+        //      distinct slots 0,1,…,K-1 (distinct nullifiers), resetting on epoch roll.
+        //   3. with no cursor and no `--slot`, preserve the historical default of slot 0.
+        let slot = match take_flag(rest, "--slot").and_then(|s| s.parse::<u64>().ok()) {
+            Some(explicit) => explicit,
+            None => match slot_cursor_path(rest) {
+                Some(path) => slotcursor::next_slot(Some(&path), epoch, k),
+                None => 0,
+            },
+        };
+        if slot >= k {
+            eprintln!("egress (live): --slot {slot} >= K {k} (out of this member's tier; the circuit would reject it)");
+            return ExitCode::from(2);
+        }
+        let rln_identifier = take_flag(rest, "--rln-identifier").unwrap_or_else(|| "1".to_string());
+        let nonce = take_flag(rest, "--nonce").unwrap_or_else(gen_nonce);
 
         // ZK artifact set (T-HARD-8). Embedded: hash-check the binary's own artifacts against
         // the lock it embeds, FAIL CLOSED on any drift, and take the set's content-derived id.
