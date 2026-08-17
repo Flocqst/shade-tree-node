@@ -234,6 +234,19 @@ deferred slashes.
 chain (stake reads default to `latest`, roots to `finalized`). Size the freshness window
 (`RGOE_FRESHNESS_ROOTS`) so a brief outage does not strand recent members.
 
+**Seen live — 2026-08-17 23:34 UTC, public RPC `eth_getLogs` range cap (both fleet gateways).**
+Symptom: after enabling `RGOE_PAID_ACCESS_CONTRACT` + `RGOE_GROUP_CONTRACT`, `rgoe-gateway`
+crash-looped at startup with `eth_getLogs: exceed maximum block range: 50000` (publicnode's cap;
+the scan asked for `[0x0, finalized]` in one call) — the process died before `listen`, so even
+`members.json` members were down; not an outage, a permanent refusal that a restart cannot fix.
+Containment: `Environment=RGOE_FROM_BLOCK=<deploy block>` in the gateway drop-in, restart.
+Prevention (shipped right after): the scan is paged + halved on a range/size refusal
+(`RGOE_LOGS_CHUNK`), starts at each contract's record deploy block (`RGOE_FROM_BLOCKS`), and an
+unreadable chain source at boot no longer kills a gateway that has a static root — it starts
+degraded (`rgoe_gateway_root_source_degraded{contract=…} 1`, log `root source UNAVAILABLE at
+startup`) and heals on the next read. Full write-up: `docs/GO-LIVE-LOG-2026-08-17.md`
+"(payments, later)"; knobs: `docs/OPERATOR.md` "Public RPC log-range caps".
+
 ---
 
 ## 6. Mass-DROP spike (members failing the gate)

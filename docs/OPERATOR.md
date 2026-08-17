@@ -435,6 +435,7 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_ROOT_PROVIDER` | `--root-provider` | `node` (trusted node, event reconstruction; default) or `light` (EIP-1186 storage proof of the on-chain `currentRoot`). |
 | `RGOE_HELIOS_RPC_URL` | (none) | `light` only: local Helios verifying RPC (`http://127.0.0.1:8546` from `bootstrap.sh RGOE_HELIOS=1`). Set ⇒ the proof's block `stateRoot` is sync-committee verified and the RPC cannot lie about the root (only withhold); startup logs `stateRootSource: helios (sync-committee verified)`. Unset ⇒ `stateRootSource: rpc header (TRUSTED, …)`. See "Anchor the admission root to the sync committee" below and `docs/LIGHT-CLIENT.md`. |
 | `RGOE_HELIOS_CHAIN_ID` | (none) | Decimal chain id Helios must report; unset = must equal the RPC's `eth_chainId`. Mismatch ⇒ refuses to start reading roots. |
+| `RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS` / `RGOE_LOGS_CHUNK` | (none) | `node` root provider + client leaf discovery: where the `eth_getLogs` event scan starts (one block for all sets / `<0xaddr>=<block>,…` per set; default = each set's deploy block from the network record) and how many blocks per call (default 10000, halved automatically when the RPC refuses a window). See "Public RPC log-range caps" below. |
 | `RGOE_TOR_HOST` / `RGOE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
 | `RGOE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
 | `RGOE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
@@ -449,6 +450,40 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
 | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
 | `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+
+### Public RPC log-range caps (eth_getLogs)
+
+The `node` root provider (and the client's leaf discovery, `rgoe leaves`) rebuilds a set's tree
+from its event log with `eth_getLogs`. Every public / hosted RPC caps ONE such call — by block
+range and/or result count — and answers with an error, not a partial result: publicnode
+`exceed maximum block range: 50000`, Infura `query returned more than 10000 results` (and a
+10k-block range), QuickNode `limited to a 10,000 blocks range`, Alchemy `Log response size
+exceeded` (2k blocks on the free tier). Scanning "from block 0" against one of them fails on
+the very first call — which is how both fleet gateways crash-looped at startup on 2026-08-17
+after `RGOE_PAID_ACCESS_CONTRACT` was enabled (`docs/GO-LIVE-LOG-2026-08-17.md`,
+`docs/INCIDENT.md` §5).
+
+Since that night the gateway does three things on its own (`lib/root-provider.mjs`):
+
+- **Pages the scan.** `[from, head]` is split into `RGOE_LOGS_CHUNK` windows (default 10000,
+  under every cap above; `head` is resolved to a number once so every page sees the same block); a
+  window the RPC refuses is halved and retried (down to 8 blocks); pieces are concatenated in
+  order. Finalized reads then continue incrementally (only the new blocks each refresh), so a
+  long-lived gateway costs one small call per poll, not a re-scan of the history.
+- **Starts at the deploy block.** Each contract's scan starts at its own deploy block from the
+  committed network record (`network/sepolia/contracts.json` `deployBlocks`), whether the box runs
+  `RGOE_NETWORK=sepolia` or pins `RGOE_GROUP_CONTRACT` / `RGOE_PAID_ACCESS_CONTRACT` by hand. Only a
+  contract no record knows starts at 0 (still correct, just slower). Override per box with
+  `RGOE_FROM_BLOCK=<block>` (all sets) or `RGOE_FROM_BLOCKS=0xSet=<block>,0xPaid=<block>`
+  (`bootstrap.sh` passes both into the gateway unit when given).
+- **Fails soft at startup.** If every chain source is unreadable at boot but `members.json` gives
+  a root, the gateway STARTS with that root, logs `root source UNAVAILABLE at startup …` (with the
+  fix hint), gauges `rgoe_gateway_root_source_degraded{contract=…} 1`, and picks the chain roots up
+  on the next successful poll (no restart). With no root at all it still refuses to start (an
+  empty admission set is not a gateway; systemd's restart is the retry). Alert on the gauge.
+
+If you see the error anyway: check `RGOE_RPC_URL` is the RPC you think, lower `RGOE_LOGS_CHUNK`
+(some providers cap at 2k), or pin the start blocks. Your own node has no such cap.
 
 ### Anchor the admission root to the sync committee (optional, T-DEV-9b)
 

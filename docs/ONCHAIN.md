@@ -288,6 +288,16 @@ the off-chain `reconstructRoot`, so the two roots are equal by construction (pin
 provider can instead reconstruct the tree from `Member*` events, because there you already
 trust the node's log view. Both paths now work against the same contract.
 
+*Event reconstruction against a public RPC (node provider, shipped 2026-08-17 fix).*
+`NodeRootProvider` / `loadGroupFromContract` page `eth_getLogs` in `RGOE_LOGS_CHUNK` windows
+(default 10000; halved on a range/size refusal — publicnode caps at 50k blocks, Infura/QuickNode
+at 10k, Alchemy free at 2k), resolve the head block once per refresh so every page is consistent,
+start each contract at its deploy block from the network record (`deployBlocks`, or
+`RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS`), and on finalized reads keep the replayed log and only fetch
+new blocks afterwards. The gateway fails SOFT at startup when the chain is unreadable but
+`members.json` gives a root (`rgoe_gateway_root_source_degraded`), and closed when nothing would be
+trusted. `docs/OPERATOR.md` "Public RPC log-range caps"; `docs/CONFIG.md`.
+
 *Trust chain of the shipped light client.* `LightClientRootProvider` verifies the account
 + storage Merkle-Patricia proofs from `eth_getProof` against a block's `stateRoot`, so a
 hostile RPC cannot forge the root's **value**. Where that `stateRoot` comes from is the last

@@ -26,6 +26,9 @@
 //      bootnode unit advertising the offer (RGOE_REGISTRAR_ADVERTISE=1 + RGOE_PAY_*), everything
 //      else byte-identical; companions validated up front; incompatible with gateway-only mode;
 //      RGOE_REGISTRAR=0 == default (golden unchanged).
+//   8. RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS (eth_getLogs start blocks, fleet crash-loop 2026-08-17):
+//      passed verbatim into the gateway unit when set, validated up front, everything else
+//      byte-identical; unset == default (golden unchanged).
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -300,6 +303,41 @@ async function main() {
     }
     const regHel = render(work, "registrar-helios", { ...REG, ...HEL });
     ok(regHel.status === 0 && (await readAll(regHel.out)).size === 6, "composes with RGOE_HELIOS=1 (6 files)");
+
+    // ---------------------------------------------------------------- 8. from-block passthrough
+    console.log("RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS (eth_getLogs start blocks):");
+    const FB = { RGOE_FROM_BLOCK: "0xafa5ad", RGOE_FROM_BLOCKS: "0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25=11510541,0x4e8C2Bf5d3c5454A04837401095fce2646484111=0xafa6b9" };
+    const fb = render(work, "fromblock", FB);
+    ok(fb.status === 0, "renders with both set");
+    const fbFiles = await readAll(fb.out);
+    const gwFb = fbFiles.get("etc/systemd/system/rgoe-gateway.service");
+    ok(unitEnv(gwFb, "RGOE_FROM_BLOCK") === FB.RGOE_FROM_BLOCK && unitEnv(gwFb, "RGOE_FROM_BLOCKS") === FB.RGOE_FROM_BLOCKS, "gateway unit carries RGOE_FROM_BLOCK + RGOE_FROM_BLOCKS verbatim");
+    const stripFb = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_FROM_BLOCKS?=/.test(l)).join("\n");
+    ok(stripFb(gwFb) === got.get("etc/systemd/system/rgoe-gateway.service"), "gateway unit otherwise byte-identical to the default");
+    for (const f of ["etc/tor/torrc.d-rgoe", "etc/systemd/system/rgoe-bootnode.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(fbFiles.get(f) === got.get(f), `from-block leaves ${f} byte-identical`);
+    const fbOne = render(work, "fromblock-one", { RGOE_FROM_BLOCK: "11510541" });
+    const gwOne = await readFile(join(fbOne.out, "etc/systemd/system/rgoe-gateway.service"), "utf8");
+    ok(fbOne.status === 0 && unitEnv(gwOne, "RGOE_FROM_BLOCK") === "11510541" && unitEnv(gwOne, "RGOE_FROM_BLOCKS") === null, "decimal RGOE_FROM_BLOCK alone -> one line, no RGOE_FROM_BLOCKS");
+    const fbHel = render(work, "fromblock-helios", { ...HEL, RGOE_FROM_BLOCK: "0xafa5ad" });
+    const gwHelFb = await readFile(join(fbHel.out, "etc/systemd/system/rgoe-gateway.service"), "utf8");
+    ok(fbHel.status === 0 && unitEnv(gwHelFb, "RGOE_FROM_BLOCK") === "0xafa5ad" && unitEnv(gwHelFb, "RGOE_ROOT_PROVIDER") === "light", "composes with RGOE_HELIOS=1 (light provider + start block)");
+    for (const [env, re] of [
+      [{ RGOE_FROM_BLOCK: "latest" }, /RGOE_FROM_BLOCK must be a block number/],
+      [{ RGOE_FROM_BLOCK: "0x" }, /RGOE_FROM_BLOCK must be a block number/],
+      [{ RGOE_FROM_BLOCK: "12; rm -rf /" }, /RGOE_FROM_BLOCK must be a block number/],
+      [{ RGOE_FROM_BLOCKS: "0x1234=5" }, /RGOE_FROM_BLOCKS must be/],
+      [{ RGOE_FROM_BLOCKS: "0x" + "ab".repeat(20) + "=" }, /RGOE_FROM_BLOCKS must be/],
+      [{ RGOE_FROM_BLOCKS: "0x" + "ab".repeat(20) + "=5,junk" }, /RGOE_FROM_BLOCKS must be/],
+      [{ RGOE_FROM_BLOCKS: "0x" + "ab".repeat(20) + "=5 " }, /RGOE_FROM_BLOCKS must be/],
+    ]) {
+      const r = render(work, "fromblock-bad", env);
+      ok(r.status !== 0 && re.test(r.stderr), `rejected up front: ${JSON.stringify(env)}`);
+    }
+    for (const env of [{ RGOE_FROM_BLOCK: "" }, { RGOE_FROM_BLOCKS: "" }]) {
+      const r = render(work, "fromblock-unset", env);
+      const files = await readAll(r.out);
+      ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `${Object.keys(env)[0]} empty == default (golden untouched)`);
+    }
 
     // ---------------------------------------------------------------- 5. other guards
     console.log("guards:");

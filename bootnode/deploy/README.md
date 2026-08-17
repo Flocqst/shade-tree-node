@@ -67,6 +67,7 @@ the script exits before installing anything on a bad one.
 | `RGOE_PAY_PRICES` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: `<limit>=<atomic amount>[,…]`, e.g. `8=100000,32=400000`. |
 | `RGOE_RPC_URL` | *(unset)* | **required with `RGOE_REGISTRAR=1`** (and with `RGOE_HELIOS=1`): the JSON-RPC the registrar settles/inserts through. |
 | `RGOE_PAY_TO` / `RGOE_REGISTRAR_PORT` / `RGOE_PAY_CHAIN_ID` | *(operator address)* / `8878` / `11155111` | stablecoin recipient / loopback+onion port / chain id advertised in `/health`. |
+| `RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS` | *(unset = not rendered)* | `eth_getLogs` start block(s) for the gateway's on-chain root scans (`<block>` / `<0xaddr>=<block>,…`), written as `Environment=` into `rgoe-gateway.service` when given. Usually unnecessary: the gateway pages the scan and starts at each contract's deploy block from the network record (`docs/OPERATOR.md` "Public RPC log-range caps"). |
 | `RGOE_RENDER_ONLY` | *(unset)* | `<dir>`: **render mode** — write the torrc include + units under `<dir>/etc/…` with placeholder onions and exit; no root, no apt, no tor/node install, no clone, no `systemctl`. `bootstrap.sh --render <dir>` is the same. This is what `bootstrap.selftest.mjs` drives. |
 
 `RGOE_GW_OPERATOR_KEY` (staked bootnodes) is a secret and deliberately **not** a tunable: add it

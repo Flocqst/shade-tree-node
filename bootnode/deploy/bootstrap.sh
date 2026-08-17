@@ -79,6 +79,14 @@
 #     RGOE_PAY_TO                stablecoin recipient        (default: unset = the operator key's address)
 #     RGOE_REGISTRAR_PORT        loopback + onion port       (default: 8878)
 #     RGOE_PAY_CHAIN_ID          chain id the bootnode advertises in /health (default: 11155111 Sepolia)
+#   RGOE_FROM_BLOCK  <block>            (default: unset = not rendered) eth_getLogs START block for
+#                    the gateway's on-chain root scans (0x-hex or decimal), passed into the gateway
+#                    unit verbatim. Public RPCs cap one eth_getLogs call (publicnode: 50k blocks;
+#                    docs/OPERATOR.md "public RPC log-range caps"); the gateway pages the scan
+#                    itself and derives each contract's deploy block from the committed network
+#                    record, so this is only needed for a contract the records do not know.
+#     RGOE_FROM_BLOCKS <addr>=<block>,…  per-contract start blocks (same passthrough; wins over
+#                    RGOE_FROM_BLOCK for the named contract). Both unset = default render, byte-identical.
 #   RGOE_RENDER_ONLY <dir>   (default: unset) RENDER mode for tests/review: write the torrc
 #                    include + systemd units under <dir>/etc/... and exit WITHOUT touching the
 #                    host (no root, no apt, no tor/node install, no clone, no systemctl). Onions
@@ -117,6 +125,8 @@ RGOE_PAY_PRICES="${RGOE_PAY_PRICES:-}"
 RGOE_PAY_TO="${RGOE_PAY_TO:-}"
 RGOE_REGISTRAR_PORT="${RGOE_REGISTRAR_PORT:-8878}"
 RGOE_PAY_CHAIN_ID="${RGOE_PAY_CHAIN_ID:-11155111}"
+RGOE_FROM_BLOCK="${RGOE_FROM_BLOCK:-}"
+RGOE_FROM_BLOCKS="${RGOE_FROM_BLOCKS:-}"
 # Pinned sha256 of the a16z/helios 0.11.1 release tarballs (github.com/a16z/helios/releases/tag/0.11.1),
 # computed 2026-08-17 from the downloaded assets. Another RGOE_HELIOS_VERSION must bring its own
 # RGOE_HELIOS_SHA256 (no unpinned download, ever).
@@ -194,6 +204,13 @@ if [ "$RGOE_REGISTRAR" = "1" ]; then
     || die "RGOE_REGISTRAR_PORT must be a port in 1024..65535 (got '$RGOE_REGISTRAR_PORT')"
   [[ "$RGOE_PAY_CHAIN_ID" =~ ^[1-9][0-9]{0,15}$ ]] || die "RGOE_PAY_CHAIN_ID must be a positive integer"
 fi
+
+# eth_getLogs start blocks (gateway on-chain roots): a bare block, or <0xaddr>=<block> pairs. Both
+# land verbatim in a unit file, so the shape is pinned here (no spaces/quotes/semicolons).
+{ [ -z "$RGOE_FROM_BLOCK" ] || [[ "$RGOE_FROM_BLOCK" =~ ^(0x[0-9a-fA-F]{1,16}|[0-9]{1,16})$ ]]; } \
+  || die "RGOE_FROM_BLOCK must be a block number (0x-hex or decimal; got '$RGOE_FROM_BLOCK')"
+{ [ -z "$RGOE_FROM_BLOCKS" ] || [[ "$RGOE_FROM_BLOCKS" =~ ^0x[0-9a-fA-F]{40}=(0x[0-9a-fA-F]{1,16}|[0-9]{1,16})(,0x[0-9a-fA-F]{40}=(0x[0-9a-fA-F]{1,16}|[0-9]{1,16}))*$ ]]; } \
+  || die "RGOE_FROM_BLOCKS must be <0xaddress>=<block>[,...] (got '$RGOE_FROM_BLOCKS')"
 
 # --- renderers: the ONLY places torrc / unit text is produced (live + render mode share them) ---
 # torrc include: one HiddenServiceDir block per onion this box publishes. The PoW line is a
@@ -349,6 +366,9 @@ EOF
       echo "Environment=RGOE_ROOT_PROVIDER=light"
       echo "Environment=RGOE_HELIOS_RPC_URL=http://127.0.0.1:${RGOE_HELIOS_PORT}"
     fi
+    # eth_getLogs start block(s) for the on-chain root scan (only when given; unset = no line).
+    [ -z "$RGOE_FROM_BLOCK" ]  || echo "Environment=RGOE_FROM_BLOCK=${RGOE_FROM_BLOCK}"
+    [ -z "$RGOE_FROM_BLOCKS" ] || echo "Environment=RGOE_FROM_BLOCKS=${RGOE_FROM_BLOCKS}"
     cat <<EOF
 ExecStart=${NODE_BIN} ${RGOE_DIR}/gateway/gateway.mjs
 Restart=always
