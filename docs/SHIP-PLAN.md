@@ -62,10 +62,11 @@ Development-correctness P0s (workstream 1) run alongside Gate 1 (they are what t
 
 ## Current focus
 
-> **Pre-ship. Do NOT deploy.** Drive Gate 1 (test hardening) and Gate 2 (Rust client) to done first.
-> Next up: **T-TEST-3** (fill remaining unit selftests) and **T-TEST-2** (fuzz/property tests),
-> then **T-TEST-1** (real-Tor integration) and **T-RUST-1** (conformance harness).
-> `T-DEPLOY-*` is BLOCKED until Gate 1 + Gate 2 are green.
+> **Gate 1 + Gate 2 DONE; Gate 3 (deploy) IN PROGRESS (2026-08-17 ship day).** PR #5 merged to `main`; the
+> loop-34 backlog (T-TEST-3, T-DEPLOY-5, T-DOC-8, T-HARD-4, T-HARD-8) shipped as PRs #7–#13. `GatewayRegistry`
+> is live on Sepolia. Next up: **T-DEPLOY-1/2** per `docs/GO-LIVE.md` (in flight), then the human items:
+> the trusted-setup **ceremony** (issue #6, `docs/CEREMONY.md` §8), stake admission (GO-LIVE Phase 3),
+> **T-DEV-9b** (Helios), **T-FEAT-7** (payments).
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `(Pn)` priority.
 
@@ -156,12 +157,16 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   => ok:false, never throws/hangs), plus the round-trip and `canonicalDirectoryBytes`
   permutation-invariance properties. Passes across seeds. *Remaining:* envelope/`validTarget` parse
   (not yet exported) and address-encoding fuzz — fold in with T-DEV-7.
-- [~] **T-TEST-3 (P0) Fill remaining unit selftests.** DONE: `lib/root-provider.mjs`
+- [x] **T-TEST-3 (P0) Fill remaining unit selftests.** DONE: `lib/root-provider.mjs`
   (12 assertions), `lib/semaphore.mjs`/`lib/rln.mjs` epoch+signal primitives (17), `group/enroll.mjs`
   (`group/enroll.selftest.mjs`, 17 — the security property: only the commitment reaches stdout, the
   secret goes to stderr, and the published leaf == rateCommitment of the withheld secret),
   `group/sign-directory.mjs` (`group/sign-directory.selftest.mjs` — sign/verify + tamper + wrong-signer,
-  library-level to avoid repo pollution). REMAINING: only `bootnode/heartbeat.mjs` (operator resolution).
+  library-level to avoid repo pollution), and `bootnode/heartbeat.mjs` (`bootnode/heartbeat.selftest.mjs`, 99 — every
+  operator source/precedence path incl. fail-fast misconfig, announce bytes vs vectors, adversarial bootnode
+  replies, fake-scheduler outage/recovery, dynamic seed/key log hygiene; PR #7 also fixed 4 bugs the tests
+  found: operator-key echo via ethers' INVALID_ARGUMENT message, half-pair silent downgrade, unverified
+  precomputed sig, non-object reply TypeError). Closed 2026-08-17.
 - [x] **T-TEST-4 (P0) Consolidated adversarial/security suite.** DONE (loop-8, `test/adversarial.selftest.mjs`, 27 checks): poisoned directory, MITM bootnode, forged-announce matrix, stake lapse, registry DoS -- one auditor-facing place, each attack run against real code + proven defeated. Stake-lapse client re-check pending T-DEV-5 (flagged in-suite).
 - [x] **T-TEST-5 (P1) Foundry fuzz + invariants + gas.** DONE (loop-8): 11 fuzz + 4 invariant tests (no forge-std added; `test/FuzzHelpers.sol` + `*.fuzz.t.sol` + `*.invariant.t.sol`). forge 38->53 tests; invariants (`activeCount`==live stakes, balance==sum of bonds) run 4096 calls each, 0 reverts. Gas baselines recorded (no stray .gas-snapshot committed). Deeper runs: raise runs/depth from 64/64.
 - [x] **T-TEST-6 (P1) Node coverage gate.** DONE (loop-9): `c8` devDep + `npm run coverage` with a measured floor (lines 60 / functions 63 / branches 78, set below current so it's a real regression gate) + `.c8rc.json` scoping to shipped code. Not in default `npm test`; CI wiring is T-TEST-9.
@@ -223,7 +228,15 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DEPLOY-6 (P2) Zero-downtime rolling update** across the fleet (drain → update → rejoin).
 - [x] **T-DEPLOY-7 (P2) Persistent on-chain deployment** of `GatewayRegistry` + `StakedReputationSet`
   wired to the live fleet (reuse Sepolia or a chosen L2).
-- [ ] **T-DEPLOY-5 (P1, added loop-34) Close the go-live gaps.** `docs/GO-LIVE.md` (loop-34) is the ordered
+- [x] **T-DEPLOY-5 (P1, added loop-34) Close the go-live gaps.** DONE 2026-08-17 (PRs #8, #9, #11 + orchestrator broadcast):
+  GAP-2 `GatewayRegistry` LIVE on Sepolia `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (recorded in
+  `network/sepolia/contracts.json:contracts.gatewayRegistry` via `scripts/record-deploy.mjs:recordDeploy`, receipt
+  `network/sepolia/gateway-registry-broadcast.json`); GAP-3 `bootnode/deploy/bootstrap.sh:render_torrc` (`RGOE_ENABLE_POW`,
+  default 0); GAP-4 `bin/rgoe.mjs:COMMANDS.identity` → `group/identity.mjs`; GAP-6 `bootstrap.sh:render_heartbeat_unit` /
+  `WITH_BOOTNODE` (`RGOE_BOOTNODE_ONION` gateway-only mode, + `RGOE_RENDER_ONLY`, `bootnode/deploy/bootstrap.selftest.mjs`,
+  gateway-only CI matrix entry); GAP-8 `monitoring/uptime/` timer + `.github/workflows/uptime-probe.yml`; GAP-10
+  `network/sepolia/bootnode.json` + `lib/network-record.mjs` (`RGOE_NETWORK=<name>`); GAP-12 `rgoe exit-gateway` /
+  `withdraw-gateway` / `gateway-status` (`group/exit-gateway.mjs`). Original text: `docs/GO-LIVE.md` (loop-34) is the ordered
   runbook for T-DEPLOY-1/2; its "Gaps found" section lists what the repo lacks. Autonomous ones: deploy +
   record `GatewayRegistry` on Sepolia in `network/sepolia/contracts.json` (GAP-2); `RGOE_ENABLE_POW` toggle in
   `bootnode/deploy/bootstrap.sh` (GAP-3); a first-class `rgoe identity` command emitting the Rust
@@ -245,7 +258,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-DOC-3 (P1) Wire-protocol + API spec.** DONE (loop-7): `docs/PROTOCOL-API.md` -- canonical byte encodings, onion<->key binding, announce + directory + envelope wire formats, bootnode HTTP API, every rejection reason, and a conformance map to testdata/vectors.json. Every claim cited to file:symbol. Unblocks the Rust conformance runner (T-RUST-1).
 - [x] **T-DOC-4 (P2) SECURITY.md** DONE (loop-9): `SECURITY.md` (unaudited/testnet status, in-scope vs known residuals, GitHub private-advisory reporting) + `CONTRIBUTING.md` (test commands, house conventions, the trust-model invariants a contributor must not break, gate ordering).
 - [x] **T-DOC-5 (P2) README polish pass.** DONE (loop-10): skimmable what/why/how lede, pruned the stale "deployed and verified live" overclaim to match pre-ship reality, reworked Run-it around the `rgoe` CLI, and a full Docs index linking every doc that now exists.
-- [ ] **T-DOC-8 (P1, added loop-34) Docs reconciliation pass.** The GO-LIVE audit found docs that
+- [x] **T-DOC-8 (P1, added loop-34) Docs reconciliation pass.** DONE 2026-08-17 (PR #10; CLI.md via #9, PoW paragraphs via #8). Original text: The GO-LIVE audit found docs that
   contradict the code or each other: `network/sepolia/README.md:10-15` + `docs/DEPLOYMENT.md:125` cite the
   superseded StakedReputationSet address (`contracts.json` has the rln-v3 one); `docs/DEPLOYMENT.md` PoW
   mismatch vs `bootstrap.sh` (PoW unconditional); `docs/INCIDENT.md:40,104,286,307-310` say bootnode
@@ -267,12 +280,19 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   (`--check`, `--provenance=`), `test/zk-artifacts.selftest.mjs` (36 assertions: hash recompute, coverage of
   every circuit/verifier file, Solidity VK == JSON VK, contract verifier == circuit verifier, Rust embed paths,
   ARTIFACTS.md table == lock; runs in `npm test` so ci.yml verifies hashes). REMAINING (human): run the ceremony
-  (CEREMONY.md §8), then swap artifacts + `--provenance=ceremony` + flip `EXPECTED_PROVENANCE`. Not wired
-  (filed as T-HARD-8): `verifyEnvelope` has a single VKEY (no dual-VK window), no wire artifact-version field,
+  (CEREMONY.md §8), then swap artifacts + `--provenance=ceremony` + flip `EXPECTED_PROVENANCE`. Why the ceremony is
+  needed at all: issue #6. The rollout machinery is now wired (T-HARD-8, PR #13, 2026-08-17). Previously not wired
+  (now done): `verifyEnvelope` has a single VKEY (no dual-VK window), no wire artifact-version field,
   `release.yml` does not run the lock selftest, Rust binary has no runtime hash check.
 - [x] **T-HARD-2 (P1) Supply chain.** DONE (loop-11, with T-TEST-9): `.github/dependabot.yml` (npm/cargo/actions weekly) + `npm audit` gate (critical blocking, high informational). Lockfile committed. Remaining polish: pin transitive advisories as Dependabot lands upstream fixes.
 - [x] **T-HARD-3 (P1) Log hygiene.** DONE (loop-8, `test/log-hygiene.selftest.mjs`, 25 assertions, mutation-verified): static scan of every log call across 9 files + dynamic capture (bootnode, gateway spent-set, enroll) => no secret/seed logged. Fixed the one note it found: the dry-run slasher no longer prints any bytes of the reconstructed secret (`gateway/gateway.mjs`).
-- [~] **T-HARD-4 (P1) Endpoint hardening.** DONE (loop-2): the client's response read from the
+- [x] **T-HARD-4 (P1) Endpoint hardening.** DONE 2026-08-17 (PR #12): `gateway/gateway.mjs:readEnvelope` envelope
+  deadline (`RGOE_ENVELOPE_TIMEOUT_MS`), relay idle timeout (`RGOE_TUNNEL_IDLE_TIMEOUT_MS`), `makeConnLimiter`
+  (`RGOE_MAX_CONNS`, `RGOE_MAX_CONNS_PER_NULLIFIER`); `bootnode/server.mjs:HTTP_LIMITS` (headers/request/keep-alive
+  timeouts, max header size → 408/431) + `makeAnnounceBucket` global token bucket ahead of ed25519 verify (429);
+  `gateway/hardening.selftest.mjs`, `bootnode/hardening.selftest.mjs`, adversarial §6–7. Also FOUND+FIXED a
+  pre-existing crash lever on main: partial envelope + FIN → writeAfterFIN/EPIPE → gateway process exit (one
+  connection = full outage); permanent socket error sink in `makeHandler`. Earlier partial (loop-2): the client's response read from the
   semi-trusted bootnode is now capped (`RGOE_BOOTNODE_MAX_RESP`, was unbounded => OOM lever), and
   the server's oversized-body rejection is tested. REMAINING: slow-loris/idle-timeout on the
   gateway tunnel, per-connection limits, request timeouts on the bootnode server, and a GLOBAL
@@ -282,7 +302,14 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-HARD-5 (P2) Directory signer rotation.** DONE (loop-13): `verifyDirectory` accepts a pinned-signer ALLOWLIST (single string still works byte-for-byte); `RGOE_DIR_SIGNER` takes a comma-separated overlap set. Rotation: add new to client set -> rotate bootnode key -> drop old. Still an allowlist (unpinned/wrong signer rejected). `lib/directory-rotation.selftest.mjs`.
 - [x] **T-HARD-6 (P2) Contract audit prep.** DONE (loop-9): `docs/CONTRACTS-AUDIT.md` (inventory, 8 written invariants each tied to a test, per-function reentrancy/CEI/access walk, honest limitations) + `slither.config.json`. slither not installed here; config left for later.
 - [x] **T-HARD-7 (P2) Tor hardening.** DONE (loop-11): `docs/TOR-HARDENING.md` (PoW tuning, vanguards, v3 client-auth -- corrected from the deprecated v2 mechanism, process/OS, SOCKS circuit isolation) + `bootnode/deploy/torrc.hardened` reference fragment (server/client tagged, version-dependent options flagged).
-- [ ] **T-HARD-8 (P1, added loop-34) Artifact-version negotiation for the ceremony swap.** `verifyEnvelope`
+- [x] **T-HARD-8 (P1, added loop-34) Artifact-version negotiation for the ceremony swap.** DONE 2026-08-17 (PR #13):
+  content-derived ids `rln-<sha256(vkey)[0:16]>`; `lib/zk-artifacts.mjs:resolveArtifact/selectArtifact`;
+  `lib/rln.mjs:verifyEnvelope` step 3b (`RGOE_ZK_ARTIFACTS=<id>=<vkey>[,…]`, `RGOE_ZK_ARTIFACT_LEGACY`; reasons
+  `artifact-retired:<id>` / `artifact-unknown:<id>` / `bad-artifact`); envelope `artifact` field; signed
+  `caps.artifacts` ad (`bootnode/heartbeat.mjs:buildGatewayCaps`); JS + Rust client negotiation
+  (`client/rgoe-client.mjs:_pickArtifact`, `rust/rgoe-proto:select_artifact`); Rust startup lock hash check
+  (`rust/rgoe-rln/src/artifacts.rs:verify_embedded`); `release.yml` `lock-check`; tests `lib/zk-artifacts.selftest.mjs`
+  + `test/zk-artifact-window.selftest.mjs` (real proofs from two sets). Concrete window procedure: CEREMONY.md §6. Spec: `verifyEnvelope`
   accepts a set of `{artifactId → vkey}` and the envelope/caps carry an artifact id, so a fleet can run a
   dual-VK window during the post-ceremony rollout instead of a flag-day; `release.yml` runs
   `test/zk-artifacts.selftest.mjs`; Rust client checks embedded artifact hashes against the lock at startup.
@@ -296,7 +323,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   me). Full-DISTRIBUTABLE polish remains as its own items: T-RUST-3 (rotation/failover/LKG/bootnode-discovery
   parity), T-RUST-4 (release binaries). PRODUCTION-trust (orthogonal to the client): real exit verifier T-DEV-1,
   trusted setup T-HARD-1, CI real-Tor T-TEST-1. Details of the deterministic core below.
-- [~] **T-RUST-2-core (P1) Rust client MVP deterministic core — DONE (loop-19).**
+- [x] **T-RUST-2-core (P1) Rust client MVP deterministic core — DONE (loop-19; box flipped 2026-08-17: every sub-item 2b/2c/2d/2e landed under T-RUST-2/2b/2c/3/4, Gate 2 closed).**
   Done (focused single run): the conformance-backed deterministic client pipeline in Rust. `rgoe-proto`
   gained receipt verify (`canonical_receipt_bytes`/`verify_receipt`/`RECEIPT_DOMAIN`, hand-built bytes),
   version negotiation (`select_proto_version`/`accept_envelope_version` + pinned reason labels), and gateway
@@ -921,4 +948,13 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   `file:///mnt/src` and git >= 2.35.2 refused the differently-owned bind mount ("dubious ownership") —
   bootstrap.sh now marks a file:// source (and its .git dir) safe.directory. One transient: node-22 Foundry
   download reset (passed on rerun). PR #5 is now merge-ready pending the human's review.
-
+- 2026-08-17  ship-day (loop-35)  PR #5 MERGED to main. Fan-out of 7 worktree agents, one PR each, all merged the same
+  day: #7 T-TEST-3 (heartbeat selftest, 4 bugs fixed), #8 T-DEPLOY-5 GAP-3/6 (bootstrap.sh `RGOE_ENABLE_POW`, gateway-only
+  `RGOE_BOOTNODE_ONION` mode, render mode + golden, gateway-only e2e matrix, default ref → main), #9 T-DEPLOY-5 GAP-4/12
+  (`rgoe identity`, `exit-gateway`/`withdraw-gateway`/`gateway-status`; CLI.md completed), #10 T-DOC-8, #11 T-DEPLOY-5
+  GAP-2-schema/8/10 (`network/<name>/` records, `RGOE_NETWORK`, `rgoe record-deploy`, uptime scheduler + GHA), #12
+  T-HARD-4 (found + fixed a one-connection gateway crash), #13 T-HARD-8. Orchestrator: `GatewayRegistry` broadcast on
+  Sepolia (`0x94ECeD0C…A868`, block 11509783) and recorded; issue #6 written (why the ceremony is needed). CI green on
+  every merge (GitHub API 503-flaky all day; two pull_request events were dropped and re-triggered). T-DEPLOY-1/2
+  go-live in flight (`docs/GO-LIVE.md`; droplet-1 = the idle June PoC box, droplet-2 = new agent-devops box in another
+  DO region).

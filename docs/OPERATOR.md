@@ -425,7 +425,8 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_GROUP_CONTRACT` | `--group-contract` | `StakedReputationSet` address; set = on-chain membership roots, unset = `members.json`. |
 | `RGOE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
 | `RGOE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
-| `RGOE_SLOTS` | (none) | Per-epoch rate cap (nullifiers before over-spend). Must match client and gateway. |
+| `RGOE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
+| `RGOE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `RGOE_SLOTS`. See "Reputation tiers" below. |
 | `RGOE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
 | `RGOE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `RGOE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |
 | `RGOE_ROOT_PROVIDER` | `--root-provider` | `node` (trusted node, event reconstruction; default) or `light` (EIP-1186 storage proof of the on-chain `currentRoot`). |
@@ -471,6 +472,30 @@ Trust after this: the sync committee + that checkpoint; the RPC can withhold but
 (`docs/THREAT-MODEL.md`). If Helios is down or on the wrong chain the gateway refuses to
 start reading roots (fail closed) and restarts until it is up. Full how-to, flags and the live
 Sepolia receipt: `docs/LIGHT-CLIENT.md`; tunables: `bootnode/deploy/README.md`.
+
+### Reputation tiers (T-FEAT-8)
+
+A member's per-epoch budget is the `userMessageLimit` baked into its leaf
+(`docs/adr/0006-reputation-tiers.md`): `Poseidon2(Poseidon1(identitySecret), limit)`. One tree
+holds every tier; the proof opens the leaf and range-checks the slot under its limit, so the
+gateway needs NO per-tier config to enforce it — a leaf carrying limit 8 has no valid proof
+for slot 8, and a member cannot forge a bigger limit (a different leaf, not in your set:
+`wrong-group-root`). What you as operator decide is admission: which limit you admit for whom.
+
+```bash
+# member side (they run this; only the commitment reaches you):
+rgoe enroll --limit 32 --commitment-only        # -> leaf that commits to 32; they run RGOE_LIMIT=32
+# operator side: admit the leaf exactly like a default one (members.json / register-onchain)
+# gateway: tell the slash path which limits exist, so an over-spender's leaf resolves to its tier
+export RGOE_TIERS=8,32
+```
+
+Limits are 1..65535 (the circuit's 16-bit range check; never admit more). With
+`RGOE_TIERS` unset a tiered over-spender is still slashed, but the log names the default-tier
+leaf (`slash: tier of the over-spent leaf not resolvable locally`). **On chain**, tiers are not
+admitted yet: `StakedReputationSet`'s hasher pins `K = 8`, so a tiered leaf staked on chain
+cannot be slashed there until the follow-up in `docs/ONCHAIN.md` "Tiers on chain" ships —
+use tiers on `members.json` gateways, or only at the default limit on chain.
 
 ### Endpoint hardening (T-HARD-4)
 

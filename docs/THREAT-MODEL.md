@@ -144,6 +144,21 @@ semantics comment; the gateway keys its spent-set on the proof's *public-signal*
 so a lying envelope cannot desync accounting. What the gateway learns is a fresh nullifier per slot
 and nothing tying two slots to one member. Adversary A1 (incl. colluding set).
 
+**Reputation tiers (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** `K` is per LEAF, not
+global: the leaf is `Poseidon2(Poseidon1(identitySecret), userMessageLimit)` and the circuit
+range-checks `messageId < userMessageLimit` with both PRIVATE, so a tier-32 member gets 32
+unlinkable nullifiers per epoch from the same tree, and the tier itself never reaches the wire
+(the public signals, envelope, and `verifyEnvelope` result are byte-identical across tiers —
+`test/reputation-tiers.selftest.mjs` UNLINKABLE). **Tier forgery (A5) is leaf forgery:** a
+member proving with a limit its leaf does not carry has no Merkle path (`proveForSlot` "not in
+group"), and a real proof over a self-made tree with the wished-for leaf is rejected
+`wrong-group-root` before any SNARK work (`lib/rln.mjs:verifyEnvelope` check 3); a tier-8
+member at slot 8 has no valid proof at all (client pre-check + circuit RangeCheck assert), so
+exceeding its tier forces a nullifier reuse => `over-spend-slashed`. Residual: `LessThan(16)`
+is unsound for a limit >= 2^16, so admission MUST refuse such leaves (`MAX_LIMIT`, `normLimit`
+— an admission-time rule, not a circuit one), and the on-chain hasher pins `K = 8`, so tiered
+leaves staked on chain are unslashable there until `docs/ONCHAIN.md` "Tiers on chain" ships.
+
 ### 4.4 Message-to-target binding
 A captured proof cannot be redirected to a different destination. The committed public `x` is
 `calculateSignalHash(requestSignal(target, nonce))`; the gateway recomputes it from the envelope's

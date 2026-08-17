@@ -25,14 +25,19 @@ import { Duplex } from "node:stream";
 import tls from "node:tls";
 import https from "node:https";
 import { SocksClient } from "socks";
-import { currentEpoch, K_SLOTS, requestSignal, proveForSlot, loadGroup, cleanUp, clientArtifactIds, selectArtifact } from "../lib/semaphore.mjs";
+import { currentEpoch, K_SLOTS, normLimit, requestSignal, proveForSlot, loadGroup, cleanUp, clientArtifactIds, selectArtifact } from "../lib/semaphore.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // ---- slot pool: per-epoch group warm + one slot/request rotation ----------------
 // (moved verbatim from the shim; the deterministic-retry + rotation invariants live here.)
+// `K` is THIS member's tier limit (T-FEAT-8): the userMessageLimit its leaf was enrolled with.
+// The pool wraps slots at K and every proof is made with `limit: K`, so a tier-2 member
+// (K=32) gets 32 distinct nullifiers per epoch from the same tree, and a member configured
+// with a K its leaf does not carry cannot prove at all (proveForSlot: not in group).
 export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEpoch, K = K_SLOTS, loadGroupFn = loadGroup }) {
+  K = Number(normLimit(K));
   let epoch = null;
   let cursor = 0;
   let group = null;
@@ -54,7 +59,7 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     Promise.resolve()
       .then(async () => {
         const g = await ensureGroup();
-        await prove(secret, ep, 0, requestSignal("precompute:warm", String(ep)), { group: g });
+        await prove(secret, ep, 0, requestSignal("precompute:warm", String(ep)), { group: g, limit: K });
       })
       .catch(() => { /* warm is best-effort */ });
   }
@@ -74,7 +79,7 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     return { epoch: ep, slot: i };
   }
 
-  return { ensureEpoch, ensureGroup, nextSlot, state: () => ({ epoch, cursor }) };
+  return { ensureEpoch, ensureGroup, nextSlot, K, state: () => ({ epoch, cursor }) };
 }
 
 // ---- protocol version negotiation (T-FEAT-11) -------------------------------
@@ -128,7 +133,8 @@ export async function buildEnvelope({ secret, target, pool, prove = proveForSlot
   const signal = requestSignal(target, nonce);
   const { epoch, slot } = pool.nextSlot();
   const group = await pool.ensureGroup();
-  const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined });
+  // `limit` = the pool's tier K (T-FEAT-8); a pool without one (older fakes) proves at the default.
+  const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined, limit: pool.K ?? K_SLOTS });
   const { proof, nullifier, externalNullifier, share } = proved;
   // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
   // this target (verifyEnvelope check 2b). It reveals nothing (it is random per request) and it is
@@ -256,7 +262,10 @@ export class RgoeClient {
     this.gatewayArtifacts = opts.gatewayArtifacts || null;
     // Injectable prover (tests pass a fake); defaults to the real lib proveForSlot.
     this._prove = opts.prove || proveForSlot;
-    this.pool = makeSlotPool({ secret: this.secret });
+    // This member's tier limit (T-FEAT-8): { limit } or RGOE_LIMIT; default K_SLOTS (RGOE_SLOTS, 8).
+    // Must equal the limit the member's leaf was enrolled with (`rgoe enroll --limit`).
+    this.limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS));
+    this.pool = makeSlotPool({ secret: this.secret, K: this.limit });
     this.pool.ensureEpoch(); // warm the current epoch in the background
   }
 

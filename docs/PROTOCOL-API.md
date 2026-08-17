@@ -362,6 +362,12 @@ NON-authoritative: `verifyEnvelope` reads them from `proof.snarkProof.publicSign
 from the envelope copies (`lib/rln.mjs:288` header). `publicSignals` field set is
 `{ y, root, nullifier, x, externalNullifier }` (`client/rgoe-client.mjs:214`).
 
+**Reputation tiers carry NO wire field (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** The
+member's per-epoch budget (`userMessageLimit`) is a PRIVATE circuit input hashed into its leaf and
+range-checking the private `messageId`; the envelope, the public-signal set, and the gateway's
+reply are byte-identical for a tier-8 and a tier-32 member. There is no `limit`/`tier` field, and a
+gateway MUST NOT be sent one. Enforcement is the root (`wrong-group-root`) + the nullifier set.
+
 ### 6.2 Request signal + target binding
 
 `lib/rln.mjs:124` `requestSignal`:

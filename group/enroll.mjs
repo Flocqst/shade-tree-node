@@ -18,6 +18,13 @@
 //                                            guidance to stderr); do NOT touch members.json.
 //                                            Pipe/hand the commitment to the operator, or:
 //                                            node group/register-onchain.mjs <commitment>
+//   node group/enroll.mjs --limit 32 ...  -> enrol at a reputation TIER (T-FEAT-8): the leaf
+//                                            commits to userMessageLimit=32 instead of the
+//                                            default K (8). The member must then run its client
+//                                            with the SAME limit (RGOE_LIMIT=32 / identity file
+//                                            `limit`) — a leaf carries exactly one tier. Whether
+//                                            a member MAY hold a tier is the operator's / the
+//                                            contract's admission call (docs/adr/0006).
 //
 // The secret is a bearer credential. Whoever holds it can egress as this member
 // until the set is rotated. It is printed here for the MEMBER to keep and is never
@@ -26,10 +33,21 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { identityFor, rateCommitmentOf, MEMBERS_PATH, loadGroup } from "../lib/rln.mjs";
+import { identityFor, rateCommitmentOf, MEMBERS_PATH, loadGroup, K_SLOTS, normLimit } from "../lib/rln.mjs";
 
 const args = process.argv.slice(2);
 const commitmentOnly = args.includes("--commitment-only") || args.includes("--no-local");
+// --limit <n> | --limit=<n>: the tier limit baked into the leaf (default K_SLOTS). Validated
+// (1..MAX_LIMIT) before anything is derived; the value is consumed so it is never mistaken for
+// the label.
+let limitArg = null;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--limit") { limitArg = args[i + 1]; args.splice(i, 2); break; }
+  if (args[i].startsWith("--limit=")) { limitArg = args[i].slice("--limit=".length); args.splice(i, 1); break; }
+}
+let limit;
+try { limit = Number(normLimit(limitArg ?? K_SLOTS)); }
+catch (e) { console.error("enroll: --" + e.message); process.exit(2); }
 const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2).toString("hex");
 
 // The identity is generated HERE, on the member's machine. The secret never leaves.
@@ -39,15 +57,17 @@ const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2
 // against AND the leaf the on-chain slash names (a reconstructed identitySecret ->
 // deriveCommitment() lands here). One coherent leaf, no scheme flag.
 const secret = "0x" + randomBytes(32).toString("hex");
-const commitment = rateCommitmentOf(identityFor(secret)).toString();
+const commitment = rateCommitmentOf(identityFor(secret), limit).toString();
+const tierNote = limit === K_SLOTS ? "" : `   (tier limit ${limit}: run the client with RGOE_LIMIT=${limit})`;
 
 if (commitmentOnly) {
   // Machine path: stdout is the commitment alone, so it can be piped straight to
   // the on-chain register or handed to the operator. The secret goes to stderr so
   // it is visible to the human running this but never captured by a pipe.
   process.stderr.write("Self-enrollment (commitment-only). Keep this secret PRIVATE; it never leaves your machine:\n");
-  process.stderr.write("\n  export RGOE_SECRET=" + secret + "\n\n");
-  process.stderr.write("Submit the commitment below (stdout) to the operator, or stake it on chain:\n");
+  process.stderr.write("\n  export RGOE_SECRET=" + secret + "\n");
+  if (limit !== K_SLOTS) process.stderr.write("  export RGOE_LIMIT=" + limit + "   (this leaf's tier; the client must prove with it)\n");
+  process.stderr.write("\nSubmit the commitment below (stdout) to the operator, or stake it on chain:\n");
   process.stderr.write("  node group/register-onchain.mjs " + commitment + "\n\n");
   process.stdout.write(commitment + "\n");
   process.exit(0);
@@ -65,12 +85,14 @@ const { root, count } = await loadGroup();
 console.log("Self-enrolled a member (you generated the identity; only the commitment left this machine).");
 console.log("  label:        " + label + "   (local only, never enters the set)");
 console.log("  commitment:   " + commitment + "   (public; added to the set / stake this on chain)");
+console.log("  tier limit:   " + limit + (limit === K_SLOTS ? "   (default K)" : "   (per-epoch budget baked into the leaf)") + tierNote);
 console.log("  set size:     " + count);
 console.log("  group root:   " + root);
 console.log("");
 console.log("Keep THIS SECRET private (the operator never sees it):");
 console.log("");
 console.log("  export RGOE_SECRET=" + secret);
+if (limit !== K_SLOTS) console.log("  export RGOE_LIMIT=" + limit);
 console.log("");
 console.log("To stake the commitment on the on-chain StakedReputationSet instead of the local set:");
 console.log("  node group/register-onchain.mjs " + commitment);

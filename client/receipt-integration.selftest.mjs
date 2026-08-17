@@ -49,6 +49,7 @@ function newKey() {
 // (envelope.proof.snarkProof.{publicSignals,proof.pi_*}, proof.epoch, proof.rlnIdentifier). No zk.
 const MOCK_SEMAPHORE = `
 export const K_SLOTS = 8;
+export function normLimit(l = K_SLOTS) { return BigInt(l); } // T-FEAT-8 tier limit (mock: identity)
 export function currentEpoch() { return 7n; }
 export function requestSignal(target, nonce) { return "sig(" + target + "|" + nonce + ")"; }
 export async function proveForSlot(secret, epoch, i, signal, opts) {

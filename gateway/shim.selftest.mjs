@@ -35,6 +35,7 @@ await mkdir(work, { recursive: true });
 const MOCK_SEMAPHORE = `
 export const EPOCH_SECONDS = 120;
 export const K_SLOTS = 8;
+export function normLimit(l = K_SLOTS) { return BigInt(l); } // T-FEAT-8 tier limit (mock: identity)
 export const MEMBERS_PATH = "/dev/null/members.json";
 export function currentEpoch() { return 7n; }
 export function externalNullifierFor(epoch) { return "extnull(" + epoch + ")"; }
@@ -69,6 +70,9 @@ export function getArtifactSet() { return { accepted: new Map(), ids: ["rln-mock
 const MOCK_RLN = `
 export function reconstructSecret(a, b) { return "SECRET(" + a.y + "|" + b.y + ")"; }
 export function deriveCommitment(secret) { return "COMMIT(" + secret + ")"; }
+export const K_SLOTS = 8;
+export const TIERS = [8];
+export function resolveSlashLeaf(secret) { return { commitment: deriveCommitment(secret), limit: 8, resolved: true }; } // T-FEAT-8 (mock)
 `;
 
 const LOADER = `

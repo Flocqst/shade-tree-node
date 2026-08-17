@@ -34,4 +34,9 @@ node "$HERE/verify-envelope.mjs" "$WORK/envA.json"
 echo "== cross-impl over-spend reconstruction =="
 node "$HERE/overspend.mjs" "$WORK/envA.json" "$WORK/envB.json" "$WORK/fixtureA.json"
 
+echo "== reputation tier (T-FEAT-8): tier-32 leaf, slot 20 (>= default K) — Rust proves, JS accepts =="
+RGOE_INTEROP_LIMIT=32 RGOE_INTEROP_SLOT=20 node "$HERE/fixture-gen.mjs" 0123456789abcdef0123456789abcdef > "$WORK/fixtureT.json"
+"$PROBE" "$WORK/fixtureT.json" "$WORK/envT.json" "$CIRCUITS"
+node "$HERE/verify-envelope.mjs" "$WORK/envT.json"
+
 echo "== RLN INTEROP OK =="

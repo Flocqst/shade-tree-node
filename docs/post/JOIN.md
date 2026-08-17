@@ -43,6 +43,12 @@ rgoe client --secret $RGOE_SECRET \
   --dir-signer <bootnode-signer-pubkey>
 ```
 
+For the Sepolia fleet you do not need to copy the two values by hand: the committed record
+`network/sepolia/bootnode.json` carries the bootnode onion + pinned signer (live since
+2026-08-17, `docs/GO-LIVE-LOG-2026-08-17.md`), so `RGOE_NETWORK=sepolia rgoe client` (or
+`rgoe client --network sepolia`) is the whole command. Explicit `--bootnode`/`--dir-signer`
+still win over the record.
+
 It binds `127.0.0.1:8888` (override with `RGOE_SHIM_PORT`).
 
 ## 3. Route traffic through it

@@ -24,7 +24,9 @@ the exact `rgoe client …` command to hand out. Re-running is safe (keys and un
 
 ## What it installs
 
-- **Node 24** (NodeSource) and **Tor** (official Tor Project repo, so the onion PoW DoS
+- **Node 24** (NodeSource; a pre-installed Node < 24 is upgraded — under the units'
+  `SystemCallFilter=@system-service` Node 20 dies with `SIGSYS` on `pkey_alloc`, Node 24 does not)
+  and **Tor** (official Tor Project repo, so the onion PoW DoS
   defense is *available*; it is **off by default**, `RGOE_ENABLE_POW=1` turns it on).
 - A `rgoe` service user and the repo at `/opt/rgoe`.
 - Onion identities minted once into `/opt/rgoe/deploy-state/` and copied into Tor's own HS
