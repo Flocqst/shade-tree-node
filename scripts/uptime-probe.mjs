@@ -69,9 +69,13 @@ function plainGet(base, path) {
   });
 }
 
-function makeFetcher() {
+// `preferUrl`: an EXPLICIT RGOE_BOOTNODE_URL (set before the RGOE_NETWORK record filled
+// anything) beats a record-supplied onion — explicit env wins over the record, and since the
+// sepolia record went live (2026-08-17) it always supplies an onion.
+function makeFetcher({ preferUrl = false } = {}) {
   const onion = process.env.RGOE_BOOTNODE_ONION;
   const url = process.env.RGOE_BOOTNODE_URL;
+  if (preferUrl && url) return (path) => plainGet(url, path);
   if (onion) {
     return (path) => fetchOverTor(onion, path, { torHost: TOR_HOST, torPort: TOR_PORT, timeoutMs: TIMEOUT_MS, maxBytes: MAX_RESP });
   }
@@ -85,9 +89,10 @@ export async function probe() {
 
   // RGOE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
   // misconfig (fail closed), never a throw out of probe().
+  const explicitUrl = !!process.env.RGOE_BOOTNODE_URL && !process.env.RGOE_BOOTNODE_ONION;
   try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return result; }
   const pinnedSigner = process.env.RGOE_DIR_SIGNER;
-  const fetchJson = makeFetcher();
+  const fetchJson = makeFetcher({ preferUrl: explicitUrl });
   if (!fetchJson) { result.reason = "misconfig:set RGOE_BOOTNODE_ONION or RGOE_BOOTNODE_URL"; return result; }
   if (!pinnedSigner) { result.reason = "misconfig:set RGOE_DIR_SIGNER (pinned signer)"; return result; }
 

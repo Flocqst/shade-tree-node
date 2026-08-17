@@ -29,16 +29,29 @@ the real RLN rateCommitment. An intermediate RLN deploy `0x7c5bcfD3…8c6E` was 
 ## Bootnode
 
 [`bootnode.json`](bootnode.json) is the committed discovery record (`{onion, signer,
-admission, staticDirectory}`; schema in `network/README.md`). Status: **pending** — the
-existing gateway fleet below is discovered through the static signed `directory.json`
-(the record's `staticDirectory` carries that directory's pinned signer, so
-`RGOE_NETWORK=sepolia` already resolves `RGOE_DIRECTORY` + `RGOE_DIR_SIGNER`). No bootnode
-onion for the existing fleet is recorded in this repo. When the T-DEPLOY-1 bootnode is
-live (docs/GO-LIVE.md row 7.1), set `onion` + `signer` to the NEW fleet's values,
-`admission` to what its unit enforces, and `status: live` — onions and pubkeys only, never
-IPs.
+admission, staticDirectory}`; schema in `network/README.md`). Status: **live** since
+2026-08-17 (T-DEPLOY-1, [`docs/GO-LIVE-LOG-2026-08-17.md`](../../docs/GO-LIVE-LOG-2026-08-17.md)).
 
-## Gateway fleet
+| field | value |
+|---|---|
+| bootnode onion | `kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion` |
+| pinned signer (`RGOE_DIR_SIGNER`) | `d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73` |
+| admission | `open` (stake admission = Phase 3 of the runbook, not yet switched on) |
+| gateway-1 onion (region `na`) | `yaxo4ywgoizk4yiylx66k3vjsgcj5waruumgi6dgds4fgaihd2eh7yqd.onion` |
+| onion PoW | off (`RGOE_ENABLE_POW=0`; a `pow: no` client tor could not reach a PoW onion) |
+| membership root | committed `group/members.json` (PoC fallback), 8 members |
+| ref deployed | `main` @ `cb237e07` |
+
+`RGOE_NETWORK=sepolia` now resolves `RGOE_BOOTNODE_ONION` + `RGOE_DIR_SIGNER` to the values
+above, so `RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client` discovers the fleet through the
+bootnode. Cold path (bootnode dark, `docs/INCIDENT.md` #1): the record's `staticDirectory`
+points at [`directory-bootnode.json`](directory-bootnode.json), the bootnode's own signed
+`/directory` export (same signer), so `RGOE_DIRECTORY=network/sepolia/directory-bootnode.json
+RGOE_DIR_SIGNER=d79f78c3…3a73` still works. The box hosting bootnode + gateway-1 is a
+DigitalOcean droplet in NYC (`docs/GO-LIVE-LOG-2026-08-17.md` names it); its clearnet IP is
+operational metadata and is not recorded here.
+
+## Legacy gateway fleet (static directory)
 
 Three reputation-gated onion egress gateways on DigitalOcean (nyc3), provisioned via
 `~/agent-devops` (`rgoe_gateway` role). Membership gates on the committed
@@ -67,8 +80,19 @@ created by OpenTofu, egress-01/02 retrofitted via the Ansible role.
 
 ## Using this deployment
 
+Bootnode fleet (live discovery, the default path):
+
 ```bash
-export RGOE_DIRECTORY=network/sepolia/directory.json      # rotate across the fleet
+export RGOE_SECRET=<your enrolled secret>
+bash scripts/start-tor-client.sh                           # laptop tor on SOCKS 9260
+RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node bin/rgoe.mjs client   # bootnode onion + signer from bootnode.json
+curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # a gateway's clean IP
+```
+
+Legacy static-directory fleet:
+
+```bash
+export RGOE_DIRECTORY=network/sepolia/directory.json      # rotate across the legacy fleet
 export RGOE_DIR_SIGNER=189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321
 export RGOE_SECRET=<your enrolled secret from demo-keys.local.md>
 bash scripts/run-client.sh

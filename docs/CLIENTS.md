@@ -65,10 +65,11 @@ Env: `RGOE_SECRET`, `RGOE_ONION` (pin) **or** `RGOE_DIRECTORY`+`RGOE_DIR_SIGNER`
 the shim silently falls back to a stale local `tor/hs/hostname`.
 
 Shortcut: `RGOE_NETWORK=sepolia` (or `rgoe client --network sepolia`) fills the discovery
-inputs from the committed record `network/sepolia/bootnode.json` — the bootnode onion + pinned
-signer once that record is `live`, or the static `directory.json` + its signer meanwhile — so
-the shim line above becomes `RGOE_SECRET=0x… RGOE_NETWORK=sepolia node client/shim.mjs`.
-Explicit env still wins over the record (`network/README.md`).
+inputs from the committed record `network/sepolia/bootnode.json` — the live bootnode onion +
+pinned signer (status `live` since the 2026-08-17 go-live, `docs/GO-LIVE-LOG-2026-08-17.md`) —
+so the shim line above becomes `RGOE_SECRET=0x… RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 node client/shim.mjs`
+(the shim then discovers the fleet through the bootnode instead of a static file). Explicit env
+still wins over the record (`network/README.md`).
 
 ## Planned — stock HTTP CONNECT + `Proxy-Authorization` (no custom client at all)
 

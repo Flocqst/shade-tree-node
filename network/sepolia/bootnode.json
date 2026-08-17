@@ -1,14 +1,14 @@
 {
   "network": "sepolia",
-  "status": "pending",
-  "onion": null,
-  "signer": null,
+  "status": "live",
+  "onion": "kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion",
+  "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73",
   "admission": "open",
   "staticDirectory": {
-    "path": "directory.json",
-    "signer": "189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321"
+    "path": "directory-bootnode.json",
+    "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73"
   },
-  "deployedRef": null,
+  "deployedRef": "main@cb237e070f07c5a97928ad1c1831ddad9e7bfc9f",
   "updated": "2026-08-17",
-  "note": "TEMPLATE, status pending: the existing Sepolia gateway fleet is discovered through the committed static directory.json (signer above, the value network/sepolia/README.md pins as RGOE_DIR_SIGNER); no bootnode onion for it is recorded in this repo. When the T-DEPLOY-1 bootnode is live (docs/GO-LIVE.md row 7.1) set onion + signer to the NEW fleet's values, admission to what its unit enforces, status to live. Onions and pubkeys only, never IPs."
+  "note": "LIVE since 2026-08-17 (docs/GO-LIVE-LOG-2026-08-17.md, T-DEPLOY-1): bootnode + gateway-1 (region na) on droplet-1, admission open, onion PoW off (RGOE_ENABLE_POW=0), membership root = committed group/members.json (PoC fallback). staticDirectory is the bootnode's own signed /directory export (same signer) for the cold path when the bootnode is dark; the LEGACY static fleet directory.json (signer 189f...1321) is untouched next to it. Onions and pubkeys only, never IPs."
 }
