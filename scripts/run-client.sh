@@ -20,8 +20,12 @@ if [ -z "${RGOE_SECRET:-}" ]; then
   echo "no RGOE_SECRET. Run:  node group/enroll.mjs   then   export RGOE_SECRET=..." >&2
   exit 1
 fi
-# Default to the live deployed gateway (DigitalOcean NYC, 204.48.28.220) so a
-# friend can run with no args. Override RGOE_ONION to point at a different box.
+# Default to the original PoC gateway onion (single-gateway path; the fleet path is
+# `rgoe client --bootnode ...`, see docs/QUICKSTART.md) so a friend can run with no
+# args. Override RGOE_ONION to point at a different box. The onion is a discovery
+# handle: knowing it buys nothing without a valid membership proof (fail-closed gate).
+# Its clearnet IP is deliberately not repeated here; scripts/join.sh carries it as
+# RGOE_EXPECT_IP, the receipt verify.sh compares the observed egress IP against.
 export RGOE_ONION="${RGOE_ONION:-ezguggje6sbldhw4pl5nudwg2mrwkb5zzyu3a26qc4eka2ur24bv3eqd.onion}"
 echo "gateway onion: ${RGOE_ONION}"
 

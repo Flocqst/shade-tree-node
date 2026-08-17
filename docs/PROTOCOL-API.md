@@ -250,8 +250,9 @@ per-gateway onion↔pubkey binding (section 4.3, reasons 5–6) is then checked 
 | — | success | `{ ok:true, signers:[matched…], threshold }` |
 
 Golden vector: `testdata/vectors.json` `thresholdDirectory` (2-of-3, fixed seeds; its canonical
-bytes equal `canonicalDirectoryBytesHex`). Rust follow-up: `rust/rgoe-proto` `verify_directory`
-is single-signer only and needs a threshold sibling to consume this shape (noted, not built).
+bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/rgoe-proto`
+`verify_directory_threshold(dir, pinned_signers)` consumes this shape (T-FEAT-9b);
+`verify_directory` remains the single-signer path.
 
 ## 5. Bootnode HTTP API
 

@@ -28,7 +28,7 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `RGOE_GROUP_CONTRACT` | (unset; falls back to `contracts/deployed.local.json`, else `members.json`) | `StakedReputationSet` address. If set, the gateway reads roots on-chain via a RootProvider; if unset it uses the local `members.json` root (PoC fallback). | gateway root source, root-provider | `--group-contract` |
-| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (Helios light client; not yet wired). | root-provider factory | `--root-provider` |
+| `RGOE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (EIP-1186 storage proof of `currentRoot` against the block header, `LightClientRootProvider`; the header's `stateRoot` is still taken from the RPC — beacon/Helios validation is T-DEV-9b). | root-provider factory | `--root-provider` |
 | `RGOE_SLASH_KEY` | (unset → dry-run) | Operational hot key that submits on-chain `slash()` txs. Without it (or without a slash contract) slashing logs a dry-run. | gateway slasher | `--slash-key` |
 | `RGOE_SLASH_CONTRACT` | (unset; falls back to `deployed.local.json`) | Slash contract address. Independent of the membership root source, so a gateway can slash on-chain while membership stays on `members.json`. | gateway slasher | `--slash-contract` |
 | `RGOE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |

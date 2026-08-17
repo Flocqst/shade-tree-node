@@ -1,6 +1,14 @@
 # On-chain staked reputation set: max-anonymous admission with slashing
 
-**Status: design, not built.** This is ROADMAP-v1 item #2 ("On-chain reputation
+**Status: design doc; the core is built.** `contracts/StakedReputationSet.sol` (stake,
+ZK-authorized exit/withdraw via `contracts/WithdrawVerifier.sol`, permissionless slash by
+secret reconstruction, on-chain incremental tree + `currentRoot` accessor) is live on Sepolia
+as release `rln-v3` (`network/sepolia/contracts.json`; the live deployment still points at
+`MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3); the gateway reads the root
+through `lib/root-provider.mjs` (`RGOE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
+`light` provider whose stateRoot validation is still open, T-DEV-9b); `contracts/GatewayRegistry.sol`
+exists but is not yet deployed on Sepolia. Read the design below for the reasoning; read
+`docs/CONTRACTS-AUDIT.md` for the invariants as implemented. This is ROADMAP-v1 item #2 ("On-chain reputation
 set") sharpened on two axes the roadmap deliberately left open:
 
 1. **Max anonymity of enrollment.** ROADMAP-v1 #2 parks enroller privacy as out of
