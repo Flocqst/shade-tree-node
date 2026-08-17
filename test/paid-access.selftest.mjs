@@ -43,6 +43,7 @@ const ANVIL_ADDR_2 = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"; // slash rece
 const ANVIL_ADDR_3 = "0x90F79bf6EB2c4f870365E785982E1f101E93b906"; // paid-set operator (the registrar key)
 const ANVIL_KEY_3 = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
 const ANVIL_KEY_4 = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a"; // NOT the operator
+const ANVIL_KEY_5 = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba"; // JS-side deployer (its own nonce lane: never shared with the forge broadcast key)
 
 async function rpc(url, method, params = []) {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
@@ -112,7 +113,9 @@ async function main() {
     const hasher = deployed.hasher;
     const { ethers } = await import("ethers");
     const provider = new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
-    const deployer = new ethers.Wallet(ANVIL_KEY_0, provider);
+    // A DIFFERENT key than the forge broadcast (key 0): sharing one account across forge + ethers
+    // raced on the nonce in CI ("nonce has already been used").
+    const deployer = new ethers.Wallet(ANVIL_KEY_5, provider);
     // PoseidonT3 (external library) + the linked PaidAccessSet, from the forge artifacts (the deploy
     // script above already built the tree; build if the artifact is missing).
     const readArtifact = (rel) => JSON.parse(readFileSync(join(ROOT, "out", rel), "utf8"));
