@@ -239,4 +239,8 @@ async function main() {
 main().then(() => {
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: paid-access selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);
-}).catch((e) => { console.error(e); process.exit(1); });
+}).catch((e) => {
+  // On stdout with a FAIL marker so scripts/test-all.mjs surfaces the cause, not just the last stderr line.
+  console.log(`  FAIL (uncaught) ${e && e.stack ? e.stack.split("\n").join(" | ") : e}${e && e.code ? ` code=${e.code}` : ""}${e && e.path ? ` path=${e.path}` : ""}`);
+  process.exit(1);
+});
