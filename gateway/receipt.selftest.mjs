@@ -121,7 +121,10 @@ await test("PRIVACY: the receipt exposes ONLY {v,onion,epoch,ok,sig} — no memb
   const r = buildReceipt({ onion: gw.onion, epoch: EPOCH, onionSeedHex: gw.seed });
   assert.deepEqual(Object.keys(r).sort(), ["epoch", "ok", "onion", "sig", "v"]);
   // Belt-and-suspenders: no forbidden field name appears anywhere in the serialized receipt.
-  const blob = JSON.stringify(r).toLowerCase();
+  // The onion (random base32) and sig (random hex) are opaque values that can contain any short
+  // substring by chance (a 56-char onion contains "ts" ~5% of the time -> flaky), so they are
+  // masked out; every OTHER byte of the receipt is scanned.
+  const blob = JSON.stringify({ ...r, onion: "<onion>", sig: "<sig>" }).toLowerCase();
   for (const forbidden of ["nullifier", "target", "share", "commitment", "member", "nonce", "secret", "ts", "identity", "x\":"]) {
     assert.ok(!blob.includes(forbidden), `receipt must not contain "${forbidden}"`);
   }

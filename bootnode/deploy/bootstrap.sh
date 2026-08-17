@@ -3,7 +3,7 @@
 # gateway, in one idempotent command. You rent the box; this does the rest.
 #
 #   ssh root@<droplet>            # or a sudo user
-#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/feat/bootnode-and-productionize/bootnode/deploy/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
 #   # or, if you already cloned the repo on the box:
 #   sudo bash bootnode/deploy/bootstrap.sh
 #
@@ -14,22 +14,230 @@
 #
 # Tunables (env):
 #   RGOE_REPO        git URL            (default: the public repo)
-#   RGOE_REF         branch/tag/sha     (default: feat/bootnode-and-productionize)
+#   RGOE_REF         branch/tag/sha     (default: main)
 #   RGOE_DIR         install dir        (default: /opt/rgoe)
 #   RGOE_ADMISSION   open | stake       (default: open)
 #   RGOE_BOOTNODE_PORT / RGOE_GATEWAY_PORT   loopback backends (default 8877 / 8443)
+#   RGOE_ENABLE_POW  1 | 0              (default: 0) onion PoW DoS defense
+#                    (HiddenServicePoWDefensesEnabled) on every HS block this box publishes.
+#                    Default OFF: a client tor built without the pow module (e.g. the Homebrew
+#                    bottle, `tor --list-modules` -> `pow: no`) could NOT reach a PoW-enabled
+#                    onion (docs/DEPLOYMENT.md "PoW capability mismatch"); the agent-devops
+#                    fleet role defaults `rgoe_enable_pow: false` for the same reason. Turn it
+#                    on (=1) once every client you serve runs a pow-capable tor. Toggling
+#                    later = edit /etc/tor/torrc.d-rgoe + `systemctl reload tor` (keys/onions
+#                    are unchanged either way).
+#   RGOE_BOOTNODE_ONION   <56-char>.onion   (default: unset = this box runs its OWN bootnode)
+#                    GATEWAY-ONLY mode: when set, this box installs ONLY tor + rgoe-gateway +
+#                    rgoe-heartbeat (no rgoe-bootnode unit, no bootnode HS block, no bootnode
+#                    identity) and the heartbeat announces the gateway to THAT remote bootnode.
+#                    Use it to add a second/third gateway to an existing bootnode (docs/OPERATOR.md
+#                    section 2). Optional companions, only read in this mode:
+#     RGOE_BOOTNODE_SIGNER   the remote bootnode's pinned signer pubkey -- printed into the
+#                            client command at the end (the heartbeat does not need it).
+#   RGOE_GATEWAY_REGION  na|sa|eu|af|as|oc|aq|unknown  (default: unset = not advertised)
+#                    coarse region bucket the heartbeat advertises in signed caps (docs/CONFIG.md).
+#   RGOE_RENDER_ONLY <dir>   (default: unset) RENDER mode for tests/review: write the torrc
+#                    include + systemd units under <dir>/etc/... and exit WITHOUT touching the
+#                    host (no root, no apt, no tor/node install, no clone, no systemctl). Onions
+#                    are fixed placeholders so the output is deterministic (golden-testable).
+#                    `bootstrap.sh --render <dir>` is the same thing.
 set -euo pipefail
 
+if [ "${1:-}" = "--render" ]; then RGOE_RENDER_ONLY="${2:?--render needs a directory}"; shift 2; fi
+
 RGOE_REPO="${RGOE_REPO:-https://github.com/dmarzzz/reputation-gated-onion-egress}"
-RGOE_REF="${RGOE_REF:-feat/bootnode-and-productionize}"
+RGOE_REF="${RGOE_REF:-main}"
 RGOE_DIR="${RGOE_DIR:-/opt/rgoe}"
 RGOE_ADMISSION="${RGOE_ADMISSION:-open}"
 RGOE_BOOTNODE_PORT="${RGOE_BOOTNODE_PORT:-8877}"
 RGOE_GATEWAY_PORT="${RGOE_GATEWAY_PORT:-8443}"
+RGOE_ENABLE_POW="${RGOE_ENABLE_POW:-0}"
+RGOE_BOOTNODE_ONION="${RGOE_BOOTNODE_ONION:-}"
+RGOE_BOOTNODE_SIGNER="${RGOE_BOOTNODE_SIGNER:-}"
+RGOE_GATEWAY_REGION="${RGOE_GATEWAY_REGION:-}"
+RGOE_RENDER_ONLY="${RGOE_RENDER_ONLY:-}"
 RUN_USER="${RGOE_USER:-rgoe}"
 
 log() { echo -e "\n\033[1;36m== $*\033[0m"; }
+die() { echo "bootstrap.sh: $*" >&2; exit 1; }
 
+# --- validate the tunables up front (fail fast, before anything is installed) ---
+case "$RGOE_ENABLE_POW" in
+  1|true|yes|on)   RGOE_ENABLE_POW=1 ;;
+  0|false|no|off)  RGOE_ENABLE_POW=0 ;;
+  *) die "RGOE_ENABLE_POW must be 1 or 0 (got '$RGOE_ENABLE_POW')" ;;
+esac
+case "$RGOE_ADMISSION" in open|stake) ;; *) die "RGOE_ADMISSION must be open or stake (got '$RGOE_ADMISSION')" ;; esac
+# Mode: WITH_BOOTNODE=1 -> this box runs bootnode + gateway (default, unchanged behaviour);
+#       WITH_BOOTNODE=0 -> gateway-only, heartbeat -> the remote RGOE_BOOTNODE_ONION.
+WITH_BOOTNODE=1
+if [ -n "$RGOE_BOOTNODE_ONION" ]; then
+  RGOE_BOOTNODE_ONION="${RGOE_BOOTNODE_ONION%.onion}.onion"
+  [[ "$RGOE_BOOTNODE_ONION" =~ ^[a-z2-7]{56}\.onion$ ]] \
+    || die "RGOE_BOOTNODE_ONION must be a v3 onion address (56 base32 chars, optional .onion suffix)"
+  WITH_BOOTNODE=0
+fi
+if [ -n "$RGOE_GATEWAY_REGION" ]; then
+  case "$RGOE_GATEWAY_REGION" in na|sa|eu|af|as|oc|aq|unknown) ;;
+    *) die "RGOE_GATEWAY_REGION must be one of na sa eu af as oc aq unknown (got '$RGOE_GATEWAY_REGION')" ;; esac
+fi
+
+# --- renderers: the ONLY places torrc / unit text is produced (live + render mode share them) ---
+# torrc include: one HiddenServiceDir block per onion this box publishes. The PoW line is a
+# per-service option, so it sits INSIDE each block right after its HiddenServicePort.
+render_torrc() {  # $1 = output file
+  {
+    if [ "$WITH_BOOTNODE" = "1" ]; then
+      echo "# rgoe: two onion services (bootnode + gateway). PoW defense: RGOE_ENABLE_POW=${RGOE_ENABLE_POW}."
+      echo "HiddenServiceDir /var/lib/tor/rgoe-bootnode"
+      echo "HiddenServicePort 80 127.0.0.1:${RGOE_BOOTNODE_PORT}"
+      echo "HiddenServicePoWDefensesEnabled ${RGOE_ENABLE_POW}"
+    else
+      echo "# rgoe: gateway-only box (bootnode is remote: ${RGOE_BOOTNODE_ONION}). PoW defense: RGOE_ENABLE_POW=${RGOE_ENABLE_POW}."
+    fi
+    echo "HiddenServiceDir /var/lib/tor/rgoe-gateway"
+    echo "HiddenServicePort 80 127.0.0.1:${RGOE_GATEWAY_PORT}"
+    echo "HiddenServicePoWDefensesEnabled ${RGOE_ENABLE_POW}"
+  } > "$1"
+}
+
+# Sandbox rationale (applied identically to every unit below). Each is a plain Node
+# process that needs: outbound network (bootnode/heartbeat over Tor SOCKS on loopback, Node
+# fetch), read access to the repo, and write access ONLY to ${RGOE_DIR}/deploy-state (the
+# bootnode mints its signer key there at runtime; the gateway/heartbeat read the minted onion
+# identities from there; persistence writes there too) plus a private /tmp.
+#   NoNewPrivileges       no setuid/capability escalation ever
+#   ProtectSystem=strict  whole FS read-only; ReadWritePaths re-opens deploy-state (see above)
+#   ProtectHome           /home,/root,/run/user hidden (service user is --system, no $HOME use)
+#   PrivateTmp            private /tmp,/var/tmp, unshared from the host
+#   ProtectKernel*/CGroups block /proc/sys, /sys, kmod, and cgroup writes (none needed)
+#   RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX  IPv4/IPv6 + AF_UNIX for the Tor SOCKS
+#                          path/DNS resolver sockets; everything exotic (AF_PACKET, AF_NETLINK…) denied
+#   RestrictNamespaces/LockPersonality  no new namespaces, no persona (ASLR) downgrades
+#   SystemCallFilter=@system-service  vetted allowlist for normal services; implicitly EXCLUDES
+#                          @privileged/@mount/@reboot/@swap/@module etc. (~=EPERM below)
+#   CapabilityBoundingSet= (empty) drop ALL capabilities — the services bind only loopback high
+#                          ports (>1024), so no CAP_NET_BIND_SERVICE or anything else is required
+#   MemoryMax=512M/TasksMax=256  contain runaway RSS/fork storms; Node + these workloads sit well under
+# MemoryDenyWriteExecute is deliberately NOT set: V8's JIT maps writable-then-executable pages,
+# so W^X enforcement would crash the Node runtime. Left off on purpose.
+render_sandbox() {
+  cat <<EOF
+# --- sandbox (see rationale in bootstrap.sh) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${RGOE_DIR}/deploy-state
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=256
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+render_bootnode_unit() {  # $1 = output file
+  {
+    cat <<EOF
+[Unit]
+Description=rgoe bootnode (gateway discovery)
+After=network-online.target tor.service
+Wants=network-online.target
+[Service]
+User=${RUN_USER}
+WorkingDirectory=${RGOE_DIR}
+Environment=RGOE_BOOTNODE_PORT=${RGOE_BOOTNODE_PORT}
+Environment=RGOE_BOOTNODE_ADMISSION=${RGOE_ADMISSION}
+Environment=RGOE_BOOTNODE_SIGNER_KEY=${RGOE_DIR}/deploy-state/bootnode-signer.key
+Environment=RGOE_BOOTNODE_STORE=${RGOE_DIR}/deploy-state/bootnode-state.json
+ExecStart=${NODE_BIN} ${RGOE_DIR}/bootnode/server.mjs
+Restart=always
+RestartSec=3
+EOF
+    render_sandbox
+  } > "$1"
+}
+
+render_gateway_unit() {  # $1 = output file
+  {
+    cat <<EOF
+[Unit]
+Description=rgoe reputation-gated egress gateway
+After=network-online.target tor.service
+Wants=network-online.target
+[Service]
+User=${RUN_USER}
+WorkingDirectory=${RGOE_DIR}
+ExecStart=${NODE_BIN} ${RGOE_DIR}/gateway/gateway.mjs
+Restart=always
+RestartSec=3
+EOF
+    render_sandbox
+  } > "$1"
+}
+
+# The gateway announces itself to the bootnode (local one by default, RGOE_BOOTNODE_ONION in
+# gateway-only mode). It uses the gateway onion identity and the local Tor SOCKS. (For
+# admission=stake, add Environment=RGOE_GW_OPERATOR_KEY=... here after staking -- a secret,
+# so it is deliberately NOT a bootstrap.sh tunable; see bootnode/deploy/README.md.)
+render_heartbeat_unit() {  # $1 = output file
+  {
+    if [ "$WITH_BOOTNODE" = "1" ]; then
+      echo "[Unit]"
+      echo "Description=rgoe gateway heartbeat to bootnode"
+      echo "After=rgoe-bootnode.service tor.service"
+    else
+      echo "[Unit]"
+      echo "Description=rgoe gateway heartbeat to remote bootnode ${RGOE_BOOTNODE_ONION}"
+      echo "After=network-online.target tor.service"
+      echo "Wants=network-online.target"
+    fi
+    cat <<EOF
+[Service]
+User=${RUN_USER}
+WorkingDirectory=${RGOE_DIR}
+Environment=RGOE_BOOTNODE_ONION=${BN_ONION}
+Environment=RGOE_GW_IDENTITY=${GW_HS}/identity.local.json
+Environment=RGOE_TOR_PORT=9050
+EOF
+    [ -z "$RGOE_GATEWAY_REGION" ] || echo "Environment=RGOE_GATEWAY_REGION=${RGOE_GATEWAY_REGION}"
+    cat <<EOF
+ExecStart=${NODE_BIN} ${RGOE_DIR}/bootnode/heartbeat.mjs
+Restart=always
+RestartSec=10
+EOF
+    render_sandbox
+  } > "$1"
+}
+
+BN_HS="$RGOE_DIR/deploy-state/bootnode-hs"
+GW_HS="$RGOE_DIR/deploy-state/gateway-hs"
+
+# --- RENDER mode: emit the files and stop -------------------------------------------------
+if [ -n "$RGOE_RENDER_ONLY" ]; then
+  NODE_BIN="${RGOE_NODE_BIN:-/usr/bin/node}"
+  GW_ONION="gatewayplaceholderplaceholderplaceholderplaceholderplace.onion"
+  if [ "$WITH_BOOTNODE" = "1" ]; then BN_ONION="bootnodeplaceholderplaceholderplaceholderplaceholderplac.onion"; else BN_ONION="$RGOE_BOOTNODE_ONION"; fi
+  out="$RGOE_RENDER_ONLY"
+  mkdir -p "$out/etc/tor" "$out/etc/systemd/system"
+  render_torrc "$out/etc/tor/torrc.d-rgoe"
+  [ "$WITH_BOOTNODE" = "1" ] && render_bootnode_unit "$out/etc/systemd/system/rgoe-bootnode.service"
+  render_gateway_unit   "$out/etc/systemd/system/rgoe-gateway.service"
+  render_heartbeat_unit "$out/etc/systemd/system/rgoe-heartbeat.service"
+  echo "rendered to $out (mode: $([ "$WITH_BOOTNODE" = "1" ] && echo bootnode+gateway || echo gateway-only), pow=${RGOE_ENABLE_POW})"
+  exit 0
+fi
+
+# --- LIVE mode --------------------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || { echo "run as root or with sudo"; exit 1; }
 
 log "packages"
@@ -43,6 +251,7 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
   apt-get install -y -qq nodejs >/dev/null
 fi
 node --version
+NODE_BIN="${RGOE_NODE_BIN:-$(command -v node)}"
 
 log "tor (official repo, for pow: yes)"
 if ! command -v tor >/dev/null; then
@@ -79,168 +288,58 @@ fi
 ( cd "$RGOE_DIR" && npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1 )
 
 log "onion identities (reused if present)"
-BN_HS="$RGOE_DIR/deploy-state/bootnode-hs"
-GW_HS="$RGOE_DIR/deploy-state/gateway-hs"
-[ -f "$BN_HS/hostname" ] || node "$RGOE_DIR/bootnode/keygen.mjs" "$BN_HS" --label bootnode >/dev/null
+if [ "$WITH_BOOTNODE" = "1" ]; then
+  [ -f "$BN_HS/hostname" ] || node "$RGOE_DIR/bootnode/keygen.mjs" "$BN_HS" --label bootnode >/dev/null
+  BN_ONION="$(cat "$BN_HS/hostname")"
+else
+  BN_ONION="$RGOE_BOOTNODE_ONION"   # remote; nothing minted here
+fi
 [ -f "$GW_HS/hostname" ] || node "$RGOE_DIR/bootnode/keygen.mjs" "$GW_HS" --label gateway  >/dev/null
-BN_ONION="$(cat "$BN_HS/hostname")"
 GW_ONION="$(cat "$GW_HS/hostname")"
 
-log "tor config (two hidden services + pow)"
+if [ "$WITH_BOOTNODE" = "1" ]; then log "tor config (two hidden services, pow=${RGOE_ENABLE_POW})"; else log "tor config (gateway hidden service only, pow=${RGOE_ENABLE_POW})"; fi
 # Tor owns the HS dirs; copy the minted keys into tor's own dirs (Tor is strict about perms).
-install -d -o debian-tor -g debian-tor -m 0700 /var/lib/tor/rgoe-bootnode /var/lib/tor/rgoe-gateway
-for pair in "$BN_HS:/var/lib/tor/rgoe-bootnode" "$GW_HS:/var/lib/tor/rgoe-gateway"; do
+HS_PAIRS=("$GW_HS:/var/lib/tor/rgoe-gateway")
+[ "$WITH_BOOTNODE" = "1" ] && HS_PAIRS=("$BN_HS:/var/lib/tor/rgoe-bootnode" "${HS_PAIRS[@]}")
+for pair in "${HS_PAIRS[@]}"; do
   src="${pair%%:*}"; dst="${pair##*:}"
+  install -d -o debian-tor -g debian-tor -m 0700 "$dst"
   install -o debian-tor -g debian-tor -m 0600 "$src/hs_ed25519_secret_key" "$dst/"
   install -o debian-tor -g debian-tor -m 0600 "$src/hs_ed25519_public_key" "$dst/"
   install -o debian-tor -g debian-tor -m 0600 "$src/hostname" "$dst/"
 done
-cat > /etc/tor/torrc.d-rgoe <<EOF
-# rgoe: two onion services. PoW on (official tor build ships the pow module).
-HiddenServiceDir /var/lib/tor/rgoe-bootnode
-HiddenServicePort 80 127.0.0.1:${RGOE_BOOTNODE_PORT}
-HiddenServicePoWDefensesEnabled 1
-HiddenServiceDir /var/lib/tor/rgoe-gateway
-HiddenServicePort 80 127.0.0.1:${RGOE_GATEWAY_PORT}
-HiddenServicePoWDefensesEnabled 1
-EOF
+render_torrc /etc/tor/torrc.d-rgoe
 grep -q "torrc.d-rgoe" /etc/tor/torrc || echo "%include /etc/tor/torrc.d-rgoe" >> /etc/tor/torrc
 systemctl enable tor >/dev/null 2>&1 || true
 systemctl restart tor
 
 log "systemd units"
-# Sandbox rationale (applied identically to all three units below). Each is a plain Node
-# process that needs: outbound network (bootnode/heartbeat over Tor SOCKS on loopback, Node
-# fetch), read access to the repo, and write access ONLY to ${RGOE_DIR}/deploy-state (the
-# bootnode mints its signer key there at runtime; the gateway/heartbeat read the minted onion
-# identities from there; persistence writes there too) plus a private /tmp.
-#   NoNewPrivileges       no setuid/capability escalation ever
-#   ProtectSystem=strict  whole FS read-only; ReadWritePaths re-opens deploy-state (see above)
-#   ProtectHome           /home,/root,/run/user hidden (service user is --system, no $HOME use)
-#   PrivateTmp            private /tmp,/var/tmp, unshared from the host
-#   ProtectKernel*/CGroups block /proc/sys, /sys, kmod, and cgroup writes (none needed)
-#   RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX  IPv4/IPv6 + AF_UNIX for the Tor SOCKS
-#                          path/DNS resolver sockets; everything exotic (AF_PACKET, AF_NETLINK…) denied
-#   RestrictNamespaces/LockPersonality  no new namespaces, no persona (ASLR) downgrades
-#   SystemCallFilter=@system-service  vetted allowlist for normal services; implicitly EXCLUDES
-#                          @privileged/@mount/@reboot/@swap/@module etc. (~=EPERM below)
-#   CapabilityBoundingSet= (empty) drop ALL capabilities — the services bind only loopback high
-#                          ports (>1024), so no CAP_NET_BIND_SERVICE or anything else is required
-#   MemoryMax=512M/TasksMax=256  contain runaway RSS/fork storms; Node + these workloads sit well under
-# MemoryDenyWriteExecute is deliberately NOT set: V8's JIT maps writable-then-executable pages,
-# so W^X enforcement would crash the Node runtime. Left off on purpose.
-cat > /etc/systemd/system/rgoe-bootnode.service <<EOF
-[Unit]
-Description=rgoe bootnode (gateway discovery)
-After=network-online.target tor.service
-Wants=network-online.target
-[Service]
-User=${RUN_USER}
-WorkingDirectory=${RGOE_DIR}
-Environment=RGOE_BOOTNODE_PORT=${RGOE_BOOTNODE_PORT}
-Environment=RGOE_BOOTNODE_ADMISSION=${RGOE_ADMISSION}
-Environment=RGOE_BOOTNODE_SIGNER_KEY=${RGOE_DIR}/deploy-state/bootnode-signer.key
-Environment=RGOE_BOOTNODE_STORE=${RGOE_DIR}/deploy-state/bootnode-state.json
-ExecStart=$(command -v node) ${RGOE_DIR}/bootnode/server.mjs
-Restart=always
-RestartSec=3
-# --- sandbox (see rationale above) ---
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${RGOE_DIR}/deploy-state
-ProtectHome=true
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-LockPersonality=true
-SystemCallFilter=@system-service
-CapabilityBoundingSet=
-MemoryMax=512M
-TasksMax=256
-[Install]
-WantedBy=multi-user.target
-EOF
-cat > /etc/systemd/system/rgoe-gateway.service <<EOF
-[Unit]
-Description=rgoe reputation-gated egress gateway
-After=network-online.target tor.service
-Wants=network-online.target
-[Service]
-User=${RUN_USER}
-WorkingDirectory=${RGOE_DIR}
-ExecStart=$(command -v node) ${RGOE_DIR}/gateway/gateway.mjs
-Restart=always
-RestartSec=3
-# --- sandbox (see rationale above the bootnode unit) ---
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${RGOE_DIR}/deploy-state
-ProtectHome=true
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-LockPersonality=true
-SystemCallFilter=@system-service
-CapabilityBoundingSet=
-MemoryMax=512M
-TasksMax=256
-[Install]
-WantedBy=multi-user.target
-EOF
+UNITS="rgoe-gateway"
+if [ "$WITH_BOOTNODE" = "1" ]; then
+  render_bootnode_unit /etc/systemd/system/rgoe-bootnode.service
+  UNITS="rgoe-bootnode $UNITS"
+elif [ -f /etc/systemd/system/rgoe-bootnode.service ]; then
+  # A previous run of this box was bootnode+gateway; gateway-only means that unit must go.
+  systemctl disable --now rgoe-bootnode >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/rgoe-bootnode.service
+fi
+render_gateway_unit /etc/systemd/system/rgoe-gateway.service
 # the deploy-state dir must be writable by the service user (signer key is minted at runtime)
 chown -R "$RUN_USER":"$RUN_USER" "$RGOE_DIR/deploy-state"
 systemctl daemon-reload
-systemctl enable --now rgoe-bootnode rgoe-gateway >/dev/null 2>&1 || systemctl restart rgoe-bootnode rgoe-gateway
+# shellcheck disable=SC2086
+systemctl enable --now $UNITS >/dev/null 2>&1 || systemctl restart $UNITS
 
-log "gateway heartbeat -> bootnode"
-# The gateway announces itself to the local bootnode. It uses the gateway onion identity and
-# the local Tor SOCKS. (For admission=stake, add RGOE_GW_OPERATOR_KEY here after staking.)
-cat > /etc/systemd/system/rgoe-heartbeat.service <<EOF
-[Unit]
-Description=rgoe gateway heartbeat to bootnode
-After=rgoe-bootnode.service tor.service
-[Service]
-User=${RUN_USER}
-WorkingDirectory=${RGOE_DIR}
-Environment=RGOE_BOOTNODE_ONION=${BN_ONION}
-Environment=RGOE_GW_IDENTITY=${GW_HS}/identity.local.json
-Environment=RGOE_TOR_PORT=9050
-ExecStart=$(command -v node) ${RGOE_DIR}/bootnode/heartbeat.mjs
-Restart=always
-RestartSec=10
-# --- sandbox (see rationale above the bootnode unit) ---
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${RGOE_DIR}/deploy-state
-ProtectHome=true
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-LockPersonality=true
-SystemCallFilter=@system-service
-CapabilityBoundingSet=
-MemoryMax=512M
-TasksMax=256
-[Install]
-WantedBy=multi-user.target
-EOF
+log "gateway heartbeat -> bootnode ${BN_ONION}"
+render_heartbeat_unit /etc/systemd/system/rgoe-heartbeat.service
 systemctl daemon-reload
 systemctl enable --now rgoe-heartbeat >/dev/null 2>&1 || systemctl restart rgoe-heartbeat
 
-log "waiting for the bootnode signer + onion descriptors (~15s)…"
-sleep 15
-SIGNER="$(node -e "console.log(JSON.parse(require('fs').readFileSync('${RGOE_DIR}/deploy-state/bootnode-signer.key')).pub)" 2>/dev/null || echo '<check: journalctl -u rgoe-bootnode>')"
-
-cat <<EOF
+if [ "$WITH_BOOTNODE" = "1" ]; then
+  log "waiting for the bootnode signer + onion descriptors (~15s)…"
+  sleep 15
+  SIGNER="$(node -e "console.log(JSON.parse(require('fs').readFileSync('${RGOE_DIR}/deploy-state/bootnode-signer.key')).pub)" 2>/dev/null || echo '<check: journalctl -u rgoe-bootnode>')"
+  cat <<EOF
 
 ========================================================================
 rgoe fleet is up.
@@ -249,6 +348,7 @@ rgoe fleet is up.
   bootnode signer: ${SIGNER}
   gateway onion  : ${GW_ONION}
   admission      : ${RGOE_ADMISSION}
+  onion PoW      : ${RGOE_ENABLE_POW}   (RGOE_ENABLE_POW; 0 = off)
 
 Clients connect with (pin the signer!):
   rgoe client --secret <member-hex> \\
@@ -260,3 +360,32 @@ Check it:
   curl --socks5-hostname 127.0.0.1:9050 http://${BN_ONION}/health   # after ~30s of descriptor propagation
 ========================================================================
 EOF
+else
+  SIGNER="${RGOE_BOOTNODE_SIGNER:-<pinned signer of the remote bootnode; ask its operator>}"
+  cat <<EOF
+
+========================================================================
+rgoe gateway is up (gateway-only box; bootnode is remote).
+
+  bootnode onion : ${BN_ONION}   (remote, RGOE_BOOTNODE_ONION)
+  bootnode signer: ${SIGNER}
+  gateway onion  : ${GW_ONION}
+  onion PoW      : ${RGOE_ENABLE_POW}   (RGOE_ENABLE_POW; 0 = off)
+
+The heartbeat announces this gateway to the remote bootnode over Tor. For an
+admission=stake bootnode, stake the operator first (rgoe register-gateway), then add
+  Environment=RGOE_GW_OPERATOR_KEY=<operator-key>
+to /etc/systemd/system/rgoe-heartbeat.service and \`systemctl daemon-reload && systemctl restart rgoe-heartbeat\`.
+
+Clients connect with (pin the signer!):
+  rgoe client --secret <member-hex> \\
+    --bootnode ${BN_ONION} \\
+    --dir-signer ${SIGNER}
+
+Check it:
+  systemctl status rgoe-gateway rgoe-heartbeat
+  journalctl -u rgoe-heartbeat -f      # expect 'announced (...)' once the descriptors propagate
+  curl --socks5-hostname 127.0.0.1:9050 http://${BN_ONION}/directory | grep -o "${GW_ONION%.onion}" | head -1
+========================================================================
+EOF
+fi

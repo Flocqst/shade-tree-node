@@ -46,8 +46,11 @@ It creates three `Restart=always` units:
 | `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, and `RGOE_REF=<tag|sha>` to pin the
-git ref the box clones (fetch the script from that same ref).
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref), `RGOE_ENABLE_POW=1` (onion PoW
+DoS defense; **off by default** because a `pow: no` client tor cannot reach a PoW onion),
+`RGOE_GATEWAY_REGION=eu`. Full table: `bootnode/deploy/README.md` "Tunables". Every value
+is validated before anything is installed.
 
 Firewall: the gateway and bootnode are onion services and take **no inbound clearnet
 ports**. Inbound-22-only + outbound-allow (UFW) is correct. Never expose the loopback
@@ -59,8 +62,29 @@ Wait ~30s for descriptor propagation, then verify (see day-2 below).
 
 ## 2. Join the fleet as a new gateway operator
 
-If you did not use `bootstrap.sh` (bringing your own host, or adding a second gateway
-against an existing bootnode):
+### Fresh box, one command (gateway-only mode)
+
+`bootstrap.sh` with `RGOE_BOOTNODE_ONION` set installs **only** tor + `rgoe-gateway` +
+`rgoe-heartbeat` — no bootnode unit, no bootnode onion — and points the heartbeat at the
+existing bootnode:
+
+```bash
+ssh root@<new-droplet-ip>
+RGOE_BOOTNODE_ONION=<bootnode-onion> RGOE_BOOTNODE_SIGNER=<pinned-signer> \
+  bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh)
+journalctl -u rgoe-heartbeat -f      # 'announced (...)' once the descriptors propagate
+```
+
+`RGOE_BOOTNODE_SIGNER` is only echoed into the printed client command (the heartbeat does
+not need it). Optional: `RGOE_GATEWAY_REGION=<na|sa|eu|af|as|oc|aq|unknown>` to advertise a
+coarse region, `RGOE_ENABLE_POW=1` to enable onion PoW. For a `stake` bootnode, stake the
+operator (b. below) and then add `Environment=RGOE_GW_OPERATOR_KEY=0x<operator-key>` to
+`/etc/systemd/system/rgoe-heartbeat.service` (`systemctl daemon-reload && systemctl restart
+rgoe-heartbeat`); the key is a secret and is not a `bootstrap.sh` tunable.
+
+### By hand
+
+If you did not use `bootstrap.sh` (bringing your own host, or a non-systemd setup):
 
 ### a. Mint an onion identity
 

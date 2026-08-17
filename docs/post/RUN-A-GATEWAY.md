@@ -34,8 +34,11 @@ identities, starts `rgoe-bootnode` + `rgoe-gateway` + `rgoe-heartbeat` as
 gateway onion, and the client command. Idempotent: re-running reuses keys and units.
 
 Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, and `RGOE_REF=<tag|sha>` to pin the
-git ref the box clones (fetch the script from that same ref). Firewall stays inbound-22-only;
+`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, `RGOE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref), `RGOE_ENABLE_POW=1` (onion PoW,
+off by default). To add a gateway to an *existing* bootnode instead, set
+`RGOE_BOOTNODE_ONION=<bootnode-onion>`: the box then runs only tor + gateway + heartbeat.
+Firewall stays inbound-22-only;
 the onion services take no clearnet ports. Never expose the loopback backends (8877 /
 8443).
 

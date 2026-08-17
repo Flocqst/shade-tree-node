@@ -169,7 +169,9 @@ issue") was wrong — nothing that worked before had broken:
    (Tor Project build); the laptop's Homebrew tor reports `pow: no` and **cannot connect
    to a PoW-enabled onion**. Proof: laptop reached DuckDuckGo's non-PoW onion (200) but
    not ours. The original PoC "worked before" precisely because Homebrew tor can't enable
-   PoW, so it was always off. Fixed by defaulting PoW off (`rgoe_enable_pow: false`).
+   PoW, so it was always off. Fixed by defaulting PoW off (`rgoe_enable_pow: false`);
+   `bootnode/deploy/bootstrap.sh` now matches that default (`RGOE_ENABLE_POW=0`; set `1`
+   to opt back in once every client runs a pow-capable tor).
 3. **Onion cold-start.** Each re-provision restarts `rgoe-tor`, and a freshly restarted
    v3 onion needs a few minutes to republish its descriptor to the HSDir hashring. My
    repeated re-provisions kept the tests landing in that window. Not a fault — just

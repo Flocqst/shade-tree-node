@@ -55,7 +55,7 @@ variable "git_repo" {
 variable "git_ref" {
   description = "Pinned branch/tag/sha to deploy (RGOE_REF). Pin a tag or sha for reproducibility; T-DEPLOY-6's rolling-update.sh moves a live box to a new ref later."
   type        = string
-  default     = "feat/bootnode-and-productionize"
+  default     = "main"
 }
 
 variable "admission" {

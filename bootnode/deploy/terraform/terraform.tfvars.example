@@ -20,7 +20,7 @@ ssh_public_key = "ssh-ed25519 AAAA...replace... you@host"
 # tags          = ["rgoe", "bootnode", "gateway"]
 
 # git_repo      = "https://github.com/dmarzzz/reputation-gated-onion-egress"
-# git_ref       = "feat/bootnode-and-productionize"   # pin a tag/sha for reproducibility
+# git_ref       = "main"   # pin a tag/sha for reproducibility
 # admission     = "open"                              # or "stake"
 # bootnode_port = 8877
 # gateway_port  = 8443
