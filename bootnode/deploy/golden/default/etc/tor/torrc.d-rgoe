@@ -1,0 +1,7 @@
+# rgoe: two onion services (bootnode + gateway). PoW defense: RGOE_ENABLE_POW=0.
+HiddenServiceDir /var/lib/tor/rgoe-bootnode
+HiddenServicePort 80 127.0.0.1:8877
+HiddenServicePoWDefensesEnabled 0
+HiddenServiceDir /var/lib/tor/rgoe-gateway
+HiddenServicePort 80 127.0.0.1:8443
+HiddenServicePoWDefensesEnabled 0

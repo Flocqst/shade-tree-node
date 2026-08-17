@@ -172,6 +172,16 @@ converge on the same live set; the forged/tampered/unstaked/stale rejection matr
 the caps; fail-soft over a dark peer; and a no-peer registry directory byte-identical to a
 federation-free one.
 
+## Deploying it (`bootstrap.sh` tunables that concern the bootnode)
+
+`bootnode/deploy/bootstrap.sh` brings up bootnode + gateway on one box by default. Two knobs change
+that shape (full table: `bootnode/deploy/README.md`, `docs/CONFIG.md` "Deploy"):
+
+| env | default | meaning |
+|---|---|---|
+| `RGOE_BOOTNODE_ONION` | *(unset → this box runs its own bootnode)* | set to an existing bootnode's onion for a **gateway-only** box: no `rgoe-bootnode` unit, no bootnode HS; the heartbeat announces to that remote bootnode |
+| `RGOE_ENABLE_POW` | `0` | onion PoW DoS defense on the bootnode + gateway onions this box publishes (`1` = on; off by default because `pow: no` client tors cannot reach a PoW onion) |
+
 ## Client side
 
 ```bash

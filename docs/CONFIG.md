@@ -75,6 +75,20 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | `RGOE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |
 | `RGOE_EPOCH_SECONDS` | `120` | Epoch length in seconds (the nullifier/rate window). Must match on client and gateway. | lib/rln (client + gateway) | `--epoch-seconds` |
 
+## Deploy (`bootnode/deploy/bootstrap.sh`)
+
+Read only by the one-command droplet bring-up (not by any `rgoe` process). They shape the torrc include + systemd units the script writes; the units then carry the runtime `RGOE_*` values above as `Environment=` lines. Full table + rationale: `bootnode/deploy/README.md` "Tunables".
+
+| Env var | Default | Controls |
+|---|---|---|
+| `RGOE_ENABLE_POW` | `0` | `HiddenServicePoWDefensesEnabled` on every onion this box publishes (per-HS line, right after `HiddenServicePort`). Off by default: a client tor without the `pow` module (Homebrew, `pow: no`) could not connect to a PoW onion; matches the agent-devops role default. |
+| `RGOE_BOOTNODE_ONION` | (unset = this box runs its own bootnode) | Gateway-only mode: install tor + gateway + heartbeat only, heartbeat announces to this remote bootnode. |
+| `RGOE_BOOTNODE_SIGNER` | (unset) | Gateway-only: remote bootnode's pinned signer, echoed into the printed client command. |
+| `RGOE_GATEWAY_REGION` | (unset) | Written into the heartbeat unit (see Bootnode/heartbeat rows above). |
+| `RGOE_ADMISSION` | `open` | Becomes `RGOE_BOOTNODE_ADMISSION` on the bootnode unit. |
+| `RGOE_REPO` / `RGOE_REF` / `RGOE_DIR` / `RGOE_BOOTNODE_PORT` / `RGOE_GATEWAY_PORT` | see script header | Clone source, install dir, loopback backend ports. |
+| `RGOE_RENDER_ONLY` | (unset) | `<dir>`: render the torrc + units under `<dir>/etc/…` and exit (no root, nothing installed); `--render <dir>` is the same. |
+
 ## Demo / test only
 
 Not part of the core protocol; set only when running the demo page or the Sepolia integration script.

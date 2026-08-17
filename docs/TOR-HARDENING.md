@@ -7,7 +7,9 @@ the zk proof is the expensive inner gate.
 
 Scope: the droplet runs two v3 onion services (bootnode + gateway) via the
 `/etc/tor/torrc.d-rgoe` include that `bootnode/deploy/bootstrap.sh` writes
-(two `HiddenServiceDir` blocks, each with `HiddenServicePoWDefensesEnabled 1`).
+(two `HiddenServiceDir` blocks, each with `HiddenServicePoWDefensesEnabled
+<RGOE_ENABLE_POW>` — `0` by default, `1` when you opt in; gateway-only boxes get
+one block).
 Clients run a SOCKS-only tor (see `tor/torrc.client`).
 
 A ready-to-copy config fragment lives at
@@ -30,12 +32,15 @@ slot, so flooding the introduction/rendezvous path (before any zk work) costs
 the attacker, not just the service. Under load tor raises the required effort
 and serves clients in priority order by the effort they proved.
 
-- `HiddenServicePoWDefensesEnabled 1` -- already set per service by
-  `bootstrap.sh`. Requires a **pow-capable tor build**. The official Tor Project
+- `HiddenServicePoWDefensesEnabled 1` -- written per service by `bootstrap.sh`
+  when `RGOE_ENABLE_POW=1` (default `0`, i.e. `HiddenServicePoWDefensesEnabled 0`).
+  Requires a **pow-capable tor build on BOTH ends**: the official Tor Project
   apt package (what `bootstrap.sh` installs) ships the `pow` module; the
-  Homebrew bottle does NOT (the PoW code is GPL, the bottle is BSD-only), which
-  is why the repo's `tor/torrc` leaves it off and the local demo enables it only
-  when the running tor has the module. Check with `tor --version` /
+  Homebrew bottle does NOT (the PoW code is GPL, the bottle is BSD-only), and a
+  `pow: no` client could not reach a PoW-enabled onion at all
+  (`docs/DEPLOYMENT.md` "PoW capability mismatch") — which is why the deploy
+  default is off, the repo's `tor/torrc` leaves it off, and the local demo enables
+  it only when the running tor has the module. Check with `tor --version` /
   `tor --list-modules` (look for `pow: yes`).
 - `HiddenServicePoWQueueRate` [verify name/units per version] -- steady-state
   rate (requests/sec) at which the service dequeues rendezvous requests from the

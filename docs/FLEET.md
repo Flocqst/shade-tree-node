@@ -380,6 +380,7 @@ justification; it is not this one.
 | `client/shim.mjs` | `RGOE_DIRECTORY` path: per-CONNECT candidate order with dial-timeout failover and health feedback. `RGOE_ONION` and the single-onion path are unchanged. |
 | `group/directory.example.json` | A signed 3-gateway example with real, internally-consistent v3 onions. |
 | `group/sign-directory.mjs` | Mint the signer key and (re)sign a directory; with no args mints the example. |
+| `bootnode/deploy/bootstrap.sh` | Fleet bring-up per box. `RGOE_BOOTNODE_ONION=<onion>` = gateway-only box that joins an existing bootnode (no local bootnode unit/HS); `RGOE_ENABLE_POW=1` = onion PoW defense (default `0`); `RGOE_GATEWAY_REGION=<bucket>` = region in signed caps. Table: `bootnode/deploy/README.md`. |
 
 Enable directory mode:
 

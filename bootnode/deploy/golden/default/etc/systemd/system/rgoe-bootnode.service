@@ -1,0 +1,32 @@
+[Unit]
+Description=rgoe bootnode (gateway discovery)
+After=network-online.target tor.service
+Wants=network-online.target
+[Service]
+User=rgoe
+WorkingDirectory=/opt/rgoe
+Environment=RGOE_BOOTNODE_PORT=8877
+Environment=RGOE_BOOTNODE_ADMISSION=open
+Environment=RGOE_BOOTNODE_SIGNER_KEY=/opt/rgoe/deploy-state/bootnode-signer.key
+Environment=RGOE_BOOTNODE_STORE=/opt/rgoe/deploy-state/bootnode-state.json
+ExecStart=/usr/bin/node /opt/rgoe/bootnode/server.mjs
+Restart=always
+RestartSec=3
+# --- sandbox (see rationale in bootstrap.sh) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/rgoe/deploy-state
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=256
+[Install]
+WantedBy=multi-user.target

@@ -75,8 +75,17 @@ and the bootnode + gateway **actually binding and serving on loopback**.
   job does **not** fail on it. Loopback `/health` + the written hostname files already
   prove the service published locally; the over-Tor hop is Tor's job, not
   `bootstrap.sh`'s.
-- **PoW defenses (`HiddenServicePoWDefensesEnabled 1`).** Configured and loaded, but
-  not driven under attack here.
+- **PoW defenses (`HiddenServicePoWDefensesEnabled`).** Off by default (`RGOE_ENABLE_POW=0`,
+  see `bootstrap.sh`); `RGOE_ENABLE_POW=1` is passed through by the runner but never
+  driven under attack here. Both renderings are asserted offline by
+  `bootnode/deploy/bootstrap.selftest.mjs`.
+- **Gateway-only mode (`E2E_MODE=gateway-only`, a CI matrix entry).** Hands `bootstrap.sh`
+  a well-formed but unreachable `RGOE_BOOTNODE_ONION` and asserts: tor + `rgoe-gateway`
+  active, **no** `rgoe-bootnode` unit / bootnode HS dir / bootnode identity, exactly one
+  `HiddenServiceDir` in the torrc include, and the heartbeat unit pointing at the remote
+  onion. The heartbeat's actual announce to a *real* remote bootnode is not exercised
+  (there is none in the container) — that is the same over-Tor caveat as above, and the
+  announce path itself is covered by the bootnode/heartbeat selftests.
 - **`rgoe-heartbeat`** is installed by `bootstrap.sh` but intentionally **not**
   asserted active: it dials the bootnode *over the onion via Tor*, so until a
   descriptor propagates it restart-loops — the same best-effort caveat as above.
