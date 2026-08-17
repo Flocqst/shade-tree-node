@@ -140,7 +140,12 @@ and at scale."
   sync committee — embed or sidecar a Helios light client and feed its verified execution stateRoot through the
   hook. *Accept:* the provider rejects a stateRoot the sync committee did not attest; with a Helios root, the whole
   chain (sync-committee → stateRoot → account proof → storage proof → root) is verified end-to-end, no RPC trust.
-- [ ] **T-DEV-9c (P2, added 2026-08-17) Redeploy `StakedReputationSet` with the T-DEV-9 on-chain tree.** The live
+- [x] **T-DEV-9c (P2, added 2026-08-17) Redeploy `StakedReputationSet` with the T-DEV-9 on-chain tree.** DONE 2026-08-17
+  (PR #48): rln-v4-tiers `StakedReputationSet 0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25` (block 11510541; real Groth16
+  withdraw verifier), live integration PASS (`network/sepolia/integration-report-rln-v4.md`: two tiers staked, over-spend at
+  tier 32 slashed on-chain `0xfff760a6…3494c`), light provider + Helios anchor returns the REAL root
+  (`docs/LIGHT-CLIENT.md` Receipt 2, `stateRootVerified:true` @11510558). Fleet gateways' `RGOE_SLASH_CONTRACT` flipped to
+  rln-v4. Original: The live
   rln-v3 contract (2026-07-15) predates the on-chain incremental tree, so `LightClientRootProvider` (even Helios-anchored)
   proves slot 3 = 0 and yields no root. Deploy the current contract on Sepolia (`[FUNDS]`, testnet), record via
   `rgoe record-deploy`, point the light provider at it, re-run the T-DEV-9b live receipt expecting a real root. Bundle with
@@ -238,7 +243,15 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   egresses through the fleet end to end. Do NOT start until the test suite is hardened and the Rust
   client MVP passes conformance. *Accept:* `curl -x` through the client returns the gateway IP;
   `/directory` lists it. Take care not to disrupt the existing live gateway on `anon-egress`.
-- [ ] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** BLOCKED 2026-08-17 on a DigitalOcean API token
+- [x] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** DONE 2026-08-17 (later) (PR #47, `docs/GO-LIVE-LOG-2026-08-17.md`
+  "(later)" rows 5.7–5.10): box-2 = agent-devops `rgoe-gw-04` (DO SFO3, s-1vcpu-1gb, gateway-only bootstrap), gateway-2
+  `av4m256h4wwgwdmg74wnqem7s7l333h6755sroydlbcq62ptkmawtwid.onion`; signed directory = 2 gateways
+  (`network/sepolia/directory-bootnode.json`), JS rotation 4/4 across both egress IPs, Rust rotation across both, two
+  regions (NJ / CA) — same provider/ASN (AS14061), so the "different provider" half stays a follow-up. Also done the same
+  pass: GO-LIVE Phase 3 stake admission (operator staked on `GatewayRegistry`, tx `0x15d810b7…5d15fc` @11510519; bootnode
+  `admission: stake`, both heartbeats `staked=true`, both gateways on-chain slashing → now pointed at rln-v4), 6.6/6.7
+  encrypted key backups + restore-proven, box-1 PoC leftovers stopped. Earlier note (kept):
+  BLOCKED 2026-08-17 on a DigitalOcean API token
   (deliberately not on disk — `agent-devops/RESTORE.md`; `doctl` → 401). Ready to run: uncomment `rgoe-gw-04`
   (role egress, sfo3, s-1vcpu-1gb, `rgoe_gateway=false`) in `~/agent-devops/tofu/environments/dev/terraform.tfvars`,
   `tofu apply -target='module.droplet["rgoe-gw-04"]'`, `task bootstrap HOST=rgoe-gw-04`, then on the box
@@ -563,7 +576,10 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   `verify_directory_threshold` sibling mirroring the JS distinct-pinned-signer counting + reason codes, and
   conformance-check it against the `thresholdDirectory` vector. *Accept:* Rust accepts a valid 2-of-3 threshold
   directory and rejects sub-threshold/duplicate/unpinned, matching JS; single-sig path unchanged.
-- [~] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** SHIPPED over the EXISTING circuit 2026-08-17
+- [x] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** DONE 2026-08-17: T-FEAT-8b on-chain half shipped in
+  PR #48 (`register(commitment, limit)` at `bondFor(limit)` from an immutable tier table [8,32], tiered `slash(…, limit, …)`,
+  live on Sepolia rln-v4). Known limitation: tier is declared, not proven, at registration (CONTRACTS-AUDIT §3). Off-chain half
+  SHIPPED over the EXISTING circuit 2026-08-17
   (PR #39, ADR `docs/adr/0006-reputation-tiers.md`): tier = the leaf's private `userMessageLimit`
   (`rateCommitment = Poseidon2(Poseidon1(secret), limit)`, circuit asserts `messageId < limit`), one tree for all
   tiers, tier never on the wire (strictly more private than a public tier input); `RGOE_LIMIT` (client),
@@ -1001,3 +1017,12 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   tests, end-to-end verified live on Sepolia; filed T-DEV-9c (redeploy StakedReputationSet with the on-chain tree, bundle
   with T-FEAT-8b). Dependabot opened #14–#36 (many major bumps: eslint 10, arkworks 0.6, ed25519-dalek 3) — left for review.
   Still human: ceremony (issue #6), stake admission (GO-LIVE Phase 3), T-DEPLOY-2 token, T-FEAT-7.
+- 2026-08-17  ship-day (loop-35c)  With the DO token: T-DEPLOY-2 DONE (PR #47: `rgoe-gw-04` SFO3 gateway-only, 2-gateway
+  signed directory, JS+Rust rotation across both; same ASN — second provider still open) + GO-LIVE Phase 3 stake admission
+  live + key backups. T-DEV-9c + T-FEAT-8b DONE (PR #48: rln-v4-tiers on Sepolia, tiered stake/slash live-integrated, Helios
+  light provider reads the real root). Dependabot #14–#36 triaged: 5 combined PRs merged (#42 rust digest set, #43 actions,
+  #44 npm incl. semaphore 4.14.3 trio + ethers 6.17, #45 eslint 10, #46 stryker 10); arkworks 0.6 + num-bigint 0.5 closed
+  (blocked on light-poseidon). agent-devops main fast-forwarded to the fleet chain (`6dd6d0a`). NOTE: the DO token used is
+  for a different DO account than the agent-devops tofu state — only `-target` applies are safe with it. Open: second
+  provider/ASN, monitoring 6.1–6.4, ceremony (issue #6), T-FEAT-7, Etherscan verification of rln-v4, rotate the fleet
+  operator hot key (it was echoed into a session log 2026-08-17).
