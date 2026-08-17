@@ -109,20 +109,20 @@ async function main() {
   const epoch = currentEpoch();
   // request 1: member A, slot 0
   const sig1 = requestSignal("example.com:443", "req-1");
-  const env1 = await pack(await proveForSlot(secretA, epoch, 0, sig1, { group }));
+  const env1 = await pack(await proveForSlot(secretA, epoch, 0, sig1, { group }), "example.com:443", "req-1");
   const v1 = await verifyEnvelope(env1, membershipRoots);
   ok(v1.ok, `req1 verifies (nullifier ${short(v1.nullifier)})`);
   // request 2: member A, slot 1 -> DIFFERENT nullifier (unlinkable to req1)
   const sig2 = requestSignal("api.other.com:443", "req-2");
-  const env2 = await pack(await proveForSlot(secretA, epoch, 1, sig2, { group }));
+  const env2 = await pack(await proveForSlot(secretA, epoch, 1, sig2, { group }), "api.other.com:443", "req-2");
   const v2 = await verifyEnvelope(env2, membershipRoots);
   ok(v2.ok && v2.nullifier !== v1.nullifier, `req2 verifies with a DISTINCT nullifier (${short(v2.nullifier)}) => unlinkable rotation`);
   // member B, slot 0 -> valid member, different person
-  const envB = await pack(await proveForSlot(secretB, epoch, 0, requestSignal("x.com:443", "b-1"), { group }));
+  const envB = await pack(await proveForSlot(secretB, epoch, 0, requestSignal("x.com:443", "b-1"), { group }), "x.com:443", "b-1");
   ok((await verifyEnvelope(envB, membershipRoots)).ok, "member B also gates in");
   // a true outsider: proves against its OWN singleton group -> wrong root -> rejected
   const outGroup = newGroup([rateCommitmentOf(identityFor(999n))]);
-  const outsider = await pack(await proveForSlot(999n, epoch, 0, requestSignal("x.com:443", "o"), { group: outGroup }));
+  const outsider = await pack(await proveForSlot(999n, epoch, 0, requestSignal("x.com:443", "o"), { group: outGroup }), "x.com:443", "o");
   ok(!(await verifyEnvelope(outsider, membershipRoots)).ok, "outsider (wrong root) is rejected");
 
   h("3. gateway share-collecting spent-set: replay vs over-spend");
@@ -152,7 +152,7 @@ async function main() {
   // member A over-spends slot 0: a NEW distinct signal reusing messageId 0 => same
   // nullifier (same identity+epoch+messageId), different x => the L+1-th point.
   const sig1b = requestSignal("evil-scrape.com:443", "req-1-overspend");
-  const env1b = await pack(await proveForSlot(secretA, epoch, 0, sig1b, { group }));
+  const env1b = await pack(await proveForSlot(secretA, epoch, 0, sig1b, { group }), "evil-scrape.com:443", "req-1-overspend");
   ok(env1b.nullifier === env1.nullifier, "over-spend reuses slot 0 => SAME nullifier as req1");
   const r = await feed(env1b);
   ok(r === "OVER-SPEND-reconstructed", "second DISTINCT signal on the same nullifier triggers reconstruction");
@@ -190,8 +190,10 @@ async function main() {
 }
 
 // pack a proveForSlot result into the wire envelope v3 the gateway consumes (no slot/scope).
-async function pack(p) {
-  return { v: 3, target: "n/a", proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
+// target + nonce ride along so the gateway can BIND the proof to this target (verifyEnvelope 2b);
+// they MUST be the same pair the signal was built from.
+async function pack(p, target, nonce) {
+  return { v: 3, target, nonce, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
 }
 const short = (s) => String(s).slice(0, 10) + "…";
 

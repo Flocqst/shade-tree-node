@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars (gitignored) and fill in, OR pass via TF_VAR_* env vars.
+# NEVER commit a real token. terraform.tfvars is in .gitignore.
+
+# --- required ---
+
+# Prefer supplying the token as an env var instead of putting it here:
+#   export TF_VAR_do_token="dop_v1_..."
+do_token = "dop_v1_REPLACE_ME"
+
+# Your SSH public key material (the .pub file contents), added to root on the box.
+#   ssh_public_key = file("~/.ssh/id_ed25519.pub")   # or paste the line below
+ssh_public_key = "ssh-ed25519 AAAA...replace... you@host"
+
+# --- optional (defaults shown; all match bootstrap.sh) ---
+
+# droplet_name  = "rgoe-bootnode"
+# region        = "nyc3"
+# droplet_size  = "s-1vcpu-1gb"
+# image         = "ubuntu-24-04-x64"
+# tags          = ["rgoe", "bootnode", "gateway"]
+
+# git_repo      = "https://github.com/dmarzzz/reputation-gated-onion-egress"
+# git_ref       = "feat/bootnode-and-productionize"   # pin a tag/sha for reproducibility
+# admission     = "open"                              # or "stake"
+# bootnode_port = 8877
+# gateway_port  = 8443
+# tor_socks_port = 9050
+
+# Lock SSH to your admin IP(s) in production, e.g.:
+# ssh_allowed_cidrs = ["203.0.113.7/32"]

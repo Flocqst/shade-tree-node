@@ -18,6 +18,7 @@ interface Vm {
     function expectRevert() external;
     function expectRevert(bytes4) external;
     function expectRevert(bytes calldata) external;
+    function load(address, bytes32) external view returns (bytes32);
     function addr(uint256) external returns (address);
     function startBroadcast() external;
     function startBroadcast(uint256) external;
@@ -27,6 +28,9 @@ interface Vm {
     function toString(uint256) external pure returns (string memory);
     function envOr(string calldata, string calldata) external view returns (string memory);
     function envOr(string calldata, uint256) external view returns (uint256);
+    function envOr(string calldata, address) external view returns (address);
+    function readFile(string calldata) external view returns (string memory);
+    function parseJsonBytes(string calldata, string calldata) external pure returns (bytes memory);
 }
 
 /// Base with the cheatcode handle + just-enough assertions.

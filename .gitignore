@@ -19,3 +19,18 @@ out/
 cache/
 broadcast/
 contracts/deployed.local.json
+
+# bootnode + gateway onion identities and signer keys (secret)
+identity.local.json
+**/identity.local.json
+bootnode/bootnode-signer.key
+hs_ed25519_secret_key
+
+# bootnode write-through persistence (runtime state, not source)
+bootnode/bootnode-state.json
+**/bootnode-state.json
+coverage/
+
+# Mutation testing (T-TEST-10) — Stryker sandbox + HTML report are disposable
+.stryker-tmp/
+reports/mutation/

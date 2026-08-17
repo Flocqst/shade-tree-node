@@ -1,14 +1,44 @@
 {
   "name": "reputation-gated-onion-egress",
-  "version": "0.1.0",
-  "description": "A Tor onion-service egress proxy gated by a zero-knowledge proof of membership in a reputation set (Semaphore + epoch-scoped nullifiers = RLN-style anonymous rate limiting).",
+  "version": "0.2.0",
+  "description": "A Tor onion-service egress proxy gated by a zero-knowledge proof of membership in a reputation set (Semaphore/RLN), with live gateway discovery via a bootnode.",
   "type": "module",
   "private": true,
+  "bin": {
+    "rgoe": "bin/rgoe.mjs"
+  },
+  "//exports": "Public SDK surface (T-FEAT-3). Subpath imports resolve by package name once published; internal relative imports (./…) are unaffected. See docs/SDK.md.",
+  "exports": {
+    "./client": "./client/rgoe-client.mjs",
+    "./package.json": "./package.json"
+  },
+  "//files": "Conservative publish allowlist. Publishing is GATED (private:true stays until Gate 1+2 clear); this documents the intended npm payload only. The Rust client ships separately as a crate (T-RUST-4).",
+  "files": [
+    "bin/",
+    "client/",
+    "lib/",
+    "circuits/",
+    "contracts/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "enroll": "node group/enroll.mjs",
     "gateway": "node gateway/gateway.mjs",
     "shim": "node client/shim.mjs",
-    "demo": "node demo/server.mjs"
+    "bootnode": "node bootnode/server.mjs",
+    "keygen": "node bootnode/keygen.mjs",
+    "heartbeat": "node bootnode/heartbeat.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "demo": "node demo/server.mjs",
+    "test": "node scripts/test-all.mjs",
+    "test:fast": "RGOE_FAST=1 node scripts/test-all.mjs --no-contracts",
+    "test:node": "node scripts/test-all.mjs --no-contracts",
+    "test:contracts": "forge test",
+    "lint": "eslint .",
+    "audit:ci": "npm audit --audit-level=critical",
+    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts",
+    "mutation:test": "stryker run"
   },
   "dependencies": {
     "@semaphore-protocol/group": "^4.0.0",
@@ -19,5 +49,11 @@
     "poseidon-lite": "^0.3.0",
     "rlnjs": "^3.3.0",
     "socks": "^2.8.3"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "c8": "^12.0.0",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0"
   }
 }

@@ -1,0 +1,33 @@
+# Keep the build context small and secret-free. Anything the image needs is
+# either a tracked source file or gets minted at runtime under /data.
+
+# Host-built deps — reinstalled cleanly with `npm ci` inside the image.
+node_modules/
+
+# VCS + logs.
+.git/
+*.log
+
+# Local Tor state and onion identities (the private HS keys live here).
+tor/data/
+tor/data-client/
+tor/hs/
+tor/tor.pid
+tor/tor-client.pid
+
+# Any *.local.* scratch/config and minted identities/deploys (secrets).
+*.local.*
+identity.local.json
+deployed.local.json
+
+# Build/scratch/runtime output that shouldn't seed the image.
+out/
+cache/
+broadcast/
+experiments/
+demo/
+network/
+
+# Signer/enrollment secrets.
+.secret
+.env

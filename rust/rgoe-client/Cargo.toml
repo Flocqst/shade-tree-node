@@ -1,0 +1,59 @@
+[package]
+name = "rgoe-client"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "RGOE distributable client: single static binary with embedded Tor. Rust port of client/rgoe-client.mjs."
+publish = false
+
+[[bin]]
+name = "rgoe"
+path = "src/main.rs"
+
+[features]
+# `live` pulls the RLN prover (rgoe-rln -> ark-circom/wasmer) so `rgoe egress` can mint a
+# REAL envelope (T-RUST-2d) AND the embedded-Tor transport (arti-client + tokio, T-RUST-2e)
+# so `rgoe egress` dials the selected gateway `.onion` over Tor with no system tor daemon
+# and no SOCKS. It is OFF by default: the everyday `cargo build` (default-members) never
+# compiles the heavy native tree or arti, keeping the deterministic client sub-second. Build
+# the live path with `cargo build -p rgoe-client --features live`.
+# `rgoe-rln/embedded-artifacts` (T-RUST-4): the RLN circuit artifacts are `include_bytes!`'d
+# into the `live` binary, so a released `rgoe` egresses with NO external circuit files
+# (`--circuits` becomes optional; omit it to use the embedded artifacts). The ~8MB of
+# artifacts land only in the `live` build — the default deterministic binary never pulls
+# rgoe-rln at all, so it stays small.
+live = ["dep:rgoe-rln", "rgoe-rln/embedded-artifacts", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio"]
+
+[dependencies]
+rgoe-proto = { path = "../rgoe-proto" }
+# OPTIONAL, feature-gated (`live`): the RLN Groth16 prover + native depth-20 Poseidon tree
+# (T-RUST-2b/2c). Excluded from default-members and only compiled under `--features live`,
+# so the default build stays fast (no ark-circom / wasmer).
+rgoe-rln = { path = "../rgoe-rln", optional = true }
+# T-RUST-2 deterministic client: parse UNTRUSTED directory/announce/receipt JSON into
+# local DTOs, then hand the mapped rgoe-proto structs to the trust-critical checks.
+# serde/serde_json live ONLY here — rgoe-proto's canonical byte path stays serde-free.
+serde = { version = "1", features = ["derive"] } # derive Deserialize on the untrusted-JSON DTOs
+serde_json = "1"                                 # parse the directory/receipt files
+# hex: render pubkeys recovered from a verified receipt for display.
+hex = "0.4"
+
+# OPTIONAL, feature-gated (`live`): embedded Tor transport for the onion egress dial
+# (T-RUST-2e). CRITICAL dep note: `default-features = false` with an explicit feature list
+# turns OFF arti's `compression` feature, which links native zstd (`async-compression`) and
+# was the loop-19 feasibility worry of a `links` collision with rln's sled. That collision
+# does not actually arise here (the prover uses `ark-circom`, not zerokit/sled — verified
+# with `cargo tree`), but compression stays OFF regardless: the client dials a single onion
+# and frames one JSON line, so directory compression buys nothing. `onion-service-client`
+# is what lets arti CONNECT to a `.onion` (v3 HS client). tokio drives arti's async runtime.
+arti-client = { version = "0.45", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
+tor-rtcompat = { version = "0.45", default-features = false, features = ["tokio", "rustls"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util", "net", "time"], optional = true }
+# arg parsing is hand-rolled (no clap) to keep the dep tree tiny; a small seeded PRNG
+# (mulberry32, in-crate) drives `select` so no `rand` runtime dep is needed either.
+
+# DONE under `live`: arti-client / tor-rtcompat + tokio (embedded Tor onion dial, T-RUST-2e)
+# and rgoe-rln (RLN Groth16 prover + native tree, T-RUST-2b/2c/2d).
+# STILL DEFERRED (future parity work, not needed to close Gate 2):
+#   alloy  -- on-chain reads (GatewayRegistry.isStaked, operator sig) for zero-trust reselect
+#   hyper  -- bootnode HTTP (/directory, /announce) discovery over the same arti client

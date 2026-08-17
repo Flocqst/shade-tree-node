@@ -1,0 +1,21 @@
+{
+  "_comment": "EXAMPLE dataset for web/fleet-map.mjs. This mimics the signed directory shape ({ onion, pubkey, weight, health }) plus the OPTIONAL, operator-SELF-DECLARED coarse `region` / `asn` labels the fleet map reads. The onion/pubkey values are fake placeholders -- the generator never emits them (aggregate-only), and no label is ever geo-resolved. Note the deliberately thin buckets (region us-west, region sa-east, several single-gateway ASNs) that MUST fold into the unnamed 'other' bucket at k=2.",
+  "version": 1,
+  "issued": 1789000000,
+  "signer": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sig": "example-unsigned-sample-not-verified",
+  "gateways": [
+    { "onion": "sampleeuwest0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaid", "pubkey": "aa00", "weight": 100, "health": "up", "region": "eu-west", "asn": "AS24940" },
+    { "onion": "sampleeuwest1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbid", "pubkey": "aa01", "weight": 100, "health": "up", "region": "eu-west", "asn": "AS24940" },
+    { "onion": "sampleeuwest2cccccccccccccccccccccccccccccccccccccccccid", "pubkey": "aa02", "weight": 80, "health": "up", "region": "eu-west", "asn": "AS16276" },
+    { "onion": "sampleuseast0dddddddddddddddddddddddddddddddddddddddddid", "pubkey": "aa03", "weight": 100, "health": "up", "region": "us-east", "asn": "AS14061" },
+    { "onion": "sampleuseast1eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeid", "pubkey": "aa04", "weight": 100, "health": "up", "region": "us-east", "asn": "AS14061" },
+    { "onion": "sampleuseast2fffffffffffffffffffffffffffffffffffffffffid", "pubkey": "aa05", "weight": 90, "health": "warn", "region": "us-east", "asn": "AS20473" },
+    { "onion": "sampleapsouth0gggggggggggggggggggggggggggggggggggggggid", "pubkey": "aa06", "weight": 100, "health": "up", "region": "ap-south", "asn": "AS16509" },
+    { "onion": "sampleapsouth1hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhid", "pubkey": "aa07", "weight": 100, "health": "up", "region": "ap-south", "asn": "AS16509" },
+    { "onion": "sampleuswest0iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiid", "pubkey": "aa08", "weight": 70, "health": "up", "region": "us-west", "asn": "AS7018" },
+    { "onion": "samplesaeast0jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjid", "pubkey": "aa09", "weight": 60, "health": "up", "region": "sa-east", "asn": "AS28573" },
+    { "onion": "sampleundecl0kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkid", "pubkey": "aa0a", "weight": 100, "health": "up" },
+    { "onion": "sampleundecl1lllllllllllllllllllllllllllllllllllllllllid", "pubkey": "aa0b", "weight": 100, "health": "up", "asn": "AS24940" }
+  ]
+}

@@ -1,0 +1,333 @@
+// Log-hygiene selftest: prove that no SECRET material is ever written to a log sink.
+//
+// The property (from the threat model): the gateway, bootnode, heartbeat, and client MUST NOT
+// log secret material — a member's RGOE_SECRET / identitySecret, an onion identity SEED (the
+// 32-byte hex in identity.local.json), or an operator private key. They MAY freely log public
+// values: onion addresses, nullifiers, commitments, operator ADDRESSES, roots, tx hashes.
+//
+// It would FAIL if someone added `console.log(seed)` or logged a raw secret. Two layers:
+//
+//   1. STATIC scan. For every source file that logs, extract each console.log/error/warn/info/
+//      debug and process.stdout/stderr.write call, and check whether it interpolates a variable
+//      whose NAME suggests a secret (seed, secret, identitySecret, priv/privKey, RGOE_SECRET,
+//      RGOE_SLASH_KEY, RGOE_GW_OPERATOR_KEY, RGOE_REGISTER_KEY) UNTRUNCATED. Every listed file
+//      except group/enroll.mjs must have ZERO such interpolations. (A `.slice(...)`-truncated
+//      reference, e.g. gateway's `secret=${String(secret).slice(0,10)}..`, is NOT a full leak
+//      and is allowed by this test's definition.)
+//
+//      enroll.mjs is the ONE intended exception: it prints the member's bearer secret so the
+//      human running it can keep it. The static test pins that exception in place — the secret
+//      reaches STDOUT only in the default/enroll flow, and commitment-only mode routes it to
+//      STDERR (never stdout), consistent with group/enroll.selftest.mjs.
+//
+//   2. DYNAMIC (best-effort). Spin the real bootnode in-process (makeRegistry/makeServer),
+//      drive a real announce built from a known onion SEED, and assert the SEED hex never
+//      appears in captured stdout/stderr NOR on the wire (served /directory, /gateway/<onion>).
+//      Drive the gateway spent-set over-spend path (makeSpentSet) with a mock reconstruct that
+//      returns a known identitySecret, and assert that secret never appears in captured logs —
+//      on the slash path OR the slash-failed catch path. Spawn enroll --commitment-only and
+//      assert the secret is on stderr, never stdout.
+//
+//   node test/log-hygiene.selftest.mjs
+//
+// Exit 0 = no secret ever reaches a log; nonzero = a leak (prints the file + line).
+
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { generateOnionIdentity } from "../bootnode/keygen.mjs";
+import { buildAnnounce } from "../bootnode/announce.mjs";
+import { makeRegistry, makeServer, loadOrMintSigner } from "../bootnode/server.mjs";
+import { makeSpentSet } from "../gateway/gateway.mjs";
+import { MockStakeVerifier } from "../lib/gateway-registry.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, "..");
+
+let failures = 0;
+const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
+
+// ---------------------------------------------------------------------------
+// Static scanner
+// ---------------------------------------------------------------------------
+
+const SINKS = [
+  "console.log", "console.error", "console.warn", "console.info", "console.debug",
+  "process.stdout.write", "process.stderr.write",
+];
+const STDERR_SINKS = new Set(["console.error", "console.warn", "process.stderr.write"]);
+
+// A reference whose NAME suggests secret material. \b-anchored so `secretFile`, `seenNonce`,
+// `SecretKeeper` do NOT match; `secret`, `identitySecret`, `signer.priv`, `id.seed`, and the
+// four RGOE_*_KEY env names do.
+const SECRET = /\b(identitySecret|secret|seedHex|seed|privKey|priv|RGOE_SECRET|RGOE_SLASH_KEY|RGOE_GW_OPERATOR_KEY|RGOE_REGISTER_KEY)\b/;
+// A reference is "truncated" (partial, not a full leak) if it is sliced or measured.
+const TRUNC = /\.(slice|substr|substring)\s*\(|\.length\b/;
+
+function lineOf(src, idx) { return src.slice(0, idx).split("\n").length; }
+
+// Read the balanced (...) argument text of a call starting at the "(" index. Treats '..', ".."
+// and `..` spans as opaque strings so parens inside string/template text don't unbalance it.
+function readBalanced(src, openIdx) {
+  let depth = 0, inStr = null;
+  for (let i = openIdx; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (c === "\\") { i++; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") { inStr = c; continue; }
+    if (c === "(") depth++;
+    else if (c === ")") { depth--; if (depth === 0) return { args: src.slice(openIdx + 1, i), end: i + 1 }; }
+  }
+  return { args: src.slice(openIdx + 1), end: src.length };
+}
+
+// Every sink call in the source, with its raw argument text.
+function extractCalls(src) {
+  const calls = [];
+  for (const sink of SINKS) {
+    let idx = 0;
+    for (;;) {
+      const at = src.indexOf(sink + "(", idx);
+      if (at === -1) break;
+      const before = src[at - 1];
+      if (before && /[A-Za-z0-9_$.]/.test(before)) { idx = at + 1; continue; } // not a standalone sink
+      const { args, end } = readBalanced(src, at + sink.length);
+      calls.push({ sink, args, index: at, line: lineOf(src, at), stderr: STDERR_SINKS.has(sink) });
+      idx = end;
+    }
+  }
+  return calls;
+}
+
+// The `${...}` interpolation expressions inside any template literals in `args`.
+function templateInterps(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "`") continue;
+    let j = i + 1;
+    while (j < args.length && args[j] !== "`") { if (args[j] === "\\") j++; j++; }
+    const span = args.slice(i + 1, j);
+    let k = 0;
+    for (;;) {
+      const s = span.indexOf("${", k);
+      if (s === -1) break;
+      let d = 1, e = s + 2;
+      for (; e < span.length && d > 0; e++) { if (span[e] === "{") d++; else if (span[e] === "}") d--; }
+      out.push(span.slice(s + 2, e - 1));
+      k = e;
+    }
+    i = j;
+  }
+  return out;
+}
+
+// The "code" of `args` with every string/template literal removed — so bare concatenation
+// operands like  "RGOE_SECRET=" + secret  survive as the identifier `secret`.
+function codeResidue(args) {
+  let out = "", inStr = null;
+  for (let i = 0; i < args.length; i++) {
+    const c = args[i];
+    if (inStr) {
+      if (c === "\\") { i++; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") { inStr = c; continue; }
+    out += c;
+  }
+  return out;
+}
+
+// Does a single expression interpolate a secret UNTRUNCATED?
+function exprLeaks(expr) { return SECRET.test(expr) && !TRUNC.test(expr); }
+
+// Does the concatenation residue reference a secret UNTRUNCATED?
+function residueLeaks(residue) {
+  const re = new RegExp(SECRET.source, "g");
+  let m;
+  while ((m = re.exec(residue))) {
+    if (!TRUNC.test(residue.slice(m.index, m.index + 40))) return true;
+  }
+  return false;
+}
+
+// Every sink call that writes an UNTRUNCATED secret, for one file.
+function scanFile(rel) {
+  const src = readFileSync(join(ROOT, rel), "utf8");
+  const leaks = [];
+  for (const call of extractCalls(src)) {
+    const viaTemplate = templateInterps(call.args).some(exprLeaks);
+    const viaConcat = residueLeaks(codeResidue(call.args));
+    if (viaTemplate || viaConcat) leaks.push(call);
+  }
+  return leaks;
+}
+
+// Files that both LOG and touch secret material. announce.mjs and rgoe-client.mjs have no sinks
+// at all (pure libs / event-emit only) — included so the test asserts that stays true.
+const FILES = [
+  "gateway/gateway.mjs",
+  "bootnode/server.mjs",
+  "bootnode/heartbeat.mjs",
+  "bootnode/announce.mjs",
+  "client/rgoe-client.mjs",
+  "client/shim.mjs",
+  "group/register-gateway.mjs",
+  "group/register-onchain.mjs",
+];
+
+// ---------------------------------------------------------------------------
+// Log-capture helper (for the dynamic layer)
+// ---------------------------------------------------------------------------
+
+async function withCapture(fn) {
+  const buf = [];
+  const push = (s) => buf.push(String(s));
+  const orig = {
+    log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug,
+    so: process.stdout.write.bind(process.stdout), se: process.stderr.write.bind(process.stderr),
+  };
+  console.log = console.error = console.warn = console.info = console.debug = (...a) => push(a.join(" "));
+  process.stdout.write = (s) => { push(s); return true; };
+  process.stderr.write = (s) => { push(s); return true; };
+  try { await fn(); } finally {
+    console.log = orig.log; console.error = orig.error; console.warn = orig.warn;
+    console.info = orig.info; console.debug = orig.debug;
+    process.stdout.write = orig.so; process.stderr.write = orig.se;
+  }
+  return buf.join("\n");
+}
+
+async function post(base, path, body) {
+  const res = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { status: res.status, text: await res.text() };
+}
+async function get(base, path) {
+  const res = await fetch(base + path);
+  return { status: res.status, text: await res.text() };
+}
+
+// ---------------------------------------------------------------------------
+
+async function main() {
+  // === 1. STATIC: no file (except enroll) writes an untruncated secret to any log sink ===
+  console.log("static scan — no secret interpolated into any log sink:");
+  for (const rel of FILES) {
+    const leaks = scanFile(rel);
+    ok(leaks.length === 0, `${rel}: no untruncated secret in console/stdout/stderr`);
+    for (const l of leaks) {
+      // A real leak: name it precisely so it can be fixed at the source.
+      console.log(`       LEAK ${rel}:${l.line}  ${l.sink}(...)  ->  ${l.args.trim().slice(0, 90)}`);
+    }
+  }
+
+  // === 1b. enroll.mjs: the ONE intended exception, held in place ===
+  // enroll prints the member's bearer secret (by design). Assert the exception is scoped:
+  // commitment-only mode -> secret to STDERR only; the operator channel (stdout) is commitment
+  // alone. The default/enroll flow may print the secret to stdout.
+  console.log("\nenroll.mjs — the one intended secret-print, correctly scoped:");
+  const enrollSrc = readFileSync(join(ROOT, "group/enroll.mjs"), "utf8");
+  const enrollLeaks = scanFile("group/enroll.mjs");
+  ok(enrollLeaks.length >= 1, "enroll.mjs DOES print the member secret (the intended exception exists)");
+
+  const coStart = enrollSrc.indexOf("if (commitmentOnly)");
+  const coEnd = enrollSrc.indexOf("process.exit(0)", coStart);
+  ok(coStart !== -1 && coEnd !== -1, "enroll.mjs has a commitment-only branch ending in process.exit(0)");
+
+  const stdoutSecretWrites = enrollLeaks.filter((l) => !l.stderr);
+  ok(stdoutSecretWrites.length >= 1, "enroll.mjs writes the secret to stdout in exactly one flow (default mode)");
+  ok(stdoutSecretWrites.every((l) => l.index > coEnd),
+     "every stdout secret-write is AFTER the commitment-only branch (never in commitment-only mode)");
+
+  const stderrSecretInCO = enrollLeaks.filter((l) => l.stderr && l.index >= coStart && l.index <= coEnd);
+  ok(stderrSecretInCO.length >= 1, "commitment-only mode routes the secret to STDERR (not the operator stdout channel)");
+
+  // === 1c. enroll.mjs DYNAMIC: commitment-only really keeps the secret off stdout ===
+  console.log("\nenroll.mjs commitment-only run — secret on stderr, never stdout:");
+  const run = spawnSync(process.execPath, [join(ROOT, "group/enroll.mjs"), "--commitment-only"], {
+    cwd: ROOT, encoding: "utf8", timeout: 60_000,
+  });
+  const SECRET_RE = /RGOE_SECRET=(0x[0-9a-fA-F]{64})/;
+  ok(run.status === 0, "enroll --commitment-only exits 0");
+  const m = run.stderr.match(SECRET_RE);
+  ok(!!m, "the secret (export RGOE_SECRET=0x..) is emitted on STDERR");
+  const secret = m ? m[1] : "__none__";
+  ok(!run.stdout.includes(secret), "the secret hex does NOT appear on stdout");
+  ok(!/0x[0-9a-fA-F]{16,}/.test(run.stdout), "no long 0x-hex blob on stdout at all");
+
+  // === 2. DYNAMIC bootnode: a real announce never logs (or wires) the onion SEED ===
+  console.log("\nbootnode in-process — onion SEED never hits a log or the wire:");
+  const work = await mkdtemp(join(tmpdir(), "rgoe-loghyg-"));
+  try {
+    const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });
+    const signer = await loadOrMintSigner(join(work, "signer.key"));
+    const registry = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open", ttlSec: 900, minReannounceSec: 0 });
+    const server = makeServer(registry, { signerPub: signer.pub });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    let dirText = "", gwText = "", announceOk = false;
+    const captured = await withCapture(async () => {
+      const a1 = buildAnnounce({ onion: g1.onion, weight: 100, onionSeedHex: g1.seed });
+      const rA = await post(base, "/announce", a1);
+      announceOk = JSON.parse(rA.text).ok === true;
+      dirText = (await get(base, "/directory")).text;
+      gwText = (await get(base, `/gateway/${g1.onion}`)).text;
+    });
+    await new Promise((r) => server.close(r));
+
+    ok(announceOk, "honest announce accepted (real announce->verify->store path exercised)");
+    ok(g1.seed.length === 64 && /^[0-9a-f]+$/.test(g1.seed), "the drive used a real 32-byte onion seed");
+    ok(!captured.includes(g1.seed), "onion SEED never appears in captured bootnode stdout/stderr");
+    ok(!dirText.includes(g1.seed), "onion SEED never appears in the served /directory (not on the wire)");
+    ok(!gwText.includes(g1.seed), "onion SEED never appears in the stored /gateway/<onion> announce");
+    ok(dirText.includes(g1.onion), "control: the PUBLIC onion address IS served (only the seed is withheld)");
+
+    // === 2b. DYNAMIC gateway spent-set: a reconstructed identitySecret never hits a log ===
+    console.log("\ngateway spent-set in-process — reconstructed identitySecret never logged:");
+    const KNOWN_SECRET = "0x" + "de".repeat(32) + "SENTINELSECRET";
+
+    // Over-spend on the slash path: reconstruct returns the known secret; slash succeeds.
+    const capSlash = await withCapture(async () => {
+      const ss = makeSpentSet({
+        reconstruct: () => KNOWN_SECRET,
+        derive: () => "PUBLIC_COMMITMENT_OK",
+        slash: async () => {},
+      });
+      await ss.admit("nullifier-A", { x: "1" });   // first signal
+      await ss.admit("nullifier-A", { x: "2" });   // 2nd distinct signal -> reconstruct+slash
+    });
+    ok(!capSlash.includes(KNOWN_SECRET), "identitySecret not logged on the slash path");
+
+    // Over-spend where slash THROWS: exercises the `slash failed ...` catch-path log.
+    const capThrow = await withCapture(async () => {
+      const ss = makeSpentSet({
+        reconstruct: () => KNOWN_SECRET,
+        derive: () => "PUBLIC_COMMITMENT_OK",
+        slash: async () => { throw new Error("chain unreachable"); },
+      });
+      await ss.admit("nullifier-B", { x: "1" });
+      await ss.admit("nullifier-B", { x: "2" });
+    });
+    ok(capThrow.includes("slash failed"), "control: the slash-failed catch path did log (so absence below is real)");
+    ok(!capThrow.includes(KNOWN_SECRET), "identitySecret not logged on the slash-FAILED catch path");
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+
+  // === Coverage note for processes not driven in-process ===
+  console.log("\ncoverage: heartbeat, shim, client (rgoe-client), register-* are STATIC-only");
+  console.log("  (they need Tor / a live chain / a listening proxy to run; their log sinks are");
+  console.log("   fully covered by the static scan above — none interpolates a secret).");
+
+  console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: log-hygiene selftest (${failures} failure${failures === 1 ? "" : "s"})`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

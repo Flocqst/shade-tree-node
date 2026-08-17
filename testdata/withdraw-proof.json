@@ -1,0 +1,24 @@
+{
+  "_comment": "REAL Groth16 exit-auth proof fixture for test/WithdrawVerifier.t.sol. Proof of knowledge of the identity secret behind the membership leaf, bound to the action. Regenerate with: node testdata/gen-withdraw-proof.mjs",
+  "_trust": "TESTNET-ONLY: verifier VK is from circom-rln's untrusted dev phase-2 (see circuits/rln/ARTIFACTS.md). Not ceremony-trusted until ship-plan T-HARD-1.",
+  "_secret_note": "The raw identity secret (witness) is intentionally NOT in this fixture; only proof + public signals.",
+  "circuit": "circom-rln withdraw (RLN slash-side): out = Poseidon(1)([identitySecret]); public [address]",
+  "pubSignalLayout": [
+    "identityCommitment",
+    "address"
+  ],
+  "K": 8,
+  "commitment": "11302006078516901731073162965056551612114122314181142374993834332168998510316",
+  "identityCommitment": "13377623690824916797327209540443066247715962236839283896963055328700043345550",
+  "recipient": "0x000000000000000000000000000000000000bEEF",
+  "exit": {
+    "context": "0xd1fa1cfc2dd41eb2f2aff3f9464e81259ec35fdba18fbb810cb84aa42aae25a6",
+    "address": "7422325680370754819221436978955739222855602526734824209266818592294543697314",
+    "proof": "0x085f45b5545e248a3b81add15371edca012a422a7f1ed891d54926ff1ae0278e296ada2cd0e9b0bfbdc585d470003966cfd752c62e3cdcd1acdb29589fc9d6b82f148efcd5b990b3a9b75633be245d9ff6866677b0db16f4e0328f38370af0960f1eefecfdbec8eab8f8aa828b32d48df7935d66e7ddc8e6274a833acb101849084373c8448827bbe67fe4fdb9721aada6c4493a9045cbf7895322d1a1058af608dbb45546801d4a6d4bcca199ca356e85c5651705eb53582dc7cf76045f835d03f016e00352ab2baa031217160838c7b0f2a23ecd9ab6b8366c6472c33cf7dd206b922164a9940a7a12cc91ef869ef0a9e90fe31e60a5e42d8252a2c7f73e061d937778c1825d2a9d931b6e9034407cac9725b446a6d57a469fac870823be8e"
+  },
+  "withdraw": {
+    "context": "0x1a0c79773425e85b0bba051161dfc301622276fb85028c111725b1ae7ec097fb",
+    "address": "11782174552975715223856100147882805861251474894807905713157112440022401849339",
+    "proof": "0x0f9a50e5da360beb7edebcee03edbc8f6e46d4c4eb135402c9606ceec4386e2525e34c84200b6cff298df26147615b7d27f0d0634a405c968c677728b6d261bd2306905ab95aacd9f01ca943b9d7a93e50ebb6a84cabb68feabf6b3af37cb5e210568cf8f5e302008f82b07d44c89fab1cfbdb9a5db0d8b7f125fea1988f83252bbeb2414e4a8fb643898fa0cead963392c7a2bee8479dbcf430578c007f9247157df485a72612d4dc15c19c92fd2d4dcfa6c2633cddfbba9590f33cc562d63910902c990da115a60955640a0ac6597e575d5b5d84222aca651441c70d5f489514570001499dcd2c479e7745a1d99bbe072190365772d344f49e12c171259fb61d937778c1825d2a9d931b6e9034407cac9725b446a6d57a469fac870823be8e"
+  }
+}

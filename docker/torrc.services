@@ -1,0 +1,36 @@
+# Tor config for the local Docker demo fleet.
+#
+# One tor instance fronts two v3 onion services and lends its network namespace
+# to the backend containers (see docker-compose.yml `network_mode: service:tor`).
+# Because the rgoe services bind loopback only (127.0.0.1), the HiddenServicePort
+# backends below are 127.0.0.1:<port> exactly as on a real single-host deploy:
+# tor and the app share one loopback, so no source change is needed.
+
+# SOCKS for the client shim. Bound on all interfaces (0.0.0.0) so the port can
+# also be published to the host for manual `curl --socks5-hostname` testing;
+# inside the shared namespace the shim still reaches it at 127.0.0.1:9050.
+SocksPort 0.0.0.0:9050
+
+# Project-local Tor state. Mounted on a named volume so the generated onion
+# addresses (and the entrypoint's world-readable mirror of them) survive
+# restarts and are visible to sibling containers.
+DataDirectory /var/lib/tor
+
+# --- bootnode onion : onion:80 -> bootnode process on 127.0.0.1:8877 ----------
+HiddenServiceDir /var/lib/tor/hs-bootnode
+HiddenServicePort 80 127.0.0.1:8877
+
+# --- gateway onion  : onion:80 -> gateway process on 127.0.0.1:8443 -----------
+# No exit node is involved on the client->gateway path: it's rendezvous-routed
+# and stays inside Tor, so the client IP is never exposed to the gateway.
+HiddenServiceDir /var/lib/tor/hs-gateway
+HiddenServicePort 80 127.0.0.1:8443
+
+# Anti-DoS: Tor's onion-service proof-of-work defense is the cheap outer gate
+# (the reputation zk-proof is the expensive inner gate). Left commented on
+# purpose — stock tor (incl. the Debian package here) hard-fails config
+# validation when this is set without the 'pow' module compiled in. Enable it
+# only on a tor build that ships the module. Matches the repo's tor/torrc note.
+# HiddenServicePoWDefensesEnabled 1
+
+Log notice stdout

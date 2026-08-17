@@ -6,7 +6,7 @@ tested (`lib/directory.mjs`, `client/selection.mjs`, `group/directory.example.js
 the `RGOE_DIRECTORY` path in `client/shim.mjs`). What is *not* built is the shared
 budget accounting across gateways and the on-chain-sourced directory. Those are the
 protocol changes, and they are the honest part of this doc. This expands
-[ROADMAP](ROADMAP.md) item 3 into a spec; read that first for the framing.
+[ROADMAP v1](ROADMAP-v1.md) item 3 into a spec; read that first for the framing.
 
 The PoC has one gateway and the client pins it (`RGOE_ONION` or `tor/hs/hostname`).
 Two costs, from the roadmap, restated so this doc stands alone:
@@ -128,7 +128,7 @@ the PoC's, untouched.
 same trusted root + same epoch verifies at *any* gateway that loads the same
 `members.json`. So rotation needs no new proof and no new circuit. The shim reuses the
 cached epoch proof (~0.9 KB, generated once per epoch, ~30 ms to verify at whichever
-gateway receives it; numbers from [ROADMAP proof overhead](ROADMAP.md#proof-overhead))
+gateway receives it; numbers from [ROADMAP proof overhead](ROADMAP-v1.md#proof-overhead))
 and just dials a different onion. Rotating across the whole fleet on every request
 costs zero extra proving.
 
@@ -146,14 +146,14 @@ State this precisely, because rotation on its own is a weaker guarantee than it 
 The load-bearing line: **rotation alone does not defeat colluding gateways.** A
 member's per-epoch nullifier is constant, so a colluding set matches it across their
 logs and rebuilds the whole profile regardless of how the requests were spread. You
-need [item 1](ROADMAP.md#1-unlinkable-rate-limiting-decouple-linkability-from-the-rate-window)
+need [item 1](ROADMAP-v1.md#1-unlinkable-rate-limiting-decouple-linkability-from-the-rate-window)
 (a distinct nullifier per request) for rotation to actually buy anything against
 collusion. **Rotation + per-request unlinkable nullifiers** is the combination that
 delivers "no operator, even a colluding set, can profile a member." Neither piece is
 sufficient alone. Against a purely *non*-colluding fleet, rotation alone already cuts
 each operator's view to ~1/N, which is the honest win it does deliver.
 
-With [item 2](ROADMAP.md#2-on-chain-reputation-set-ethereum), the fleet and the
+With [item 2](ROADMAP-v1.md#2-on-chain-reputation-set-ethereum), the fleet and the
 membership read one root, and rotation stays free because the proof is still
 root-and-epoch scoped, not gateway-scoped.
 
@@ -328,7 +328,7 @@ adopts:
 - **Per-request rotation** cuts the fraction of your traffic any one gateway (rogue or
   honest) receives to ~1/N, so a rogue gateway can only correlate the share that lands on
   it.
-- **Per-request nullifiers** (ROADMAP #1) cap the *blast radius* of each successful
+- **Per-request nullifiers** (ROADMAP-v1 #1) cap the *blast radius* of each successful
   correlation to a **single request** instead of the whole epoch. With the constant
   per-epoch nullifier, one correlation hit attributes every request that epoch; with
   per-request nullifiers it attributes one stream.

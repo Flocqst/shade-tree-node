@@ -7,7 +7,7 @@ ONCHAIN.md / FLEET.md / LIGHT-CLIENT.md into one coherent demo:
 - **A — honesty fixes:** self-enrollment, request-bound signal, deterministic-retry,
   cheap-check reorder.
 - **B — correlation mitigations:** per-request gateway rotation (already scaffolded) +
-  per-request slot nullifiers (ROADMAP #1 Tier 1, public slots, no custom circuit).
+  per-request slot nullifiers (ROADMAP-v1 #1 Tier 1, public slots, no custom circuit).
 - **C — on-chain staked set + slashing:** `StakedReputationSet` on a local `anvil`,
   trusted **node** root provider, RLN-style share slashing at PoC fidelity.
 

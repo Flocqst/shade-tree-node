@@ -1,0 +1,84 @@
+# rgoe: hardened torrc reference fragment.
+#
+# This is a REFERENCE, not wired into bootstrap.sh. bootstrap.sh writes the
+# minimal working config (/etc/tor/torrc.d-rgoe: two HiddenServiceDir blocks +
+# HiddenServicePoWDefensesEnabled 1). The lines below are the safe extra subset
+# you can layer on. Copy the SERVER block onto the droplet's torrc.d-rgoe, and
+# the CLIENT block onto the laptop/client tor. See docs/TOR-HARDENING.md for the
+# reasoning and for the options deliberately left out (vanguards, client-auth).
+#
+# Legend:
+#   [S]      server-side (droplet running the onion services)
+#   [C]      client-side (laptop dialing the fleet)
+#   [S-POW]  server-side AND requires a pow-capable tor build (official Tor
+#            Project apt package has it; the Homebrew bottle does NOT -- the PoW
+#            code is GPL and the bottle is BSD-only)
+#   [VERIFY] confirm the option exists in YOUR tor version before relying on it
+
+
+# ============================================================================
+# SERVER SIDE  (droplet: /etc/tor/torrc.d-rgoe, alongside the HiddenServiceDir
+# blocks that bootstrap.sh already writes)
+# ============================================================================
+
+# [S] Drop privileges. The apt tor package already runs as debian-tor via its
+# systemd unit; set this only if you launch tor yourself. Harmless to state.
+# User debian-tor
+
+# [S] Tor's own seccomp2 syscall sandbox (Linux/x86_64 only). Strong defense in
+# depth around the tor process. CAVEATS: once enabled you cannot live-reload a
+# torrc change that needs a new syscall or a new file path -- you must fully
+# restart tor. Test a restart before trusting it in production.
+Sandbox 1
+
+# --- PoW DoS defense --------------------------------------------------------
+# bootstrap.sh already sets HiddenServicePoWDefensesEnabled 1 per service. The
+# two knobs below tune the request queue that the PoW gate feeds. They only take
+# effect on a pow-capable build. Raise them under active flooding; see the doc.
+
+# [S-POW][VERIFY] Steady-state rate the onion dequeues rendezvous requests from
+# the PoW-priority queue (requests/sec). Higher = serve more real clients per
+# second under load, at more CPU. Verify the exact name/units for your version.
+# HiddenServicePoWQueueRate 250
+
+# [S-POW][VERIFY] Max burst the queue absorbs above the steady rate. Raise with
+# QueueRate when legit demand is spiky. Verify against your tor version.
+# HiddenServicePoWQueueBurst 2500
+
+# [S][VERIFY] Optional stream caps per rendezvous circuit -- caps a single
+# client's fan-out. Close the circuit if exceeded. Tune to your real per-client
+# concurrency. Left commented; verify names against your tor version.
+# HiddenServiceMaxStreams 32
+# HiddenServiceMaxStreamsCloseCircuit 1
+
+# NOTE (server-side client-auth) is intentionally NOT here. For a PRIVATE fleet
+# you would add an authorized_clients/ subdir under each HiddenServiceDir (v3
+# mechanism), NOT the old v2 "HiddenServiceAuthorizeClient" torrc line. It is
+# off by design: rgoe gates at the app layer (zk reputation), which is the whole
+# point. See docs/TOR-HARDENING.md section 3 before enabling.
+
+
+# ============================================================================
+# CLIENT SIDE  (laptop tor; compare tor/torrc.client in this repo)
+# ============================================================================
+
+# [C] Per-request circuit isolation. rgoe rotates gateways per request; these
+# flags make tor also use a SEPARATE circuit per distinct destination and per
+# distinct SOCKS auth, so two requests do not share one exit-less path by
+# accident. Ties directly to the per-request rotation goal.
+#   IsolateDestAddr    new circuit per distinct destination address (.onion)
+#   IsolateDestPort    new circuit per distinct destination port
+#   IsolateSOCKSAuth   new circuit per distinct SOCKS username/password pair
+#                      (the client can pass a per-request tag as SOCKS auth to
+#                       force a fresh circuit on demand)
+SocksPort 9260 IsolateDestAddr IsolateDestPort IsolateSOCKSAuth
+
+# [C] How long a circuit keeps accepting NEW streams before tor rotates to a
+# fresh one (seconds; default 600). Lower = fresher circuits, more build churn
+# and more load on guards. Isolation flags above already fork per destination;
+# lower this only if you also want time-based rotation within one destination.
+# MaxCircuitDirtiness 600
+
+# [C] Client-auth private keys (only if the SERVER enabled v3 client-auth).
+# Point tor at a dir of "<onion>.auth_private" files. Off by default in rgoe.
+# ClientOnionAuthDir /var/lib/tor/rgoe-onion-auth

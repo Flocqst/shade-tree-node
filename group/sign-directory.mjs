@@ -15,7 +15,7 @@
 
 import { writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { signDirectory, verifyDirectory, pubkeyToOnion, ed25519PublicKey } from "../lib/directory.mjs";
