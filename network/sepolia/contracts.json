@@ -22,14 +22,16 @@
     "hasher": "0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586",
     "withdrawVerifier": "0x522409038aA03FFF998d33C60A37486975695351",
     "gatewayRegistry": "0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868",
-    "withdrawGroth16Verifier": "0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E"
+    "withdrawGroth16Verifier": "0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E",
+    "paidAccessSet": "0x4e8C2Bf5d3c5454A04837401095fce2646484111"
   },
   "deployTxs": {
     "stakedReputationSet": "0xa565fd7769ddfdd79abaff6e0a5f40159bb77604c531ec631941b52f2953ba03",
     "hasher": "0xcb2559925392f0582ce60525f7461f3d0c3931a237fc6e72c7401c337be09605",
     "withdrawVerifier": "0xf4a69899a63ecfba72b2408fe6e00f518f9a621171b55a14cb18415828cdac91",
     "gatewayRegistry": "0x1ae812c18ebd0744417109f66e5df768cd7fc81181c6022c9166578c7b3ad5dc",
-    "withdrawGroth16Verifier": "0xc4bcb4628fcc64b51c78673bddbb3b7a3e91c51e680abe1d7ab37eed097f65cc"
+    "withdrawGroth16Verifier": "0xc4bcb4628fcc64b51c78673bddbb3b7a3e91c51e680abe1d7ab37eed097f65cc",
+    "paidAccessSet": "0x9835d062d007642dc739b6e2bae434f81286f25ea807f4d99dc74a2c880e4086"
   },
   "deployBlock": 11510538,
   "deployBlocks": {
@@ -37,7 +39,8 @@
     "hasher": 11510538,
     "withdrawGroth16Verifier": 11510539,
     "withdrawVerifier": 11510540,
-    "stakedReputationSet": 11510541
+    "stakedReputationSet": 11510541,
+    "paidAccessSet": 11510873
   },
   "gatewayRegistry": {
     "owner": "0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02",
@@ -48,6 +51,33 @@
     "verified": "cast call: BOND()==1000000000000000, owner()==0xc8606C75...7f02",
     "broadcast": "network/sepolia/gateway-registry-broadcast.json"
   },
+  "paidAccessSet": {
+    "role": "T-FEAT-7 Layer 1: the paid-access membership tree (docs/PAYMENTS.md). Payment settles OFF chain over HTTP 402 rails (x402 / MPP, stablecoin straight to the operator); the operator (registrar) INSERTS the buyer leaf after settlement. No funds ever touch this contract (nothing payable, no receive). Same tree / leaf / hasher / slot-3 root as the staked set; the gateway unions both roots (RGOE_PAID_ACCESS_CONTRACT).",
+    "operator": "0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02",
+    "allowedLimits": [
+      8,
+      32
+    ],
+    "defaultLimit": 8,
+    "hasher": "0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586",
+    "libraries": "PoseidonT3 0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022 linked (reused, --libraries)",
+    "deployedAt": "2026-08-17",
+    "deployGas": 2071319,
+    "verified": "cast call: currentRoot()==10354334201938752428558948798274962999644820234654929486063894213598717249307 (empty depth-20 root) at deploy, storage slot 3 == currentRoot, allowedLimits()==[8,32], DEFAULT_LIMIT()==8, ROOT_STORAGE_SLOT()==3, operator()==0xc860…7f02, pendingOperator()==0x0, hasher()==0x29e9…6586, isAllowedLimit(16)==false, commitmentOf(111,8)==11302006078516901731073162965056551612114122314181142374993834332168998510316 (JS golden), balance 0",
+    "smoke": {
+      "result": "PASS",
+      "date": "2026-08-17",
+      "flow": "static insert from a non-operator reverts NotOperator; static insert at unlisted tier 16 reverts BadLimit; live insert(leaf, 8) from the operator -> Inserted(leaf, 8, 0, root) event, currentRoot()==JS newGroup([leaf]).root==storage slot 3, leafCount()==1, limitOf(leaf)==8; static re-insert reverts AlreadyInserted; static slash at limit 32 reverts BadLimit, at limit 8 with a wrong secret reverts BadSecret, with the right secret simulates OK (not broadcast: the smoke leaf stays live); balance 0 throughout",
+      "insertTx": "0x67afe076d8557fb416784fc1e2e583789269ccd7c8a5cbd94bcf523d63f93a32",
+      "insertBlock": 11510877,
+      "insertGas": 1263222,
+      "leaf": "3173469406562808608136455723690012297332154121683446842802892401114468614068",
+      "rootAfter": "6430323861468492113547438473981076657535586200031679816061979000753954952048",
+      "report": "network/sepolia/integration-report-paid-access.md"
+    },
+    "events": "Inserted(uint256 indexed commitment, uint256 limit, uint256 index, uint256 root) / Slashed(uint256 indexed commitment, uint256 limit, uint256 index, uint256 root) — the root is the post-update currentRoot; NOTE topic0 differs from the staked set’s MemberRegistered/MemberSlashed (an event-replay root provider needs these two topics; the light-client provider reads slot 3 unchanged)",
+    "broadcast": "network/sepolia/paid-access-broadcast.json"
+  },
   "circuit": {
     "family": "rate-limiting-nullifier / circom-rln v1.0.0",
     "commit": "17f0fed7d8d19e8b127fd0b3e5295a4831193a0d",
@@ -55,7 +85,7 @@
     "leaf": "rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), limit ]) — limit = the member's reputation tier (userMessageLimit; 8 or 32 on this deployment), docs/adr/0006-reputation-tiers.md",
     "artifacts": "circuits/rln/ (hash-pinned in circuits/rln/ARTIFACTS.md; testnet-only, untrusted phase-2 ceremony)"
   },
-  "note": "RLN release with ON-CHAIN TIERS (T-FEAT-8b) + the ON-CHAIN incremental tree / currentRoot at storage slot 3 (T-DEV-9, T-DEV-9c). register(commitment, limit) requires bondFor(limit) and records the tier; slash(commitment, secret, limit, receiver) recomputes the leaf at the CLAIMED limit through the tiered RateCommitmentHasher and burns that tier's bond; the one-arg register / three-arg slash overloads are the default-tier (8) path, byte-equivalent to rln-v3. Exit-auth is the REAL Groth16 WithdrawVerifier (testnet-only VK, T-HARD-1 pending) taking the recorded limit. Events MemberRegistered/MemberSlashed carry the limit (new topic0; lib/root-provider.mjs reads both generations). Deployed by the fleet operator hot key. GatewayRegistry is UNCHANGED (0x94EC…9A68, rln-v3 era, still the live registry). NOTE: the LIVE fleet gateways' slashing (RGOE_SLASH_CONTRACT in agent-devops) still points at the superseded rln-v3 set 0xdAE2…20FC — flipping the fleet units to this set is a separate operator step (docs/ONCHAIN-DEPLOY.md §8); RGOE_NETWORK=sepolia already resolves RGOE_GROUP_CONTRACT to this set.",
+  "note": "RLN release with ON-CHAIN TIERS (T-FEAT-8b) + the ON-CHAIN incremental tree / currentRoot at storage slot 3 (T-DEV-9, T-DEV-9c). register(commitment, limit) requires bondFor(limit) and records the tier; slash(commitment, secret, limit, receiver) recomputes the leaf at the CLAIMED limit through the tiered RateCommitmentHasher and burns that tier's bond; the one-arg register / three-arg slash overloads are the default-tier (8) path, byte-equivalent to rln-v3. Exit-auth is the REAL Groth16 WithdrawVerifier (testnet-only VK, T-HARD-1 pending) taking the recorded limit. Events MemberRegistered/MemberSlashed carry the limit (new topic0; lib/root-provider.mjs reads both generations). Deployed by the fleet operator hot key. GatewayRegistry is UNCHANGED (0x94EC…9A68, rln-v3 era, still the live registry). NOTE: the LIVE fleet gateways' slashing (RGOE_SLASH_CONTRACT in agent-devops) still points at the superseded rln-v3 set 0xdAE2…20FC — flipping the fleet units to this set is a separate operator step (docs/ONCHAIN-DEPLOY.md §8); RGOE_NETWORK=sepolia already resolves RGOE_GROUP_CONTRACT to this set. T-FEAT-7 (2026-08-17): the PaidAccessSet 0x4e8C…4111 was added NEXT TO this release (release name unchanged; see the `paidAccessSet` block): the operator-inserted paid-access membership tree whose root the gateway unions with this set’s. An earlier payable/priced variant of that contract was designed but NEVER broadcast (pivoted to off-chain 402 settlement before deploy).",
   "liveIntegration": {
     "result": "PASS",
     "date": "2026-08-17",

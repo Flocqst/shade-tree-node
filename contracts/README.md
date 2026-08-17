@@ -53,6 +53,21 @@ already in place to inject a verified root. Cost: 20 Poseidon(2) hashes per memb
 change (~1.25M gas / register on the vendored pure-Solidity Poseidon; fine for testnet).
 See docs/ONCHAIN.md, "Reading the root".
 
+## PaidAccessSet.sol (T-FEAT-7 Layer 1)
+
+The paid-access membership tree of [`docs/PAYMENTS.md`](../docs/PAYMENTS.md): the staked set's
+structural sibling — same on-chain depth-20 Poseidon tree (`currentRoot` at slot 3), same leaf
+via the same tiered `RateCommitmentHasher`, same immutable allowed-tier table, same
+zero-in-place `slash(commitment, secret, limit, receiver)` — with **no funds on chain**:
+payment settles OFF chain over HTTP 402 rails (x402 / MPP) to the operator, who then
+`insert(commitment, limit)` / `insertBatch(..)`s the buyer's leaf (`onlyOperator`, not
+payable). No exit / withdraw / sweep / receive; `slash` zeroes the leaf and pays nothing;
+`operator` rotates by two-step `setOperator` / `acceptOperator`. The gateway unions this
+tree's root with the staked set's. `docs/ONCHAIN.md` "Paid access set", deploy
+`contracts/script/DeployPaidAccess.s.sol` (`docs/ONCHAIN-DEPLOY.md` §9), audit
+`docs/CONTRACTS-AUDIT.md` I12–I15. Live on Sepolia (`network/sepolia/contracts.json`
+`contracts.paidAccessSet`).
+
 ## Known simplifications (reference scope)
 
 - `UNBONDING` must be `>= F + E + C` (freshness window + epoch + slash-confirmation

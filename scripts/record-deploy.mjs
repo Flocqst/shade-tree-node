@@ -18,8 +18,8 @@
 // Flags:
 //   --network <name>        network/<name>/contracts.json to update   (or RGOE_NETWORK)
 //   --from-broadcast <p>    Foundry run-latest.json to read address/tx/block from
-//   --contract <slot>       which slot to record (default gatewayRegistry); with --from-broadcast
-//                           the CREATE whose contractName maps to that slot is used
+//   --contract <slot>       which slot to record (default gatewayRegistry; e.g. paidAccessSet); with
+//                           --from-broadcast the CREATE whose contractName maps to that slot is used
 //   --all                   with --from-broadcast: record EVERY CREATE with a known slot mapping
 //   --address/--tx/--block  manual values (no broadcast file needed); --block is a decimal int
 //   --status <s>            also set the record's top-level status (live|pending|retired)
@@ -45,6 +45,7 @@ export const CONTRACT_SLOTS = {
   WithdrawVerifier: "withdrawVerifier",
   MockWithdrawVerifier: "withdrawVerifier",
   WithdrawGroth16Verifier: "withdrawGroth16Verifier", // the snarkJS-exported pairing verifier WithdrawVerifier wraps (rln-v4)
+  PaidAccessSet: "paidAccessSet", // T-FEAT-7 fixed-denomination deposit/sweep set (docs/PAYMENTS.md)
 };
 
 export function parseArgs(rawArgv) {

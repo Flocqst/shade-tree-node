@@ -500,6 +500,83 @@ real Groth16 exit proof at the recorded tier), the tier fuzz tests in
 (`test/StakedReputationSet.invariant.t.sol`, balance == Σ per-tier bonds). End to end:
 `test/onchain-tiers.selftest.mjs` (anvil, real gateway, real proofs, real slasher).
 
+## Paid access set (T-FEAT-7 Layer 1 — DEPLOYED next to rln-v4, 2026-08-17)
+
+`docs/PAYMENTS.md` buys access instead of staking for it. Its Layer 1 is
+`contracts/PaidAccessSet.sol` (`network/sepolia/contracts.json` `contracts.paidAccessSet`,
+`0x4e8C2Bf5d3c5454A04837401095fce2646484111`), a **second membership tree** that sits next to
+the staked set and is read the same way:
+
+1. **Same tree, same leaf, same slot.** The identical depth-20 Poseidon(2) incremental tree
+   (`_updateLeaf` / `_nodeAt` are a verbatim copy of the staked set's; the deployed staked set is
+   immutable so the code is duplicated, not refactored, and
+   `test/PaidAccessSet.t.sol::test_Root_ParityWithStakedReputationSet` drives both contracts
+   through the same leaf sequence and asserts identical roots after every step), the identical
+   leaf `Poseidon2(Poseidon1(identitySecret), limit)` via the SAME live tiered
+   `RateCommitmentHasher` (`commitmentOf(secret, limit)`), the identical immutable
+   allowed-tier table (`allowedLimits()`, `DEFAULT_LIMIT` 8, `MAX_LIMIT` 65535; Sepolia
+   `{8, 32}`), the identical zero-in-place removal, and `currentRoot` at the identical
+   `ROOT_STORAGE_SLOT = 3` — so `LightClientRootProvider` proves it with the same `eth_getProof`
+   path, and the gateway's tiered slasher (`DEFAULT_LIMIT` / `allowedLimits` / `limitOf` /
+   `slash(commitment, secret, limit, receiver)`) drives it unchanged.
+2. **No money on chain.** Payment settles OFF this contract over HTTP 402 rails (x402 / MPP,
+   USDC or another stablecoin on the same chain) with a **registrar** the operator runs; the
+   stablecoin goes straight to the operator's address in that settlement. The contract's only
+   job is to be the membership tree the operator **inserts into after settlement**:
+   `insert(commitment, limit)` and `insertBatch(commitments[], limits[])` are `onlyOperator`
+   and NOT payable (batching an issuance round is what grows that round's anonymity set,
+   PAYMENTS.md open item 3). There is no `deposit`, no price, no `sweep`, no `receive` /
+   `fallback`: ETH cannot enter (`test_NoFunds_EthCannotEnter`, `invariant_noFundsEver`).
+   Nothing is refundable: no exit / withdraw. Redemption is off chain, to the gateway, with the
+   ordinary RLN membership proof against this tree's root.
+3. **Slash = zero the leaf, pay nothing.** `slash(commitment, secret, limit, receiver)` has
+   the staked set's exact signature and gate order (`NotInserted` → `BadLimit` if `limit` is not
+   the recorded tier → `BadSecret` if the secret does not hash to the leaf there), zeroes the
+   leaf in place and refreshes the root; there is no bond to burn, so `receiver` receives
+   nothing (kept for call-shape parity so one gateway slasher drives both sets). The over-spender
+   loses the access they bought.
+4. **Operator = registrar key, two-step rotation.** `setOperator(to)` nominates,
+   `acceptOperator()` (only the nominee) takes the role; the old key keeps inserting until the
+   new one proves it holds the key (a fat-fingered address cannot brick issuance). The operator
+   can ONLY insert at the fixed tiers and hand the role over — it cannot add tiers, move or
+   remove a leaf, or pause. `pendingOperator()` is public.
+5. **Events carry the post-update root.** `Inserted(commitment indexed, limit, index, root)` /
+   `Slashed(commitment indexed, limit, index, root)`, so an event reader can cross-check its
+   reconstruction event by event. NOTE their topic0 differs from the staked set's
+   `MemberRegistered` / `MemberSlashed`; an event-replay root provider adds these two topics,
+   the light-client provider (slot 3) needs nothing. `leafCount()` (= `nextIndex`, slashed
+   leaves included) is the anonymity-set figure the gateway logs against its floor;
+   `liveCount()` is the leaves currently in the root.
+
+**Gateway.** Trusts the UNION of roots: static `members.json` (PoC fallback) ∪ each contract
+in `RGOE_GROUP_CONTRACT` (comma-separated) ∪ `RGOE_PAID_ACCESS_CONTRACT` (sugar that appends;
+`RGOE_NETWORK=sepolia` resolves it from `contracts.paidAccessSet`), one root provider per
+contract; the slasher resolves which contract holds a reconstructed leaf (`limitOf != 0`) and
+calls that contract's `slash`. Startup: `roots: members.json + staked(0x…) + paid(0x…)` and
+`paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)` — WARN, never refuse,
+below the floor. (Gateway/client wiring is T-FEAT-7 parts 2/3.)
+
+**Honest limits.** (a) The trust statement of PAYMENTS.md stands: the operator could take a
+payment and not insert, or insert and refuse to honor a valid proof — buyer–seller trust,
+irreducible for a prepaid service, no third party added. What the chain gives is a PUBLIC,
+light-client-provable record of exactly which leaves were admitted, and payer↔user
+UNLINKABILITY at redemption (a zk membership proof over the tree). The 402 rail sees the payer;
+this contract never does. (b) The tier is DECLARED at insert (the contract cannot see inside a
+leaf), exactly as at `register`; a mismatch buys nothing (the gateway enforces the leaf's real
+budget) and makes the leaf unslashable at the declared tier — the registrar should derive the
+tier from what was paid for. (c) The operator is one key with the sole insert authority; a lost
+key means no new members until the pending-transfer path was prepared (rotate to a multisig
+early). (d) `leafCount()` is a floor on anonymity, not a proof: batch and dwell.
+
+Foundry: `test/PaidAccessSet.t.sol` (14: only the operator inserts, single + batch all-or-nothing,
+allowed tiers only, live duplicate reverts / slashed re-insert appends fresh, events carry the
+post-update root, slash gate order + pays nothing, no ETH can enter, two-step transfer, slot 3
+by `vm.load`, JS `newGroup` goldens, parity with the live staked set's tree code),
+`test/PaidAccessSet.fuzz.t.sol` (7: any secret / tier / caller / batch size vs the reference
+staked set), `test/PaidAccessSet.invariant.t.sol` (4: balance 0 forever, `leafCount ==
+inserts`, `root == reference` and `== slot 3`, operator == ghost across rotations; 4096 calls
+each). Live: `network/sepolia/integration-report-paid-access.md`.
+
 ## Honest scope: what this does not solve
 
 - **The RLN circuit is a real dependency and a real audit surface.** Adopt upstream,
