@@ -125,13 +125,27 @@ and at scale."
   works (it currently throws). Put the root in a storage slot provable via `eth_getProof`. *Accept:*
   the light provider returns a root validated against a header; test. DONE (loop-33): full on-chain depth-20
   Poseidon tree; currentRoot@slot-3; EIP-1186 MPT verifier; on-chain root == reconstructRoot golden == Rust tree.
-- [ ] **T-DEV-9b (P3, added loop-33) Validate the light-client stateRoot (beacon / Helios).** T-DEV-9's
+- [x] **T-DEV-9b (P3, added loop-33) Validate the light-client stateRoot (beacon / Helios).** DONE 2026-08-17 (PR #40):
+  sidecar (LIGHT-CLIENT.md option A) — `lib/helios-root.mjs:makeHeliosTrustedStateRoot` feeds the existing
+  `trustedStateRoot` hook; `RGOE_HELIOS_RPC_URL` on `LightClientRootProvider` cross-checks the RPC header and rejects
+  `stateRoot mismatch at block N …` before any proof fetch (fail closed on chainId mismatch / unreachable);
+  `bootnode/deploy/bootstrap.sh` `RGOE_HELIOS=1` opt-in installs sha256-pinned helios 0.11.1 + hardened
+  `rgoe-helios.service` (:8546); `lib/helios-root.selftest.mjs`. Acceptance: rejection proven by tests; end-to-end
+  proven LIVE on Sepolia (helios synced via lodestar-sepolia.chainsafe.io, `stateRootVerified:true` at blocks
+  11510090 / 11510122 / 11510152). Finding: the live rln-v3 `StakedReputationSet` predates the T-DEV-9 on-chain tree
+  (slot 3 = 0 → `roots: []`); see T-DEV-9c. Original spec: T-DEV-9's
   `LightClientRootProvider` cryptographically verifies the slot VALUE against the block `stateRoot` (EIP-1186 MPT),
   but currently TRUSTS the `stateRoot` itself (fetched from the RPC at a confirmed depth). The `trustedStateRoot(blockTag)`
   injection hook is already in place. Close the last trust anchor: validate the stateRoot via the beacon-chain
   sync committee — embed or sidecar a Helios light client and feed its verified execution stateRoot through the
   hook. *Accept:* the provider rejects a stateRoot the sync committee did not attest; with a Helios root, the whole
   chain (sync-committee → stateRoot → account proof → storage proof → root) is verified end-to-end, no RPC trust.
+- [ ] **T-DEV-9c (P2, added 2026-08-17) Redeploy `StakedReputationSet` with the T-DEV-9 on-chain tree.** The live
+  rln-v3 contract (2026-07-15) predates the on-chain incremental tree, so `LightClientRootProvider` (even Helios-anchored)
+  proves slot 3 = 0 and yields no root. Deploy the current contract on Sepolia (`[FUNDS]`, testnet), record via
+  `rgoe record-deploy`, point the light provider at it, re-run the T-DEV-9b live receipt expecting a real root. Bundle with
+  T-FEAT-8b (tiered hasher / `register(commitment, limit)`) so it is ONE redeploy. Also: operators need a
+  proof-serving RPC that keeps `eth_getProof` at finalized (public RPCs' ~32-block windows are shorter than finality).
 - [x] **T-DEV-10 (P2) Configurable egress policy.** DONE (loop-12): exported `makeEgressPolicy({allow,deny})` (default-deny; deny wins; `*`/`*.suffix`/exact host + `*`/exact port). `RGOE_EGRESS_ALLOW`/`RGOE_EGRESS_DENY`, default `*:443` = exactly the old behavior (byte-equivalence table proves it). A policy reject DROPs `bad-target-policy` + increments the metric. Startup warns when widened past :443 (no longer metadata-only). `gateway/egress-policy.selftest.mjs`.
 - [x] **T-DEV-11 (P2) Directory scale.** DONE (loop-12): GET /directory gains a strong sha256 ETag + If-None-Match (304 on unchanged) + gzip (Accept-Encoding), all transport-only (signature/content unchanged). Removed the dead verifyDirectory import. Pagination deferred (registry maxEntries caps count). `bootnode/directory-scale.selftest.mjs`.
 - [x] **T-DEV-12 (P2) Bootnode active health probing.** Optionally dial each announced onion and
@@ -211,12 +225,25 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
 - [x] **T-TEST-15 (P1) Fuzz regression corpus.** DONE (loop-14): `testdata/corpus/regressions.json` (16 curated adversarial inputs drawn from real audit findings) replayed first+fast in `test/fuzz.selftest.mjs`; documented add-procedure. No entry revealed a still-unfixed bug.
 - [x] **T-TEST-16 (P2) Timing/side-channel sanity.** DONE (loop-7, `test/timing.selftest.mjs`: per-member verify medians within ~1.1-1.3x, gated at 2x; Groth16 verify is witness-oblivious).
 - [x] **T-TEST-17 (P1) Fast/slow test split.** DONE (loop-10): `RGOE_FAST=1`/`--fast` in scripts/test-all.mjs skips the 3 real-proof suites + forge and prints exactly what it skipped; `npm run test:fast` ~7s vs ~86s full. Also fixed a pre-existing wall-clock flake in `lib/rln.selftest.mjs` (pin verifyEnvelope nowMs to the proof's epoch).
-- [ ] **T-DEPLOY-1 (P0, BLOCKED by Gate 1 + Gate 2) First live deployment.** Deploy the bootnode +
+- [x] **T-DEPLOY-1 (P0) First live deployment.** DONE 2026-08-17 (PR #38, `docs/GO-LIVE-LOG-2026-08-17.md`): box =
+  the idle June PoC droplet `anon-egress` (DO NYC1) via `bootstrap.sh` (main@cb237e07, PoW off, admission open, root =
+  committed `group/members.json`). Bootnode `kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion`, signer
+  `d79f78c3…953a73`, gateway-1 `yaxo4ywgoizk4yiylx66k3vjsgcj5waruumgi6dgds4fgaihd2eh7yqd.onion` (region na). Acceptance A:
+  `curl -x 127.0.0.1:8888 api.ipify.org` = the gateway's IP (JS client, `RGOE_NETWORK=sepolia rgoe client`, and Rust
+  `-live` egress over embedded arti); B: signed `/directory` lists it (`network/sepolia/directory-bootnode.json`,
+  `rgoe verify-directory` ok). Privacy check 0×, negative check DROPs, uptime probe ok. Record: `network/sepolia/bootnode.json`.
+  Found+fixed: Node 20 crash-loops under `SystemCallFilter=@system-service` (`pkey_alloc` SIGSYS) → bootstrap now requires
+  Node ≥ 24. Original spec: Deploy the bootnode +
   a gateway (to `anon-egress` or a fresh droplet), announce the gateway, and verify a laptop client
   egresses through the fleet end to end. Do NOT start until the test suite is hardened and the Rust
   client MVP passes conformance. *Accept:* `curl -x` through the client returns the gateway IP;
   `/directory` lists it. Take care not to disrupt the existing live gateway on `anon-egress`.
-- [ ] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** At least 2 gateways on different
+- [ ] **T-DEPLOY-2 (P1) Multi-gateway across regions/ASNs.** BLOCKED 2026-08-17 on a DigitalOcean API token
+  (deliberately not on disk — `agent-devops/RESTORE.md`; `doctl` → 401). Ready to run: uncomment `rgoe-gw-04`
+  (role egress, sfo3, s-1vcpu-1gb, `rgoe_gateway=false`) in `~/agent-devops/tofu/environments/dev/terraform.tfvars`,
+  `tofu apply -target='module.droplet["rgoe-gw-04"]'`, `task bootstrap HOST=rgoe-gw-04`, then on the box
+  `RGOE_BOOTNODE_ONION=<BN> RGOE_GATEWAY_REGION=na sudo -E bash bootstrap.sh` (gateway-only mode, PR #8), then
+  GO-LIVE 5.5–5.10. Spec: At least 2 gateways on different
   providers/regions so rotation spreads the both-ends AS vantage. *Accept:* directory shows ≥2, the
   client rotates across them.
 - [x] **T-DEPLOY-3 (P1) Infra-as-code.** Provision + configure the fleet via OpenTofu + Ansible
@@ -536,7 +563,15 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   `verify_directory_threshold` sibling mirroring the JS distinct-pinned-signer counting + reason codes, and
   conformance-check it against the `thresholdDirectory` vector. *Accept:* Rust accepts a valid 2-of-3 threshold
   directory and rejects sub-threshold/duplicate/unpinned, matching JS; single-sig path unchanged.
-- [ ] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** Today membership is binary
+- [~] **T-FEAT-8 (P2, added loop-2) Reputation-weighted rate budget.** SHIPPED over the EXISTING circuit 2026-08-17
+  (PR #39, ADR `docs/adr/0006-reputation-tiers.md`): tier = the leaf's private `userMessageLimit`
+  (`rateCommitment = Poseidon2(Poseidon1(secret), limit)`, circuit asserts `messageId < limit`), one tree for all
+  tiers, tier never on the wire (strictly more private than a public tier input); `RGOE_LIMIT` (client),
+  `RGOE_TIERS` (gateway slash-leaf resolution `lib/rln.mjs:resolveSlashLeaf`), `enroll --limit`, `identity --limit`,
+  Rust `--k` from the identity file; `test/reputation-tiers.selftest.mjs` (real proofs: two tiers, tier-8 over-spend
+  → `over-spend-slashed`, forged tier → `not in group` / `wrong-group-root`). App-level `MAX_LIMIT = 65535`
+  (LessThan(16) unsound above). REMAINING (T-FEAT-8b, [HUMAN] redeploy): on-chain tier admission + tiered slash —
+  `StakedReputationSet` is immutable and its hasher pins K=8 (`docs/ONCHAIN.md` "Tiers on chain"). Original spec: Today membership is binary
   and every member gets the same per-epoch slot budget `K`. Let standing scale the budget: a member
   with higher on-chain stake (or accrued good behavior) proves, in zero knowledge, a budget tier and
   gets a larger `K`, without revealing which member. Makes "reputation" a spectrum, not a bit, while
@@ -933,7 +968,7 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   T-FEAT-10 signed proto-range caps + T-FEAT-11 handshake). Filed T-DEV-9b (validate the stateRoot via a beacon
   sync-committee / Helios sidecar through the trustedStateRoot hook — the last light-client trust anchor).
   AUTONOMOUS ROADMAP COMPLETE: 97/102 done; the 5 open items are all human-gated (T-HARD-1 trusted setup,
-  T-DEPLOY-1/2 deploy), circuit-blocked (T-FEAT-8), or speculative P3 (T-FEAT-7).
+  T-DEPLOY-1/2 deploy), circuit-blocked (T-FEAT-8 — turned out NOT circuit-blocked, shipped 2026-08-17), or speculative P3 (T-FEAT-7).
 - 2026-08-15  loop-34  RESUMED (manual). Root-caused why PR #5 had NO CI: it was CONFLICTING with main
   (main got the 2026-08-13 "roadmap for gateway discovery, payment interop, and zkAPI" rewrite of
   docs/ROADMAP.md), and GitHub does not run pull_request workflows without a merge ref. Merged main: the new
@@ -958,3 +993,11 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   every merge (GitHub API 503-flaky all day; two pull_request events were dropped and re-triggered). T-DEPLOY-1/2
   go-live in flight (`docs/GO-LIVE.md`; droplet-1 = the idle June PoC box, droplet-2 = new agent-devops box in another
   DO region).
+- 2026-08-17  ship-day (loop-35b)  T-DEPLOY-1 LIVE (PR #38): bootnode + gateway-1 on the idle June box, laptop JS + Rust
+  clients egress through the fleet, signed directory verified, records in `network/sepolia/{bootnode,directory-bootnode}.json`,
+  go-live log `docs/GO-LIVE-LOG-2026-08-17.md`; found Node-20 SIGSYS under the hardened unit (→ Node ≥ 24). T-DEPLOY-2 BLOCKED
+  on the DO API token (box `rgoe-gw-04` staged in agent-devops tfvars, commented). T-FEAT-8 shipped over the existing circuit
+  (PR #39, ADR 0006; tier = private userMessageLimit). T-DEV-9b shipped (PR #40): Helios sidecar anchor, rejection proven by
+  tests, end-to-end verified live on Sepolia; filed T-DEV-9c (redeploy StakedReputationSet with the on-chain tree, bundle
+  with T-FEAT-8b). Dependabot opened #14–#36 (many major bumps: eslint 10, arkworks 0.6, ed25519-dalek 3) — left for review.
+  Still human: ceremony (issue #6), stake admission (GO-LIVE Phase 3), T-DEPLOY-2 token, T-FEAT-7.
