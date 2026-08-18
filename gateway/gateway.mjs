@@ -22,19 +22,23 @@
 // The reputation root is read from a RootProvider (the on-chain StakedReputationSet,
 // via lib/root-provider.mjs) so TRUSTED_ROOT is a recent-roots SET refreshed on
 // membership change, not only a static members.json. T-FEAT-7 (docs/PAYMENTS.md): the
-// accepted set is the UNION of every configured root SOURCE — the static members.json
-// (friends / PoC), each StakedReputationSet in RGOE_GROUP_CONTRACT (a comma list), and the
-// PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT — see initRoots() / RGOE_ROOTS. Without any
-// contract it is members.json alone, so the PoC path still works.
+// accepted set is the UNION of every ADMITTED root SOURCE — the static members.json
+// (invited friends / PoC), each StakedReputationSet in RGOE_GROUP_CONTRACT (a comma list),
+// and the PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT. WHICH of those this gateway admits is
+// the provider's choice, RGOE_ADMIT=invited[,staked][,paid] (T-FEAT-9, docs/adr/0008): the
+// default is `invited` alone — the maximum-anonymity mode — even when contract addresses are
+// configured; see initRoots() / resolveAdmission(). A configured-but-not-admitted contract is
+// neither a root source nor a slash target.
 
 import net from "node:net";
 import { readFile } from "node:fs/promises";
-import { watch, existsSync } from "node:fs";
+import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { verifyEnvelope, loadGroupOnchain, loadGroup, currentEpoch, EPOCH_SECONDS, MEMBERS_PATH, getArtifactSet } from "../lib/semaphore.mjs";
 import { reconstructSecret, resolveSlashLeaf, deriveCommitments, TIERS, K_SLOTS } from "../lib/rln.mjs";
 import { makeRootProvider, configuredContracts } from "../lib/root-provider.mjs";
+import { ADMIT_ORDER, DEFAULT_ADMIT, parseAdmit, admitsFromRoots, describeAdmits } from "../lib/admission.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
 import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
 import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
@@ -168,26 +172,53 @@ export function deriveSlashLeaf(identitySecret, opts = {}) {
   return resolveSlashTier(identitySecret, opts).commitment;
 }
 
-// ---- root SOURCES (T-FEAT-7) -----------------------------------------------------
-// RGOE_ROOTS names which sources feed recentRoots: a comma list of `static` (the members.json
-// file, MEMBERS_PATH / RGOE_MEMBERS_FILE) and `onchain` (every configured contract: the
-// RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT). Unset = the least-surprising union:
-// `onchain` whenever a contract is configured, PLUS `static` whenever members.json exists (so a
-// fleet that starts trusting a paid/staked set keeps admitting its members.json friends). Set
-// RGOE_ROOTS=onchain to trust the chain alone (the pre-T-FEAT-7 on-chain-only behavior), or
-// RGOE_ROOTS=static to ignore configured contracts. Exported + pure for the selftest.
-export function resolveRootSources({ spec = process.env.RGOE_ROOTS, contracts = configuredContracts(), staticExists = existsSync(MEMBERS_PATH) } = {}) {
-  const raw = String(spec == null ? "" : spec).trim();
-  if (raw === "") {
-    const onchain = contracts.length > 0;
-    return { static: staticExists || !onchain, onchain, explicit: false };
+// ---- admission policy: which root SOURCES this gateway trusts (T-FEAT-7 / T-FEAT-9) --------
+// RGOE_ADMIT=invited[,staked][,paid] names the ADMISSION PATHS (docs/adr/0008, anonymity order
+// most -> least: invited > staked > paid). Each path is one root source:
+//   invited  the members.json file (MEMBERS_PATH / RGOE_MEMBERS_FILE)
+//   staked   every StakedReputationSet in RGOE_GROUP_CONTRACT   (requires it to be configured)
+//   paid     the PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT     (requires it to be configured)
+// DEFAULT `invited` — even when RGOE_NETWORK / env supply contract addresses: a provider opts
+// into the less-anonymous paths explicitly. A path whose contract is missing FAILS CLOSED at
+// startup (never a silently smaller admission set). RGOE_ROOTS (T-FEAT-7: static,onchain) is a
+// DEPRECATED alias -- static->invited, onchain->staked+paid (whichever are configured) -- accepted
+// with a startup warning; RGOE_ADMIT wins when both are set. Exported + pure for the selftest.
+//   -> { admits: [..canonical order..], static, onchain, contracts: [ADMITTED contracts only],
+//        explicit, source: "RGOE_ADMIT" | "RGOE_ROOTS" | "default", warnings: [..] }
+export function resolveAdmission({ admit = process.env.RGOE_ADMIT, roots = process.env.RGOE_ROOTS, contracts = configuredContracts(), warn = (m, f) => log.warn(m, f) } = {}) {
+  const staked = contracts.filter((c) => c.kind === "staked");
+  const paid = contracts.filter((c) => c.kind === "paid");
+  const rawAdmit = String(admit ?? "").trim();
+  const rawRoots = String(roots ?? "").trim();
+  const warnings = [];
+  let admits, source;
+  if (rawAdmit) {
+    admits = parseAdmit(rawAdmit);
+    source = "RGOE_ADMIT";
+    if (rawRoots) warnings.push("RGOE_ROOTS is ignored because RGOE_ADMIT is set (RGOE_ROOTS is a deprecated alias; drop it)");
+  } else if (rawRoots) {
+    admits = admitsFromRoots(rawRoots, { hasStaked: staked.length > 0, hasPaid: paid.length > 0 });
+    source = "RGOE_ROOTS";
+    warnings.push(`RGOE_ROOTS is DEPRECATED (static->invited, onchain->staked+paid): set RGOE_ADMIT=${admits.join(",")} instead`);
+  } else {
+    admits = [...DEFAULT_ADMIT];
+    source = "default";
+    if (contracts.length) warnings.push(`RGOE_ADMIT is unset: admitting ${admits.join(",")} ONLY (the maximum-anonymity default); the configured ${contracts.map((c) => `${c.kind}(${c.address})`).join(" + ")} is NOT trusted until you set RGOE_ADMIT=${ADMIT_ORDER.filter((p) => p === "invited" || contracts.some((c) => c.kind === p)).join(",")}`);
   }
-  const parts = raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
-  for (const p of parts) if (p !== "static" && p !== "onchain") throw new Error(`RGOE_ROOTS: unknown source "${p.slice(0, 16)}" (expected static,onchain)`);
-  const want = { static: parts.includes("static"), onchain: parts.includes("onchain"), explicit: true };
-  if (want.onchain && contracts.length === 0) throw new Error("RGOE_ROOTS names onchain but no contract is configured (set RGOE_GROUP_CONTRACT and/or RGOE_PAID_ACCESS_CONTRACT)");
-  if (!want.static && !want.onchain) throw new Error("RGOE_ROOTS: no source selected");
-  return want;
+  if (admits.includes("staked") && staked.length === 0) throw new Error(`${source} names staked but no StakedReputationSet is configured (set RGOE_GROUP_CONTRACT, or RGOE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
+  if (admits.includes("paid") && paid.length === 0) throw new Error(`${source} names paid but no PaidAccessSet is configured (set RGOE_PAID_ACCESS_CONTRACT, or RGOE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
+  for (const w of warnings) warn(w, { source });
+  const admitted = contracts.filter((c) => admits.includes(c.kind));
+  return { admits, static: admits.includes("invited"), onchain: admitted.length > 0, contracts: admitted, explicit: source !== "default", source, warnings };
+}
+
+// Back-compat shim for the deprecated RGOE_ROOTS spelling (T-FEAT-7): { static, onchain, explicit }.
+// Unset spec = the T-FEAT-9 default (invited only). Kept exported for older callers/tests.
+export function resolveRootSources({ spec = process.env.RGOE_ROOTS, contracts = configuredContracts() } = {}) {
+  const raw = String(spec == null ? "" : spec).trim();
+  if (raw === "") return { static: true, onchain: false, explicit: false };
+  const admits = admitsFromRoots(raw, { hasStaked: contracts.some((c) => c.kind === "staked"), hasPaid: contracts.some((c) => c.kind === "paid") });
+  return { static: admits.includes("invited"), onchain: admits.some((p) => p !== "invited"), explicit: true };
 }
 
 // The paid set's anonymity-set floor K (docs/PAYMENTS.md open item 3): below it the gateway WARNS
@@ -206,7 +237,9 @@ async function readLeafCount(contract, rpcUrl) {
   } catch { return null; }
 }
 
-// Format the ABI-file startup line: `roots: members.json + staked(0x…) + paid(0x…)`.
+// Format the ABI-file startup lines: `admits: invited+staked+paid` (T-FEAT-9, the policy) and
+// `roots: members.json + staked(0x…) + paid(0x…)` (T-FEAT-7, the sources behind it).
+export function describeAdmission(admits) { return describeAdmits(admits); }
 export function describeRootSources({ static: st, contracts = [] } = {}) {
   const parts = [];
   if (st) parts.push("members.json");
@@ -227,14 +260,24 @@ export function describeRootSources({ static: st, contracts = [] } = {}) {
 //   systemd restarts it, which is the retry). A source that fails on a LATER refresh keeps its
 //   last-known-good (lib/root-provider.mjs withCache) exactly as before.
 export async function initRoots({
-  contracts = configuredContracts(),
-  want = resolveRootSources({ contracts }),
+  contracts = null,
+  want = null,
   rpcUrl = process.env.RGOE_RPC_URL || "http://127.0.0.1:8545",
   loadStatic = loadGroup,
   makeProvider = (addrs) => makeRootProvider(undefined, { contracts: addrs }), // node|light per RGOE_ROOT_PROVIDER
   watchFile = (path, cb) => watch(path, { persistent: false }, cb),
   quiet = false,
 } = {}) {
+  // Admission policy (T-FEAT-9): with no injected `want`, resolve RGOE_ADMIT over the configured
+  // contracts and NARROW `contracts` to the admitted ones (a configured-but-not-admitted set is
+  // never read). Tests inject { contracts, want } directly and skip the env resolution.
+  if (!want) {
+    want = resolveAdmission({ contracts: contracts ?? configuredContracts() });
+    contracts = want.contracts;
+  } else if (!contracts) {
+    contracts = configuredContracts();
+  }
+  const admits = want.admits || [...(want.static ? ["invited"] : []), ...ADMIT_ORDER.filter((p) => p !== "invited" && (want.onchain ? contracts : []).some((c) => c.kind === p))];
   let staticRoot = null;
   let staticCount = 0;
   let chainRoots = [];
@@ -317,7 +360,7 @@ export async function initRoots({
     provider.onChange?.(() => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
   }
   recompute();
-  if (quiet) return { count: want.static ? staticCount : null, contracts, degraded: Array.from(degraded), provider };
+  if (quiet) return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider };
 
   // Startup lines. `root source: on-chain RootProvider` / `members.json (PoC fallback)` are the
   // pre-T-FEAT-7 substrings scripts grep; the ABI-file `roots:` line names every source.
@@ -329,13 +372,15 @@ export async function initRoots({
     log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", contracts: contracts.length, recentRoots: chainRoots.length, ...(stateRootSource ? { stateRootSource } : {}) });
   }
   if (want.static) log.info(want.onchain ? "root source: members.json (static, unioned with the chain)" : "root source: members.json (PoC fallback)", { members: staticCount });
+  // T-FEAT-9: the admission POLICY line (what this provider chose), then the T-FEAT-7 sources line.
+  log.info(describeAdmits(admits), { source: want.source || "injected", policy: "RGOE_ADMIT (default invited = max-anon; docs/adr/0008)" });
   log.info(describeRootSources({ static: want.static, contracts: want.onchain ? contracts : [] }), {
     trustedRoots: recentRoots.size,
     ...(want.static ? { static: staticRoot ? 1 : 0 } : {}),
     ...Object.fromEntries(perSource.map((p) => [`${(contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked"}:${String(p.contract || "").slice(0, 10)}`, p.roots.length])),
   });
   if (want.onchain) await checkPaidFloor(true);
-  return { count: want.static ? staticCount : null, contracts, degraded: Array.from(degraded), provider };
+  return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider };
 }
 
 // ---- share-collecting spent-set (RLN slashing at PoC fidelity) --------------
@@ -482,21 +527,24 @@ async function readDeployed() {
   }
 }
 
-async function makeSlasher() {
+// `rootContracts` = the ADMITTED root contracts (initRoots().contracts; T-FEAT-9): only those are
+// appended as routing targets. Defaults to every configured contract for callers without a policy.
+async function makeSlasher({ rootContracts = configuredContracts() } = {}) {
   const key = process.env.RGOE_SLASH_KEY;
   const deployed = await readDeployed();
   // Slash TARGETS (T-FEAT-7 routing). RGOE_SLASH_CONTRACT (or a deployed.local.json) is the
   // PRIMARY — it may name a set that is NOT a root source (the fleet's superseded rln-v3 set,
   // still slashable), which is why it stays independent of the root config. Every configured
-  // root contract (the RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT) is appended, so an
-  // over-spender is slashed on WHICHEVER contract holds its leaf (`limitOf(leaf) != 0`, per
-  // makeRoutingSlasher). One address => the plain single-contract slasher, as before.
+  // root contract (the RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT) THAT THIS GATEWAY
+  // ADMITS (RGOE_ADMIT, T-FEAT-9) is appended, so an over-spender is slashed on WHICHEVER contract
+  // holds its leaf (`limitOf(leaf) != 0`, per makeRoutingSlasher). A configured contract the
+  // policy does not admit is not routed to. One address => the plain single-contract slasher.
   const primary = process.env.RGOE_SLASH_CONTRACT || deployed.stakedReputationSet
     || deployed.StakedReputationSet || deployed.address || null;
   const targets = [];
   const push = (address, kind) => { if (address && !targets.some((t) => t.address.toLowerCase() === address.toLowerCase())) targets.push({ address, kind }); };
   push(primary, "primary");
-  for (const c of configuredContracts()) push(c.address, c.kind);
+  for (const c of rootContracts) push(c.address, c.kind);
   const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
   const receiver = process.env.RGOE_SLASH_RECEIVER || null;
 
@@ -1152,8 +1200,8 @@ function initArtifacts() {
 
 async function main() {
   initArtifacts();
-  await initRoots();
-  const slash = await makeSlasher();
+  const roots = await initRoots();
+  const slash = await makeSlasher({ rootContracts: roots.contracts });
   // Optional cross-fleet shared spent-nullifier tally (T-FEAT-20). null unless a real
   // cross-host transport is wired — which this run does NOT bundle (follow-up), so this is
   // null by default and makeSpentSet({ sharedTally:null }) is byte-identical to T-FEAT-12.

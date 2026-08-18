@@ -425,7 +425,9 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `RGOE_GW_WEIGHT` | `--weight` | Selection weight advertised for this gateway (default 100). |
 | `RGOE_STAKE_MODE` | `--stake-mode` | `onchain` (eth_call `isStaked`) or `mock` (chainless dev). |
 | `RGOE_GATEWAY_REGISTRY` | `--gateway-registry` | `GatewayRegistry` address (required for onchain stake + `register-gateway`). |
-| `RGOE_GROUP_CONTRACT` | `--group-contract` | `StakedReputationSet` address; set = on-chain membership roots, unset = `members.json`. |
+| `RGOE_ADMIT` | `--admit` | Admission policy (T-FEAT-9): `invited[,staked][,paid]`, default `invited` (max-anon) — the ONLY root sources + slash targets; a named path without its contract refuses to start. Set the same on the heartbeat (advertised as signed `caps.admits`). `RGOE_ROOTS` = deprecated alias. See "Choose what you admit and what you sell" below. |
+| `RGOE_GROUP_CONTRACT` | `--group-contract` | `StakedReputationSet` address (comma list allowed); read ONLY when `RGOE_ADMIT` includes `staked`. |
+| `RGOE_PAY_PROTOCOLS` | `--pay-protocols` | Registrar rails served + advertised: `x402,mpp` (default) / `x402` / `mpp` (T-FEAT-9). |
 | `RGOE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
 | `RGOE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
 | `RGOE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
@@ -535,6 +537,62 @@ admitted yet: `StakedReputationSet`'s hasher pins `K = 8`, so a tiered leaf stak
 cannot be slashed there until the follow-up in `docs/ONCHAIN.md` "Tiers on chain" ships —
 use tiers on `members.json` gateways, or only at the default limit on chain.
 
+### Choose what you admit and what you sell (T-FEAT-9, ADR [0008](adr/0008-per-gateway-admission-and-payment-choice.md))
+
+Every gateway PROVIDER decides two things; the defaults are the maximum-anonymity mode.
+
+**1. What you admit — `RGOE_ADMIT`.** The three admission paths, in ANONYMITY ORDER (most → least):
+
+| path | root source | what a member's membership reveals |
+|---|---|---|
+| `invited` | `group/members.json` (`RGOE_MEMBERS_FILE`) — leaves you enrolled by hand | nothing on chain |
+| `staked` | every `StakedReputationSet` in `RGOE_GROUP_CONTRACT` (comma list) | the staking wallet ↔ commitment (+ tier bond), public and permanent |
+| `paid` | the `PaidAccessSet` in `RGOE_PAID_ACCESS_CONTRACT` | the buyer address → your address transfer (amount = tier price) + the `Inserted(commitment, limit)` |
+
+```bash
+# the default: invited ONLY -- even when RGOE_NETWORK / env supply contract addresses (opt in explicitly)
+RGOE_ADMIT=invited                 rgoe gateway --network sepolia
+# admit staked members too
+RGOE_ADMIT=invited,staked          rgoe gateway --network sepolia
+# admit everyone you can (what the pre-T-FEAT-9 union heuristic silently did)
+RGOE_ADMIT=invited,staked,paid     rgoe gateway --network sepolia
+# on-chain only, no members.json at all
+RGOE_ADMIT=staked                  rgoe gateway --network sepolia
+```
+
+- The named paths are the ONLY root sources and the ONLY slash routing targets; a configured but
+  un-admitted contract is never read. Startup prints the policy, then the sources: `admits:
+  invited+staked+paid` / `roots: members.json + staked(0x…) + paid(0x…)` — read both.
+- Fail closed: `RGOE_ADMIT=invited,staked` without a `StakedReputationSet` configured (or `paid`
+  without a `PaidAccessSet`) refuses to start — never a silently smaller set. `RGOE_ADMIT` unset
+  with contracts configured WARNs `RGOE_ADMIT is unset: admitting invited ONLY … set
+  RGOE_ADMIT=invited,staked,paid` and runs invited-only.
+- `RGOE_ROOTS=static,onchain` (T-FEAT-7) still works as a DEPRECATED alias (static→invited,
+  onchain→staked+paid over what is configured) with a warning; move to `RGOE_ADMIT`.
+- **Set the SAME value on the heartbeat unit.** The heartbeat advertises it as signed `caps.admits`
+  so clients route only to gateways that admit their leaf source (a paid buyer never dials your
+  invited-only gateway; an invited member with `--max-anon` dials ONLY invited-only gateways).
+  `bootstrap.sh RGOE_ADMIT=…` renders both units; by hand, add `Environment=RGOE_ADMIT=…` to
+  `rgoe-gateway.service.d/` AND `rgoe-heartbeat.service.d/` drop-ins and restart both. A heartbeat
+  without `RGOE_ADMIT` advertises no policy: clients then assume you may admit anything and a
+  mismatch costs them one `wrong-group-root` reject + failover (rollout compat, `docs/CLIENTS.md`).
+- The demo fleet is heterogeneous on purpose (`network/sepolia/README.md`): gateway-1
+  `invited,staked,paid` + registrar, gateway-2 `invited,staked` — so a paid buyer lands on
+  gateway-1 only, and `--max-anon` refuses both (neither is invited-only).
+
+**2. What you sell — `RGOE_PAY_PROTOCOLS`, your own registrar, your own `PaidAccessSet`.**
+Selling is opt-in (`RGOE_REGISTRAR=1`, next section) and requires `paid` in `RGOE_ADMIT` (admit
+what you sell; `bootstrap.sh` refuses otherwise). `RGOE_PAY_PROTOCOLS=x402,mpp` (default both) is
+the rail subset THIS registrar serves — `x402` or `mpp` alone: a disabled rail gets no challenge,
+is absent from `pay.protocols`, and its payload is refused `400 protocol-disabled` (the rails are
+equal on the anonymity axis; pick by fees/tooling). A GATEWAY-ONLY box may run its own registrar
+on its own gateway onion (`bootstrap.sh RGOE_REGISTRAR=1` with `RGOE_BOOTNODE_ONION` set:
+`HiddenServicePort 8878` in the gateway HS block, `RGOE_REGISTRAR_ONION` = the gateway onion) and
+its own `PaidAccessSet` (deploy one, `docs/ONCHAIN-DEPLOY.md`; `RGOE_PAID_ACCESS_CONTRACT` on both
+the registrar and the gateway unit): you sell access on your own terms, no bootnode required. The
+offer is advertised in your gateway's signed caps (`caps.pay`; heartbeat `RGOE_REGISTRAR_ADVERTISE=1`
++ `RGOE_PAY_*`, rendered by bootstrap) — and, on a bootnode box, in the bootnode's `/health` as before.
+
 ### Selling access via 402 (T-FEAT-7)
 
 Members can *buy* a leaf instead of being enrolled by hand: `docs/PAYMENTS.md` "Shipped
@@ -550,10 +608,13 @@ signature and submits the transfer from your key. It needs ETH for gas (one sett
 one insert ≈ 1.26M gas per sale on Sepolia), the stablecoin arrives at `RGOE_PAY_TO`
 (default: the operator address).
 
-Deploy (bootnode box; `bootstrap.sh` is idempotent, re-run it with the tunables):
+Deploy (bootnode box shown; a gateway-only box works the same with `RGOE_BOOTNODE_ONION` set — the
+registrar then rides the GATEWAY onion; `bootstrap.sh` is idempotent, re-run it with the tunables):
 
 ```bash
 RGOE_REGISTRAR=1 \
+RGOE_ADMIT=invited,paid                \   # T-FEAT-9: admit what you sell (add staked if you trust the staked set too)
+RGOE_PAY_PROTOCOLS=x402,mpp            \   # T-FEAT-9: the rails you serve (default both; x402 or mpp alone is fine)
 RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111 \   # network/sepolia/contracts.json contracts.paidAccessSet
 RGOE_PAY_ASSET=<stablecoin>            \   # Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238, or contracts.json payAsset (tUSD)
 RGOE_PAY_PRICES=8=100000,32=400000     \   # atomic units per tier (0.10 / 0.40 with 6 decimals)
@@ -569,10 +630,13 @@ curl -sS -D - --socks5-hostname 127.0.0.1:9050 "http://<bootnode-onion>:8878/pay
 ```
 
 What bootstrap did: `HiddenServicePort 8878 127.0.0.1:8878` inside the bootnode's HS block (the
-registrar rides the bootnode onion; no new identity), `rgoe-registrar.service` (same sandbox as
-the other units; store at `deploy-state/registrar-state.json`), and
+registrar rides the bootnode onion; no new identity — on a gateway-only box, inside the GATEWAY's
+HS block instead), `rgoe-registrar.service` (same sandbox as the other units; store at
+`deploy-state/registrar-state.json`; `RGOE_PAY_PROTOCOLS` in its env),
 `RGOE_REGISTRAR_ADVERTISE=1` on `rgoe-bootnode.service` so `GET /health` carries `pay:{port,
-protocols, asset, chain, tiers}` (how a client discovers "this fleet sells access, here").
+protocols, asset, chain, tiers}` (how a client discovers "this fleet sells access, here"), and the
+same advert on `rgoe-heartbeat.service` so your gateway's SIGNED caps carry `pay` (+ `admits`) in
+the directory (T-FEAT-9: how a client discovers "THIS gateway sells, and admits paid leaves").
 The registrar refuses to start if the token's on-chain `DOMAIN_SEPARATOR()` does not match its
 computed EIP-712 domain or if `PaidAccessSet.allowedLimits()` lacks a sold tier.
 
@@ -618,10 +682,11 @@ export RGOE_PAID_MIN_LEAVES=8               # anonymity-set floor K: WARN below 
 export RGOE_TIERS=8,32                       # the tiers you sell, so a paid over-spender's leaf resolves
 ```
 
-- **Roots.** `RGOE_ROOTS` unset = the union of what is configured (`onchain` for every contract +
-  `static` while `group/members.json` / `RGOE_MEMBERS_FILE` exists), so your members.json friends
-  keep egressing while paid and staked leaves are admitted too. `RGOE_ROOTS=onchain` drops the
-  static root. Startup prints `roots: members.json + staked(0x…) + paid(0x…)` — read it.
+- **Roots.** `RGOE_ADMIT` names them (T-FEAT-9, "Choose what you admit" above): the DEFAULT is
+  `invited` alone, so set `RGOE_ADMIT=invited,paid` (or `invited,staked,paid`) for the paid set to
+  become a root source at all — configuring `RGOE_PAID_ACCESS_CONTRACT` is not enough. Startup prints
+  `admits: invited+paid` then `roots: members.json + paid(0x…)` — read both. (`RGOE_ROOTS` is the
+  deprecated alias.)
 - **Floor.** `paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)`: with few paid
   leaves a paid member is thinly hidden among the OTHER paid members (the gateway still cannot
   tell which one; but "one of 3 buyers" is a small crowd). The gateway WARNs and keeps serving;

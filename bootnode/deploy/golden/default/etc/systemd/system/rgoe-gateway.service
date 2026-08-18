@@ -5,6 +5,7 @@ Wants=network-online.target
 [Service]
 User=rgoe
 WorkingDirectory=/opt/rgoe
+Environment=RGOE_ADMIT=invited
 ExecStart=/usr/bin/node /opt/rgoe/gateway/gateway.mjs
 Restart=always
 RestartSec=3

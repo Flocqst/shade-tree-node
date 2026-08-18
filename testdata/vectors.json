@@ -68,7 +68,17 @@
   "capabilities": {
     "_note": "T-FEAT-10 gateway capability advertisement. ADDITIVE: caps + capsSig are OPTIONAL, OMITTED from canonical bytes when absent, so the canonicalAnnounceBytes/canonicalDirectoryBytes GOLDEN vectors above are byte-UNCHANGED (an announce/directory without caps is byte-identical to before). Reuses the SAME onion key as `onion`/`onionSeed`/`onionPub`. canonicalCaps normalizes to fixed order {ports(deduped,sorted),region(coarse bucket),proto{min,max}}. capsSig = ed25519Sign(canonicalCapsBytes = utf8(capsDomain) || utf8(JSON {onion,caps}), onionSeed) — durable (no ts), onion-bound, RFC 8032 deterministic so byte-pinned. announceWithCaps.canonicalBytesHex/onionSig pin an announce that CARRIES caps (caps appended after nonce, covered by the main onion sig). directoryWithCaps pins the directory canonical bytes + bootnode signature for an entry carrying caps+capsSig. The Rust client must reproduce capsDomain, canonicalCapsBytesHex, capsSig, and both canonical-bytes hexes.",
     "capsDomain": "RGOE gateway capabilities v1\n",
-    "caps": { "ports": [80, 443], "region": "eu", "proto": { "min": 3, "max": 3 } },
+    "caps": {
+      "ports": [
+        80,
+        443
+      ],
+      "region": "eu",
+      "proto": {
+        "min": 3,
+        "max": 3
+      }
+    },
     "canonicalCapsBytesHex": "52474f452067617465776179206361706162696c69746965732076310a7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2263617073223a7b22706f727473223a5b38302c3434335d2c22726567696f6e223a226575222c2270726f746f223a7b226d696e223a332c226d6178223a337d7d7d",
     "capsSig": "9a5363c4d90612177c3223ca136b7f155f272e1d6117dfc7912c5892aa73da924f1b9490bb610a3f855b482ae7dcdb88cd69c8dba41b9db6b827440b1acfd503",
     "announceWithCaps": {
@@ -142,6 +152,156 @@
       },
       "canonicalCapsBytesHex": "52474f452067617465776179206361706162696c69746965732076310a7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2263617073223a7b22706f727473223a5b3434335d2c2270726f746f223a7b226d696e223a332c226d6178223a337d2c22617274696661637473223a5b22726c6e2d30623235663832346130346461336138222c22726c6e2d32636632346462613566623061333065225d7d7d",
       "capsSig": "62fe1df4aa753ad53820dcb23a5c701108108e9dce3b3b7e61fedadb725f06e0ab978a3f4a5832d5602a37512c186ed2cfedfca68c62dad08179b83af0198606"
+    }
+  },
+  "admission": {
+    "_note": "T-FEAT-9 per-gateway ADMISSION POLICY + PAYMENT advert (docs/adr/0008). ADDITIVE: `admits` (subset of admitPaths in the fixed ANONYMITY order invited>staked>paid, deduped) and `pay` ({protocols (subset of payProtocols, fixed order x402,mpp), onion? (lowercased v3 onion, only when the registrar rides another onion), port, asset (lowercased 0x-hex-40), chain (eip155:<id>), tiers ({\"<limit>\": \"<atomic price>\"}, numeric-ascending keys, at most maxPayTiers)}) are appended to canonicalCaps AFTER artifacts, in that order; every pre-existing caps vector is byte-UNCHANGED (absent => omitted). `capsWithAdmission` pins canonicalCaps + canonicalCapsBytes + capsSig under the SAME onion key as `capabilities`. The Rust client must reproduce the canonical form, the bytes and the signature; junk/oversized admits/pay canonicalize to absent (TOTAL).",
+    "admitPaths": [
+      "invited",
+      "staked",
+      "paid"
+    ],
+    "payProtocols": [
+      "x402",
+      "mpp"
+    ],
+    "maxPayTiers": 8,
+    "capsWithAdmission": {
+      "caps": {
+        "ports": [
+          443
+        ],
+        "proto": {
+          "min": 3,
+          "max": 3
+        },
+        "admits": [
+          "paid",
+          "invited",
+          "invited"
+        ],
+        "pay": {
+          "protocols": [
+            "mpp",
+            "x402"
+          ],
+          "onion": "UCNKL5D2M5MYAL7ZKX4NYLJKCSS4THJDX2L7QZASP74TQNCVUTYPP3AD.ONION",
+          "port": 8878,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "8": "100000",
+            "32": "400000"
+          }
+        }
+      },
+      "canonical": {
+        "ports": [
+          443
+        ],
+        "proto": {
+          "min": 3,
+          "max": 3
+        },
+        "admits": [
+          "invited",
+          "paid"
+        ],
+        "pay": {
+          "protocols": [
+            "x402",
+            "mpp"
+          ],
+          "onion": "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+          "port": 8878,
+          "asset": "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "8": "100000",
+            "32": "400000"
+          }
+        }
+      },
+      "canonicalCapsBytesHex": "52474f452067617465776179206361706162696c69746965732076310a7b226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c2263617073223a7b22706f727473223a5b3434335d2c2270726f746f223a7b226d696e223a332c226d6178223a337d2c2261646d697473223a5b22696e7669746564222c2270616964225d2c22706179223a7b2270726f746f636f6c73223a5b2278343032222c226d7070225d2c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c22706f7274223a383837382c226173736574223a22307831633764346231393663623063376230316437343366626336313136613930323337396337323338222c22636861696e223a226569703135353a3131313535313131222c227469657273223a7b2238223a22313030303030222c223332223a22343030303030227d7d7d7d",
+      "capsSig": "3ab2e0e21c45c69555e7a381c6a3b94d607a56cd519264ad794677eda94abd4213ddcd10e4da61f8c5833b5c15d924b048082d4c2b12ab7ed40cd31bbf6bb206"
+    },
+    "junk": {
+      "_note": "each canonicalizes to NO admits / NO pay (dropped, never an error)",
+      "admits": [
+        [
+          "onchain",
+          "Static",
+          7,
+          null
+        ],
+        []
+      ],
+      "pay": [
+        {
+          "protocols": [
+            "x402"
+          ],
+          "port": 8878,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {}
+        },
+        {
+          "protocols": [
+            "lightning"
+          ],
+          "port": 8878,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "8": "1"
+          }
+        },
+        {
+          "protocols": [
+            "x402"
+          ],
+          "port": 70000,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "8": "1"
+          }
+        },
+        {
+          "protocols": [
+            "x402"
+          ],
+          "port": 8878,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "1": "1",
+            "2": "1",
+            "3": "1",
+            "4": "1",
+            "5": "1",
+            "6": "1",
+            "7": "1",
+            "8": "1",
+            "9": "1"
+          }
+        },
+        {
+          "protocols": [
+            "x402"
+          ],
+          "port": 8878,
+          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "chain": "eip155:11155111",
+          "tiers": {
+            "0": "1",
+            "8": "0",
+            "70000": "1",
+            "08": "1"
+          }
+        }
+      ]
     }
   }
 }

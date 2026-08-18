@@ -105,6 +105,15 @@ export function resolveCommitment(o, env = process.env) {
   return { commitment: identityFileFor(secret, o.limit).leaf, source: `leaf of ${source} at limit ${o.limit}` };
 }
 
+// T-FEAT-9: a registrar serves only the rails its provider enabled (RGOE_PAY_PROTOCOLS); the 402
+// body's `pay.protocols` says which. Turn "no header" into a precise "this rail is not sold here".
+function railHint(q, rail) {
+  try {
+    const protos = JSON.parse(q.body || "{}")?.pay?.protocols;
+    if (Array.isArray(protos) && !protos.includes(rail)) return ` -- this registrar does not serve ${rail} (it sells via: ${protos.join(", ")}); retry with --protocol ${protos[0]}`;
+  } catch { /* not a JSON problem body */ }
+  return "";
+}
 const target = (o) => (o.registrarUrl ? { url: o.registrarUrl } : { onion: o.bootnode, port: o.registrarPort });
 // The paying POST waits for settle + insert to be mined (2 confirmations on a 12 s chain) over Tor.
 const PAY_TIMEOUT_MS = Number(process.env.RGOE_PAY_HTTP_TIMEOUT_MS || 240000);
@@ -114,7 +123,7 @@ export async function payX402({ o, wallet, commitment, out, nowMs = Date.now() }
   const q = await request({ ...target(o), method: "GET", path: `/pay/quote?limit=${o.limit}` });
   if (q.status !== 402) throw new Error(`expected 402 from /pay/quote, got ${q.status}: ${q.body.slice(0, 200)}`);
   const pr = decodeX402Header(q.headers["payment-required"]);
-  if (!pr || pr.x402Version !== 2 || !Array.isArray(pr.accepts)) throw new Error("registrar sent no usable PAYMENT-REQUIRED (x402 v2) header");
+  if (!pr || pr.x402Version !== 2 || !Array.isArray(pr.accepts)) throw new Error("registrar sent no usable PAYMENT-REQUIRED (x402 v2) header" + railHint(q, "x402"));
   const accepted = pr.accepts.find((a) => a && a.scheme === "exact" && a.extra && Number(a.extra.limit) === o.limit && chainIdOfCaip2(a.network));
   if (!accepted) throw new Error(`no x402 'exact' requirement for tier ${o.limit} in the quote (accepts: ${pr.accepts.map((a) => `${a.scheme}/${a.network}/${a.amount}`).join(", ")})`);
   const chainId = chainIdOfCaip2(accepted.network);
@@ -150,7 +159,7 @@ export async function payMpp({ o, wallet, commitment, out, nowMs = Date.now() })
   const challenges = lines.flatMap((l) => parseWwwAuthenticate(l)).map((c) => c.params);
   const decodeReq = (c) => { const s = b64decode(c.request || "", { url: true }); return s == null ? null : jsonParseSafe(s); };
   const pick = challenges.map((c) => ({ c, req: decodeReq(c) })).find(({ c, req }) => c.method === "evm" && c.intent === "charge" && req && req.externalId === `limit=${o.limit}`);
-  if (!pick) throw new Error(`no MPP evm/charge challenge for tier ${o.limit} (got ${challenges.length} challenge(s))`);
+  if (!pick) throw new Error(`no MPP evm/charge challenge for tier ${o.limit} (got ${challenges.length} challenge(s))` + railHint(q, "mpp"));
   const { c, req } = pick;
   const md = req.methodDetails || {};
   if (!Array.isArray(md.credentialTypes) || !md.credentialTypes.includes("authorization")) throw new Error("registrar's MPP challenge does not accept type=authorization (EIP-3009); this client implements no other credential type");

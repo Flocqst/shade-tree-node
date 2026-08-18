@@ -20,6 +20,17 @@
 //   RGOE_ZK_ARTIFACTS       the gateway's accepted ZK artifact set (also read by lib/rln.mjs
 //                           verifyEnvelope; T-HARD-8); when SET, its artifact ids are advertised
 //                           as signed caps so clients pick a mutual set in a dual-VK window
+//   RGOE_ADMIT              the gateway's ADMISSION POLICY (T-FEAT-9, also read by gateway.mjs);
+//                           when SET (or its deprecated alias RGOE_ROOTS), the admitted paths
+//                           are advertised as signed `caps.admits` so a client routes only to
+//                           gateways that admit ITS leaf source (invited/staked/paid)
+//   RGOE_REGISTRAR_ADVERTISE=1 + RGOE_PAY_ASSET/RGOE_PAY_PRICES[/RGOE_PAY_PROTOCOLS/
+//   RGOE_REGISTRAR_PORT/RGOE_PAY_CHAIN_ID/RGOE_REGISTRAR_ONION]
+//                           this provider SELLS access (T-FEAT-9): the same advert the bootnode
+//                           puts in /health (bootnode/server.mjs payAdvertFromEnv) rides in the
+//                           gateway's signed caps as `caps.pay` (a gateway-only box has no
+//                           bootnode /health to advertise on). RGOE_REGISTRAR_ONION names the
+//                           onion the registrar rides when it is NOT the gateway's own
 //   stake (optional, admission=stake bootnodes):
 //   RGOE_GW_OPERATOR_KEY    operator EOA private key; signs the durable onion<->operator auth, OR
 //   RGOE_GW_OPERATOR +      a pre-computed operator address and
@@ -39,6 +50,8 @@ import { postOverTor } from "./fetch.mjs";
 import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
 import { REGION_BUCKETS } from "../lib/directory.mjs";
 import { loadArtifactSet } from "../lib/zk-artifacts.mjs";
+import { parseAdmit, admitsFromRoots } from "../lib/admission.mjs";
+import { payAdvertFromEnv } from "./server.mjs";
 import { isPrivHex, isEthAddress } from "../lib/config.mjs";
 import { applyNetworkEnv } from "../lib/network-record.mjs";
 
@@ -131,10 +144,36 @@ export function advertisedPorts(allowSpec) {
   return [...out].sort((a, b) => a - b);
 }
 
+// The admission paths this gateway advertises (T-FEAT-9): RGOE_ADMIT parsed (the same spelling
+// the gateway resolves), else the deprecated RGOE_ROOTS alias mapped over the contracts THIS env
+// names, else null (unset => not advertised; the gateway itself then runs the `invited` default and
+// a client treats the absent field as "may admit any path" during the rollout, docs/adr/0008).
+// A malformed value is a startup error here too (fail fast, never advertise a guess).
+export function advertisedAdmits(env = process.env) {
+  if (env.RGOE_ADMIT !== undefined && String(env.RGOE_ADMIT).trim() !== "") return parseAdmit(env.RGOE_ADMIT);
+  if (env.RGOE_ROOTS !== undefined && String(env.RGOE_ROOTS).trim() !== "") {
+    return admitsFromRoots(env.RGOE_ROOTS, { hasStaked: !!(env.RGOE_GROUP_CONTRACT && String(env.RGOE_GROUP_CONTRACT).trim()), hasPaid: !!(env.RGOE_PAID_ACCESS_CONTRACT && String(env.RGOE_PAID_ACCESS_CONTRACT).trim()) });
+  }
+  return null;
+}
+
+// The payment advert this gateway carries in its caps (T-FEAT-9): the bootnode's /health `pay`
+// shape (payAdvertFromEnv) plus `onion` when RGOE_REGISTRAR_ONION names a registrar onion other
+// than the gateway's own (`gatewayOnion`). null when RGOE_REGISTRAR_ADVERTISE is unset/garbage.
+export function advertisedPay(env = process.env, { gatewayOnion = null } = {}) {
+  const pay = payAdvertFromEnv(env);
+  if (!pay) return null;
+  const out = { protocols: pay.protocols, port: pay.port, asset: pay.asset, chain: pay.chain, tiers: pay.tiers };
+  const ro = env.RGOE_REGISTRAR_ONION ? String(env.RGOE_REGISTRAR_ONION).trim().toLowerCase().replace(/\.onion$/, "") + ".onion" : null;
+  if (ro && ro !== String(gatewayOnion || "").toLowerCase()) out.onion = ro;
+  return out;
+}
+
 // Build the raw caps object from env (injectable for tests; defaults to process.env). Returns
-// null when the gateway is UNCONFIGURED (no explicit egress policy, no valid region) so the
-// announce stays byte-identical to today. buildAnnounce canonicalizes + signs whatever we return.
-export function buildGatewayCaps(env = process.env, { artifactIds = null } = {}) {
+// null when the gateway is UNCONFIGURED (no explicit egress policy, no valid region, no artifact
+// set, no admission policy, no pay advert) so the announce stays byte-identical to today.
+// buildAnnounce canonicalizes + signs whatever we return.
+export function buildGatewayCaps(env = process.env, { artifactIds = null, gatewayOnion = null } = {}) {
   const caps = {};
   // ports: advertised ONLY when the operator explicitly set an egress policy (env present). An
   // UNSET policy is the implicit :443 floor every gateway already meets (DEFAULT_EGRESS_PORT), so
@@ -155,8 +194,13 @@ export function buildGatewayCaps(env = process.env, { artifactIds = null } = {})
   } else if (env.RGOE_ZK_ARTIFACTS !== undefined && String(env.RGOE_ZK_ARTIFACTS).trim() !== "") {
     caps.artifacts = loadArtifactSet({ env }).ids;
   }
+  // admits (T-FEAT-9): the provider's admission policy, when it set one; pay: when it sells.
+  const admits = advertisedAdmits(env);
+  if (admits) caps.admits = admits;
+  const pay = advertisedPay(env, { gatewayOnion });
+  if (pay) caps.pay = pay;
   // Nothing configured -> no caps -> byte-identical announce (proven in the selftest).
-  if (caps.ports === undefined && caps.region === undefined && caps.artifacts === undefined) return null;
+  if (caps.ports === undefined && caps.region === undefined && caps.artifacts === undefined && caps.admits === undefined && caps.pay === undefined) return null;
   // At least one real cap: advertise the proto range too (complete, and safe — it only ever
   // rides alongside already-present caps, never triggers caps on its own).
   caps.proto = { min: PROTO_RANGE.min, max: PROTO_RANGE.max };
@@ -260,10 +304,13 @@ export async function runHeartbeat({
   log(enabled
     ? `egress self-check: ON (metadata-only TCP connect to ${EGRESS_CHECK_TARGET} before each announce; SKIP announce if DOWN). Disable with RGOE_EGRESS_CHECK=0`
     : "egress self-check: OFF (RGOE_EGRESS_CHECK=0) — announcing unconditionally");
-  const caps = buildGatewayCaps(env);
+  const caps = buildGatewayCaps(env, { gatewayOnion: id.onion });
   log(caps
     ? `capabilities advertised (signed): ${JSON.stringify(caps)}`
-    : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW, RGOE_GATEWAY_REGION and/or RGOE_ZK_ARTIFACTS to advertise)");
+    : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set RGOE_EGRESS_ALLOW, RGOE_GATEWAY_REGION, RGOE_ZK_ARTIFACTS, RGOE_ADMIT and/or RGOE_REGISTRAR_ADVERTISE to advertise)");
+  if (caps && caps.admits) log(`admission policy advertised: admits=${caps.admits.join(",")} (RGOE_ADMIT; must match the gateway unit's)`);
+  else log("admission policy: NOT advertised (RGOE_ADMIT unset here) — clients assume this gateway may admit any leaf source; set RGOE_ADMIT to the gateway's policy");
+  if (caps && caps.pay) log(`payment advert: protocols=${caps.pay.protocols.join(",")} port=${caps.pay.port}${caps.pay.onion ? " onion=" + caps.pay.onion.slice(0, 16) + ".." : " (this onion)"}`);
 
   const beat = makeBeat({
     announce: () => announce({ id, bootnode, op, weight, torHost, torPort, caps }),
