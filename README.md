@@ -81,9 +81,10 @@ the bond (a paid leaf is zeroed instead). Your wallet and your commitment are li
 
 **Which gateways you use.** `RGOE_LEAF_SOURCE=auto|invited|staked|paid` (default `auto`: the
 set that holds your leaf) and the client only picks gateways whose signed `admits` include
-that source. `--max-anon` (`RGOE_MAX_ANON=1`) goes further: it uses only gateways that admit
-`invited` and nothing else, so a gateway that also sells or stakes access is refused, and it
-refuses to run at all with a paid or staked leaf (those paths leave an on-chain footprint, so
+that source (a gateway advertising no policy is assumed to admit every path during the
+rollout). `--max-anon` (`RGOE_MAX_ANON=1`) goes further: it uses only gateways whose signed
+`admits` is exactly `invited`, so a gateway that also sells or stakes access, or advertises no
+policy, is refused, and it refuses to run at all with a paid or staked leaf (those paths leave an on-chain footprint, so
 "max anon" would be a lie). Order of the paths, most to least anonymous: invited, staked, paid.
 
 **The Rust binary** (`rgoe-0.1.1-<target>-live`, no Node, no tor daemon; the default
@@ -120,12 +121,13 @@ A provider decides three things, all env vars on that line
   signed caps, so clients can filter. `RGOE_ROOTS` is a deprecated alias.
 - **What you sell.** `RGOE_REGISTRAR=1` runs a 402 registrar on this box (an extra onion port,
   8878) and `RGOE_PAY_PROTOCOLS=x402,mpp` picks the rails (any non-empty subset; default both).
-  Companions: `RGOE_PAID_ACCESS_CONTRACT`, `RGOE_PAY_ASSET`, `RGOE_PAY_PRICES`, `RGOE_RPC_URL`;
-  the operator key is a secret drop-in, never a tunable. You sell on your own terms; the
-  fleet's other gateways decide separately whether to admit paid leaves.
+  Companions: `paid` in `RGOE_ADMIT` (admit what you sell), `RGOE_PAID_ACCESS_CONTRACT`,
+  `RGOE_PAY_ASSET`, `RGOE_PAY_PRICES`, `RGOE_RPC_URL`; the operator key is a secret drop-in,
+  never a tunable. On a gateway-only box the registrar rides the gateway onion. You sell on
+  your own terms; the fleet's other gateways decide separately whether to admit paid leaves.
 - **Where and how you read the chain.** `RGOE_GATEWAY_REGION=na|eu|…` goes into the signed
-  caps; `RGOE_HELIOS=1` anchors the root read to the beacon sync committee so the RPC can
-  withhold but not lie ([`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md)).
+  caps; `RGOE_HELIOS=1` (with `staked` admitted) anchors the root read to the beacon sync
+  committee so the RPC can withhold but not lie ([`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md)).
 
 `RGOE_BOOTNODE_ONION=<onion>` makes it a gateway-only box that joins an existing bootnode
 (how gateway-2 was added; the live bootnode admits staked operators, so joining it means
