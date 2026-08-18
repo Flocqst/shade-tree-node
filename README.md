@@ -1,336 +1,294 @@
 # reputation-gated onion egress
 
-A Tor onion service that egresses to the clearnet only for clients who prove, in
-zero knowledge, that they belong to a curated set. Everyone else is dropped before
-a byte leaves. The point is a clean-IP egress that stays clean without ever learning
-who its users are.
-
-- **What it is.** An application-layer reputation gate on top of Tor onion services.
-  It runs as a fleet: many gateways, discovered live through a bootnode, membership and
-  stake rooted on chain, and a client that rotates across gateways per request.
-- **Why it matters.** Tor exit IPs are a public, auto-blocked list, so honest Tor users
-  get walled out. This gates on a *proof of membership* instead of an identity, so a
-  clean egress IP stays scarce and sybil-resistant without a trusted third party ever
-  learning who you are.
-- **How to run it.** One CLI, `rgoe`. Joining the live fleet and the 30-second local loop are
-  [below](#run-it); the full walkthrough is in [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
-
-It is a reference implementation, **unaudited**, on **testnet ZK artifacts** (see
-[Security and audit](#security-and-audit)). As of 2026-08-17 a fleet is live for members:
-two gateways in two regions behind one bootnode, stake admission on, membership rooted on
-Sepolia, access buyable over HTTP 402. It is still not production: the trusted-setup ceremony
-has not been run, nothing is audited, everything on chain is testnet, and the fleet is one
-operator on one cloud provider (see [Status](#status-2026-08-17) and
-[Scope](#scope-what-it-is-and-is-not)).
-
-The write-up, with the exit-blocking benchmark and the gate protocol, is at
+A Tor onion service that egresses to the clearnet only for clients who prove, in zero
+knowledge, that they belong to a set the gateway trusts. Everyone else is dropped before a
+byte leaves. The gateway never learns who its users are or where they come from: it is
+reached by onion rendezvous (no exit node, no client IP), it verifies one RLN membership
+proof per request, and it tunnels `CONNECT host:443` from its own clean IP. It runs as a
+fleet: many gateways, discovered live through a bootnode, membership rooted on chain, one
+CLI (`rgoe`) for every role. Write-up with the design and the exit-blocking benchmark:
 [reputation-gated-egress.vercel.app](https://reputation-gated-egress.vercel.app)
-(source: [`docs/post/`](docs/post/)). What comes next is in [`docs/ROADMAP.md`](docs/ROADMAP.md);
-the design of each shipped milestone is in [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md).
+(source [`docs/post/`](docs/post/)). Security policy: [`SECURITY.md`](SECURITY.md).
 
-## Status (2026-08-17)
+## Status (2026-08-18)
 
-- **Fleet live.** Bootnode + gateway-1 (DigitalOcean NYC1) and gateway-2 (DigitalOcean SFO3), stake
-  admission on (`GatewayRegistry` `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`). Bootnode onion
-  `kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion`, signer
-  `d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73`; both are in
-  [`network/sepolia/README.md`](network/sepolia/README.md) and `RGOE_NETWORK=sepolia` reads them.
-  Execution record: [`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md).
+- **Live on testnet.** Bootnode + gateway-1 (DigitalOcean NYC1) + gateway-2 (DigitalOcean
+  SFO3), stake admission on (`GatewayRegistry` `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`).
+  Bootnode `kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion`, signer
+  `d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73`; `RGOE_NETWORK=sepolia`
+  reads both from [`network/sepolia/`](network/sepolia/README.md). Record:
+  [`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md).
 - **Three ways in.** Invited (a leaf in the committed `group/members.json`), staked
-  (`StakedReputationSet` rln-v4 `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, tiers 8/32, on-chain
-  tiered slash), or bought (`PaidAccessSet` `0x4e8C2Bf5d3c5454A04837401095fce2646484111`); the
-  gateways trust the union of the three roots.
-- **Payments live on Sepolia.** HTTP 402 in both x402 v2 and MPP, settled by the operator via
-  EIP-3009 (buyer needs no gas). On 2026-08-17 one buyer per rail bought a leaf and egressed
-  through the fleet with nothing else. Settle asset today is a test EIP-3009 token; real USDC is
-  one env ([`docs/PAYMENTS.md`](docs/PAYMENTS.md)).
-- **Not done.** The trusted-setup ceremony has not been run: ZK artifacts are the untrusted dev
-  testnet set ([issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6),
-  [`docs/CEREMONY.md`](docs/CEREMONY.md)). Unaudited. Testnet only. One operator, one provider
-  (two regions, same ASN). Do not rely on it for real anonymity or funds.
+  (`StakedReputationSet` rln-v4 `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, tiers 8/32,
+  refundable bond, tiered slash) and paid (`PaidAccessSet`
+  `0x4e8C2Bf5d3c5454A04837401095fce2646484111`, operator-inserted after an HTTP 402 payment).
+  Each gateway provider chooses which of the three it honors (`RGOE_ADMIT`, default `invited`,
+  the maximum-anonymity mode) and whether it sells
+  ([ADR 0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md)). The live fleet is
+  heterogeneous on purpose since 2026-08-18: gateway-1 admits `invited,staked,paid` and sells
+  over x402 and MPP; gateway-2 admits `invited,staked` and sells nothing. So a paid buyer
+  routes to gateway-1 only, and `--max-anon` refuses both today (neither is invited-only) and
+  says so.
+- **Payments live on Sepolia**, x402 v2 and MPP, one EIP-3009 authorization signed by the
+  buyer (no gas), settled by the operator, who is its own facilitator. Per provider: a
+  registrar is opt-in and `RGOE_PAY_PROTOCOLS` picks the rails. Settle asset today is a test
+  token (tUSD); real USDC is one env ([`docs/PAYMENTS.md`](docs/PAYMENTS.md)).
+- **Binaries.** [v0.1.1](https://github.com/dmarzzz/reputation-gated-onion-egress/releases/tag/v0.1.1):
+  a static Rust client for 7 targets, plus a `-live` build (embedded Tor + prover) for
+  linux-x86_64, macos-arm64 and windows-x86_64, each with a `.sha256`
+  ([`rust/INSTALL.md`](rust/INSTALL.md)).
+- **Not done.** No trusted-setup ceremony: the ZK artifacts are the untrusted dev set
+  ([issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6),
+  [`docs/CEREMONY.md`](docs/CEREMONY.md)). Unaudited. Sepolia only. One operator, one cloud
+  provider, one ASN. Do not rely on it for real anonymity or real funds.
 
-## The problem
+## Use it
 
-Tor exit IPs are a public, auto-blocked list with perpetually bad reputation
-([torbulkexitlist](https://check.torproject.org/torbulkexitlist),
-[FireHOL tor_exits](https://iplists.firehol.org/?ipset=tor_exits)), so honest Tor
-users get locked out. Measured directly over the same 36 sites: a home IP was blocked
-8.3 percent of the time, a datacenter IP 16.7, and Tor 17.1, with the sites that wall
-Tor at 90 to 100 percent mostly fronted by commercial anti-bot vendors; method and
-classifier in [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md).
-The usual escape, a [residential proxy](docs/residential-proxies.md), trades
-IP-reputation evasion for a fully trusted third party who links every request to your
-billing identity. Underneath both: an open clean-IP egress is blocklisted within hours,
-so clean IPs stay clean only by being gated and scarce. We gate on a proof of membership
-instead of an identity, which keeps sybil and rate resistance while decoupling them from
-the IP and from who you are.
+Install the CLI (`npm install && npm link`, or `node bin/rgoe.mjs`; `rgoe doctor` checks node,
+tor, deps, keys) and start a local Tor SOCKS port (`bash scripts/start-tor-client.sh` gives
+you 9260, add `--tor-port 9260`; a system tor is `--tor-port 9050`). Every `--flag` is an
+`RGOE_*` env var, either works. Then pick your way in; all three end at the same proxy:
 
-## Design
+```bash
+curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # a gateway's clean IP, not yours
+```
 
-The gate is an application-layer protocol on top of Tor, not a Tor modification.
-Tor cannot carry a reputation proof natively (cells are opaque, v3 client-auth is a
-static linkable allowlist), but onion services give us the part that matters: each
-gateway is published as a `.onion` and reached by rendezvous, so there is no exit
-node and the gateway never learns the client IP.
+**I was invited** (someone sent you an `RGOE_SECRET`; your leaf is in `group/members.json`):
+
+```bash
+RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client
+```
+
+**I want to buy access** (a wallet holding the settle asset on Sepolia; no ETH, no gas):
+
+```bash
+rgoe enroll                                              # your secret + commitment, locally; keep the secret
+rgoe pay --network sepolia --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret   # or --protocol mpp
+RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8   # --limit 32 if you bought tier 32
+```
+
+`--dry-run` shows the operator's 402 challenge and the exact authorization you would sign.
+Read before paying: the transfer (your address, the operator's address, the tier's price) and
+the operator's `insert(commitment, limit)` are public on chain, so "this address bought access
+from this operator" is visible to anyone; your later requests are not (the gateway sees a
+proof, never a leaf). Pay from a fresh address if that matters to you.
+
+**I want to stake** (Sepolia ETH; a refundable bond, `bondFor(8)` 0.001 ETH, `bondFor(32)` 0.004 ETH):
+
+```bash
+rgoe enroll --limit 8                                            # or --limit 32
+rgoe register-member <commitment> --limit 8 --network sepolia    # posts the tier's bond
+RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8
+```
+
+Over-spend your tier's per-epoch budget and the gateway reconstructs your secret and slashes
+the bond (a paid leaf is zeroed instead). Your wallet and your commitment are linked on chain.
+
+**Which gateways you use.** `RGOE_LEAF_SOURCE=auto|invited|staked|paid` (default `auto`: the
+set that holds your leaf) and the client only picks gateways whose signed `admits` include
+that source (a gateway advertising no policy is assumed to admit every path during the
+rollout). `--max-anon` (`RGOE_MAX_ANON=1`) goes further: it uses only gateways whose signed
+`admits` is exactly `invited`, so a gateway that also sells or stakes access, or advertises no
+policy, is refused, and it refuses to run at all with a paid or staked leaf (those paths leave
+an on-chain footprint, so "max anon" would be a lie). On today's fleet it refuses both gateways,
+naming each one's policy. Order of the paths, most to least anonymous: invited, staked, paid.
+
+**The Rust binary** (`rgoe-0.1.1-<target>-live`, no Node, no tor daemon; the default
+non-live binary verifies, selects and fetches directories but does not egress):
+
+```bash
+RGOE_SECRET=<hex> rgoe identity --out identity.json              # JS CLI, once: {identitySecret, leaf}
+rgoe leaves --contract 0x4e8C2Bf5d3c5454A04837401095fce2646484111 --network sepolia --out members.json   # a paid or staked leaf; invited = group/members.json
+./rgoe-0.1.1-<target>-live egress --bootnode-onion kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion \
+  --signer d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73 \
+  --identity identity.json --members members.json --target api.ipify.org:443
+```
+
+Member page: [`docs/JOIN.md`](docs/JOIN.md); walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md);
+every command: [`docs/CLI.md`](docs/CLI.md).
+
+## Run one
+
+**One command on a fresh Ubuntu 24.04 box** installs Tor + Node, mints the onions, starts
+bootnode + gateway + heartbeat as systemd units, and prints the bootnode onion, its pinned
+signer, and the client command to hand out:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+```
+
+A provider decides three things, all env vars on that line
+([`bootnode/deploy/README.md`](bootnode/deploy/README.md), [`docs/CONFIG.md`](docs/CONFIG.md)):
+
+- **What you admit.** `RGOE_ADMIT=invited[,staked][,paid]`, default `invited` even when
+  `RGOE_NETWORK` supplies the contracts (opt in explicitly). `staked` needs
+  `RGOE_GROUP_CONTRACT`, `paid` needs `RGOE_PAID_ACCESS_CONTRACT`; a missing one fails closed
+  at startup. The gateway trusts the union of the roots you list and advertises `admits` in its
+  signed caps, so clients can filter. `RGOE_ROOTS` is a deprecated alias.
+- **What you sell.** `RGOE_REGISTRAR=1` runs a 402 registrar on this box (an extra onion port,
+  8878) and `RGOE_PAY_PROTOCOLS=x402,mpp` picks the rails (any non-empty subset; default both).
+  Companions: `paid` in `RGOE_ADMIT` (admit what you sell), `RGOE_PAID_ACCESS_CONTRACT`,
+  `RGOE_PAY_ASSET`, `RGOE_PAY_PRICES`, `RGOE_RPC_URL`; the operator key is a secret drop-in,
+  never a tunable. On a gateway-only box the registrar rides the gateway onion. You sell on
+  your own terms; the fleet's other gateways decide separately whether to admit paid leaves.
+- **Where and how you read the chain.** `RGOE_GATEWAY_REGION=na|eu|…` goes into the signed
+  caps; `RGOE_HELIOS=1` (with `staked` admitted) anchors the root read to the beacon sync
+  committee so the RPC can withhold but not lie ([`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md)).
+
+`RGOE_BOOTNODE_ONION=<onion>` makes it a gateway-only box that joins an existing bootnode
+(how gateway-2 was added; the live bootnode admits staked operators, so joining it means
+`rgoe register-gateway` first, [`docs/OPERATOR.md`](docs/OPERATOR.md) §2). `RGOE_ADMISSION=stake`
+makes your own bootnode require the same bond.
+
+**The 30-second local loop** (one box, each line its own terminal, a local tor daemon):
+
+```bash
+rgoe keygen tor/hs-bootnode           # mint an onion identity
+rgoe bootnode --admission open        # discovery bootnode (its own onion service)
+rgoe gateway                          # a reputation-gated gateway (RGOE_ADMIT=invited)
+rgoe heartbeat --bootnode <onion>     # keep the gateway announced
+rgoe enroll                           # a member identity (prints RGOE_SECRET)
+rgoe client --secret <hex> --bootnode <onion> --dir-signer <signer-pubkey>
+```
+
+Watch the gate drop non-members with `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
+
+## How it works
+
+The gate is an application-layer protocol on top of Tor, not a Tor modification. Tor cannot
+carry a reputation proof natively (cells are opaque, v3 client-auth is a static linkable
+allowlist), but onion services give the part that matters: each gateway is a `.onion` reached
+by rendezvous, so there is no exit node and the gateway never learns the client IP.
 
 ```
   curl / SearXNG / your agent
         |
         v
   client ──── 1. pull the live gateway set from the bootnode (over Tor), verify it
-        |     2. build ONE RLN membership proof for this request (fresh per-request nullifier)
-        |     3. pick a gateway (weighted rotation + failover)
+        |     2. keep the gateways whose signed `admits` cover my leaf source
+        |     3. build ONE RLN membership proof for this request (fresh per-request nullifier)
+        |     4. pick a gateway (weighted rotation + failover)
         |  SOCKS to Tor, no exit node
         v
   Tor rendezvous  (3 + 3 hops; client IP never revealed to the gateway)
         |
         v
-  gateway.onion ── verify RLN proof · root in the on-chain freshness window? · nullifier fresh?
+  gateway.onion ── verify RLN proof · root in the union it admits (invited ∪ staked ∪ paid),
+        |          within the freshness window? · nullifier fresh?
         |          a 2nd distinct signal on one nullifier reconstructs the secret and SLASHES
         v
   clean egress IP ──> destination   (TCP CONNECT :443 only; TLS stays end to end)
 ```
 
-Three things make it a system rather than one proxy:
+- **The proof is real RLN.** The set is a [Semaphore](https://semaphore.pse.dev/) /
+  [RLN](https://rate-limiting-nullifier.github.io/rln-docs/) group; each request carries a
+  fresh nullifier and a Shamir share inside one circom-rln Groth16 proof (`lib/rln.mjs`,
+  `circuits/rln/`). One share per slot egresses; a second distinct signal on the same
+  nullifier is a provable over-spend, so the gateway reconstructs the identity secret and
+  slashes on whichever contract holds the leaf (`gateway/gateway.mjs:makeRoutingSlasher`).
+  Requests are mutually unlinkable, even to the gateway. A member's per-epoch budget is a tier
+  baked into its leaf (`Poseidon2(Poseidon1(secret), limit)`, 8 or 32), proven in the same
+  circuit and invisible on the wire ([ADR 0006](docs/adr/0006-reputation-tiers.md)).
+- **The root is a union of on-chain sets.** Members self-enroll (only a commitment leaves the
+  machine). A gateway reads one root per source it admits, `group/members.json` (invited),
+  `StakedReputationSet` (staked, `contracts/StakedReputationSet.sol`) and `PaidAccessSet`
+  (paid, `contracts/PaidAccessSet.sol`, [ADR 0007](docs/adr/0007-paid-access.md)), through a
+  `RootProvider` (`lib/root-provider.mjs`: node, or an EIP-1186 light client, optionally
+  Helios-anchored) and trusts their union. `GatewayRegistry` (`contracts/GatewayRegistry.sol`)
+  holds operator bonds; the live bootnode admits staked operators only. Addresses:
+  [`network/sepolia/contracts.json`](network/sepolia/contracts.json).
+- **Payment is a leaf, not a token.** `rgoe pay` speaks HTTP 402 in x402 v2 or MPP to the
+  provider's registrar (`payments/registrar.mjs`), signs one EIP-3009 authorization, the
+  operator settles it and inserts the commitment; egress is the same RLN proof
+  ([`docs/PAYMENTS.md`](docs/PAYMENTS.md)).
+- **The fleet is discovered live.** Gateways heartbeat to a bootnode (`bootnode/`) that
+  serves a signed directory with per-gateway signed caps (`admits`, `pay`, region); the client
+  pulls it over Tor, verifies it, re-derives each onion's key, keeps a last-known-good copy,
+  and rotates per request. The onion is never on chain; the bootnode is a cache, not a trust
+  root ([`docs/BOOTNODE.md`](docs/BOOTNODE.md), [ADR 0002](docs/adr/0002-onion-never-on-chain.md),
+  [ADR 0003](docs/adr/0003-bootnode-is-a-cache-not-a-trust-root.md)).
 
-- **Membership is a real RLN circuit.** The set is a [Semaphore](https://semaphore.pse.dev/)
-  / [RLN](https://rate-limiting-nullifier.github.io/rln-docs/) group. Each request carries a
-  *fresh* nullifier and a Shamir share, all proven inside one circom-rln Groth16 proof
-  (`lib/rln.mjs`, `circuits/rln/`). One share per slot egresses; a second distinct signal on
-  the same nullifier is a provable over-spend, so the gateway reconstructs the identity secret
-  and slashes the member's on-chain stake. Requests are mutually unlinkable, even to the gateway.
-  Proofs are ~0.9 KB and verify in ~30 ms regardless of set size.
-- **The root is on chain, and it is a union.** Members self-enroll (they generate their own
-  identity and only a commitment ever leaves the machine). The gateway admits the UNION of three
-  sets, one tree shape, one proof: the committed `group/members.json` (invited), every staked set in
-  `RGOE_GROUP_CONTRACT` (`StakedReputationSet`, `contracts/`, live on Sepolia, tiered stake), and the
-  **paid** set (`PaidAccessSet`, `RGOE_PAID_ACCESS_CONTRACT`) whose leaves the operator inserts after
-  a 402 payment. Roots are read from the chain through a `RootProvider` (`lib/root-provider.mjs`,
-  node or Helios-anchored light client), so the operator never holds a member secret, and a slash
-  lands on whichever contract holds the leaf ([ADR 0007](docs/adr/0007-paid-access.md),
-  [`docs/PAYMENTS.md`](docs/PAYMENTS.md)).
-- **The fleet is discovered live.** Gateways announce to a **bootnode** (`bootnode/`), which
-  serves a signed directory of live onions; the client pulls it over Tor, verifies it, caches a
-  persisted last-known-good copy, and rotates per request. The onion is never on chain, and the
-  bootnode is a cache, not a trust root. See [`docs/BOOTNODE.md`](docs/BOOTNODE.md).
+## What is and is not anonymous
 
-## Run it
+The proof hides the leaf; the request hides the IP. What differs is how you got the leaf.
 
-One CLI fronts every role. Each `--flag` maps to an `RGOE_*` env var (either works).
+| path | on-chain footprint | who can link what | default admitted? |
+|---|---|---|---|
+| invited | none | the operator knows it handed you a secret; nobody can tell which requests are yours | yes (`RGOE_ADMIT=invited`); live fleet: both gateways |
+| staked | `register(commitment, limit)` from your wallet, `bondFor(limit)` posted | wallet ↔ commitment ↔ tier bucket, public; requests still unlinkable to the leaf | opt-in (`staked`); live fleet: both gateways |
+| paid | your address → operator transfer (tier price) and the operator's `insert(commitment, limit)` a block or two later | "this address bought from this operator" and the tier, public; the operator learns commitment ↔ payer; requests still unlinkable | opt-in (`paid`); live fleet: gateway-1 only |
 
-```bash
-npm install
-npm link                 # puts `rgoe` on PATH (or use `node bin/rgoe.mjs`)
-rgoe doctor              # check node, tor, deps, keys
-```
+Facts that hold for all three: the gateway sees a rendezvous circuit, never your IP; which
+root a proof opens (invited / staked / paid) is a public signal, so your crowd is that set's
+size (the paid set is warned below `RGOE_PAID_MIN_LEAVES`, never refused); TLS is end to end,
+the gateway sees `host:443`. Prepaid access is trust in the operator: a valid proof the
+operator refuses to honor, or a payment it never inserts, has no on-chain recourse, only
+public evidence. Full ledger: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) §4.14b, §5.
 
-**Join the live fleet.** `RGOE_NETWORK=sepolia` fills the bootnode onion, its pinned signer,
-and the contract addresses from [`network/sepolia/`](network/sepolia/README.md); the client
-fetches the signed directory over Tor and rotates across the two gateways. You need a local Tor
-SOCKS port (`bash scripts/start-tor-client.sh` gives you 9260; `--tor-port 9050` for a system tor).
+## Not done, and why it matters
 
-```bash
-# handed a secret by the operator (a leaf in group/members.json):
-RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client
-curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json     # a gateway's clean IP
-
-# or buy a leaf over HTTP 402 (a wallet holding the settle asset; no gas):
-rgoe enroll                                                    # your secret + commitment, locally
-rgoe pay --network sepolia --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret   # or --protocol mpp
-RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8      # proves against the paid set
-
-# or stake a leaf (tier 8 or 32; posts the tier's bond):
-rgoe register-member <commitment> --limit 8 --network sepolia
-```
-
-The returned IP is a gateway's, not yours; the gateway never learned your IP; the request
-carried a fresh RLN proof of membership. Member page: [`docs/JOIN.md`](docs/JOIN.md).
-
-**The 30-second local loop** stands up a bootnode, a gateway, and a client on one box
-(each line its own terminal; you need a local Tor daemon, which the repo ships):
-
-```bash
-rgoe keygen tor/hs-bootnode           # mint an onion identity
-rgoe bootnode --admission open        # discovery bootnode (its own onion service)
-rgoe gateway                          # a reputation-gated gateway
-rgoe heartbeat --bootnode <onion>     # keep the gateway announced
-rgoe enroll                           # a member identity (prints RGOE_SECRET)
-rgoe client --secret <hex> --bootnode <onion> --dir-signer <signer-pubkey>
-curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
-```
-
-Watch the gate drop non-members with `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
-
-**The one-command droplet** brings the same fleet up on a fresh Ubuntu box:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
-```
-
-It installs Tor and Node, mints the onions, starts the bootnode + gateway + heartbeat as
-systemd units, and prints the bootnode onion, its pinned signer, and the client command.
-Opt-ins: `RGOE_BOOTNODE_ONION=<onion>` for a gateway-only box that joins an existing bootnode
-(how gateway-2 was added), `RGOE_REGISTRAR=1` to sell access over 402, `RGOE_HELIOS=1` for the
-light-client root anchor ([`bootnode/deploy/README.md`](bootnode/deploy/README.md)).
-
-Full walkthrough (live fleet, local, on-chain mode, and droplet) is in
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md); every command in [`docs/CLI.md`](docs/CLI.md)
-and every variable in [`docs/CONFIG.md`](docs/CONFIG.md).
-
-## Security and audit
-
-This is a reference implementation, unaudited, and the ZK artifacts came from an untrusted
-testnet ceremony. It is ready to be reviewed end to end: the trust boundaries, the threat
-model per party, the test inventory, and what to read in what order are in
-[`docs/AUDIT.md`](docs/AUDIT.md). The security policy and how to report privately are in
-[`SECURITY.md`](SECURITY.md); the auditor's guide and written invariants for the contracts
-are in [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md).
-
-The whole repo is tested. One command runs every node selftest plus the Foundry contract suite:
-
-```bash
-npm test                 # auto-discovers all *selftest.mjs, then `forge test`
-npm run test:node        # node selftests only (no foundry)
-```
-
-Coverage today: the security-critical directory module (onion↔key binding, signature
-verification, poison resistance, rotation), the bootnode discovery loop end to end (every
-adversarial announce rejected), the RLN spent-set and slashing control flow, the on-chain
-`StakedReputationSet`, `PaidAccessSet` and `GatewayRegistry` (Foundry), the stake verifier, the
-client-side stake re-verification path, the 402 registrar and both payment wire dialects
-(adversarial matrix, replay, crash recovery), the multi-root gateway with real proofs, the Tor
-key-format correctness, the CLI, and the client selection path. See [`docs/AUDIT.md`](docs/AUDIT.md) for the per-suite breakdown.
-
-## Scope: what it is and is not
-
-Built and verified:
-
-- **Client anonymous to the gateway.** Onion rendezvous, no exit node, no IP.
-- **Membership proven, never named**, with *per-request* unlinkable nullifiers (real RLN), so
-  even a colluding set of gateways cannot rejoin a member's requests.
-- **Reputation is a spectrum, not a bit.** A member's per-epoch budget is a *tier* baked into
-  its leaf (`rgoe enroll --limit 32`); two tiers with different `K` are proven in the same
-  circuit, enforced by the same root + nullifier set, unforgeable, and invisible on the wire.
-  On chain too: the rln-v4 `StakedReputationSet` charges `bondFor(limit)` and slashes per tier
-  ([ADR 0006](docs/adr/0006-reputation-tiers.md)).
-- **Operator never holds a secret.** Self-enrollment: only the commitment leaves the member.
-- **On-chain admission with stake and slashing.** `StakedReputationSet` (members) and
-  `GatewayRegistry` (operators; the live bootnode admits staked operators only); over-spenders
-  are slashed by cryptographic reconstruction, on the contract that holds the leaf.
-- **Access can be bought, and it was.** `rgoe pay` speaks HTTP 402 in both machine-payment
-  dialects (x402 v2 and MPP) to the operator's registrar on the bootnode onion (`:8878`), signs
-  one EIP-3009 stablecoin authorization (no gas), the operator settles and inserts the leaf into
-  `PaidAccessSet`, and egress is the same RLN proof. Both rails were exercised live on Sepolia on
-  2026-08-17, purchase through egress ([`docs/PAYMENTS.md`](docs/PAYMENTS.md), `payments/`).
-- **A live fleet.** Bootnode discovery, per-request gateway rotation, failover, and a persisted
-  last-known-good directory cache; two gateways in two regions today. Clients re-derive each
-  onion's key and, opt-in with `RGOE_VERIFY_STAKE`, re-check a gateway's operator signature and
-  live stake themselves rather than trusting the bootnode's label. The onion is never on chain;
-  the bootnode is a cache, not a trust root.
-- **A trust-minimized root read.** `LightClientRootProvider` proves the root against the block
-  state (EIP-1186) and, with `RGOE_HELIOS_RPC_URL`, anchors the state root to the beacon sync
-  committee; live receipts in [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md).
-- **Metadata-only tunnel.** TCP `CONNECT :443` only; TLS stays end to end.
-- **A distributable Rust client.** `rust/` (`rgoe-proto` + `rgoe-rln` + `rgoe-client`) byte-matches
-  the JS wire formats against `testdata/vectors.json`, and the `-live` build egresses over embedded
-  arti with per-request rotation; it went through the fleet on go-live day. Release binaries are
-  built by `.github/workflows/release.yml` on a `v*` tag; none is cut yet, so build it yourself
-  ([`rust/INSTALL.md`](rust/INSTALL.md)).
-- **Artifact-version negotiation.** Client and gateway agree on which ZK artifact set a proof
-  was made with, so the ceremony swap can roll without a flag day
-  ([`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md), `testdata/zk-artifacts.lock.json`).
-
-Deliberately out of scope, still an operator responsibility, or honestly not done:
-
-- **Payments are testnet-only and the buyer↔operator link is public.** The transfer (buyer
-  address → operator, the tier's price) is on chain by design and the tier bucket is public;
-  decorrelating the funding address (Layer 0) is the buyer's choice, not something the protocol
-  does for them. The operator is its own x402 facilitator (no third party, so nothing to trust
-  but also nothing to hide behind). Today's settle asset is a test EIP-3009 token; real USDC is
-  one env.
-- **Admission is where sybil resistance lives.** The proof gates membership; it does not create
-  reputation. Whatever adds a leaf (stake, invite, payment, proof-of-personhood) is what
-  "reputable" means. This moves the sybil problem to admission; it does not dissolve it.
-- **Gateway slashing is governed, not permissionless.** A member over-spend is a cryptographic
-  proof; gateway misbehavior is a subjective judgment, so `GatewayRegistry.slash` is owner-gated.
-- **Scale past one clean IP is the fleet's job**, and the fleet is only as clean as its gateways'
-  IPs. Sourcing and rotating clean egress IPs is an operational problem, not a protocol one.
-- **Rendezvous DoS.** Anyone with a `.onion` can force verify work; Tor's onion proof-of-work
-  defense is the outer gate, enabled where the tor build has the `pow` module (off on the live
-  fleet today, because not every client tor has it).
-- **Live on testnet for members; not production.** The ceremony has not been run
-  ([issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6)), nothing is
-  audited, and the fleet is one operator on one provider, two regions, same ASN. What remains is
-  in [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) and the go-live log's "Left open".
-- **Unaudited, testnet ZK artifacts.** Do not put real funds or real anonymity needs on this yet.
-
-Per-party worst case and fixes: [`docs/adversarial-review.md`](docs/adversarial-review.md).
+- **No trusted-setup ceremony.** `circuits/rln/` is circom-rln's dev phase-2 (two hard-coded
+  contributions, a fixed beacon); anyone can recompute the toxic waste and forge a membership
+  proof under any root or an exit-auth proof against any bond. `testdata/zk-artifacts.lock.json`
+  says so (`trust: "UNTRUSTED-TESTNET"`) and CI verifies the pins; the runbook is
+  [`docs/CEREMONY.md`](docs/CEREMONY.md), the reasoning is
+  [issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6).
+- **No audit.** Trust boundaries, per-party threat model and review order:
+  [`docs/AUDIT.md`](docs/AUDIT.md), [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md),
+  [`docs/adversarial-review.md`](docs/adversarial-review.md). `npm test` runs every
+  `*selftest.mjs` plus the Foundry suite.
+- **One operator, one provider.** Two regions, same AS14061; every asset is Sepolia testnet;
+  onion PoW is off (`RGOE_ENABLE_POW=0`, most client tors lack the module), so rendezvous DoS
+  is unmitigated; gateway slashing is owner-gated ([ADR 0005](docs/adr/0005-governed-gateway-slash.md)).
+- **Why bother.** [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md): over 51
+  Tor exits, web destinations blocked 315 of 1,812 requests (17%), and 98% of those blocks were
+  403 / CAPTCHA / JS challenge, 2% rate limits; search engines blocked 2,217 of 6,024 (37%),
+  62% reputation, 38% rate limit. Sites behind commercial anti-bot vendors block Tor in the
+  90 to 100 percent range, the open web roughly zero. Clean IPs stay clean by being gated and
+  scarce; this gates on membership instead of identity.
 
 ## Docs
 
 | Doc | What it is |
 |-----|------------|
-| [`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md) | The go-live execution record: bootnode + gateway-1, gateway-2, stake admission, backups, the 402 registrar and the live purchases, and what is left open |
-| [`network/sepolia/README.md`](network/sepolia/README.md) | The live Sepolia record: `contracts.json` (addresses), `bootnode.json` (bootnode onion + signer, read by `RGOE_NETWORK=sepolia`), `directory-bootnode.json` (signed fleet), the legacy static fleet |
-| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Join the live fleet, or stand up your own: local loop, on-chain mode, one-command droplet |
-| [`docs/CLI.md`](docs/CLI.md), [`docs/CONFIG.md`](docs/CONFIG.md) | Every `rgoe` command and every `RGOE_*` variable + default |
-| [`docs/OPERATOR.md`](docs/OPERATOR.md) | Runbook for running a gateway or bootnode in production |
-| [`docs/INCIDENT.md`](docs/INCIDENT.md) | Incident-response playbook for the failure modes that matter |
-| [`docs/BACKUP.md`](docs/BACKUP.md), [`docs/ONION-IDENTITY.md`](docs/ONION-IDENTITY.md) | `rgoe backup` / `rgoe restore` (encrypted key material) and verify-before-cutover onion continuity |
-| [`docs/TOR-HARDENING.md`](docs/TOR-HARDENING.md), [`docs/SLO.md`](docs/SLO.md) | Hardening the Tor layer under the fleet; service-level objectives + error budget |
-| [`docs/ONCHAIN-DEPLOY.md`](docs/ONCHAIN-DEPLOY.md) | Runbook for a persistent on-chain deployment of the stake contracts |
-| [`docs/BOOTNODE.md`](docs/BOOTNODE.md) | The live-discovery design: announce, signed directory, trust boundary |
-| [`docs/FLEET.md`](docs/FLEET.md) | Fleet discovery + per-request selection design, and the fleet-wide budget analysis |
-| [`docs/ONCHAIN.md`](docs/ONCHAIN.md) | On-chain admission: staked set, gateway registry, root provider |
-| [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md) | Trust-minimized (light-client) reads of the reputation root; the Helios sync-committee anchor and its live receipts |
-| [`docs/PAYMENTS.md`](docs/PAYMENTS.md) | Payments, shipped 2026-08-17: the 402 rails (x402 + MPP, EIP-3009, operator as facilitator, `PaidAccessSet`), the leak ledger, and the anonymity design they sit in |
-| [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/AUDIT.md`](docs/AUDIT.md) | The consolidated threat model; trust boundaries, test inventory, review order |
-| [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md) | Auditor's guide + written invariants for the Solidity contracts |
-| [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md) | Wire formats + bootnode HTTP API; the Rust conformance target |
-| [`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md), [`docs/RECEIPTS.md`](docs/RECEIPTS.md) | Envelope version negotiation; signed egress success receipts |
-| [`docs/CLIENTS.md`](docs/CLIENTS.md), [`docs/SDK.md`](docs/SDK.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Client modes (shim vs. library), the `RgoeClient` SDK, routing tools/agents through the fleet |
-| [`docs/MUTATION-TESTING.md`](docs/MUTATION-TESTING.md) | Mutation-testing setup and the surviving-mutant list |
-| [`docs/adr/`](docs/adr/) | Architecture decision records for the load-bearing decisions; [0006](docs/adr/0006-reputation-tiers.md) reputation tiers, [0007](docs/adr/0007-paid-access.md) paid access as a second tree |
-| [`SECURITY.md`](SECURITY.md) | Security policy: what is in scope, what is known, how to report |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to run the tests and the house rules a change must hold |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | The forward roadmap: protocol properties, fleet gaps, discovery, payments, zkAPI; with a status map of what PR #5 built |
-| [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md), [`docs/NEXT-VERSION.md`](docs/NEXT-VERSION.md), [`docs/RLN-MIGRATION.md`](docs/RLN-MIGRATION.md) | The original milestone designs (1–5), the next-version build spec, and the RLN migration plan (historical; what they specified is built) |
-| [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md) | The shipping backlog and the release gates (test → Rust client → deploy; all three passed 2026-08-17), and what is still open |
-| [`docs/CEREMONY.md`](docs/CEREMONY.md), [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | The two human-gated runbooks: production trusted setup (NOT run yet; artifact hashes are pinned in `testdata/zk-artifacts.lock.json` and CI-verified) and the live-deployment runbook the go-live log executed |
-| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) (+ `PROTOCOL.html`) | The protocol design write-up for anonymous paid access (access layer built; payment layer design) |
-| [`docs/STATUS.md`](docs/STATUS.md), [`docs/REPORT.md`](docs/REPORT.md), [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/JOIN.md`](docs/JOIN.md), [`docs/walkthrough.html`](docs/walkthrough.html) | Historical: the June 2026 single-gateway PoC status/report/deploy guides, the July fleet deployment record, and the PoC member page + request walkthrough |
-| [`docs/adversarial-review.md`](docs/adversarial-review.md), [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md) | Per-party worst case; the benchmark |
-| [`docs/residential-proxies.md`](docs/residential-proxies.md), [`docs/residential-proxy-providers.md`](docs/residential-proxy-providers.md) | Background research: what residential proxies do to your privacy, and a provider taxonomy |
-| [`docs/post/`](docs/post/) | The published write-up (HTML + figures), plus [`JOIN.md`](docs/post/JOIN.md) and [`RUN-A-GATEWAY.md`](docs/post/RUN-A-GATEWAY.md) for members and operators |
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md), [`docs/JOIN.md`](docs/JOIN.md) | Join the live fleet (invited / buy / stake), the local loop, the droplet; the member page |
+| [`docs/CLI.md`](docs/CLI.md), [`docs/CONFIG.md`](docs/CONFIG.md) | Every `rgoe` command; every `RGOE_*` variable and default |
+| [`docs/OPERATOR.md`](docs/OPERATOR.md), [`docs/INCIDENT.md`](docs/INCIDENT.md), [`docs/SLO.md`](docs/SLO.md) | Running a gateway or bootnode; incident playbook; service-level objectives |
+| [`docs/BACKUP.md`](docs/BACKUP.md), [`docs/ONION-IDENTITY.md`](docs/ONION-IDENTITY.md), [`docs/TOR-HARDENING.md`](docs/TOR-HARDENING.md) | Encrypted key backup/restore; onion continuity; hardening the Tor layer |
+| [`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md), [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | The go-live execution record and the runbook it executed |
+| [`network/sepolia/README.md`](network/sepolia/README.md) | The live Sepolia record: `contracts.json`, `bootnode.json`, the signed directory |
+| [`docs/ONCHAIN.md`](docs/ONCHAIN.md), [`docs/ONCHAIN-DEPLOY.md`](docs/ONCHAIN-DEPLOY.md) | On-chain admission design (staked set, gateway registry, root provider); deploying it |
+| [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md) | Light-client root reads and the Helios sync-committee anchor, with live receipts |
+| [`docs/PAYMENTS.md`](docs/PAYMENTS.md), [`docs/PROTOCOL.md`](docs/PROTOCOL.md) (+ `PROTOCOL.html`) | The 402 rails as shipped and the leak ledger; the anonymous-paid-access design write-up |
+| [`docs/BOOTNODE.md`](docs/BOOTNODE.md), [`docs/FLEET.md`](docs/FLEET.md) | Live discovery (announce, signed directory, trust boundary); per-request selection and fleet budget |
+| [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/AUDIT.md`](docs/AUDIT.md), [`docs/CONTRACTS-AUDIT.md`](docs/CONTRACTS-AUDIT.md), [`docs/adversarial-review.md`](docs/adversarial-review.md) | Threat model; trust boundaries, test inventory, review order; contract invariants; per-party worst case |
+| [`docs/CEREMONY.md`](docs/CEREMONY.md) | Trusted-setup runbook (not run) |
+| [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md), [`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md), [`docs/RECEIPTS.md`](docs/RECEIPTS.md) | Wire formats + bootnode HTTP API; artifact-version negotiation; signed egress receipts |
+| [`docs/CLIENTS.md`](docs/CLIENTS.md), [`docs/SDK.md`](docs/SDK.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Client modes, the `RgoeClient` SDK, routing tools and agents through the fleet |
+| [`docs/adr/`](docs/adr/) | Decision records: client language, onion never on chain, bootnode is a cache, RLN, governed slash, tiers, paid access, [0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md) per-gateway admission and payment choice |
+| [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md), [`docs/residential-proxies.md`](docs/residential-proxies.md), [`docs/residential-proxy-providers.md`](docs/residential-proxy-providers.md) | The benchmark; what residential proxies do to your privacy; a provider taxonomy |
+| [`docs/MUTATION-TESTING.md`](docs/MUTATION-TESTING.md) | Mutation-testing setup and surviving mutants |
+| [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md), [`docs/ROADMAP.md`](docs/ROADMAP.md) | The shipping backlog and release gates; the forward roadmap |
+| [`docs/ROADMAP-v1.md`](docs/ROADMAP-v1.md), [`docs/NEXT-VERSION.md`](docs/NEXT-VERSION.md), [`docs/RLN-MIGRATION.md`](docs/RLN-MIGRATION.md) | Historical designs (milestones 1 to 5, next-version spec, RLN migration); what they specified is built |
+| [`docs/STATUS.md`](docs/STATUS.md), [`docs/REPORT.md`](docs/REPORT.md), [`docs/DEPLOY.md`](docs/DEPLOY.md), [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/walkthrough.html`](docs/walkthrough.html) | Historical: the June 2026 single-gateway PoC status/report/deploy guides, the July fleet deployment record, the request walkthrough |
+| [`docs/post/`](docs/post/) | The published write-up (HTML + figures), plus [`JOIN.md`](docs/post/JOIN.md) and [`RUN-A-GATEWAY.md`](docs/post/RUN-A-GATEWAY.md) |
+| [`SECURITY.md`](SECURITY.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) | Security policy and how to report; tests and house rules |
 
 ## Layout
 
 | Path | What it is |
 |------|------------|
 | `bin/rgoe.mjs` | The unified CLI (every role, `--flag` → `RGOE_*` env) |
-| `lib/rln.mjs`, `circuits/rln/` | Real circom-rln Groth16: prove, verify, reconstruct, slash |
-| `lib/semaphore.mjs` | Load the group, prove, verify, epoch/slot math |
-| `lib/directory.mjs` | Signed fleet directory: onion↔key binding, verify, rotation |
-| `lib/root-provider.mjs` | Read the on-chain admission root (node or light client) |
-| `lib/gateway-registry.mjs` | The pluggable gateway-stake verifier (on-chain or mock) |
-| `contracts/StakedReputationSet.sol` | Member stake + ZK exit/withdraw + permissionless slash |
-| `contracts/GatewayRegistry.sol` | Gateway operator stake (onion never on chain); the live bootnode admits on it |
-| `contracts/PaidAccessSet.sol` | Paid-access membership tree: operator-inserted leaves, on-chain root, slash zeroes the leaf |
-| `payments/` | The 402 registrar (`registrar.mjs`), both wire dialects (`wire.mjs`), EIP-3009 typed data, test-asset deploy |
-| `group/pay.mjs`, `group/leaves.mjs` | `rgoe pay` (buy a leaf over x402/MPP); export an on-chain set's leaves for the Rust client |
-| `lib/helios-root.mjs`, `lib/zk-artifacts.mjs` | Helios sync-committee anchor for the light-client root; ZK artifact-set lock + negotiation |
-| `network/` | Committed deployment records per network (`sepolia/`: contracts, bootnode, signed directory); `RGOE_NETWORK` reads them |
-| `gateway/gateway.mjs` | Onion-side egress: verify, dedup/slash, tunnel, drop |
-| `client/rgoe-client.mjs`, `client/shim.mjs` | The fleet client (library) and its HTTP-CONNECT proxy |
-| `client/selection.mjs` | Per-request gateway selection + client-side stake re-verification |
-| `bootnode/server.mjs` | Live discovery service (its own onion); serves the signed directory |
-| `bootnode/announce.mjs`, `keygen.mjs`, `heartbeat.mjs`, `fetch.mjs` | Announce protocol, onion identity, gateway heartbeat, client fetch |
-| `bootnode/deploy/` | One-command droplet bring-up |
-| `group/enroll.mjs` | Self-enrollment (member generates its own identity) |
-| `group/register-onchain.mjs`, `register-gateway.mjs` | Stake a member commitment / a gateway operator |
-| `rust/` | The distributable client: `rgoe-proto` (wire formats), `rgoe-rln` (prover + tree), `rgoe-client` (embedded arti, `-live` egress) |
-| `smithers/` | The whole roadmap as a runnable [Smithers](https://smithers.sh) workflow |
-| `docker/`, `Dockerfile`, `docker-compose.yml` | Container image + a local tor/bootnode/gateway/client fleet |
-| `monitoring/`, `scripts/uptime-probe.mjs` | Prometheus/Grafana material for the gateway + bootnode metrics; the scheduled fleet uptime probe |
-| `examples/`, `web/` | Routing an agent through the fleet (`agent-egress.mjs`, `agent-fetch.mjs`); the fleet map page |
-| `scripts/test-all.mjs` | The audit entrypoint: every selftest + the contract suite |
+| `lib/rln.mjs`, `circuits/rln/` | circom-rln Groth16: prove, verify, reconstruct, slash |
+| `lib/directory.mjs`, `lib/root-provider.mjs`, `lib/helios-root.mjs` | Signed fleet directory + caps; on-chain root read (node / light client); Helios anchor |
+| `lib/gateway-registry.mjs`, `lib/zk-artifacts.mjs` | Gateway-stake verifier; ZK artifact-set lock + negotiation |
+| `contracts/` | `StakedReputationSet.sol`, `PaidAccessSet.sol`, `GatewayRegistry.sol` |
+| `gateway/gateway.mjs` | Onion-side egress: admit set, verify, dedup/slash, tunnel, drop |
+| `bootnode/` | Discovery server, announce, keygen, heartbeat, fetch; `deploy/` = the one-command droplet |
+| `client/` | The fleet client library (`rgoe-client.mjs`), HTTP-CONNECT proxy (`shim.mjs`), selection |
+| `payments/` | The 402 registrar, both wire dialects, EIP-3009 typed data, test-asset deploy |
+| `group/` | Self-enrollment, `rgoe pay`, `rgoe leaves`, on-chain register (member / gateway), the committed `members.json` |
+| `network/` | Committed deployment records per network; `RGOE_NETWORK` reads them |
+| `rust/` | The distributable client: `rgoe-proto` (wire), `rgoe-rln` (prover + tree), `rgoe-client` (embedded arti, `-live`) |
+| `test/`, `testdata/`, `scripts/test-all.mjs` | Foundry suite + cross-module selftests; golden vectors + artifact lock; the audit entrypoint |
+| `docker/`, `monitoring/`, `examples/`, `web/`, `smithers/` | Local container fleet; Prometheus/Grafana; agent examples; fleet map page; the roadmap as a Smithers workflow |

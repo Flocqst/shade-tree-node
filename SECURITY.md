@@ -2,11 +2,16 @@
 
 ## Status
 
-This is a reference implementation. It is **unaudited**, and its ZK artifacts
+This is a reference implementation, live on testnet since 2026-08-17 (two gateways
+behind one bootnode on Sepolia; invited, staked and paid admission; HTTP 402
+payments in x402 and MPP). It is **unaudited**, and its ZK artifacts
 (`circuits/rln/`) came from an **untrusted testnet phase-2 ceremony**
-(`circuits/rln/ARTIFACTS.md`). Do not put real funds or real anonymity needs on
-it yet. Treat everything here as testnet-only until an audit and a real trusted
-setup land (`docs/SHIP-PLAN.md` T-HARD-1).
+(`circuits/rln/ARTIFACTS.md`; the ceremony has not been run,
+[issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6),
+`docs/CEREMONY.md`). Everything on chain is Sepolia; the fleet is one operator on
+one provider. Do not put real funds or real anonymity needs on it yet. Treat
+everything here as testnet-only until an audit and a real trusted setup land
+(`docs/SHIP-PLAN.md` T-HARD-1).
 
 The full trust model, per-party threat model, and trust boundaries are in
 [`docs/AUDIT.md`](docs/AUDIT.md). Read it before reporting: several sharp edges
@@ -24,8 +29,11 @@ Reports that show a real defect in the shipped code, for example:
   envelope, onion derivation, on-chain reads).
 - A way to poison the fleet view a client acts on, past what the bootnode is
   already trusted for (it is a cache, not a trust root; see below).
-- A contract bug in `StakedReputationSet` or `GatewayRegistry` (stake lifecycle,
-  slash authorization, fund custody).
+- A contract bug in `StakedReputationSet`, `PaidAccessSet` or `GatewayRegistry`
+  (stake lifecycle, slash authorization, insert authorization, fund custody).
+- A 402 registrar defect (`payments/`): settling without inserting, inserting
+  without a valid settlement, replaying an authorization, or a challenge that
+  can be edited without breaking its binding.
 - A secret reaching a log or the wire (member identity secret, seed, onion
   secret key).
 
@@ -54,9 +62,13 @@ instead.
   end to end in CI inside a systemd container (`.github/workflows/bootstrap-e2e.yml`,
   T-TEST-8), but it still runs as root on a fresh box; read it before running it.
   (`docs/AUDIT.md`.)
-- Anything under "Scope: what it is and is not" in the README that is called out
-  as deliberately out of scope or an operator responsibility (no payments,
-  sourcing clean egress IPs, rendezvous DoS, and so on).
+- **Paid access is prepaid trust in the operator.** The buyer's address, the
+  operator's address and the tier are public on chain by design; a payment the
+  operator never inserts has public evidence but no on-chain recourse
+  (`docs/PAYMENTS.md` "Leak ledger", `docs/THREAT-MODEL.md` §5).
+- Anything under "What is and is not anonymous" and "Not done" in the README
+  that is called out as deliberately out of scope or an operator responsibility
+  (sourcing clean egress IPs, rendezvous DoS with PoW off, one operator, and so on).
 
 See `docs/SHIP-PLAN.md` for the full residual list and its priorities.
 

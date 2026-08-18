@@ -1,8 +1,10 @@
 # Quickstart
 
-Stand up the whole system — a discovery bootnode, a reputation-gated gateway, and a client —
-or just join the one that is running. Three paths: **join the live fleet** (what a member does),
-a **local loop** to understand the pieces, and a **live droplet** to run your own.
+Join the fleet that is running, or stand up your own (a discovery bootnode, a reputation-gated
+gateway, and a client). Three paths: **Path A, join the live fleet** (invited with a secret, buy a
+leaf over HTTP 402, or stake one), **Path B, a local loop** to understand the pieces, and
+**Path C, a live droplet** to run your own gateway or fleet (you choose what you admit, default
+invited only, and what you sell).
 
 Everything is one CLI: `rgoe <command> [--flags]`. Install it:
 

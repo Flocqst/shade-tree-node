@@ -2,7 +2,7 @@
 
 This closes the loop back to the project's origin use case. The whole system exists because
 a SearXNG instance run over a raw Tor exit got blocked almost everywhere (the README
-["problem"](../README.md#the-problem) and [`exit-blocking-benchmark.md`](exit-blocking-benchmark.md)).
+["Not done, and why it matters"](../README.md#not-done-and-why-it-matters) and [`exit-blocking-benchmark.md`](exit-blocking-benchmark.md)).
 An adapter is how you point that same SearXNG instance (or an AI agent, or any tool) at a
 clean, gated egress IP instead, with minimal config and nothing learning who you are.
 

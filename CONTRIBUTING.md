@@ -1,7 +1,7 @@
 # Contributing
 
-A reference implementation of reputation-gated onion egress. Unaudited,
-testnet-only (see [`SECURITY.md`](SECURITY.md)). Contributions are welcome; this
+A reference implementation of reputation-gated onion egress, live on testnet,
+unaudited (see [`SECURITY.md`](SECURITY.md)). Contributions are welcome; this
 page is how to run the tests and the house rules a change must hold to.
 
 ## Run the tests
@@ -88,16 +88,13 @@ need to, that is a design discussion, not a quiet edit. All are grounded in
 
 The shipping backlog and priorities live in
 [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md); the protocol-design milestones are in
-`docs/ROADMAP.md`. Note the release gate ordering before proposing deploy work:
-
-1. **Gate 1, test hardening.** The suite is deep enough that "green" is
-   trustworthy.
-2. **Gate 2, Rust client.** The conformance harness plus a Rust client MVP that
-   passes it.
-3. **Gate 3, deploy.** Only then, live deployment.
-
-Tests and the Rust client come before any live deploy. `T-DEPLOY-*` is blocked
-until Gates 1 and 2 are green.
+`docs/ROADMAP.md`. The three release gates (test hardening, Rust client, deploy)
+all passed on 2026-08-17 and the fleet is live on testnet
+(`docs/GO-LIVE-LOG-2026-08-17.md`), so a change today lands on a system that
+members use: keep wire formats and signed-caps additive
+(`docs/PROTOCOL-VERSIONING.md`), keep the golden vectors and the Rust
+conformance suite green, and read `docs/OPERATOR.md` before touching anything
+the fleet units run.
 
 Some actions are never taken autonomously and must be flagged for a human:
 rotating or replacing production onion or operator keys, spending real funds,
