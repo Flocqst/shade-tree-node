@@ -72,6 +72,7 @@ import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { signDirectory } from "../lib/directory.mjs";
+import { parsePayProtocols } from "../lib/admission.mjs";
 import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
 import { registry as metrics } from "../lib/metrics.mjs";
@@ -392,6 +393,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       weight: Math.max(0, Math.min(MAX_WEIGHT, rawWeight)), // clamp self-attested weight
       operator: v.operator,
       staked: v.staked,
+      caps: v.caps, capsSig: typeof rec.capsSig === "string" ? rec.capsSig : null, // T-FEAT-10/9: verified, bounded (canonicalCaps)
       rec,
       // Preserve the original expiry across a restart (don't silently extend a gateway's TTL);
       // a live announce gets a fresh now()+ttlSec.
@@ -448,6 +450,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       weight: Math.max(0, Math.min(MAX_WEIGHT, rawWeight)), // clamp self-attested weight
       operator: v.operator,
       staked: v.staked,
+      caps: v.caps, capsSig: typeof rec.capsSig === "string" ? rec.capsSig : null,
       rec,
       expiresAt: gossipExpiry, // origin-bounded, never extended by gossip
       lastAt: now(),
@@ -480,6 +483,12 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
       // listed; clients deprioritize it). Off => every live entry is up, exactly as before.
       health: prober && prober.health.isDown(onion) ? "down" : "up",
       ...(e.operator ? { operator: e.operator, staked: e.staked } : {}),
+      // T-FEAT-10 / T-FEAT-9: the gateway's SIGNED caps (ports/region/proto/artifacts/admits/pay)
+      // pass through VERBATIM with their onion-control capsSig, so a client re-verifies them
+      // against the gateway's own onion key (verifyDirectory) — the bootnode cannot forge or
+      // widen them. An announce whose caps lack a standalone capsSig is listed cap-free (a
+      // directory entry with caps but no capsSig would fail verification).
+      ...(e.caps && e.capsSig ? { caps: e.caps, capsSig: e.capsSig } : {}),
     }));
     const dir = { version: 1, issued: now(), gateways, signer: signer.pub };
     return signDirectory(dir, signer.priv);
@@ -508,12 +517,18 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
   // Worst case is therefore identical to the full-directory path (ADR 0003): a hostile bootnode
   // can OMIT a gateway or answer full:true (a re-fetch), never INJECT one it does not control.
   const etagKey = (e) => String(e || "").trim().replace(/^"|"$/g, "").toLowerCase();
-  const versionHistory = new Map(); // etagKey -> Set(onion) present in that served version
+  // etagKey -> Map(onion -> serialized entry) for that served version. Keyed by BODY, not only
+  // onion, so an entry whose signed content changed in place (weight, health, or its signed caps
+  // -- e.g. a provider flipping RGOE_ADMIT, T-FEAT-9) is re-shipped in `added` (the client's
+  // by-onion reconstruction overrides its cached copy) instead of leaving the client to
+  // reconstruct with a stale body that would no longer verify.
+  const versionHistory = new Map();
+  const entryKey = (g) => JSON.stringify(g);
 
   function recordVersion(etag, gateways) {
     const key = etagKey(etag);
     if (versionHistory.has(key)) versionHistory.delete(key); // refresh recency (move to newest)
-    versionHistory.set(key, new Set(gateways.map((g) => g.onion)));
+    versionHistory.set(key, new Map(gateways.map((g) => [g.onion, entryKey(g)])));
     while (versionHistory.size > deltaHistoryMax) versionHistory.delete(versionHistory.keys().next().value);
   }
 
@@ -546,8 +561,8 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
     const oldSet = versionHistory.get(sinceKey);
     // `base` was just recorded, so `since === current` resolves here to an empty delta.
     if (!oldSet) return { full: true, base };
-    const added = dir.gateways.filter((g) => !oldSet.has(g.onion));
-    const removed = [...oldSet].filter((o) => !currentSet.has(o));
+    const added = dir.gateways.filter((g) => oldSet.get(g.onion) !== entryKey(g)); // new OR changed in place
+    const removed = [...oldSet.keys()].filter((o) => !currentSet.has(o));
     return { base, since: sinceEtag, added, removed, unchanged: currentSet.size - added.length,
              directory: reconstructMeta(dir) };
   }
@@ -578,7 +593,10 @@ export function payAdvertFromEnv(env = process.env) {
   }
   if (!Object.keys(tiers).length) return null;
   const chainId = Number(env.RGOE_PAY_CHAIN_ID || 11155111);
-  return { port: envInt("RGOE_REGISTRAR_PORT", 8878), protocols: ["x402", "mpp"], asset, chain: `eip155:${chainId}`, tiers };
+  // T-FEAT-9: only the rails the registrar actually serves (RGOE_PAY_PROTOCOLS; default both).
+  let protocols;
+  try { protocols = parsePayProtocols(env.RGOE_PAY_PROTOCOLS); } catch { return null; }
+  return { port: envInt("RGOE_REGISTRAR_PORT", 8878), protocols, asset, chain: `eip155:${chainId}`, tiers };
 }
 
 // ---- HTTP transport ---------------------------------------------------------

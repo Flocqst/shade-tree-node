@@ -42,7 +42,11 @@ function startShim() {
       // RgoeClient.connect builds ONE proof, picks a gateway (rotation + failover), dials it
       // over Tor, sends the envelope, checks the ack, and returns a raw tunnel to the target.
       // TLS stays end-to-end client<->target.
-      const tunnel = await client.connect(target);
+      const tunnel = await client.connect(target, {
+        // T-FEAT-9: name the leaf source + the admitted candidate list once selection settles, so a
+        // "why did it go to THAT gateway" question is answerable from the log (onions only).
+        onEvent: (e) => { if (e.phase === "select" && e.status === "done") console.log(`SELECT  ${target}  leaf=${e.leafSource || "?"}${e.maxAnon ? " max-anon" : ""}  candidates=${e.candidates.map((c) => `${String(c.onion).slice(0, 12)}..${c.admits ? "[" + c.admits.join(",") + "]" : "[?]"}`).join(" ")}`); },
+      });
 
       clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n");
       if (head && head.length) tunnel.write(head);
@@ -64,6 +68,7 @@ function startShim() {
   server.listen(LISTEN_PORT, "127.0.0.1", () => {
     console.log(`shim up: http://127.0.0.1:${LISTEN_PORT}  ->  Tor SOCKS ${client.torHost}:${client.torPort}  ->  gateway.onion`);
     console.log(`mode: ${client.onion ? "pinned onion" : "directory fleet rotation"}; per-request slot + gateway rotation`);
+    console.log(`admission: leaf source=${client.leafSourcePin} (RGOE_LEAF_SOURCE; auto = whichever set holds the leaf), max-anon=${client.maxAnon ? "ON (invited-only gateways)" : "off"} (RGOE_MAX_ANON / --max-anon)`);
     console.log(`use:  curl -x http://127.0.0.1:${LISTEN_PORT} https://api.ipify.org?format=json`);
   });
 }

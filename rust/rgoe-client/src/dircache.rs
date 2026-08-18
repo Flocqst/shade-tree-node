@@ -68,6 +68,53 @@ pub struct CapsDto {
     // T-HARD-8: accepted ZK artifact ids (canonicalized by rgoe-proto; junk dropped there).
     #[serde(default)]
     pub artifacts: Option<Vec<String>>,
+    // T-FEAT-9: admission policy + payment advert (canonicalized by rgoe-proto; junk dropped).
+    #[serde(default)]
+    pub admits: Option<Vec<String>>,
+    #[serde(default)]
+    pub pay: Option<PayCapsDto>,
+}
+
+/// Untrusted `caps.pay` (T-FEAT-9). Lenient: tiers may carry string or integer prices; the
+/// proto crate validates/normalizes (`canonical_pay`).
+#[derive(Deserialize)]
+pub struct PayCapsDto {
+    #[serde(default)]
+    pub protocols: Option<Vec<String>>,
+    #[serde(default)]
+    pub onion: Option<String>,
+    #[serde(default)]
+    pub port: Option<i64>,
+    #[serde(default)]
+    pub asset: Option<String>,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(default)]
+    pub tiers: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+impl PayCapsDto {
+    fn into_proto(self) -> rgoe_proto::PayCaps {
+        rgoe_proto::PayCaps {
+            protocols: self.protocols,
+            onion: self.onion,
+            port: self.port,
+            asset: self.asset,
+            chain: self.chain,
+            tiers: self.tiers.map(|m| {
+                m.into_iter()
+                    .map(|(k, v)| {
+                        let price = match v {
+                            serde_json::Value::String(s) => s,
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => String::new(),
+                        };
+                        (k, price)
+                    })
+                    .collect()
+            }),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -119,6 +166,8 @@ impl DirectoryDto {
                             max: p.max,
                         }),
                         artifacts: c.artifacts,
+                        admits: c.admits,
+                        pay: c.pay.map(|p| p.into_proto()),
                     }),
                     caps_sig: g.caps_sig,
                 })

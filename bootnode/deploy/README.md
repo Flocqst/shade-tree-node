@@ -61,11 +61,14 @@ the script exits before installing anything on a bad one.
 | `RGOE_HELIOS_PORT` | `8546` | sidecar loopback RPC port (1024..65535); `8545` is left free for a local node. `RGOE_HELIOS_RPC_URL` on the gateway follows it. |
 | `RGOE_HELIOS_CHECKPOINT` | *(unset)* | weak-subjectivity checkpoint: a recent **finalized** beacon block root (`0x` + 64 hex, e.g. `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second source). Unset = helios `--load-external-fallback` (fetches one from public checkpoint services). Pinning is the more trust-minimized bootstrap. |
 | `RGOE_HELIOS_VERSION` / `RGOE_HELIOS_SHA256` | `0.11.1` / *(pinned table)* | release to install; a version without a pinned sha256 in `bootstrap.sh` must pass `RGOE_HELIOS_SHA256=<sha256 of helios_linux_<arch>.tar.gz>` — there is no unpinned download. Unsupported arch (only amd64/arm64 are pinned) ⇒ the script stops and tells you to install `helios` at `/usr/local/bin/helios` by hand and re-run. |
-| `RGOE_REGISTRAR` | `0` | **Opt-in 402 registrar** (T-FEAT-7, `docs/PAYMENTS.md` "Shipped 2026-08-17"): `1` = render + start a hardened `rgoe-registrar.service` (`payments/registrar.mjs` on `127.0.0.1:RGOE_REGISTRAR_PORT`; same sandbox as the other Node units; order store under `deploy-state/`), publish it as an **extra virtual port of the bootnode onion** (`HiddenServicePort <port> 127.0.0.1:<port>` inside the bootnode HS block, so buyers reach `http://<bootnode-onion>:<port>/pay/quote`), and set `RGOE_REGISTRAR_ADVERTISE=1` (+ asset/prices/chain) on `rgoe-bootnode.service` so `/health` carries `pay: {port, protocols, asset, chain, tiers}`. Bootnode box only (refused with `RGOE_BOOTNODE_ONION`). Re-running with `0` disables and removes the unit. The unit is **enabled but not started** until the operator key drop-in exists (see below). Also accepts `true/false/yes/no/on/off`. |
+| `RGOE_ADMIT` | `invited` | **Admission policy** (T-FEAT-9, `docs/adr/0008`): `invited[,staked][,paid]`, normalized to the canonical anonymity order (`invited,staked,paid`). Rendered into BOTH `rgoe-gateway.service` (enforced by `gateway/gateway.mjs`: these are the ONLY root sources + slash targets; a named path whose contract is missing fails closed at startup) and `rgoe-heartbeat.service` (advertised as signed `caps.admits`, so clients route only to gateways that admit their leaf source). Default `invited` alone = the maximum-anonymity mode (members.json only, no contract, no RPC). `staked` needs `RGOE_GROUP_CONTRACT`, `paid` needs `RGOE_PAID_ACCESS_CONTRACT`, either needs `RGOE_RPC_URL` — validated up front and rendered into the gateway unit. `RGOE_HELIOS=1` requires `staked`; `RGOE_REGISTRAR=1` requires `paid`. The default golden render gained `Environment=RGOE_ADMIT=invited` in both units. |
+| `RGOE_REGISTRAR` | `0` | **Opt-in 402 registrar** (T-FEAT-7, `docs/PAYMENTS.md` "Shipped 2026-08-17"): `1` = render + start a hardened `rgoe-registrar.service` (`payments/registrar.mjs` on `127.0.0.1:RGOE_REGISTRAR_PORT`; same sandbox as the other Node units; order store under `deploy-state/`), publish it as an **extra virtual port of an onion this box runs** (`HiddenServicePort <port> 127.0.0.1:<port>` inside the BOOTNODE HS block on a bootnode+gateway box, so buyers reach `http://<bootnode-onion>:<port>/pay/quote`; or — T-FEAT-9 — inside the GATEWAY HS block on a gateway-only box, `RGOE_BOOTNODE_ONION` set, so buyers reach `http://<gateway-onion>:<port>/pay/quote`), set `RGOE_REGISTRAR_ADVERTISE=1` (+ asset/prices/chain/protocols) on `rgoe-bootnode.service` (when present) so `/health` carries `pay: {port, protocols, asset, chain, tiers}`, AND the same advert (+ `RGOE_REGISTRAR_ONION`) on `rgoe-heartbeat.service` so the gateway's signed caps carry `pay`. Requires `paid` in `RGOE_ADMIT`. Re-running with `0` disables and removes the unit. The unit is **enabled but not started** until the operator key drop-in exists (see below). Also accepts `true/false/yes/no/on/off`. |
+| `RGOE_PAY_PROTOCOLS` | `x402,mpp` | With `RGOE_REGISTRAR=1`: the rails this registrar serves + advertises (`x402,mpp` / `x402` / `mpp`; normalized to `x402,mpp` order; rendered into the registrar unit, the bootnode advert and the heartbeat advert). A disabled rail gets no 402 challenge and its payload is refused `400 protocol-disabled`. |
 | `RGOE_PAID_ACCESS_CONTRACT` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: `PaidAccessSet` address the registrar inserts into (`network/sepolia/contracts.json` `contracts.paidAccessSet`). |
 | `RGOE_PAY_ASSET` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: EIP-3009 stablecoin address (Sepolia USDC `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`, or the test tUSD in `contracts.json` `payAsset`). |
 | `RGOE_PAY_PRICES` | *(unset)* | **required with `RGOE_REGISTRAR=1`**: `<limit>=<atomic amount>[,…]`, e.g. `8=100000,32=400000`. |
-| `RGOE_RPC_URL` | *(unset)* | **required with `RGOE_REGISTRAR=1`** (and with `RGOE_HELIOS=1`): the JSON-RPC the registrar settles/inserts through. |
+| `RGOE_RPC_URL` | *(unset)* | **required with `RGOE_REGISTRAR=1`** (and with `RGOE_HELIOS=1`, and with `staked`/`paid` in `RGOE_ADMIT`): the JSON-RPC the registrar settles/inserts through and the gateway reads on-chain roots through. |
+| `RGOE_GROUP_CONTRACT` | *(unset)* | **required with `staked` in `RGOE_ADMIT`** (and with `RGOE_HELIOS=1`): `StakedReputationSet` address(es), rendered into the gateway unit. |
 | `RGOE_PAY_TO` / `RGOE_REGISTRAR_PORT` / `RGOE_PAY_CHAIN_ID` | *(operator address)* / `8878` / `11155111` | stablecoin recipient / loopback+onion port / chain id advertised in `/health`. |
 | `RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS` | *(unset = not rendered)* | `eth_getLogs` start block(s) for the gateway's on-chain root scans (`<block>` / `<0xaddr>=<block>,…`), written as `Environment=` into `rgoe-gateway.service` when given. Usually unnecessary: the gateway pages the scan and starts at each contract's deploy block from the network record (`docs/OPERATOR.md` "Public RPC log-range caps"). |
 | `RGOE_RENDER_ONLY` | *(unset)* | `<dir>`: **render mode** — write the torrc include + units under `<dir>/etc/…` with placeholder onions and exit; no root, no apt, no tor/node install, no clone, no `systemctl`. `bootstrap.sh --render <dir>` is the same. This is what `bootstrap.selftest.mjs` drives. |
@@ -95,14 +98,26 @@ journalctl -u rgoe-heartbeat -f          # 'announced (...)' once the descriptor
 
 Same idempotence rules: re-running reuses the gateway identity and units.
 
+Choose what this gateway admits and sells (T-FEAT-9, `docs/OPERATOR.md` "Choose what you admit and
+what you sell"): the default is `invited` (members.json only). A gateway-only box that ALSO sells
+access on its own onion, with its own `PaidAccessSet`:
+
+```bash
+RGOE_BOOTNODE_ONION=<bootnode>.onion RGOE_BOOTNODE_SIGNER=<pinned-signer> RGOE_ADMIT=invited,paid RGOE_REGISTRAR=1 RGOE_PAY_PROTOCOLS=x402 RGOE_PAID_ACCESS_CONTRACT=0x… RGOE_PAY_ASSET=0x… RGOE_PAY_PRICES=8=100000,32=400000 RGOE_RPC_URL=https://…   bash bootnode/deploy/bootstrap.sh
+# -> torrc: HiddenServicePort 8878 inside the GATEWAY HS block; rgoe-registrar.service on this box;
+#    the heartbeat advertises admits=[invited,paid] + pay{protocols:[x402],…} as signed caps
+```
+
 ### Render mode (review / tests, no root)
 
 ```bash
 bash bootnode/deploy/bootstrap.sh --render /tmp/r && find /tmp/r -type f
 RGOE_ENABLE_POW=1 RGOE_BOOTNODE_ONION=<onion> bash bootnode/deploy/bootstrap.sh --render /tmp/r2
-RGOE_HELIOS=1 RGOE_HELIOS_CONSENSUS_RPC=https://… RGOE_RPC_URL=https://… RGOE_GROUP_CONTRACT=0x… \
+RGOE_HELIOS=1 RGOE_ADMIT=invited,staked RGOE_HELIOS_CONSENSUS_RPC=https://… RGOE_RPC_URL=https://… RGOE_GROUP_CONTRACT=0x… \
   bash bootnode/deploy/bootstrap.sh --render /tmp/r3     # + rgoe-helios.service, gateway unit pointed at it
-node bootnode/deploy/bootstrap.selftest.mjs   # golden default + PoW on/off + gateway-only + helios assertions
+RGOE_ADMIT=invited,staked,paid RGOE_GROUP_CONTRACT=0x… RGOE_PAID_ACCESS_CONTRACT=0x… RGOE_RPC_URL=https://… \
+  bash bootnode/deploy/bootstrap.sh --render /tmp/r4     # gateway + heartbeat units carry RGOE_ADMIT; gateway unit carries the contracts + RPC
+node bootnode/deploy/bootstrap.selftest.mjs   # golden default + PoW on/off + gateway-only + helios + registrar + admission assertions
 ```
 
 The default render is frozen in `bootnode/deploy/golden/default/`; a deliberate change to what

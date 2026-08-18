@@ -33,6 +33,8 @@ impl Requirement {
 
     /// Human-readable `port=..,proto=..,region=..` for the fail-closed error
     /// (`describeRequirement`, `selection.mjs`).
+    /// `leaf-source=paid,max-anon` for the egress log line (the live transport path).
+    #[allow(dead_code)]
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
         if let Some(p) = self.port {
@@ -108,10 +110,150 @@ pub fn filter_by_capability(gateways: &mut Vec<GatewayEntry>, req: &Requirement)
     gateways.len()
 }
 
+// ---- admission-aware selection (T-FEAT-9, docs/adr/0008) ---------------------------------
+// The Rust port of `filterByAdmission` (client/selection.mjs), kept MINIMAL: filter by the
+// gateway's SIGNED `caps.admits` when a leaf source is given, and `--max-anon`. Parity notes:
+//   - leaf source is an explicit CLI input here (`--leaf-source invited|staked|paid`); the JS
+//     client also DISCOVERS it from which set holds the leaf (RGOE_LEAF_SOURCE=auto). The Rust
+//     egress path takes `--members <file>` (an exported set) so it cannot know which set that
+//     was — the operator names it. Absent => no admission filtering (byte-identical).
+//   - absent `admits` on an entry = legacy gateway = "may admit any path" (kept) — same rollout
+//     compat rule as JS; under `--max-anon` an absent policy cannot prove invited-only (dropped).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Admission {
+    /// "invited" | "staked" | "paid" (the set the member's leaf is in), or None.
+    pub leaf_source: Option<String>,
+    /// Keep ONLY gateways whose admits is exactly ["invited"].
+    pub max_anon: bool,
+}
+
+impl Admission {
+    pub fn is_active(&self) -> bool {
+        self.leaf_source.is_some() || self.max_anon
+    }
+    /// `leaf-source=paid,max-anon` for the egress log line (the live transport path).
+    #[allow(dead_code)]
+    pub fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(l) = &self.leaf_source {
+            parts.push(format!("leaf-source={l}"));
+        }
+        if self.max_anon {
+            parts.push("max-anon".to_string());
+        }
+        parts.join(",")
+    }
+}
+
+/// The gateway's canonical admits list, or None when it advertises no policy.
+pub fn admits_of(entry: &GatewayEntry) -> Option<Vec<String>> {
+    entry.caps.as_ref().and_then(|c| canonical_caps(c).admits)
+}
+
+/// Does one entry pass the admission constraint? Pure + TOTAL. See the module note.
+pub fn gateway_admits(entry: &GatewayEntry, adm: &Admission) -> bool {
+    if !adm.is_active() {
+        return true;
+    }
+    let admits = admits_of(entry);
+    if adm.max_anon {
+        return matches!(&admits, Some(a) if a.len() == 1 && a[0] == "invited");
+    }
+    match (&admits, &adm.leaf_source) {
+        (None, _) => true, // legacy / no policy advertised: assume it may admit us (rollout compat)
+        (Some(a), Some(src)) => a.iter().any(|x| x == src),
+        (Some(_), None) => true,
+    }
+}
+
+/// Retain only entries passing `adm`; no-op when inactive. Returns the count retained.
+pub fn filter_by_admission(gateways: &mut Vec<GatewayEntry>, adm: &Admission) -> usize {
+    if adm.is_active() {
+        gateways.retain(|g| gateway_admits(g, adm));
+    }
+    gateways.len()
+}
+
+/// `gw1..=[invited,staked] gw2..=(no policy advertised)` for the fail-closed message.
+pub fn describe_fleet_admits(gateways: &[GatewayEntry]) -> String {
+    if gateways.is_empty() {
+        return "(empty directory)".to_string();
+    }
+    gateways
+        .iter()
+        .map(|g| {
+            let short: String = g.onion.chars().take(12).collect();
+            match admits_of(g) {
+                Some(a) => format!("{short}..=[{}]", a.join(",")),
+                None => format!("{short}..=(no policy advertised)"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rgoe_proto::{Caps, ProtoCaps};
+
+    fn admits_entry(admits: Option<&[&str]>) -> GatewayEntry {
+        entry_with(admits.map(|a| Caps {
+            admits: Some(a.iter().map(|x| x.to_string()).collect()),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn admission_filter_by_leaf_source_and_max_anon() {
+        let legacy = admits_entry(None);
+        let inv = admits_entry(Some(&["invited"]));
+        let inv_staked = admits_entry(Some(&["staked", "invited"]));
+        let all = admits_entry(Some(&["paid", "staked", "invited"]));
+        // inactive: no-op
+        let mut g = vec![legacy.clone(), inv.clone(), inv_staked.clone(), all.clone()];
+        assert_eq!(filter_by_admission(&mut g, &Admission::default()), 4);
+        // paid leaf: only `all` admits it; legacy kept (compat)
+        let mut g = vec![legacy.clone(), inv.clone(), inv_staked.clone(), all.clone()];
+        let adm = Admission {
+            leaf_source: Some("paid".into()),
+            max_anon: false,
+        };
+        assert_eq!(filter_by_admission(&mut g, &adm), 2);
+        assert!(
+            g.iter()
+                .all(|e| admits_of(e).is_none()
+                    || admits_of(e).unwrap().contains(&"paid".to_string()))
+        );
+        // staked leaf
+        let mut g = vec![legacy.clone(), inv.clone(), inv_staked.clone(), all.clone()];
+        let adm = Admission {
+            leaf_source: Some("staked".into()),
+            max_anon: false,
+        };
+        assert_eq!(filter_by_admission(&mut g, &adm), 3);
+        // max-anon: exactly ["invited"] only; legacy dropped
+        let mut g = vec![legacy.clone(), inv.clone(), inv_staked.clone(), all.clone()];
+        let adm = Admission {
+            leaf_source: Some("invited".into()),
+            max_anon: true,
+        };
+        assert_eq!(filter_by_admission(&mut g, &adm), 1);
+        assert_eq!(admits_of(&g[0]).unwrap(), vec!["invited".to_string()]);
+        // max-anon with no invited-only gateway: empty (caller fails closed)
+        let mut g = vec![legacy.clone(), inv_staked.clone(), all.clone()];
+        assert_eq!(
+            filter_by_admission(
+                &mut g,
+                &Admission {
+                    leaf_source: None,
+                    max_anon: true
+                }
+            ),
+            0
+        );
+        assert!(describe_fleet_admits(&[legacy, all]).contains("(no policy advertised)"));
+    }
 
     fn entry_with(caps: Option<Caps>) -> GatewayEntry {
         GatewayEntry {
@@ -131,7 +273,7 @@ mod tests {
             ports: Some(vec![80, 443]),
             region: Some("eu".to_string()),
             proto: Some(ProtoCaps { min: 3, max: 3 }),
-            artifacts: None,
+            ..Default::default()
         }
     }
 

@@ -50,6 +50,37 @@ from `network/sepolia/bootnode.json` and the client discovers the fleet live ove
 Runnable example: `examples/agent-fetch.mjs`. Verified live end to end (returns rotating
 fleet gateway IPs, laptop IP absent from gateway logs).
 
+## Leaf source + admission filtering + `--max-anon` (T-FEAT-9, both options)
+
+Your leaf lives in ONE set — `members.json` (**invited**), a `StakedReputationSet` (**staked**), or
+the `PaidAccessSet` (**paid**) — and each gateway advertises WHICH of those it admits as signed caps
+(`admits`, in the anonymity order invited > staked > paid; `docs/adr/0008`). The client:
+
+- discovers your **leaf source** (`makeLeafSourceLoader`: members.json first, then the staked sets,
+  then the paid set — `RGOE_LEAF_SOURCE=invited|staked|paid` / `{ leafSource }` / `--leaf-source`
+  pins the set if your leaf is in several), and
+- routes ONLY to gateways whose `admits` include it (`selectCandidates(req, { leafSource, maxAnon })`
+  → `filterByAdmission`). A gateway that advertises no policy is assumed to admit any path during
+  the rollout (logged once); if NO gateway admits your leaf source the client fails closed:
+  `no gateway admits a paid leaf (your leaf source); fleet: abcd..=[invited,staked] efgh..=[invited] …`.
+- `--max-anon` / `RGOE_MAX_ANON=1` / `{ maxAnon: true }`: the maximum-anonymity mode. Only gateways
+  whose `admits` is EXACTLY `["invited"]` (their whole population is invited; a policy-less gateway
+  cannot prove it and is excluded), and the client REFUSES to run with a staked/paid leaf before any
+  proof or dial — `--max-anon: your leaf is in the paid set (the buyer address -> operator transfer
+  and tier bucket are public); an invited-only gateway would reject it (wrong-group-root)…`. No
+  invited-only gateway in the directory: `--max-anon: no invited-only gateway in the directory …
+  fleet: …` (on the sepolia demo fleet neither gateway is invited-only, so an invited member with
+  `--max-anon` gets exactly this refusal — the correct outcome, `network/sepolia/README.md`).
+- A pinned `onion` is honoured as-is (its policy is unknown to the client; a mismatch surfaces as
+  the gateway's `wrong-group-root`), except that `--max-anon` still refuses a staked/paid leaf.
+- Events: `onEvent({ phase:"select", status:"done", leafSource, maxAnon, candidates:[{onion, admits}] })`
+  once selection settles (the shim logs it as `SELECT <target> leaf=paid candidates=…`); `tunnel.rgoe.leafSource`.
+
+```bash
+RGOE_NETWORK=sepolia rgoe client --secret <hex> --max-anon            # invited-only gateways, or a precise refusal
+RGOE_NETWORK=sepolia rgoe client --secret <hex> --leaf-source paid --limit 32   # prove from the paid set; paid-admitting gateways only
+```
+
 ## Option B — shim (`client/shim.mjs`): a local proxy for unmodified tools
 
 Use this when the client is a **stock tool** you can't change (browser, curl, any

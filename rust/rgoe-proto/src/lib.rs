@@ -332,23 +332,166 @@ pub struct Caps {
     /// T-HARD-8: the ZK artifact ids the gateway verifies proofs under (raw; validated,
     /// deduped + sorted by [`canonical_caps`]). Mirrors `caps.artifacts`.
     pub artifacts: Option<Vec<String>>,
+    /// T-FEAT-9: the ADMISSION PATHS the gateway honours (raw; validated against
+    /// [`ADMIT_PATHS`], deduped, put in anonymity order by [`canonical_caps`]).
+    /// Mirrors `caps.admits`. Absent = a legacy gateway (may admit any path).
+    pub admits: Option<Vec<String>>,
+    /// T-FEAT-9: the provider's payment advert when it SELLS access (raw; a half/oversized
+    /// advert is dropped whole by [`canonical_caps`]). Mirrors `caps.pay`.
+    pub pay: Option<PayCaps>,
 }
 
-/// Canonicalized caps: fixed field order (ports, region, proto, artifacts), ports deduped +
-/// sorted ascending, artifacts deduped + sorted, only valid fields retained. The value
-/// [`canonical_caps_json`] serializes and [`has_caps`] tests. Mirrors the object
-/// `canonicalCaps` returns (`lib/directory.mjs:156`).
+/// RAW, untrusted `caps.pay` (T-FEAT-9): `{ protocols, onion?, port, asset, chain, tiers }`.
+/// `tiers` is `(limit, price)` pairs as carried on the wire (object keys/values as strings;
+/// an integer price parses to its decimal string upstream). Validated + normalized only by
+/// [`canonical_pay`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PayCaps {
+    pub protocols: Option<Vec<String>>,
+    pub onion: Option<String>,
+    pub port: Option<i64>,
+    pub asset: Option<String>,
+    pub chain: Option<String>,
+    pub tiers: Option<Vec<(String, String)>>,
+}
+
+/// Canonical `caps.pay`: protocols in the fixed order [`PAY_PROTOCOLS`], onion lowercased
+/// (present only when valid), asset lowercased, tiers sorted by numeric limit. Mirrors the
+/// object `canonicalPay` returns (`lib/directory.mjs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CanonicalPay {
+    pub protocols: Vec<String>,
+    pub onion: Option<String>,
+    pub port: u64,
+    pub asset: String,
+    pub chain: String,
+    pub tiers: Vec<(u64, String)>,
+}
+
+/// Canonicalized caps: fixed field order (ports, region, proto, artifacts, admits, pay), ports
+/// deduped + sorted ascending, artifacts deduped + sorted, admits deduped in anonymity order,
+/// pay normalized, only valid fields retained. The value [`canonical_caps_json`] serializes and
+/// [`has_caps`] tests. Mirrors the object `canonicalCaps` returns (`lib/directory.mjs:156`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CanonicalCaps {
     pub ports: Option<Vec<u64>>,
     pub region: Option<String>,
     pub proto: Option<(u64, u64)>,
     pub artifacts: Option<Vec<String>>,
+    pub admits: Option<Vec<String>>,
+    pub pay: Option<CanonicalPay>,
 }
 
 /// Upper bound on advertised artifact ids (`lib/directory.mjs MAX_CAPS_ARTIFACTS`); a longer
 /// list is dropped entirely by [`canonical_caps`] (an ad can't balloon).
 pub const MAX_CAPS_ARTIFACTS: usize = 8;
+
+/// T-FEAT-9 (docs/adr/0008): the admission paths in ANONYMITY ORDER (most anonymous first) —
+/// `lib/directory.mjs ADMIT_PATHS` / `lib/admission.mjs ADMIT_ORDER`. This order is canonical.
+pub const ADMIT_PATHS: [&str; 3] = ["invited", "staked", "paid"];
+/// T-FEAT-9: the payment rails, fixed order (`lib/directory.mjs PAY_PROTOCOLS`).
+pub const PAY_PROTOCOLS: [&str; 2] = ["x402", "mpp"];
+/// Upper bound on advertised price tiers (`lib/directory.mjs MAX_CAPS_PAY_TIERS`); more (or none)
+/// drops the whole `pay` advert.
+pub const MAX_CAPS_PAY_TIERS: usize = 8;
+
+/// The `admits` field alone (`lib/directory.mjs canonicalAdmits`): valid names, deduped, in
+/// [`ADMIT_PATHS`] order; empty when nothing valid (the caller omits it). TOTAL.
+pub fn canonical_admits(list: &[String]) -> Vec<String> {
+    let lowered: Vec<String> = list.iter().map(|a| a.to_ascii_lowercase()).collect();
+    ADMIT_PATHS
+        .iter()
+        .filter(|p| lowered.iter().any(|a| a == *p))
+        .map(|p| p.to_string())
+        .collect()
+}
+
+fn is_hex_str(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+fn is_canonical_uint(s: &str, max_len: usize) -> bool {
+    !s.is_empty()
+        && s.len() <= max_len
+        && s.bytes().all(|b| b.is_ascii_digit())
+        && !s.starts_with('0')
+}
+/// A v3 onion address shape: 56 base32 chars + `.onion` (lowercased by the caller).
+fn is_v3_onion_shape(o: &str) -> bool {
+    o.len() == 62
+        && o.ends_with(".onion")
+        && o[..56]
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+}
+
+/// The `pay` field alone (`lib/directory.mjs canonicalPay`): `None` unless it forms a complete,
+/// bounded advert (protocols ⊆ PAY_PROTOCOLS non-empty; port 1..=65535; asset 0x-hex-40; chain
+/// `eip155:<1..16 digits, no leading zero>`; 1..=MAX_CAPS_PAY_TIERS tiers with canonical integer
+/// limits 1..=65535 and canonical decimal prices ≤ 40 digits). `onion` kept only when it is a
+/// v3 onion shape (lowercased). TOTAL.
+pub fn canonical_pay(pay: &PayCaps) -> Option<CanonicalPay> {
+    let protos: Vec<String> = pay
+        .protocols
+        .as_ref()
+        .map(|l| l.iter().map(|p| p.to_ascii_lowercase()).collect())
+        .unwrap_or_default();
+    let protocols: Vec<String> = PAY_PROTOCOLS
+        .iter()
+        .filter(|p| protos.iter().any(|a| a == *p))
+        .map(|p| p.to_string())
+        .collect();
+    if protocols.is_empty() {
+        return None;
+    }
+    let onion = pay
+        .onion
+        .as_ref()
+        .map(|o| o.to_ascii_lowercase())
+        .filter(|o| is_v3_onion_shape(o));
+    let port = match pay.port {
+        Some(p) if (1..=65535).contains(&p) => p as u64,
+        _ => return None,
+    };
+    let asset = match &pay.asset {
+        Some(a) if a.len() == 42 && a.starts_with("0x") && is_hex_str(&a[2..]) => {
+            a.to_ascii_lowercase()
+        }
+        _ => return None,
+    };
+    let chain = match &pay.chain {
+        Some(c) if c.starts_with("eip155:") && is_canonical_uint(&c[7..], 16) => c.clone(),
+        _ => return None,
+    };
+    let mut tiers: Vec<(u64, String)> = Vec::new();
+    for (k, v) in pay.tiers.as_deref().unwrap_or(&[]) {
+        if !is_canonical_uint(k, 5) {
+            continue;
+        }
+        let limit: u64 = match k.parse() {
+            Ok(n) if (1..=65535).contains(&n) => n,
+            _ => continue,
+        };
+        if !is_canonical_uint(v, 40) {
+            continue;
+        }
+        if tiers.iter().any(|(l, _)| *l == limit) {
+            continue; // first occurrence wins (a JS object cannot carry a duplicate key anyway)
+        }
+        tiers.push((limit, v.clone()));
+    }
+    tiers.sort_by_key(|(l, _)| *l);
+    if tiers.is_empty() || tiers.len() > MAX_CAPS_PAY_TIERS {
+        return None;
+    }
+    Some(CanonicalPay {
+        protocols,
+        onion,
+        port,
+        asset,
+        chain,
+        tiers,
+    })
+}
 
 /// Normalize raw caps into canonical bucketed form (`lib/directory.mjs:156 canonicalCaps`).
 /// TOTAL: never fails; unknown/invalid fields are dropped; a fully-empty result is returned
@@ -392,6 +535,16 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
             out.artifacts = Some(v);
         }
     }
+    // T-FEAT-9: admission policy + payment advert, appended LAST (in that order), same rule.
+    if let Some(list) = &caps.admits {
+        let v = canonical_admits(list);
+        if !v.is_empty() {
+            out.admits = Some(v);
+        }
+    }
+    if let Some(p) = &caps.pay {
+        out.pay = canonical_pay(p);
+    }
     out
 }
 
@@ -400,7 +553,12 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
 /// when empty, keeping absent/empty-caps records byte-identical to before.
 pub fn has_caps(caps: &Caps) -> bool {
     let c = canonical_caps(caps);
-    c.ports.is_some() || c.region.is_some() || c.proto.is_some() || c.artifacts.is_some()
+    c.ports.is_some()
+        || c.region.is_some()
+        || c.proto.is_some()
+        || c.artifacts.is_some()
+        || c.admits.is_some()
+        || c.pay.is_some()
 }
 
 /// Serialize canonical caps as the exact `JSON.stringify(canonicalCaps(caps))` bytes:
@@ -451,6 +609,56 @@ fn canonical_caps_json(cc: &CanonicalCaps) -> String {
             push_json_string(&mut s, a);
         }
         s.push(']');
+        first = false;
+    }
+    // T-FEAT-9: `admits` then `pay`, exactly as JSON.stringify(canonicalCaps(..)) emits them.
+    if let Some(adm) = &cc.admits {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"admits\":[");
+        for (i, a) in adm.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            push_json_string(&mut s, a);
+        }
+        s.push(']');
+        first = false;
+    }
+    if let Some(p) = &cc.pay {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"pay\":{\"protocols\":[");
+        for (i, a) in p.protocols.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            push_json_string(&mut s, a);
+        }
+        s.push(']');
+        if let Some(o) = &p.onion {
+            s.push_str(",\"onion\":");
+            push_json_string(&mut s, o);
+        }
+        s.push_str(",\"port\":");
+        s.push_str(&p.port.to_string());
+        s.push_str(",\"asset\":");
+        push_json_string(&mut s, &p.asset);
+        s.push_str(",\"chain\":");
+        push_json_string(&mut s, &p.chain);
+        // tiers: JS orders integer-like keys ascending, so `{"8":"..","32":".."}` — same here.
+        s.push_str(",\"tiers\":{");
+        for (i, (l, price)) in p.tiers.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            push_json_string(&mut s, &l.to_string());
+            s.push(':');
+            push_json_string(&mut s, price);
+        }
+        s.push_str("}}");
     }
     s.push('}');
     s

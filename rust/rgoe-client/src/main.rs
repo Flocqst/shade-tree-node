@@ -218,6 +218,7 @@ SUBCOMMANDS:
 
     select <dir-file> --signer <hex> [--seed <n>] [--health-cache <f>]
                       [--port <n>] [--proto <n>] [--region <bucket>]
+                      [--leaf-source invited|staked|paid] [--max-anon]
         Verify the directory, then print the weighted-random chosen gateway onion
         and the full failover order. --seed makes the choice reproducible.
         --health-cache seeds each gateway's health from persisted egress failover
@@ -226,6 +227,14 @@ SUBCOMMANDS:
         only gateways whose SIGNED caps meet it are selected (a no-caps gateway meets
         only the conservative 443/v3 floor; region is never implicit). If no gateway
         qualifies, select fails closed (not-ok) rather than dialing an incapable one.
+        --leaf-source / --max-anon (T-FEAT-9, docs/adr/0008): admission-aware selection.
+        A gateway advertises WHICH admission paths it honours as signed caps.admits
+        (invited > staked > paid, the anonymity order). --leaf-source names the set
+        YOUR leaf is in (RGOE_LEAF_SOURCE): only gateways that admit it are selected
+        (a gateway advertising no policy is kept, rollout compat). --max-anon
+        (RGOE_MAX_ANON=1) keeps ONLY invited-only gateways (admits=[invited]) and
+        refuses a staked/paid leaf source. Neither given = byte-identical selection.
+        The same two flags apply to `egress --directory` / `--bootnode-onion`.
 
     verify-receipt <receipt-file> --onion <onion>
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
@@ -293,6 +302,60 @@ NOTES:
     untrusted JSON and calls those checks. Live network I/O (the RLN prover and the
     embedded-Tor onion dial) is compiled only under `--features live`.
     See docs/adr/0001-client-language.md.";
+
+/// T-FEAT-9: `--leaf-source invited|staked|paid` + `--max-anon` (or RGOE_LEAF_SOURCE /
+/// RGOE_MAX_ANON=1). `--max-anon` with a staked/paid leaf source is refused up front (an
+/// invited-only gateway would reject that proof with wrong-group-root) — see the JS client.
+fn admission_from_args(args: &[String]) -> capability::Admission {
+    let env_src = std::env::var("RGOE_LEAF_SOURCE")
+        .ok()
+        .filter(|s| !s.trim().is_empty() && s.trim() != "auto");
+    let leaf_source = take_flag(args, "--leaf-source")
+        .or(env_src)
+        .map(|s| s.trim().to_ascii_lowercase());
+    let env_max = matches!(
+        std::env::var("RGOE_MAX_ANON")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    );
+    let max_anon = args.iter().any(|a| a == "--max-anon") || env_max;
+    capability::Admission {
+        leaf_source,
+        max_anon,
+    }
+}
+
+fn admission_refusal(adm: &capability::Admission, before: &[rgoe_proto::GatewayEntry]) -> String {
+    if adm.max_anon {
+        return format!(
+            "--max-anon: no invited-only gateway in the directory (a gateway qualifies only when its signed caps say admits=[invited]); fleet: {}",
+            capability::describe_fleet_admits(before)
+        );
+    }
+    format!(
+        "no gateway admits a {} leaf (your leaf source); fleet: {} -- pick a gateway that admits it, or obtain a leaf in a set the fleet admits (docs/CLIENTS.md \"Leaf source\")",
+        adm.leaf_source.as_deref().unwrap_or("?"),
+        capability::describe_fleet_admits(before)
+    )
+}
+
+/// Validate the admission inputs before any dial (a bad name or max-anon over a staked/paid
+/// leaf is a precise refusal, never a wasted proof).
+fn check_admission(adm: &capability::Admission) -> Result<(), String> {
+    if let Some(src) = &adm.leaf_source {
+        if !rgoe_proto::ADMIT_PATHS.contains(&src.as_str()) {
+            return Err(format!(
+                "--leaf-source: expected invited, staked or paid (got {src})"
+            ));
+        }
+        if adm.max_anon && src != "invited" {
+            return Err(format!("--max-anon: your leaf is in the {src} set; an invited-only gateway would reject it (wrong-group-root). Max-anon requires an invited (members.json) leaf -- drop --max-anon to use gateways that admit {src}."));
+        }
+    }
+    Ok(())
+}
 
 /// Extract `--flag <value>` from args, returning the value and the remaining args.
 fn take_flag(args: &[String], flag: &str) -> Option<String> {
@@ -402,6 +465,22 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 "not-ok: no gateway meets capability requirement: {}",
                 req.describe()
             );
+            return ExitCode::from(1);
+        }
+    }
+    // Admission-aware filter (T-FEAT-9). --leaf-source names the set the member's leaf is in;
+    // only gateways whose SIGNED caps.admits include it survive (no policy advertised = kept,
+    // rollout compat). --max-anon keeps ONLY invited-only gateways. Absent both => byte-identical.
+    let adm = admission_from_args(args);
+    if let Err(e) = check_admission(&adm) {
+        println!("not-ok: {e}");
+        return ExitCode::from(1);
+    }
+    if adm.is_active() {
+        let before = dir.gateways.clone();
+        capability::filter_by_admission(&mut dir.gateways, &adm);
+        if dir.gateways.is_empty() {
+            println!("not-ok: {}", admission_refusal(&adm, &before));
             return ExitCode::from(1);
         }
     }
@@ -519,8 +598,8 @@ mod live {
     use serde::Deserialize;
 
     use super::{
-        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, slotcursor,
-        take_flag,
+        admission_from_args, admission_refusal, capability, check_admission, default_seed,
+        dircache, health, mulberry32, now_ms, parse_max_age, read_file, slotcursor, take_flag,
     };
 
     /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
@@ -708,6 +787,23 @@ mod live {
             None
         };
 
+        // Admission-aware filter (T-FEAT-9): route only to gateways whose signed policy admits
+        // this member's leaf source (--leaf-source / RGOE_LEAF_SOURCE), --max-anon = invited-only.
+        let adm = admission_from_args(rest);
+        check_admission(&adm)?;
+        if adm.is_active() {
+            let before = dir.gateways.clone();
+            capability::filter_by_admission(&mut dir.gateways, &adm);
+            if dir.gateways.is_empty() {
+                return Err(admission_refusal(&adm, &before));
+            }
+            eprintln!(
+                "egress: admission filter ({}) kept {} of {} gateway(s)",
+                adm.describe(),
+                dir.gateways.len(),
+                before.len()
+            );
+        }
         let mut rng = mulberry32(default_seed());
         let order = selection_order(&dir, &mut rng);
         if order.is_empty() {

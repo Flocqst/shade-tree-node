@@ -699,16 +699,75 @@ export function filterByCapability(gateways, req) {
   return gateways.filter((g) => gatewayMeetsRequirement(g, req));
 }
 
+// ---- admission-aware selection (T-FEAT-9, docs/adr/0008) ----------------------------------
+// Each gateway advertises WHICH admission paths it honours as signed `caps.admits` (a subset
+// of invited/staked/paid in anonymity order). The client knows which set holds ITS leaf (the
+// leaf SOURCE: members.json => invited, a StakedReputationSet => staked, the PaidAccessSet =>
+// paid) and routes only to gateways that admit it -- a gateway that does not would reject the
+// proof with `wrong-group-root` after a wasted dial.
+//   - `admits` ABSENT (a legacy gateway, or a heartbeat without RGOE_ADMIT) is treated as
+//     "may admit any path" during the rollout window (kept, and logged once) -- the worst case is
+//     the same wrong-group-root reject + failover a pre-T-FEAT-9 client got. docs/CLIENTS.md.
+//   - `maxAnon` (--max-anon / RGOE_MAX_ANON=1): keep ONLY gateways whose admits is EXACTLY
+//     ["invited"] -- the maximum-anonymity fleet: no staked/paid leaves are hidden among the
+//     invited set there, so nothing about a member's on-chain footprint leaks by association.
+//     An absent `admits` cannot prove invited-only and is EXCLUDED under max-anon.
+// Pure + TOTAL. Returns the SAME array reference when neither constraint is active.
+export function admitsOf(entry) {
+  const a = canonicalCaps(entry && entry.caps).admits;
+  return Array.isArray(a) ? a : null;
+}
+export function admissionActive(adm) {
+  return Boolean(adm && typeof adm === "object" && ((adm.leafSource && adm.leafSource !== "auto") || adm.maxAnon));
+}
+let _legacyAdmitsWarned = false;
+export function _resetLegacyAdmitsWarning() { _legacyAdmitsWarned = false; }
+export function filterByAdmission(gateways, adm, { log = console.error } = {}) {
+  if (!admissionActive(adm)) return gateways;
+  const src = adm.leafSource && adm.leafSource !== "auto" ? adm.leafSource : null;
+  let legacy = 0;
+  const kept = gateways.filter((g) => {
+    const admits = admitsOf(g);
+    if (adm.maxAnon) return Array.isArray(admits) && admits.length === 1 && admits[0] === "invited";
+    if (!admits) { legacy++; return true; } // rollout compat: unknown policy => assume it may admit us
+    return admits.includes(src);
+  });
+  if (legacy && !_legacyAdmitsWarned) {
+    _legacyAdmitsWarned = true;
+    log(`selection: ${legacy} gateway(s) advertise no admission policy (legacy / RGOE_ADMIT unset on their heartbeat); assuming they may admit a ${src} leaf -- a wrong guess costs one wrong-group-root reject + failover`);
+  }
+  return kept;
+}
+// One-line fleet policy summary for the fail-closed errors: `gw1=[invited,staked] gw2=(none)`.
+export function describeFleetAdmits(gateways) {
+  return gateways.map((g) => `${String(g.onion || "").slice(0, 12)}..=${admitsOf(g) ? "[" + admitsOf(g).join(",") + "]" : "(no policy advertised)"}`).join(" ") || "(empty directory)";
+}
+
 // Returns an ordered list of candidate gateways to try this CONNECT: the weighted
 // pick first, then failovers. Each is { onion }.
 //
 // `req` (optional, T-FEAT-10): a capability requirement { port?, proto?, region? }. OMITTED or
 // empty => today's behavior exactly. Present => the fleet is pre-filtered to capable gateways
 // and, if none qualify, this throws (fail closed) with a reason naming the requirement.
-export async function selectCandidates(req = null) {
+//
+// `adm` (optional, T-FEAT-9): { leafSource: "invited"|"staked"|"paid", maxAnon: bool }. OMITTED
+// or inactive => no admission filtering (byte-identical). Active => the fleet is pre-filtered to
+// gateways that admit this leaf source (or, under maxAnon, to invited-only gateways) and, if none
+// remain, this throws (fail closed) naming every gateway's advertised policy.
+export async function selectCandidates(req = null, adm = null) {
   const { dir } = await ensureLoaded();
   let gateways = dir.gateways;
   if (VERIFY_STAKE) gateways = await filterReverified(gateways);
+  // Admission-aware filter (T-FEAT-9). Runs FIRST so a policy mismatch is named precisely even
+  // when a capability requirement is also active. Same-reference when inactive.
+  if (admissionActive(adm)) {
+    const before = gateways;
+    gateways = filterByAdmission(gateways, adm);
+    if (gateways.length === 0) {
+      if (adm.maxAnon) throw new Error(`--max-anon: no invited-only gateway in the directory (a gateway qualifies only when its signed caps say admits=[invited]); fleet: ${describeFleetAdmits(before)}`);
+      throw new Error(`no gateway admits a ${adm.leafSource} leaf (your leaf source); fleet: ${describeFleetAdmits(before)} -- pick a gateway that admits ${adm.leafSource}, or obtain a leaf in a set the fleet admits (docs/CLIENTS.md "Leaf source")`);
+    }
+  }
   // Receipt-quality weight adjustment (T-FEAT-22). OFF by default and identity when no gateway has a
   // live tally: applyReceiptWeights returns the SAME array reference, so we fall through to the exact
   // weight-only path below (byte-identical to pre-feature behavior). When it does adjust, it returns
@@ -740,6 +799,8 @@ export async function selectCandidates(req = null) {
     const c = { onion: g.onion.replace(/\.onion$/, "") };
     const arts = canonicalCaps(g.caps).artifacts;
     if (arts) c.artifacts = arts;
+    const admits = admitsOf(g); // T-FEAT-9: the gateway's signed admission policy, when advertised
+    if (admits) c.admits = admits;
     return c;
   });
 }

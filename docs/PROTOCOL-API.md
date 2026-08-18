@@ -94,6 +94,27 @@ Built by `bootnode/announce.mjs:51` `buildAnnounce`; verified by `:80` `verifyAn
 | `onionSig` | hex string | yes | ed25519 over `canonicalAnnounceBytes(rec)`, signed by the onion identity key (`:59`) |
 | `operator` | string | no | Ethereum address, lowercased (`:62`) |
 | `operatorSig` | hex string | no | EIP-191 `personal_sign` over `operatorAuthMessage` (`:63`) |
+| `caps` | object | no | T-FEAT-10 signed capabilities, `canonicalCaps` form (`lib/directory.mjs`): fixed field order `ports, region, proto, artifacts, admits, pay`, each present only when valid; covered by `onionSig` (appended after `nonce` in `canonicalAnnounceBytes`) |
+| `capsSig` | hex string | with `caps` | durable onion-key signature over `canonicalCapsBytes(onion, caps)` (`CAPS_DOMAIN` + `{onion,caps}`); copied verbatim onto the directory entry |
+
+#### 3.0.1 `caps` fields (all bucketed, TOTAL canonicalization: junk dropped, never thrown)
+
+| Field | Canonical form | Bound | Task |
+| --- | --- | --- | --- |
+| `ports` | deduped, ascending integers in 1..65535 | — | T-FEAT-10 |
+| `region` | one of `na sa eu af as oc aq unknown` | — | T-FEAT-10 |
+| `proto` | `{min,max}`, `min>=1`, `max>=min` | — | T-FEAT-11 |
+| `artifacts` | deduped, sorted ids `^[a-z0-9][a-z0-9._-]{0,63}$` | ≤ 8 (`MAX_CAPS_ARTIFACTS`) | T-HARD-8 |
+| `admits` | subset of `invited, staked, paid` in THAT order (the anonymity order, `ADMIT_PATHS`), deduped, lowercased | ≤ 3 by construction | T-FEAT-9 |
+| `pay` | `{ protocols: subset of [x402, mpp] in that order (non-empty), onion?: lowercased v3 onion (only when the registrar rides ANOTHER onion than the gateway's), port: 1..65535, asset: lowercased 0x-hex-40, chain: "eip155:<1..16 digits>", tiers: { "<limit 1..65535, canonical integer key>": "<atomic price, 1..40 decimal digits>" } sorted by numeric limit }`; a `pay` missing any of protocols/port/asset/chain/tiers is dropped WHOLE | 1..8 tiers (`MAX_CAPS_PAY_TIERS`) | T-FEAT-9 |
+
+`admits` is the gateway's ADMISSION POLICY (`RGOE_ADMIT`, `docs/adr/0008`): which membership
+roots it trusts. Absent = a legacy gateway (a client assumes it may admit any path during the
+rollout). `pay` is present iff the provider SELLS access (`RGOE_REGISTRAR_ADVERTISE=1` on its
+heartbeat); its shape is the bootnode `/health` `pay` object plus `onion`. Both are unforgeable
+by the bootnode: they ride under `onionSig` and `capsSig`, so a widened/narrowed policy fails
+`bad-caps-sig` at `verifyAnnounce` / `verifyDirectory`. Pinned: `testdata/vectors.json`
+`admission.capsWithAdmission` (§9).
 
 ### 3.1 Onion-control signature (proof 1, always required)
 
@@ -166,7 +187,9 @@ verified by `:152` `verifyDirectory`.
       "weight": <number>,
       "health": "up",
       "operator": "<addr>",   // present only when the entry had an operator
-      "staked":   <bool>      // present only when the entry had an operator
+      "staked":   <bool>,     // present only when the entry had an operator
+      "caps":     { "ports": [...], "region": "eu", "proto": {...}, "artifacts": [...], "admits": ["invited","staked","paid"], "pay": {...} },  // T-FEAT-10/9: the gateway's SIGNED caps, passed through verbatim (present only when it advertised any)
+      "capsSig":  "<hex ed25519 over canonicalCapsBytes(onion, caps), by the gateway's onion key>"  // required whenever `caps` is present
     }
   ],
   "signer":    "<hex ed25519 pubkey of the pinned signer>",
@@ -175,6 +198,13 @@ verified by `:152` `verifyDirectory`.
 ```
 
 `operator`/`staked` are labels only; they are NOT covered by the signature (section 1.2).
+`caps`/`capsSig` ARE covered (appended after the four legacy fields, `canonicalDirectoryBytes`),
+and `capsSig` is re-verified per entry against the entry's OWN onion key (`bad-caps-sig:<onion>`),
+so neither the bootnode nor the directory signer can alter a gateway's advertised policy/offer.
+The bootnode stores the verified caps + capsSig from the announce and emits them unchanged
+(`bootnode/server.mjs directory()`); an entry announced with caps but no standalone `capsSig`
+is listed cap-free. The delta protocol (`/directory/delta`) re-ships an entry whose body changed
+in place (e.g. its `admits`) in `added`.
 `health` is `"up"` for every live entry the bootnode emits (`bootnode/server.mjs:123`);
 clients still probe and fail over (`lib/directory.mjs:264` `reportHealth`).
 
@@ -320,10 +350,15 @@ report.
 
 ### 5.4 Registrar HTTP API (402 rails, T-FEAT-7) — `payments/registrar.mjs` `makeServer`
 
-The operator's payment endpoint, published as an EXTRA virtual port of the bootnode onion
-(`http://<bootnode-onion>:8878/`, loopback `127.0.0.1:RGOE_REGISTRAR_PORT`). Both machine-payment
-dialects on one route set; wire formats in `payments/wire.mjs`, exact headers/fields in
-`docs/PAYMENTS.md` "Headers (both rails, exact)".
+The operator's payment endpoint, published as an EXTRA virtual port of an onion the box runs:
+the bootnode onion (`http://<bootnode-onion>:8878/`) or — T-FEAT-9 — the GATEWAY onion on a
+gateway-only box (`http://<gateway-onion>:8878/`; the gateway's signed `caps.pay` says where,
+§3.0.1); loopback `127.0.0.1:RGOE_REGISTRAR_PORT`. Both machine-payment dialects on one route
+set — but only the rails the provider ENABLED (`RGOE_PAY_PROTOCOLS`, default both) are served:
+a disabled rail gets NO challenge header in any 402, is absent from `pay.protocols`, and a
+`POST /pay` carrying its header is refused `400 { ok:false, err:"protocol-disabled",
+protocol:"x402"|"mpp", protocols:[<enabled>], detail }` before any parsing. Wire formats in
+`payments/wire.mjs`, exact headers/fields in `docs/PAYMENTS.md` "Headers (both rails, exact)".
 
 | Method | Path | Success | Notes |
 | --- | --- | --- | --- |
@@ -341,7 +376,7 @@ Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
 | --- | --- | --- |
 | 402 | x402: payload rejected (`invalid_payment_payload`, `invalid_x402_version`, `invalid_scheme`, `invalid_network`, `invalid_exact_evm_payload_*`, `insufficient_funds`, `expired`, `not-yet-valid`, `bad-signature`, `nonce-used` (chain), `settle-failed`, `limit-mismatch`) | fresh `PAYMENT-REQUIRED` + `PAYMENT-RESPONSE { success:false, errorReason }` |
 | 402 | MPP: `malformed-credential`, `invalid-challenge` (HMAC/realm/digest/offer drift), `payment-expired`, `verification-failed` (type/nonce/to/value/signature…), `payment-insufficient` | fresh `WWW-Authenticate: Payment …` + `application/problem+json { type:"https://paymentauth.org/problems/<code>", title, status:402, detail, pay }` |
-| 400 | bad JSON / bad body (`bad-body`, `bad-commitment`, `unknown-limit`); MPP `method-unsupported` | `{ ok:false, err }` / problem |
+| 400 | bad JSON / bad body (`bad-body`, `bad-commitment`, `unknown-limit`); MPP `method-unsupported`; a payload for a rail this registrar does not serve (`protocol-disabled`, T-FEAT-9) | `{ ok:false, err }` / problem; `protocol-disabled` adds `protocol` + `protocols:[enabled]` |
 | 409 | `nonce-used` (same authorization, different commitment), `already-member` (commitment live in the set — refused BEFORE settlement), `in-progress` | `{ ok:false, err, detail }` |
 | 413 / 431 / 408 | body > 4 KiB / headers > `maxHeaderSize` / slow client (`HTTP_LIMITS`, T-HARD-4) | |
 | 429 | quote or pay token bucket empty | `{ err:"rate-limited" }` + `Retry-After` |
@@ -490,6 +525,10 @@ Epoch clock: `epoch = floor(nowMs/1000 / EPOCH_SECONDS)`, `EPOCH_SECONDS` defaul
 7. `artifactIdOf` (sha256 prefix of the vkey bytes), `canonicalCaps.artifacts`, and `selectArtifact`
    (T-HARD-8; the Rust client also hash-checks its embedded artifacts against the embedded lock at
    startup, `rust/rgoe-rln/src/artifacts.rs`).
+8. `canonicalCaps.admits` (anonymity order, deduped) and `canonicalCaps.pay` (bounded, numeric tier
+   order) + the admission-aware selection rule (T-FEAT-9: keep gateways whose `admits` include the
+   client's leaf source; absent `admits` = keep; `--max-anon` = exactly `["invited"]`), `rgoe_proto`
+   `canonical_admits` / `canonical_pay`, `rgoe-client` `filter_by_admission`.
 
 ## 8. Ambiguities / notes
 
@@ -523,6 +562,9 @@ Rust client MUST reproduce every BYTE-PINNED value below exactly.
 | `artifacts.reasons` | YES | bounded reason labels `bad-artifact` / `artifact-retired` / `artifact-unknown` / `no-mutual-artifact` / `no-client-artifact` |
 | `artifacts.selection` | YES | `selectArtifact` pick (newest client id the gateway lists) + the byte-exact `no-mutual-artifact:client=…,gateway=…` string |
 | `artifacts.capsWithArtifacts` | YES | `canonicalCaps` with an `artifacts` list (sorted, appended after `proto`), its `canonicalCapsBytes` hex and onion `capsSig`; the no-artifacts `capabilities` vectors are byte-unchanged |
+| `admission.admitPaths` / `payProtocols` / `maxPayTiers` | input | the canonical name orders + the tier bound (T-FEAT-9) |
+| `admission.capsWithAdmission` | YES | `canonicalCaps` with `admits` (deduped, anonymity order) + `pay` (protocol order, lowercased onion/asset, numeric tier keys), appended after `artifacts`; its `canonicalCapsBytes` hex and onion `capsSig`; every earlier caps vector is byte-unchanged |
+| `admission.junk` | input | admits / pay values that MUST canonicalize to ABSENT (unknown names, an empty tier map, an unknown rail, port 70000, 9 tiers, non-canonical tier keys) |
 
 NOT pinned (verify by equivalence, never byte-equality):
 

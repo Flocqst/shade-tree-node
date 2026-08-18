@@ -77,6 +77,9 @@ function startGateway() {
     gw = spawn(process.execPath, [join(ROOT, "gateway", "gateway.mjs")], {
       cwd: ROOT,
       env: { ...process.env,
+        // T-FEAT-9: the gateway admits invited (members.json) ONLY by default; this integration
+        // proves against the staked set, so admit it explicitly (RGOE_ADMIT in the caller's env wins).
+        RGOE_ADMIT: process.env.RGOE_ADMIT || (process.env.RGOE_GROUP_CONTRACT ? "invited,staked" : "invited"),
         RGOE_EPOCH_SECONDS: "120",
         RGOE_SLASH_KEY: slasher.private_key,
         RGOE_SLASH_RECEIVER: slasher.address, // slashed bond -> slasher

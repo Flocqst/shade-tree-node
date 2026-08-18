@@ -1,7 +1,11 @@
 // The registrar: sell membership leaves for a stablecoin over HTTP 402 (T-FEAT-7, Layer 1 of
 // docs/PAYMENTS.md as shipped 2026-08-17). A loopback HTTP service the operator publishes as an
-// extra port of the bootnode onion (HiddenServicePort 8878 127.0.0.1:8878, bootstrap
-// RGOE_REGISTRAR=1), speaking BOTH machine-payment 402 rails over one settlement primitive:
+// extra port of an onion this box already runs (HiddenServicePort 8878 127.0.0.1:8878, bootstrap
+// RGOE_REGISTRAR=1): the BOOTNODE onion on a bootnode+gateway box, the GATEWAY onion on a
+// gateway-only box (T-FEAT-9: every provider may run its own registrar + its own PaidAccessSet
+// and sell access on its own terms; the gateway then advertises `caps.pay`). It speaks the
+// machine-payment 402 rails the provider ENABLES (RGOE_PAY_PROTOCOLS, default both) over one
+// settlement primitive:
 //
 //   x402 v2   402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE     (payments/wire.mjs)
 //   MPP       402 + WWW-Authenticate: Payment / Authorization: Payment / Payment-Receipt
@@ -41,6 +45,8 @@
 //   RGOE_PAY_ASSET              EIP-3009 ERC-20 (Sepolia USDC 0x1c7D4B19…7238, or the test tUSD) REQUIRED
 //   RGOE_PAY_PRICES             per-tier price in the asset's atomic units: "8=100000,32=400000" REQUIRED
 //   RGOE_PAY_TO                 recipient of the stablecoin (default: the operator address)
+//   RGOE_PAY_PROTOCOLS          rails to serve: x402,mpp (default both) or either alone (T-FEAT-9); a
+//                               disabled rail gets no challenge and its payload is refused 400
 //   RGOE_REGISTRAR_PORT         loopback port (default 8878)
 //   RGOE_REGISTRAR_ONION        this service's onion (resource URL + MPP realm; default 127.0.0.1)
 //   RGOE_REGISTRAR_STORE        JSON order store path (default payments/registrar-state.local.json)
@@ -63,6 +69,7 @@ import { ethers } from "ethers";
 import { log } from "../lib/log.mjs";
 import { registry as metrics } from "../lib/metrics.mjs";
 import { networkDefault } from "../lib/network-record.mjs";
+import { parsePayProtocols } from "../lib/admission.mjs";
 import { makeAnnounceBucket, makeGracefulShutdown } from "../bootnode/server.mjs";
 import { EIP3009_ABI, tokenDomain, recoverAuthorization, splitSignature, isAddress, isUintString, sameAddress } from "./eip3009.mjs";
 import {
@@ -162,6 +169,7 @@ export function makeOffer(env = process.env) {
   return {
     asset: ethers.getAddress(env.RGOE_PAY_ASSET),
     tiers,
+    protocols: parsePayProtocols(env.RGOE_PAY_PROTOCOLS), // T-FEAT-9: throws on an unknown rail
     payTo: env.RGOE_PAY_TO ? ethers.getAddress(env.RGOE_PAY_TO) : null, // null => operator address (set in main)
     maxTimeoutSeconds: envInt("RGOE_PAY_TIMEOUT", 600),
     settleBufferSec: envInt("RGOE_PAY_SETTLE_BUFFER", 20),
@@ -373,10 +381,14 @@ function readBody(req, max = MAX_BODY) {
   });
 }
 
+// Which rails this offer serves (T-FEAT-9). An offer built outside makeOffer (tests) defaults to both.
+export const offerProtocols = (offer) => (Array.isArray(offer.protocols) && offer.protocols.length ? offer.protocols : ["x402", "mpp"]);
+export const offerServes = (offer, protocol) => offerProtocols(offer).includes(protocol);
+
 // The public description of the offer (402 body + /health `pay` block + the bootnode's advert).
 export function offerSummary(offer) {
   return {
-    protocols: ["x402", "mpp"],
+    protocols: offerProtocols(offer),
     chain: caip2(offer.chainId),
     chainId: offer.chainId,
     asset: offer.asset,
@@ -399,17 +411,24 @@ export function makeServer(engine, { offer, store, set, limits = {}, now = () =>
   metrics.gauge("rgoe_registrar_orders", "Orders in the registrar store.").setCollect(() => store.size());
   metrics.gauge("rgoe_registrar_inflight", "Settlements currently in flight.").setCollect(() => engine.inflight());
 
-  // Every 402 carries BOTH challenges for the tiers in `limits`, plus the JSON offer as body.
+  const x402On = offerServes(offer, "x402"), mppOn = offerServes(offer, "mpp");
+  const wantHeader = [x402On ? "PAYMENT-SIGNATURE" : null, mppOn ? "Authorization: Payment" : null].filter(Boolean).join(" or ");
+  // Every 402 carries the challenge(s) of the ENABLED rails for the tiers in `limits`
+  // (RGOE_PAY_PROTOCOLS, T-FEAT-9: a disabled rail gets NO challenge), plus the JSON offer as body.
   function send402(res, limitsToOffer, { digest = "", error = null, problem = null, x402Response = null, route = "quote" } = {}) {
     M.quotes.inc({ route });
-    const pr = x402PaymentRequired(offer, limitsToOffer, { error: error || "PAYMENT-SIGNATURE or Authorization: Payment header is required" });
-    const headers = { "payment-required": encodeX402Header(pr) };
-    // One MPP challenge per tier (intent negotiation via multiple challenges is spec'd; we list
-    // each as its own header line so parsers that split on the first comma still work).
-    const challenges = limitsToOffer.map((l) => mppChallenge(offer, l, store.mppSecret(), { digest, nowMs: now() }).header);
-    headers["www-authenticate"] = challenges;
-    if (x402Response) headers["payment-response"] = encodeX402Header(x402Response);
-    const body = { ...(problem || mppProblem("payment-required", "pay for a membership leaf: sign the EIP-3009 authorization from one of the challenges and POST /pay {commitment, limit}")), pay: { ...offerSummary(offer), offered: limitsToOffer } };
+    const headers = {};
+    if (x402On) {
+      const pr = x402PaymentRequired(offer, limitsToOffer, { error: error || `${wantHeader} header is required` });
+      headers["payment-required"] = encodeX402Header(pr);
+    }
+    if (mppOn) {
+      // One MPP challenge per tier (intent negotiation via multiple challenges is spec'd; we list
+      // each as its own header line so parsers that split on the first comma still work).
+      headers["www-authenticate"] = limitsToOffer.map((l) => mppChallenge(offer, l, store.mppSecret(), { digest, nowMs: now() }).header);
+    }
+    if (x402Response && x402On) headers["payment-response"] = encodeX402Header(x402Response);
+    const body = { ...(problem || mppProblem("payment-required", `pay for a membership leaf: sign the EIP-3009 authorization from one of the challenges and POST /pay {commitment, limit} (rails: ${offerProtocols(offer).join(", ")})`)), pay: { ...offerSummary(offer), offered: limitsToOffer } };
     return send(res, 402, body, headers, "application/problem+json");
   }
 
@@ -458,6 +477,10 @@ export function makeServer(engine, { offer, store, set, limits = {}, now = () =>
         if (!x402Header && !authHeader) return send402(res, limits, { digest: raw.length ? contentDigest(raw) : "", route: "pay" });
         if (!payBucket.take()) return send(res, 429, { ok: false, err: "rate-limited" }, { "retry-after": String(payBucket.retryAfterSec()) });
         if (!body || !isCommitment(body.commitment) || bodyLimit == null) return send(res, 400, { ok: false, err: "bad-body", want: "{commitment: <decimal field element>, limit: <tier>}" });
+        // A payload for a rail this provider does not serve (RGOE_PAY_PROTOCOLS, T-FEAT-9) is refused
+        // up front with the enabled list -- never parsed, never a challenge for the disabled rail.
+        if (x402Header && !x402On) { M.payments.inc({ protocol: "x402", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "x402", protocols: offerProtocols(offer), detail: `this registrar does not serve x402 (RGOE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
+        if (!x402Header && authHeader && !mppOn) { M.payments.inc({ protocol: "mpp", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "mpp", protocols: offerProtocols(offer), detail: `this registrar does not serve MPP (RGOE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
 
         // ---- x402 -----------------------------------------------------------------
         if (x402Header) {
@@ -544,7 +567,7 @@ async function main() {
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
   server.listen(offer.port, "127.0.0.1", () => {
     log.info(`registrar up on 127.0.0.1:${offer.port}`, { operator: wallet.address, payTo: offer.payTo, asset: offer.asset, assetName: offer.assetName, chain: caip2(offer.chainId), tiers: offer.tiers, paidAccessSet: setAddr, store: storePath });
-    log.info("endpoints: GET /pay/quote?limit=N  POST /pay  GET /pay/status/<nonce>  GET /health  GET /metrics  (protocols: x402 v2 + MPP evm/charge type=authorization)");
+    log.info(`endpoints: GET /pay/quote?limit=N  POST /pay  GET /pay/status/<nonce>  GET /health  GET /metrics  (protocols: ${offer.protocols.map((p) => (p === "x402" ? "x402 v2" : "MPP evm/charge type=authorization")).join(" + ")}; RGOE_PAY_PROTOCOLS=${offer.protocols.join(",")})`);
     log.info("endpoint hardening", { ...server.limits, maxBody: MAX_BODY });
   });
   const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs: Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000), label: "registrar" });

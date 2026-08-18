@@ -209,6 +209,7 @@ export async function runTierIntegration(opts) {
     gw = startGateway({
       RGOE_RPC_URL: rpcUrl,
       RGOE_GROUP_CONTRACT: set,        // on-chain root mode (NodeRootProvider event reconstruction)
+      RGOE_ADMIT: "staked",            // T-FEAT-9: admit the staked set ALONE (the default would be invited/members.json only)
       RGOE_ROOT_PROVIDER: "node",
       RGOE_CONFIRMATIONS: String(confirmations),
       RGOE_FROM_BLOCK: "0x" + Math.max(0, (txs.stakeALICE.block || 1) - 1).toString(16),
