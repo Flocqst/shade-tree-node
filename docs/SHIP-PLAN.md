@@ -609,6 +609,17 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   token (`0xCe0C9F88…a3A8`; Circle's Sepolia USDC faucet is captcha-gated) — real USDC is a one-env swap. Known limits:
   buyer→operator transfer + tier bucket public on chain (Layer-0 hop is the buyer's choice), operator is its own x402
   facilitator, no leaf expiry (subscription semantics), no insert batching/dwell yet. Original spec: Wire the anonymous-payment design (`docs/PAYMENTS.md`:
+- [x] **T-FEAT-7b (added 2026-08-18) Per-gateway admission policy + per-provider payment rails.** DONE 2026-08-18 (PRs #58/#59,
+  ADR 0008; user decision: each provider chooses what it admits and sells, default = maximum anonymity): gateway `RGOE_ADMIT=
+  invited[,staked][,paid]` (default `invited` even when the network record supplies contracts; `RGOE_ROOTS` deprecated alias),
+  registrar `RGOE_PAY_PROTOCOLS=x402,mpp` (subset; may run on a gateway-only box over the gateway onion), signed caps `admits`
+  + `pay` (bootnode now passes caps through `/directory`), client `RGOE_LEAF_SOURCE` + admits filtering + `--max-anon`
+  (JS + Rust). Live fleet is heterogeneous: gateway-1 `invited,staked,paid` + sells x402/MPP; gateway-2 `invited,staked`;
+  a paid buyer is routed only to gateway-1 (observed); `--max-anon` refuses both today (no invited-only gateway) — by design.
+  Proof: `gateway/gateway.mjs:resolveAdmission`, `lib/admission.mjs`, `client/selection.mjs:filterByAdmission`,
+  `payments/registrar.mjs` protocol gating, `gateway/admission.selftest.mjs`, `test/paid-access.selftest.mjs` §7.
+  Deferred: Rust leaf-source discovery (explicit `--leaf-source` only); tighten "absent admits = any" after the rollout window;
+  `rgoe pay` discovery via `caps.pay`. NOTE: id "T-FEAT-9" is already taken by the threshold-signed directory (loop-3).
   Cashu or an on-chain Privacy-Pools-funded stake) as an optional admission path, so egress can be
   paid-for without rebuilding the identity graph. *Accept:* a paid credential admits a member with
   no link to the funding source; scoped as its own sub-plan.
@@ -1046,3 +1057,7 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   cap on the paid-root scan) hot-fixed and fixed in code (#55: chunked scans, record-derived from-block, fail-soft startup);
   fleet rolled to main@6c4940c. README/JOIN/QUICKSTART/CLIENTS rewritten to the live state (#54). SHIP-PLAN now 111/112:
   only T-HARD-1's human half (the ceremony, issue #6) is open.
+- 2026-08-18  loop-35e  T-FEAT-7b per-gateway admission policy + per-provider rails shipped and rolled (heterogeneous fleet);
+  README overhauled as the front door for the live fleet (#60: use / run / how it works / what is and is not anonymous /
+  not done), SECURITY.md + CONTRIBUTING.md + QUICKSTART intro refreshed. v0.1.1 released with all 12 targets (#57).
+  SHIP-PLAN 112/113: only the ceremony (issue #6) remains.
