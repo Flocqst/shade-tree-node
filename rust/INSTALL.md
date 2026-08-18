@@ -140,7 +140,11 @@ cargo build --release -p rgoe-client --features live  # live client (embeds arti
 The release profile (`opt-level="z"`, `lto`, `codegen-units=1`, `strip`,
 `panic="abort"`, in [`rust/Cargo.toml`](Cargo.toml)) is what keeps the binary small
 and symbol-stripped. The `live` build is heavier (native `wasmer` + `arti`) and
-takes several minutes; the default build is sub-second incremental.
+takes several minutes; the default build is sub-second incremental. It needs a C
+compiler (SQLite for arti's directory cache is compiled in — `arti-client/static-sqlite`
+— so no system `libsqlite3` is required at build or run time) and rustc ≥ 1.91 (arti's
+MSRV); on x86_64 the crate supplies wasmer 4's `__rust_probestack` itself, so any
+current stable toolchain links (see `rgoe-rln/src/prover.rs`).
 
 See [`README.md`](README.md) for the crate layout and the JS↔Rust conformance story,
 and [`../docs/adr/0001-client-language.md`](../docs/adr/0001-client-language.md) for

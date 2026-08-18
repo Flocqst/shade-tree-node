@@ -385,3 +385,116 @@ pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
         share_y: pf_to_dec(&y),
     })
 }
+
+// ---------------------------------------------------------------------------------------
+// `__rust_probestack` shim for wasmer 4 on x86_64 (release-fix, v0.1.1).
+//
+// `wasmer-vm` 4.x (pulled by ark-circom 0.5) unconditionally declares
+// `extern "C" { fn __rust_probestack(); }` on x86_64 non-Windows targets and installs it
+// as the JIT's stack-probe libcall (`wasmer_vm::probestack::PROBESTACK`). Since Rust 1.89
+// `compiler_builtins` no longer exports that symbol under its unmangled name (rustc has
+// used inline-asm stack probes for years, so the intrinsic became internal), which makes
+// every `--features live` link on x86_64-linux fail with
+// `rust-lld: undefined symbol: __rust_probestack ... (wasmer_vm::libcalls::function_pointer)`.
+// wasmer 6.x fixed this by carrying its own copy (`missing_rust_probestack` cfg); we cannot
+// take wasmer 6 without moving the whole prover to ark-circom 0.6 / arkworks 0.6, which is
+// out of scope for a release fix of a trust-critical prover. So we provide the SAME
+// definition here: this is compiler-builtins' `probestack.rs` x86_64 routine, verbatim
+// (Rust Project Developers, MIT/Apache-2.0), the exact bytes rustc <1.89 shipped and the
+// exact bytes wasmer 6 vendors.
+//
+// ABI (defined by LLVM, not a real "C" ABI): frame size in %rax; must return with %rsp and
+// %rax unchanged, clobbering only %r11; touches every page from %rsp+8 down to %rsp+8-%rax
+// so a frame larger than the guard page still faults into the guard page (Stack Clash).
+//
+// Scope: x86_64 only (LLVM only probes on x86/x86_64; aarch64 wasmer uses an empty probe),
+// not Windows (wasmer uses `__chkstk` there). Mach-O spells the symbol `___rust_probestack`.
+// It lives in THIS module (next to `build_envelope`, the only wasmer caller) rather than in
+// its own file so the codegen unit that defines the symbol is always the one already
+// pulled into the link (an rlib is an archive; a member holding only `global_asm!` and no
+// otherwise-referenced item can be skipped by a single-pass linker). Under the release
+// profile (fat LTO) it is one module anyway. Any rustc <1.89 (which still exports the
+// symbol) cannot build `live` at all (arti-client 0.45 needs rustc >= 1.91), so there is no
+// duplicate-definition case to worry about.
+// ---------------------------------------------------------------------------------------
+#[cfg(all(target_arch = "x86_64", not(windows), not(target_vendor = "apple")))]
+core::arch::global_asm!(
+    "
+    .pushsection .text.__rust_probestack
+    .globl __rust_probestack
+    .type  __rust_probestack, @function
+    .hidden __rust_probestack
+__rust_probestack:
+    .cfi_startproc
+    pushq  %rbp
+    .cfi_adjust_cfa_offset 8
+    .cfi_offset %rbp, -16
+    movq   %rsp, %rbp
+    .cfi_def_cfa_register %rbp
+
+    mov    %rax,%r11        // duplicate %rax as we're clobbering %r11
+
+    // Main loop, one page per iteration, until less than a page remains.
+    // `8(%rsp)` accounts for the return address pushed on entry, so the test
+    // happens at the caller's stack pointer.
+    cmp    $0x1000,%r11
+    jna    3f
+2:
+    sub    $0x1000,%rsp
+    test   %rsp,8(%rsp)
+    sub    $0x1000,%r11
+    cmp    $0x1000,%r11
+    ja     2b
+
+3:
+    // Finish the last partial page, then restore %rsp (the caller readjusts).
+    sub    %r11,%rsp
+    test   %rsp,8(%rsp)
+    add    %rax,%rsp
+
+    leave
+    .cfi_def_cfa_register %rsp
+    .cfi_adjust_cfa_offset -8
+    ret
+    .cfi_endproc
+    .size __rust_probestack, . - __rust_probestack
+    .popsection
+    ",
+    options(att_syntax)
+);
+
+// Same routine for x86_64 Mach-O (triple underscore is deliberate; no ELF section/type
+// directives). Not a release target, but keeps `cargo build --features live` working on
+// Intel Macs with rustc >= 1.89.
+#[cfg(all(target_arch = "x86_64", target_vendor = "apple"))]
+core::arch::global_asm!(
+    "
+    .globl ___rust_probestack
+___rust_probestack:
+    .cfi_startproc
+    pushq  %rbp
+    .cfi_adjust_cfa_offset 8
+    .cfi_offset %rbp, -16
+    movq   %rsp, %rbp
+    .cfi_def_cfa_register %rbp
+    mov    %rax,%r11
+    cmp    $0x1000,%r11
+    jna    3f
+2:
+    sub    $0x1000,%rsp
+    test   %rsp,8(%rsp)
+    sub    $0x1000,%r11
+    cmp    $0x1000,%r11
+    ja     2b
+3:
+    sub    %r11,%rsp
+    test   %rsp,8(%rsp)
+    add    %rax,%rsp
+    leave
+    .cfi_def_cfa_register %rsp
+    .cfi_adjust_cfa_offset -8
+    ret
+    .cfi_endproc
+    ",
+    options(att_syntax)
+);
