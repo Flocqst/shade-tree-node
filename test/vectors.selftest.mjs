@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createPublicKey } from "node:crypto";
-import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, signDirectoryThreshold, verifyDirectory, CAPS_DOMAIN, canonicalCaps, canonicalCapsBytes, signCaps } from "../lib/directory.mjs";
+import { ed25519Sign, ed25519PrivateKey, pubkeyToOnion, onionToPubkey, canonicalDirectoryBytes, signDirectory, signDirectoryThreshold, verifyDirectory, CAPS_DOMAIN, canonicalCaps, canonicalCapsBytes, signCaps, verifyCapsSig, ADMIT_PATHS, PAY_PROTOCOLS, MAX_CAPS_PAY_TIERS } from "../lib/directory.mjs";
 import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "../bootnode/announce.mjs";
 import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
@@ -151,6 +151,18 @@ async function main() {
   ok(canonicalCapsBytes(V.onion, cwa.caps).toString("hex") === cwa.canonicalCapsBytesHex, "canonical caps-with-artifacts bytes match the pinned vector");
   ok(signCaps(V.onion, cwa.caps, V.onionSeed) === cwa.capsSig, "caps-with-artifacts onion signature matches the pinned vector (ed25519 determinism)");
   ok(canonicalCapsBytes(V.onion, cap.caps).toString("hex") === cap.canonicalCapsBytesHex, "caps WITHOUT artifacts still serialize byte-identically to the pre-T-HARD-8 vector");
+
+  console.log("\nadmission policy + payment advert caps (T-FEAT-9; additive — every earlier caps vector is UNCHANGED):");
+  const ad = V.admission;
+  ok(JSON.stringify(ADMIT_PATHS) === JSON.stringify(ad.admitPaths) && JSON.stringify(PAY_PROTOCOLS) === JSON.stringify(ad.payProtocols) && MAX_CAPS_PAY_TIERS === ad.maxPayTiers, "ADMIT_PATHS / PAY_PROTOCOLS / MAX_CAPS_PAY_TIERS match the pinned constants");
+  const cwad = ad.capsWithAdmission;
+  ok(JSON.stringify(canonicalCaps(cwad.caps)) === JSON.stringify(cwad.canonical), "canonicalCaps dedups+orders admits (anonymity order), normalizes pay (protocol order, lowercased onion/asset, numeric tier keys), appended after artifacts (pinned canonical form)");
+  ok(canonicalCapsBytes(V.onion, cwad.caps).toString("hex") === cwad.canonicalCapsBytesHex, "canonical caps-with-admission bytes match the pinned vector");
+  ok(signCaps(V.onion, cwad.caps, V.onionSeed) === cwad.capsSig, "caps-with-admission onion signature matches the pinned vector (ed25519 determinism)");
+  ok(verifyCapsSig(V.onion, cwad.caps, cwad.capsSig) === true, "…and verifies against the onion");
+  ok(ad.junk.admits.every((j) => canonicalCaps({ admits: j }).admits === undefined), "junk admits lists canonicalize to NO admits");
+  ok(ad.junk.pay.every((j) => canonicalCaps({ pay: j }).pay === undefined), "junk / oversized / half pay adverts canonicalize to NO pay");
+  ok(canonicalCapsBytes(V.onion, cwa.caps).toString("hex") === cwa.canonicalCapsBytesHex && canonicalCapsBytes(V.onion, cap.caps).toString("hex") === cap.canonicalCapsBytesHex, "caps WITHOUT admits/pay still serialize byte-identically to the pre-T-FEAT-9 vectors");
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: vectors selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);

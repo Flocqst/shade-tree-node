@@ -128,6 +128,35 @@ service, and lets the same parse surface serve both rails and be fuzzed in one p
 | operator linking payment to *use* | it cannot: redemption is a Semaphore/RLN proof over the paid root | timing correlation between an insert and a first use — dwell time (user's choice) |
 | the operator taking money and not inserting | the buyer holds the settle tx hash and the order key; the registrar's store retries the insert on boot; a refusal is visible (payment on chain, no `Inserted`) | buyer–seller trust, irreducible for any prepaid service (as stated below); public evidence makes it reputational |
 
+### Per-provider choice: what a gateway sells, and on which rails (T-FEAT-9, ADR [0008](adr/0008-per-gateway-admission-and-payment-choice.md))
+
+Selling access is EACH provider's decision, not the fleet's:
+
+- **Rails.** `RGOE_PAY_PROTOCOLS=x402,mpp` (default both when the registrar is enabled; any non-empty
+  subset) is what THIS registrar serves. A disabled rail gets no challenge in any 402 (`GET /pay/quote`,
+  the bodied `POST /pay`), is absent from the 402 body's `pay.protocols` and from `/health`, and a
+  `POST /pay` carrying its header (`PAYMENT-SIGNATURE` / `Authorization: Payment`) is refused
+  `400 { err:"protocol-disabled", protocol, protocols:[enabled] }` before any parsing. `rgoe pay
+  --protocol mpp` against an x402-only registrar says so: "this registrar does not serve mpp (it
+  sells via: x402); retry with --protocol x402". x402 and MPP are EQUAL on the anonymity axis (one
+  EIP-3009 transfer either way); the choice is fees, tooling, and the buyer's client.
+- **Where.** A registrar rides an onion the box already runs: the bootnode's (as shipped 2026-08-17)
+  or — a gateway-only box — the GATEWAY's own onion (`bootstrap.sh RGOE_REGISTRAR=1` with
+  `RGOE_BOOTNODE_ONION` set: `HiddenServicePort 8878` in the gateway HS block, `RGOE_REGISTRAR_ONION`
+  = the gateway onion). Every provider may therefore run its own registrar + its own `PaidAccessSet`
+  and sell on its own terms; nothing requires a bootnode.
+- **Advertised where.** The offer (`{protocols, onion?, port, asset, chain, tiers}`) rides in the
+  gateway's SIGNED caps as `caps.pay` (heartbeat `RGOE_REGISTRAR_ADVERTISE=1`; `onion` names the
+  registrar's onion when it is not the gateway's own, e.g. the bootnode's) — and, on a bootnode box,
+  in the bootnode's `/health` `pay` as before. Both may coexist; the caps form is what a client
+  learns from `/directory` and cannot be forged by the bootnode (`docs/PROTOCOL-API.md` §3.0.1).
+- **Admit what you sell.** A gateway must ADMIT paid leaves to sell them: `RGOE_ADMIT` must include
+  `paid` (`bootstrap.sh` refuses `RGOE_REGISTRAR=1` otherwise), and the default policy is `invited`
+  ALONE — a provider that never opts in never admits a paid leaf, whoever inserted it. Conversely a
+  buyer's client routes ONLY to gateways whose `caps.admits` include `paid` (`docs/CLIENTS.md`
+  "Leaf source"): on the sepolia demo fleet that is gateway-1 (`invited,staked,paid`), not gateway-2
+  (`invited,staked`) — `network/sepolia/README.md`.
+
 ### Settle asset on Sepolia
 
 Circle's Sepolia USDC (`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`) implements EIP-3009 (checked

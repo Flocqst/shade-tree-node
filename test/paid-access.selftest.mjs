@@ -18,6 +18,10 @@
 //   - the client's leaf discovery names members.json / staked / paid for the three members;
 //   - static, staked and paid members ALL egress (three roots trusted at once);
 //   - a proof under an unknown root is dropped `gate:wrong-group-root`;
+//   - T-FEAT-9 admission policy: the DEFAULT gateway (RGOE_ADMIT unset) admits invited ONLY even with
+//     the staked + paid contracts configured (a staked member's real proof -> wrong-group-root);
+//     RGOE_ADMIT=invited,staked admits it back and routes slashes over the staked set only; the
+//     deprecated RGOE_ROOTS alias still works with a warning;
 //   - the paid member's over-spend is slashed on the PAID contract (leaf zeroed, root changes) and
 //     the staked contract is untouched.
 //
@@ -162,10 +166,11 @@ async function main() {
     await rpc(url, "evm_mine", []); // head-1 now covers the stake + the deposit
 
     // ---- 3. the REAL gateway: union of the three roots + routing slasher ------------------------
-    gw = startGateway({
+    const gwEnv = {
       RGOE_RPC_URL: url,
       RGOE_GROUP_CONTRACT: staked,
       RGOE_PAID_ACCESS_CONTRACT: paid,
+      RGOE_ADMIT: "invited,staked,paid", // T-FEAT-9: the union is now an EXPLICIT policy (default = invited alone; step 7)
       RGOE_MEMBERS_FILE: membersFile,
       RGOE_ROOT_PROVIDER: "node",
       RGOE_CONFIRMATIONS: "1",
@@ -178,8 +183,11 @@ async function main() {
       RGOE_NETWORK: "",
       RGOE_EGRESS_ALLOW: targetList.join(","),
       RGOE_EPOCH_SECONDS: "120",
-    }, { log: (step, line) => { if (/roots:|paid-access|slash:|SLASH|root source|routed/.test(line)) console.log("    " + line); } });
+    };
+    const gwLog = { log: (step, line) => { if (/roots:|admits:|RGOE_ADMIT|paid-access|slash:|SLASH|root source|routed/.test(line)) console.log("    " + line); } };
+    gw = startGateway(gwEnv, gwLog);
     await gw.ready;
+    ok(/admits: invited\+staked\+paid/.test(gw.out), "startup log: `admits: invited+staked+paid` (RGOE_ADMIT, T-FEAT-9)");
     ok(new RegExp(`roots: members\\.json \\+ staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "startup log: `roots: members.json + staked(0x..) + paid(0x..)`");
     ok(/paid-access anonymity set: 1 leaves \(floor K=8\)/.test(gw.out) && /BELOW the floor/.test(gw.out), "startup log WARNs the paid anonymity set (1 leaf) is below the floor K=8 (and keeps running)");
     ok(new RegExp(`slash: routing over staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "slasher routes over staked + paid");
@@ -232,6 +240,40 @@ async function main() {
     ok(paidRootAfter !== paidRootBefore && paidRootAfter === gZ.root.toString(), "paid currentRoot changed == JS tree with P zeroed in place");
     ok((await stakedC.limitOf(A.leaf)) === 8n && (await stakedC.currentRoot()).toString() === stakedRootBefore, "staked contract untouched (A still tier 8, root unchanged)");
     ok(!/slash: leaf not held by the contract/.test(gw.out), "no default-tier fallback claim was needed (routing resolved the holder)");
+
+    // ---- 7. ADMISSION POLICY (T-FEAT-9): the DEFAULT gateway (RGOE_ADMIT unset) admits invited ONLY;
+    //         the staked member's REAL proof is dropped wrong-group-root; RGOE_ADMIT=invited,staked admits it back.
+    gw.stop();
+    await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
+    const { RGOE_ADMIT: _drop, ...noPolicy } = gwEnv;
+    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "" }, gwLog); // "" = unset for the resolver (contracts STILL configured)
+    await gw.ready;
+    ok(/admits: invited(?!\+)/.test(gw.out) && /RGOE_ADMIT is unset: admitting invited ONLY/.test(gw.out) && new RegExp(`set RGOE_ADMIT=invited,staked,paid`).test(gw.out), "default (RGOE_ADMIT unset, contracts configured): `admits: invited` + a WARN naming the exact RGOE_ADMIT that would trust the configured sets");
+    ok(/roots: members\.json\b/.test(gw.out) && !new RegExp(`staked\\(${staked}\\)`).test(gw.out.split("roots:")[1] || "") && /trustedRoots=1/.test(gw.out), "…roots: members.json alone (trustedRoots=1): the configured staked + paid sets are NOT root sources");
+    ok(!/slash: routing over/.test(gw.out), "…and the slasher does not route over the un-admitted contracts");
+    const envS7 = await buildEnvelope({ secret: S.seed, target: targetList[0], pool: pools.S });
+    ok((await sendEnvelope(envS7.envelope)).ok === true, "invited member S egresses on the invited-only gateway");
+    const envA7 = await buildEnvelope({ secret: A.seed, target: targetList[0], pool: pools.A });
+    const ackA7 = await sendEnvelope(envA7.envelope);
+    ok(ackA7.ok === false && ackA7.err === "gate:wrong-group-root", `staked member A's REAL proof is dropped by the invited-only gateway: ${JSON.stringify(ackA7)}`);
+    gw.stop();
+    await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
+    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "invited,staked" }, gwLog);
+    await gw.ready;
+    {
+      const rootsLine = gw.out.split("\n").find((l) => l.startsWith("roots:")) || "";
+      const slashLines = gw.out.split("\n").filter((l) => /^slash: (routing over|on-chain)/.test(l)).join("\n");
+      // ONE admitted contract => the plain single-contract slasher (`slash: on-chain … via=<staked>`), not the router.
+      ok(/admits: invited\+staked(?!\+)/.test(gw.out) && rootsLine.startsWith(`roots: members.json + staked(${staked}) `) && !rootsLine.includes("paid(") && new RegExp(`slash: on-chain .*via=${staked}`).test(slashLines) && !slashLines.includes(paid), "RGOE_ADMIT=invited,staked: `admits: invited+staked`, roots = members.json + staked only, the slasher targets the staked set only (paid excluded)");
+    }
+    const envA7b = await buildEnvelope({ secret: A.seed, target: targetList[0], pool: pools.A });
+    ok((await sendEnvelope(envA7b.envelope)).ok === true, "staked member A egresses again once the policy admits staked (fresh slot)");
+    // the deprecated alias still works, with a warning
+    gw.stop();
+    await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
+    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "", RGOE_ROOTS: "static,onchain" }, gwLog);
+    await gw.ready;
+    ok(/RGOE_ROOTS is DEPRECATED/.test(gw.out) && /admits: invited\+staked\+paid/.test(gw.out), "RGOE_ROOTS=static,onchain (deprecated alias) -> WARN + admits: invited+staked+paid");
   } finally {
     if (gw) gw.stop();
     for (const t of targets) t.close();

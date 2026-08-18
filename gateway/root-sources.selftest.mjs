@@ -1,5 +1,5 @@
-// T-FEAT-7 gateway unit tests (fast lane, no chain): the root-SOURCE resolution (RGOE_ROOTS /
-// the static+onchain union default), the ABI-file `roots:` startup line, and the ROUTING slasher
+// T-FEAT-7 gateway unit tests (fast lane, no chain): the root-SOURCE resolution (the deprecated
+// RGOE_ROOTS spelling; RGOE_ADMIT proper is gateway/admission.selftest.mjs), the ABI-file `roots:` startup line, and the ROUTING slasher
 // (makeRoutingSlasher over a fake `ethers` — a reconstructed secret is slashed on the contract
 // whose limitOf() holds its leaf; none => the primary gets the default claim). The anvil end-to-end
 // twin is test/paid-access.selftest.mjs (slow lane).
@@ -38,10 +38,12 @@ async function main() {
     ok(r.static === true && r.onchain === false, "no contract, members.json present -> static only (PoC path)");
     r = resolveRootSources({ spec: "", contracts: [], staticExists: false });
     ok(r.static === true && r.onchain === false, "no contract, no members.json -> still static (loadGroup reports the missing file, as before)");
+    // T-FEAT-9 (docs/adr/0008): the default is `invited` (members.json) ALONE even with contracts
+    // configured -- a provider opts into staked/paid via RGOE_ADMIT (gateway/admission.selftest.mjs).
     r = resolveRootSources({ spec: "", contracts: [A], staticExists: true });
-    ok(r.static === true && r.onchain === true, "contract + members.json -> UNION by default (friends keep egressing)");
+    ok(r.static === true && r.onchain === false, "contract + members.json, RGOE_ROOTS/RGOE_ADMIT unset -> invited only (T-FEAT-9 max-anon default; opt in with RGOE_ADMIT)");
     r = resolveRootSources({ spec: "", contracts: [A, P], staticExists: false });
-    ok(r.static === false && r.onchain === true, "contracts, no members.json -> on-chain only");
+    ok(r.static === true && r.onchain === false, "contracts, no members.json, nothing set -> still invited only (initRoots then fails closed on the missing members.json)");
     r = resolveRootSources({ spec: "onchain", contracts: [A], staticExists: true });
     ok(r.static === false && r.onchain === true && r.explicit, "RGOE_ROOTS=onchain -> chain alone even with members.json present");
     r = resolveRootSources({ spec: "static", contracts: [A], staticExists: true });

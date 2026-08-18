@@ -728,7 +728,7 @@ fn vector_caps(v: &Value) -> Caps {
             min: c["proto"]["min"].as_i64().unwrap(),
             max: c["proto"]["max"].as_i64().unwrap(),
         }),
-        artifacts: None,
+        ..Default::default()
     }
 }
 
@@ -869,7 +869,7 @@ fn directory_with_tampered_caps_is_rejected_bad_caps_sig() {
         ports: Some(vec![443]),
         region: Some("eu".to_string()),
         proto: Some(ProtoCaps { min: 3, max: 3 }),
-        artifacts: None,
+        ..Default::default()
     });
     let resig = ed25519_sign(
         &canonical_directory_bytes(&dir),
@@ -904,6 +904,7 @@ fn absent_caps_is_byte_identical_to_no_caps_vector() {
         region: Some("zzz".to_string()),
         proto: Some(ProtoCaps { min: 9, max: 1 }),
         artifacts: Some(vec!["Not An Id".to_string(), String::new()]),
+        ..Default::default()
     });
     dir2.gateways[0].caps_sig = Some("deadbeef".to_string());
     assert_eq!(
@@ -1008,6 +1009,7 @@ fn caps_with_artifacts_match_vector() {
             max: cwa["caps"]["proto"]["max"].as_i64().unwrap(),
         }),
         artifacts: Some(str_vec(&cwa["caps"]["artifacts"])),
+        ..Default::default()
     };
     // canonical form: artifacts deduped + sorted, appended after proto
     let cc = rgoe_proto::canonical_caps(&caps);
@@ -1071,4 +1073,155 @@ fn str_ports(v: &Value) -> Vec<i64> {
         .iter()
         .map(|x| x.as_i64().unwrap())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// T-FEAT-9 per-gateway admission policy + payment advert (`admission` vector)
+// ---------------------------------------------------------------------------
+// Consumes `admission.capsWithAdmission`: caps carrying `admits` + `pay` normalize to the
+// pinned canonical form (admits deduped in ANONYMITY order, pay with fixed protocol order,
+// lowercased onion/asset, numeric-ascending tiers), serialize to the pinned canonical bytes,
+// and re-produce the pinned onion capsSig. Junk/oversized admits/pay canonicalize to ABSENT.
+
+fn vector_pay(p: &Value) -> rgoe_proto::PayCaps {
+    let tiers = p["tiers"].as_object().map(|m| {
+        m.iter()
+            .map(|(k, v)| {
+                let price = match v {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    _ => String::new(),
+                };
+                (k.clone(), price)
+            })
+            .collect::<Vec<_>>()
+    });
+    rgoe_proto::PayCaps {
+        protocols: p["protocols"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        }),
+        onion: p["onion"].as_str().map(String::from),
+        port: p["port"].as_i64(),
+        asset: p["asset"].as_str().map(String::from),
+        chain: p["chain"].as_str().map(String::from),
+        tiers,
+    }
+}
+
+#[test]
+fn caps_with_admission_match_vector() {
+    let v = vectors();
+    let ad = &v["admission"];
+    let cwa = &ad["capsWithAdmission"];
+    let onion = s(&v, "onion");
+    assert_eq!(
+        str_vec(&ad["admitPaths"]),
+        rgoe_proto::ADMIT_PATHS
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        str_vec(&ad["payProtocols"]),
+        rgoe_proto::PAY_PROTOCOLS
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        ad["maxPayTiers"].as_u64().unwrap() as usize,
+        rgoe_proto::MAX_CAPS_PAY_TIERS
+    );
+    let caps = Caps {
+        ports: Some(str_ports(&cwa["caps"]["ports"])),
+        proto: Some(ProtoCaps {
+            min: cwa["caps"]["proto"]["min"].as_i64().unwrap(),
+            max: cwa["caps"]["proto"]["max"].as_i64().unwrap(),
+        }),
+        admits: Some(str_vec(&cwa["caps"]["admits"])),
+        pay: Some(vector_pay(&cwa["caps"]["pay"])),
+        ..Default::default()
+    };
+    let cc = rgoe_proto::canonical_caps(&caps);
+    assert_eq!(
+        cc.admits.as_deref().unwrap(),
+        str_vec(&cwa["canonical"]["admits"]),
+        "admits deduped, anonymity order"
+    );
+    let pay = cc.pay.as_ref().expect("pay canonicalizes");
+    assert_eq!(
+        pay.protocols,
+        str_vec(&cwa["canonical"]["pay"]["protocols"])
+    );
+    assert_eq!(
+        pay.onion.as_deref(),
+        cwa["canonical"]["pay"]["onion"].as_str()
+    );
+    assert_eq!(pay.asset, s(&cwa["canonical"]["pay"], "asset"));
+    assert_eq!(pay.chain, s(&cwa["canonical"]["pay"], "chain"));
+    assert_eq!(pay.port, cwa["canonical"]["pay"]["port"].as_u64().unwrap());
+    let want_tiers: Vec<(u64, String)> = cwa["canonical"]["pay"]["tiers"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.parse::<u64>().unwrap(), v.as_str().unwrap().to_string()))
+        .collect::<Vec<_>>();
+    let mut want_sorted = want_tiers.clone();
+    want_sorted.sort_by_key(|(l, _)| *l);
+    assert_eq!(pay.tiers, want_sorted, "tiers sorted by numeric limit");
+    // bytes + sig byte-pinned
+    assert_eq!(
+        hex::encode(canonical_caps_bytes(onion, &caps)),
+        s(cwa, "canonicalCapsBytesHex")
+    );
+    let sig = ed25519_sign(
+        &canonical_caps_bytes(onion, &caps),
+        &seed32(s(&v, "onionSeed")),
+    );
+    assert_eq!(hex::encode(sig), s(cwa, "capsSig"));
+    assert!(verify_caps_sig(onion, &caps, Some(s(cwa, "capsSig"))));
+    // Widening the policy (grafting `staked`) breaks the onion-bound signature.
+    let mut grafted = caps.clone();
+    grafted.admits.as_mut().unwrap().push("staked".to_string());
+    assert!(!verify_caps_sig(onion, &grafted, Some(s(cwa, "capsSig"))));
+    // admits alone make caps non-empty; junk admits canonicalize to none.
+    assert!(rgoe_proto::has_caps(&Caps {
+        admits: Some(vec!["invited".to_string()]),
+        ..Default::default()
+    }));
+    for j in ad["junk"]["admits"].as_array().unwrap() {
+        let list: Vec<String> = j
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(
+            rgoe_proto::canonical_caps(&Caps {
+                admits: Some(list),
+                ..Default::default()
+            })
+            .admits,
+            None
+        );
+    }
+    for j in ad["junk"]["pay"].as_array().unwrap() {
+        assert_eq!(
+            rgoe_proto::canonical_caps(&Caps {
+                pay: Some(vector_pay(j)),
+                ..Default::default()
+            })
+            .pay,
+            None,
+            "junk pay: {j}"
+        );
+    }
+    // Pre-existing caps vectors are byte-UNCHANGED (admits/pay absent => omitted).
+    let cap = vector_caps(&v);
+    assert_eq!(
+        hex::encode(canonical_caps_bytes(onion, &cap)),
+        s(&v["capabilities"], "canonicalCapsBytesHex")
+    );
 }

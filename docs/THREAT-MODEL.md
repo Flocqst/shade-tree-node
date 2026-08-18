@@ -288,6 +288,46 @@ leaf on the paid set and a staked one its bond; a members.json member is only ev
 slashed as before. **Enforced** in `gateway/gateway.mjs:makeRoutingSlasher`; tested in
 `test/paid-access.selftest.mjs`, `gateway/root-sources.selftest.mjs`. Adversaries A1, A2, A4.
 
+### 4.14c Per-gateway admission policy + `--max-anon` (T-FEAT-9, ADR [0008](adr/0008-per-gateway-admission-and-payment-choice.md))
+What each admission path REVEALS is not the same, so §4.14b's "which ROOT the proof opens" leak has
+three different weights (the ANONYMITY ORDER, most → least):
+
+| leaf source | on-chain footprint of BEING a member | what a proof reveals to the gateway |
+|---|---|---|
+| `invited` (members.json) | none — a leaf in a file only the operator holds | "one of the operator's invited set" |
+| `staked` (`StakedReputationSet`) | the staking wallet ↔ commitment (+ tier bond) is public and permanent; a bonded wallet is linkable to whatever funded it | "one of the staked set" — and the crowd is enumerable on chain |
+| `paid` (`PaidAccessSet`) | the buyer address → operator transfer (amount = the tier price) and the following `Inserted(commitment, limit)` are public; the OPERATOR learns `commitment ↔ payer` (§4.17); x402 and MPP are equal here | "one of the paid set" — enumerable, and each leaf has a payer behind it |
+
+Consequences and what is enforced:
+- A gateway that admits several paths MIXES these crowds; a member's proof still shows only its
+  root, but a member who wants the strongest guarantee should route only to gateways whose whole
+  population is invited. Hence `RGOE_ADMIT` on the gateway (`gateway/gateway.mjs:resolveAdmission`;
+  the DEFAULT is `invited` ALONE, even when contract addresses are configured; a named path whose
+  contract is missing fails CLOSED at startup) and the client's `--max-anon` (`client/selection.mjs
+  filterByAdmission`: keep ONLY gateways whose SIGNED `admits` is exactly `["invited"]`; a
+  policy-less gateway cannot prove it and is EXCLUDED; and the client REFUSES to run with a staked or
+  paid leaf, saying which linkability that leaf carries — an invited-only gateway would reject the
+  proof `wrong-group-root` anyway). Default `--max-anon` OFF: a member routes to whatever admits its
+  leaf source (a leaf source it cannot hide from the gateway either way — the root is public).
+- The policy is a SIGNED cap (`caps.admits`, onion `capsSig` + announce `onionSig`), so a bootnode
+  cannot widen it to lure a paid member onto a gateway that will then log a `wrong-group-root`, nor
+  narrow it to starve one; a client that sees no admitting gateway fails CLOSED naming every
+  gateway's advertised policy rather than dialing blind. Rollout caveat: an ABSENT `admits` is
+  treated as "may admit any path" (except under `--max-anon`), so during the window a paid member may
+  still meet one `wrong-group-root` + failover — exactly the pre-T-FEAT-9 worst case, never worse.
+- What the client's CHOICE leaks: nothing new to the gateway (it already sees the root); to the
+  bootnode nothing (the client fetches the whole directory and filters locally); the leaf-source
+  label appears only in the client's own log/events (`SELECT … leaf=paid`).
+- The registrar's rail choice (`RGOE_PAY_PROTOCOLS`) is a business knob with no anonymity delta
+  (both rails settle the same EIP-3009 transfer, §4.17); a disabled rail's payload is refused
+  `400 protocol-disabled` before any parsing (one less parser reachable by an unauthenticated peer).
+- Slashing routes only over ADMITTED contracts (`makeSlasher({ rootContracts })`): a leaf in an
+  un-admitted set could never have egressed here.
+**Enforced** in `gateway/gateway.mjs:resolveAdmission/initRoots`, `client/selection.mjs:
+filterByAdmission`, `client/rgoe-client.mjs:_admission`, `lib/directory.mjs:canonicalAdmits`;
+tested in `gateway/admission.selftest.mjs`, `client/admission-filter.selftest.mjs`,
+`lib/admission-caps.selftest.mjs`, `test/paid-access.selftest.mjs` §7. Adversaries A1, A2, A4.
+
 ### 4.15 Version-negotiation downgrade resistance
 The gateway declares an inclusive envelope-version range and checks the incoming `v` **before any
 field is read**, so a garbage or out-of-range version never reaches `verifyEnvelope`. **Enforced** by

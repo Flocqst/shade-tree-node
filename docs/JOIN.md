@@ -47,6 +47,14 @@ curl -x http://127.0.0.1:8888 "https://www.google.com/search?q=zk+proofs"
 
 Your traffic goes: your laptop, into Tor, to a rendezvous point, to the gateway's hidden service. The gateway checks your proof and then makes the request from its own clean IP. It never sees your IP. Google never sees Tor. Your search stays inside TLS the whole way, so the gateway sees only `www.google.com:443`, never the query.
 
+Want the strongest guarantee? Add `--max-anon`: your client then uses only gateways that admit
+**invited** members and nobody else (no staked or paid population mixed in), and refuses to run at
+all if your own leaf is staked or paid — it tells you why. If no gateway on the fleet is
+invited-only you get a precise refusal naming each gateway's policy (that is the case on the
+sepolia demo fleet today: gateway-1 admits invited+staked+paid, gateway-2 invited+staked). Without
+`--max-anon` the client simply routes to whichever gateways admit your leaf source (`docs/CLIENTS.md`
+"Leaf source"; `--leaf-source paid` pins the set if you hold more than one leaf).
+
 ## buy access (no key handed to you)
 
 The operator also sells access, so you can buy your own leaf. You need a wallet that holds the
@@ -60,8 +68,14 @@ rgoe pay --network sepolia --limit 8 \
   --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
 RGOE_NETWORK=sepolia rgoe client --secret <your secret> --limit 8   # egress as usual (--limit 32 if you bought tier 32:
-                                                                    # the client finds your leaf in the PAID set and proves against it)
+                                                                    # the client finds your leaf in the PAID set and proves against it,
+                                                                    # and routes ONLY to gateways whose signed policy admits paid leaves)
 ```
+
+A gateway PROVIDER chooses what it admits (`invited`, `staked`, `paid`) and what it sells (which
+402 rails); the operator's `/health` `pay.protocols` (or the gateway's `caps.pay` in the directory)
+lists the rails you can pay with — `rgoe pay --protocol mpp` against an x402-only registrar tells
+you to retry with `--protocol x402`.
 
 `--dry-run` shows the operator's 402 challenge and the exact authorization you would sign, and
 signs nothing. Tier 32 = a bigger per-epoch budget (`--limit 32`, priced higher). Both rails

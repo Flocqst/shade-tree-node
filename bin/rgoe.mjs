@@ -62,7 +62,12 @@ const FLAG_ENV = {
   // identity and register-member alike, so `--limit` maps to it for every command.
   limit: "RGOE_LIMIT",
   "paid-access-contract": "RGOE_PAID_ACCESS_CONTRACT",
-  roots: "RGOE_ROOTS",
+  roots: "RGOE_ROOTS",           // DEPRECATED alias of --admit (T-FEAT-9)
+  // admission policy + payment rails (T-FEAT-9, docs/adr/0008)
+  admit: "RGOE_ADMIT",                     // gateway: invited[,staked][,paid] (default invited = max-anon)
+  "pay-protocols": "RGOE_PAY_PROTOCOLS",   // registrar / bootnode advert: x402,mpp subset
+  "leaf-source": "RGOE_LEAF_SOURCE",       // client: auto|invited|staked|paid
+  "max-anon": "RGOE_MAX_ANON",             // client: only invited-only gateways (bare flag => "true")
 };
 
 // command -> { script, help }. `long` marks a durable service (just for the help hint).
@@ -132,6 +137,7 @@ function topHelp() {
   const order = ["join", "keygen", "bootnode", "heartbeat", "enroll", "identity", "register-member", "pay", "leaves", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "gateway", "client", "doctor", "backup", "restore", "record-deploy"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
+  console.log(`admission (T-FEAT-9): gateway --admit invited[,staked][,paid] (default invited); client --leaf-source auto|invited|staked|paid, --max-anon`);
   console.log(`every --flag maps to an RGOE_* env var (see docs/CLI.md); flags override the environment.`);
   console.log(`--network <name> (RGOE_NETWORK) fills unset discovery/contract vars from network/<name>/{bootnode,contracts}.json.`);
 }

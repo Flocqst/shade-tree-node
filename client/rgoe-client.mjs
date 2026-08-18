@@ -31,6 +31,7 @@ import { currentEpoch, K_SLOTS, normLimit, requestSignal, proveForSlot, loadGrou
 import * as rln from "../lib/rln.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
 import { configuredContracts, loadGroupFromContract } from "../lib/root-provider.mjs";
+import { admitPathOfSource, parseLeafSource, envFlag, ADMIT_ORDER } from "../lib/admission.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -47,25 +48,37 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 //     "not in group", as before), and a missing members.json is that read error.
 //   - `limit` MUST be the tier the leaf was enrolled / staked / paid at (a different limit is a
 //     different leaf) — the discovery error says so.
+//   - `only` (T-FEAT-9, RGOE_LEAF_SOURCE=invited|staked|paid; default "auto"): PIN which set to
+//     look in — `invited` = members.json alone, `staked` = the RGOE_GROUP_CONTRACT sets alone,
+//     `paid` = the PaidAccessSet alone. A member with a leaf in more than one set uses it to
+//     choose which one to prove from (and therefore which gateways admit it).
 export function makeLeafSourceLoader({
   secret, limit = K_SLOTS, env = process.env,
   loadStatic = loadGroup, loadContract = loadGroupFromContract,
   contracts = null, rpcUrl = env.RGOE_RPC_URL || "http://127.0.0.1:8545",
+  only = parseLeafSource(env.RGOE_LEAF_SOURCE),
 } = {}) {
-  const sources = contracts || configuredContracts(env);
+  const all = contracts || configuredContracts(env);
+  const sources = only === "auto" ? all : all.filter((c) => (c.kind || "staked") === only);
+  const wantStatic = only === "auto" || only === "invited";
   const holds = (g, leaf) => !!g && typeof g.indexOf === "function" && g.indexOf(BigInt(leaf)) !== -1;
   return async function discoverGroup() {
-    // Legacy path first (no contract configured): the static group, exactly as before, even
-    // when the leaf is not in it or the secret is not derivable here (fakes in tests).
+    if (only !== "auto" && only !== "invited" && sources.length === 0) {
+      throw new Error(`RgoeClient: RGOE_LEAF_SOURCE=${only} but no ${only} set is configured (set ${only === "paid" ? "RGOE_PAID_ACCESS_CONTRACT" : "RGOE_GROUP_CONTRACT"}, or RGOE_NETWORK with a contracts.json that has one)`);
+    }
+    // Legacy path first (no contract configured / invited pinned): the static group, exactly as
+    // before, even when the leaf is not in it or the secret is not derivable here (fakes in tests).
     if (sources.length === 0) return { ...(await loadStatic()), source: "members.json" };
     const leaf = rln.rateCommitmentOf(rln.identityFor(secret), limit).toString();
     const tried = [];
-    try {
-      const st = await loadStatic();
-      if (holds(st.group, leaf)) return { ...st, source: "members.json" };
-      tried.push(`members.json (${st.count ?? (st.group && st.group.members ? st.group.members.length : "?")} leaves)`);
-    } catch (e) {
-      tried.push(`members.json (unreadable: ${e.message})`);
+    if (wantStatic) {
+      try {
+        const st = await loadStatic();
+        if (holds(st.group, leaf)) return { ...st, source: "members.json" };
+        tried.push(`members.json (${st.count ?? (st.group && st.group.members ? st.group.members.length : "?")} leaves)`);
+      } catch (e) {
+        tried.push(`members.json (unreadable: ${e.message})`);
+      }
     }
     for (const c of sources) {
       const label = `${c.kind || "staked"}(${c.address})`;
@@ -78,7 +91,7 @@ export function makeLeafSourceLoader({
       }
     }
     throw new Error(
-      `RgoeClient: your leaf ${leaf.slice(0, 12)}.. (limit ${limit}) is in none of: ${tried.join(", ")} — ` +
+      `RgoeClient: your leaf ${leaf.slice(0, 12)}.. (limit ${limit}) is in none of: ${tried.join(", ")}${only !== "auto" ? ` (RGOE_LEAF_SOURCE=${only} pins the search to that set)` : ""} — ` +
       "check --limit / RGOE_LIMIT (it must equal the tier you enrolled, staked or paid at), " +
       "or buy access (docs/PAYMENTS.md), stake (`rgoe register-member`), or ask the operator to add you to members.json",
     );
@@ -97,12 +110,16 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
   let cursor = 0;
   let group = null;
   let groupPromise = null;
+  let source = null; // the discovered leaf-source label ("members.json" | "staked(0x..)" | "paid(0x..)"), T-FEAT-9
 
   async function ensureGroup() {
     if (group) return group;
-    if (!groupPromise) groupPromise = Promise.resolve(loadGroupFn()).then((g) => (group = g.group));
+    if (!groupPromise) groupPromise = Promise.resolve(loadGroupFn()).then((g) => { source = g.source ?? source; return (group = g.group); });
     return groupPromise;
   }
+  // The leaf source's ADMISSION PATH (invited|staked|paid) once discovered; null when the loader
+  // did not label its result (a bare loadGroup / a test fake) -- treated as "unknown" by the client.
+  async function leafSource() { await ensureGroup(); return admitPathOfSource(source); }
 
   function rollover(ep) {
     epoch = ep;
@@ -134,7 +151,7 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     return { epoch: ep, slot: i };
   }
 
-  return { ensureEpoch, ensureGroup, nextSlot, K, state: () => ({ epoch, cursor }) };
+  return { ensureEpoch, ensureGroup, leafSource, nextSlot, K, state: () => ({ epoch, cursor, source }) };
 }
 
 // ---- protocol version negotiation (T-FEAT-11) -------------------------------
@@ -322,8 +339,36 @@ export class RgoeClient {
     this.limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS));
     // Which tree holds this member's leaf (T-FEAT-7): members.json, a staked set, or the paid
     // set — discovered lazily on first use (makeLeafSourceLoader); { loadGroupFn } overrides.
-    this.pool = makeSlotPool({ secret: this.secret, K: this.limit, loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit }) });
+    // T-FEAT-9: { leafSource } / RGOE_LEAF_SOURCE pins the set (auto = whichever holds the leaf);
+    // { maxAnon } / RGOE_MAX_ANON=1 routes ONLY to invited-only gateways (and refuses to run with
+    // a staked/paid leaf, which an invited-only gateway would reject with wrong-group-root).
+    this.leafSourcePin = parseLeafSource(opts.leafSource ?? process.env.RGOE_LEAF_SOURCE);
+    this.maxAnon = opts.maxAnon != null ? Boolean(opts.maxAnon) : envFlag(process.env.RGOE_MAX_ANON);
+    if (this.maxAnon && this.leafSourcePin !== "auto" && this.leafSourcePin !== "invited") {
+      throw new Error(`RgoeClient: --max-anon requires an invited (members.json) leaf, but RGOE_LEAF_SOURCE=${this.leafSourcePin} pins a ${this.leafSourcePin} leaf; an invited-only gateway would reject it (wrong-group-root). Drop --max-anon or use an invited leaf.`);
+    }
+    this.pool = makeSlotPool({ secret: this.secret, K: this.limit, loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit, only: this.leafSourcePin }) });
     this.pool.ensureEpoch(); // warm the current epoch in the background
+  }
+
+  // The admission path of THIS member's leaf (T-FEAT-9): the pin when set, else the discovered
+  // source (invited|staked|paid), else "invited" for a loader that does not label its result
+  // (a bare members.json loadGroup / a test fake -- the legacy PoC path is the invited set).
+  async leafSource() {
+    if (this.leafSourcePin !== "auto") return this.leafSourcePin;
+    const s = await this.pool.leafSource();
+    return s || "invited";
+  }
+
+  // The admission constraint handed to selection (T-FEAT-9): which gateways admit our leaf, and
+  // the max-anon rule. Under max-anon a staked/paid leaf is refused HERE, before any dial, with
+  // the reason (an invited-only gateway would reject the proof with wrong-group-root anyway).
+  async _admission() {
+    const leafSource = await this.leafSource();
+    if (this.maxAnon && leafSource !== "invited") {
+      throw new Error(`--max-anon: your leaf is in the ${leafSource} set (${ADMIT_ORDER.indexOf(leafSource) > 0 ? "less anonymous than invited: " : ""}${leafSource === "staked" ? "the staking wallet is linkable to your commitment on chain" : "the buyer address -> operator transfer and tier bucket are public"}); an invited-only gateway would reject it (wrong-group-root). Max-anon requires an invited (members.json) leaf -- drop --max-anon to use gateways that admit ${leafSource}.`);
+    }
+    return { leafSource, maxAnon: this.maxAnon };
   }
 
   async _sel() {
@@ -336,11 +381,19 @@ export class RgoeClient {
   // where `artifacts` is the gateway's SIGNED accepted-artifact ad from the directory (T-HARD-8),
   // when it advertises one.
   async _candidates() {
-    if (this.onion) return [{ onion: this.onion, artifacts: this.gatewayArtifacts }];
+    if (this.onion) {
+      // A pinned onion is the caller's explicit choice: no admission filtering is possible (its
+      // policy is unknown here); a mismatch surfaces as the gateway's wrong-group-root reject.
+      if (this.maxAnon) await this._admission(); // still refuse a staked/paid leaf under max-anon
+      return [{ onion: this.onion, artifacts: this.gatewayArtifacts }];
+    }
     const sel = await this._sel();
     if (sel.directoryEnabled()) {
-      const cands = await sel.selectCandidates();
-      if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null }));
+      // T-FEAT-9: route only to gateways whose signed policy admits OUR leaf source (fail closed
+      // with a precise fleet summary when none does); --max-anon = invited-only gateways only.
+      const adm = await this._admission();
+      const cands = await sel.selectCandidates(null, adm);
+      if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null, admits: c.admits || null }));
     }
     try {
       const host = (await readFile(join(HERE, "..", "tor", "hs", "hostname"), "utf8")).trim();
@@ -394,8 +447,15 @@ export class RgoeClient {
   async connect(target, { onEvent, onion } = {}) {
     const emit = (e) => { try { onEvent?.(e); } catch { /* progress is best-effort */ } };
     // opts.onion pins a specific gateway for this request (else directory/pin/local order).
-    const cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates();
+    let cands;
+    try {
+      cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates();
+    } catch (e) {
+      emit({ phase: "select", status: "error", error: e.message });
+      throw e;
+    }
     const onions = cands.map((c) => c.onion);
+    emit({ phase: "select", status: "done", leafSource: await this.leafSource().catch(() => null), maxAnon: this.maxAnon, candidates: cands.map((c) => ({ onion: c.onion, admits: c.admits || null })) });
 
     // Negotiate the wire version (T-FEAT-11): pick the highest version this client and the gateway
     // both support. With no known gateway range this is just our max (v3 today); if the ranges are
@@ -504,7 +564,7 @@ export class RgoeClient {
     }
 
     const tunnel = tunnelStream(sock, rest);
-    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt, artifact: envelope.artifact };
+    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt, artifact: envelope.artifact, leafSource: await this.leafSource().catch(() => null) };
     return tunnel;
   }
 

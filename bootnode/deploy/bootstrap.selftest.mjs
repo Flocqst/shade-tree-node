@@ -29,6 +29,11 @@
 //   8. RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS (eth_getLogs start blocks, fleet crash-loop 2026-08-17):
 //      passed verbatim into the gateway unit when set, validated up front, everything else
 //      byte-identical; unset == default (golden unchanged).
+//   9. RGOE_ADMIT (T-FEAT-9, docs/adr/0008): DEFAULT `invited` (the golden gateway + heartbeat units
+//      carry Environment=RGOE_ADMIT=invited -- regenerated for this); staked/paid opt-in renders the
+//      contracts + RPC into the gateway unit and is fail-closed on a missing companion; canonical
+//      order; RGOE_PAY_PROTOCOLS subset normalized into registrar + both adverts; RGOE_REGISTRAR=1
+//      requires `paid` admitted; a GATEWAY-ONLY box may run the registrar on the GATEWAY onion.
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -204,7 +209,9 @@ async function main() {
 
     // ---------------------------------------------------------------- 6. helios sidecar (opt-in)
     console.log("RGOE_HELIOS sidecar (T-DEV-9b):");
-    const HEL = { RGOE_HELIOS: "1", RGOE_HELIOS_CONSENSUS_RPC: "https://beacon.example/", RGOE_RPC_URL: "https://rpc.example/v1/KEY", RGOE_GROUP_CONTRACT: "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC" };
+    // T-FEAT-9: the helios sidecar anchors the STAKED (on-chain) root, so it requires an admission
+    // policy that admits staked leaves; RGOE_ADMIT=invited,staked here (default `invited` alone is rejected below).
+    const HEL = { RGOE_HELIOS: "1", RGOE_HELIOS_CONSENSUS_RPC: "https://beacon.example/", RGOE_RPC_URL: "https://rpc.example/v1/KEY", RGOE_GROUP_CONTRACT: "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC", RGOE_ADMIT: "invited,staked" };
     const hel = render(work, "helios", HEL);
     ok(hel.status === 0 && /helios=1/.test(hel.stdout), `RGOE_HELIOS=1 renders (${(hel.stdout || "").trim()})`);
     const helFiles = await readAll(hel.out);
@@ -219,9 +226,10 @@ async function main() {
     const gwH = helFiles.get("etc/systemd/system/rgoe-gateway.service");
     ok(/^After=network-online\.target tor\.service rgoe-helios\.service$/m.test(gwH) && /^Wants=network-online\.target rgoe-helios\.service$/m.test(gwH), "gateway unit ordered after + wants rgoe-helios.service");
     ok(unitEnv(gwH, "RGOE_ROOT_PROVIDER") === "light" && unitEnv(gwH, "RGOE_HELIOS_RPC_URL") === "http://127.0.0.1:8546" && unitEnv(gwH, "RGOE_RPC_URL") === HEL.RGOE_RPC_URL && unitEnv(gwH, "RGOE_GROUP_CONTRACT") === HEL.RGOE_GROUP_CONTRACT, "gateway unit: RGOE_ROOT_PROVIDER=light + RGOE_HELIOS_RPC_URL + RGOE_RPC_URL + RGOE_GROUP_CONTRACT");
-    const stripGw = (u) => u.split("\n").filter((l) => !/^(After=|Wants=|Environment=RGOE_(GROUP_CONTRACT|RPC_URL|ROOT_PROVIDER|HELIOS_RPC_URL)=)/.test(l)).join("\n");
+    const stripGw = (u) => u.split("\n").filter((l) => !/^(After=|Wants=|Environment=RGOE_(GROUP_CONTRACT|RPC_URL|ROOT_PROVIDER|HELIOS_RPC_URL)=)/.test(l)).join("\n").replace("Environment=RGOE_ADMIT=invited,staked", "Environment=RGOE_ADMIT=invited");
     ok(stripGw(gwH) === stripGw(got.get("etc/systemd/system/rgoe-gateway.service")), "gateway unit otherwise identical to the default (sandbox, exec, restart)");
-    for (const f of ["etc/tor/torrc.d-rgoe", "etc/systemd/system/rgoe-bootnode.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(helFiles.get(f) === got.get(f), `helios=1 leaves ${f} byte-identical`);
+    for (const f of ["etc/tor/torrc.d-rgoe", "etc/systemd/system/rgoe-bootnode.service"]) ok(helFiles.get(f) === got.get(f), `helios=1 leaves ${f} byte-identical`);
+    ok(helFiles.get("etc/systemd/system/rgoe-heartbeat.service").replace("Environment=RGOE_ADMIT=invited,staked", "Environment=RGOE_ADMIT=invited") === got.get("etc/systemd/system/rgoe-heartbeat.service"), "helios=1 leaves the heartbeat unit byte-identical apart from advertising RGOE_ADMIT=invited,staked");
     // companions + checkpoint + port + network
     const helCp = render(work, "helios-cp", { ...HEL, RGOE_HELIOS_CHECKPOINT: "0x" + "ab".repeat(32), RGOE_HELIOS_PORT: "9545", RGOE_HELIOS_NETWORK: "mainnet" });
     const huCp = await readFile(join(helCp.out, "etc/systemd/system/rgoe-helios.service"), "utf8");
@@ -235,6 +243,7 @@ async function main() {
       [{ ...HEL, RGOE_RPC_URL: "https://x/;rm -rf /" }, /needs RGOE_RPC_URL/],
       [{ ...HEL, RGOE_GROUP_CONTRACT: "" }, /needs RGOE_GROUP_CONTRACT/],
       [{ ...HEL, RGOE_GROUP_CONTRACT: "0x1234" }, /needs RGOE_GROUP_CONTRACT/],
+      [{ ...HEL, RGOE_ADMIT: "invited" }, /RGOE_HELIOS=1 anchors the ON-CHAIN \(staked\) admission root, but RGOE_ADMIT=invited/],
       [{ ...HEL, RGOE_HELIOS_NETWORK: "goerli" }, /RGOE_HELIOS_NETWORK must be/],
       [{ ...HEL, RGOE_HELIOS_PORT: "80" }, /RGOE_HELIOS_PORT must be/],
       [{ ...HEL, RGOE_HELIOS_PORT: "abc" }, /RGOE_HELIOS_PORT must be/],
@@ -259,7 +268,9 @@ async function main() {
 
     // ---------------------------------------------------------------- 7. 402 registrar (opt-in)
     console.log("RGOE_REGISTRAR (T-FEAT-7):");
-    const REG = { RGOE_REGISTRAR: "1", RGOE_PAID_ACCESS_CONTRACT: "0x1111111111111111111111111111111111111111", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=100000,32=400000", RGOE_RPC_URL: "https://rpc.example/v1/KEY" };
+    // T-FEAT-9: a gateway must ADMIT what it sells, so RGOE_REGISTRAR=1 requires `paid` in RGOE_ADMIT
+    // (the default `invited` alone is rejected below); the gateway unit then carries the paid set + RPC.
+    const REG = { RGOE_REGISTRAR: "1", RGOE_PAID_ACCESS_CONTRACT: "0x1111111111111111111111111111111111111111", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=100000,32=400000", RGOE_RPC_URL: "https://rpc.example/v1/KEY", RGOE_ADMIT: "invited,paid" };
     const reg1 = render(work, "registrar", REG);
     ok(reg1.status === 0 && /registrar=1/.test(reg1.stdout), `RGOE_REGISTRAR=1 renders (${(reg1.stdout || "").trim()})`);
     const regFiles = await readAll(reg1.out);
@@ -274,9 +285,16 @@ async function main() {
     ok(/^User=rgoe$/m.test(ru) && /^NoNewPrivileges=true$/m.test(ru) && /^ProtectSystem=strict$/m.test(ru) && /^CapabilityBoundingSet=$/m.test(ru) && /^SystemCallFilter=@system-service$/m.test(ru) && /^Restart=always$/m.test(ru) && !/MemoryDenyWriteExecute/.test(ru), "registrar unit: same sandbox as the other Node units (no W^X: V8 JIT)");
     const bnR = regFiles.get("etc/systemd/system/rgoe-bootnode.service");
     ok(unitEnv(bnR, "RGOE_REGISTRAR_ADVERTISE") === "1" && unitEnv(bnR, "RGOE_REGISTRAR_PORT") === "8878" && unitEnv(bnR, "RGOE_PAY_ASSET") === REG.RGOE_PAY_ASSET && unitEnv(bnR, "RGOE_PAY_PRICES") === REG.RGOE_PAY_PRICES && unitEnv(bnR, "RGOE_PAY_CHAIN_ID") === "11155111", "bootnode unit advertises the offer (RGOE_REGISTRAR_ADVERTISE=1 + port/asset/prices/chain)");
-    const stripBn = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_(REGISTRAR_ADVERTISE|REGISTRAR_PORT|PAY_ASSET|PAY_PRICES|PAY_CHAIN_ID)=/.test(l)).join("\n");
+    ok(unitEnv(bnR, "RGOE_PAY_PROTOCOLS") === "x402,mpp" && unitEnv(ru, "RGOE_PAY_PROTOCOLS") === "x402,mpp", "default rails x402,mpp rendered into the bootnode advert + the registrar unit (RGOE_PAY_PROTOCOLS, T-FEAT-9)");
+    const stripBn = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_(REGISTRAR_ADVERTISE|REGISTRAR_PORT|PAY_ASSET|PAY_PRICES|PAY_CHAIN_ID|PAY_PROTOCOLS)=/.test(l)).join("\n");
     ok(stripBn(bnR) === got.get("etc/systemd/system/rgoe-bootnode.service"), "bootnode unit otherwise byte-identical to the default");
-    for (const f of ["etc/systemd/system/rgoe-gateway.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(regFiles.get(f) === got.get(f), `registrar=1 leaves ${f} byte-identical`);
+    // T-FEAT-9: the gateway unit admits invited,paid (+ the paid set + RPC it needs); the heartbeat
+    // advertises the SAME policy + the offer as signed caps (RGOE_REGISTRAR_ADVERTISE + RGOE_PAY_* + onion).
+    const gwR = regFiles.get("etc/systemd/system/rgoe-gateway.service"), hbR = regFiles.get("etc/systemd/system/rgoe-heartbeat.service");
+    ok(unitEnv(gwR, "RGOE_ADMIT") === "invited,paid" && unitEnv(gwR, "RGOE_PAID_ACCESS_CONTRACT") === REG.RGOE_PAID_ACCESS_CONTRACT && unitEnv(gwR, "RGOE_RPC_URL") === REG.RGOE_RPC_URL && unitEnv(gwR, "RGOE_GROUP_CONTRACT") === null, "gateway unit: RGOE_ADMIT=invited,paid + RGOE_PAID_ACCESS_CONTRACT + RGOE_RPC_URL (no staked contract)");
+    ok(unitEnv(hbR, "RGOE_ADMIT") === "invited,paid" && unitEnv(hbR, "RGOE_REGISTRAR_ADVERTISE") === "1" && unitEnv(hbR, "RGOE_REGISTRAR_ONION") === unitEnv(ru, "RGOE_REGISTRAR_ONION") && unitEnv(hbR, "RGOE_PAY_ASSET") === REG.RGOE_PAY_ASSET && unitEnv(hbR, "RGOE_PAY_PRICES") === REG.RGOE_PAY_PRICES && unitEnv(hbR, "RGOE_PAY_PROTOCOLS") === "x402,mpp" && unitEnv(hbR, "RGOE_PAY_CHAIN_ID") === "11155111" && unitEnv(hbR, "RGOE_REGISTRAR_PORT") === "8878", "heartbeat unit: same RGOE_ADMIT + the pay advert env (advertised as signed caps.pay; registrar onion = the bootnode's)");
+    const stripAdm = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_(PAID_ACCESS_CONTRACT|RPC_URL|REGISTRAR_ADVERTISE|REGISTRAR_PORT|REGISTRAR_ONION|PAY_ASSET|PAY_PRICES|PAY_CHAIN_ID|PAY_PROTOCOLS)=/.test(l)).join("\n").replace("Environment=RGOE_ADMIT=invited,paid", "Environment=RGOE_ADMIT=invited");
+    for (const f of ["etc/systemd/system/rgoe-gateway.service", "etc/systemd/system/rgoe-heartbeat.service"]) ok(stripAdm(regFiles.get(f)) === got.get(f), `registrar=1 leaves ${f} otherwise byte-identical`);
     const regPT = render(work, "registrar-payto", { ...REG, RGOE_PAY_TO: "0x2222222222222222222222222222222222222222", RGOE_REGISTRAR_PORT: "9878", RGOE_PAY_CHAIN_ID: "1" });
     const ruPT = await readFile(join(regPT.out, "etc/systemd/system/rgoe-registrar.service"), "utf8");
     ok(regPT.status === 0 && unitEnv(ruPT, "RGOE_PAY_TO") === "0x2222222222222222222222222222222222222222" && unitEnv(ruPT, "RGOE_REGISTRAR_PORT") === "9878" && hsBlocks(await readFile(join(regPT.out, "etc/tor/torrc.d-rgoe"), "utf8"))[0].lines[1] === "HiddenServicePort 9878 127.0.0.1:9878" && unitEnv(await readFile(join(regPT.out, "etc/systemd/system/rgoe-bootnode.service"), "utf8"), "RGOE_PAY_CHAIN_ID") === "1", "RGOE_PAY_TO / RGOE_REGISTRAR_PORT / RGOE_PAY_CHAIN_ID passthrough (unit + torrc + advert)");
@@ -289,7 +307,9 @@ async function main() {
       [{ ...REG, RGOE_PAY_TO: "0x12" }, /RGOE_PAY_TO must be/],
       [{ ...REG, RGOE_REGISTRAR_PORT: "80" }, /RGOE_REGISTRAR_PORT must be/],
       [{ ...REG, RGOE_PAY_CHAIN_ID: "sepolia" }, /RGOE_PAY_CHAIN_ID must be/],
-      [{ ...REG, RGOE_BOOTNODE_ONION: ONION }, /needs the bootnode on this box/],
+      [{ ...REG, RGOE_ADMIT: "invited" }, /RGOE_REGISTRAR=1 sells paid leaves but RGOE_ADMIT=invited does not admit them/],
+      [{ ...REG, RGOE_PAY_PROTOCOLS: "lightning" }, /RGOE_PAY_PROTOCOLS must be/],
+      [{ ...REG, RGOE_PAY_PROTOCOLS: "x402,,mpp" }, /RGOE_PAY_PROTOCOLS must be/],
       [{ RGOE_REGISTRAR: "maybe" }, /RGOE_REGISTRAR must be 1 or 0/],
     ];
     for (const [env, re] of rgBad) {
@@ -301,8 +321,10 @@ async function main() {
       const files = await readAll(r.out);
       ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `RGOE_REGISTRAR=${off} == default (opt-in; golden untouched)`);
     }
-    const regHel = render(work, "registrar-helios", { ...REG, ...HEL });
-    ok(regHel.status === 0 && (await readAll(regHel.out)).size === 6, "composes with RGOE_HELIOS=1 (6 files)");
+    const regHel = render(work, "registrar-helios", { ...REG, ...HEL, RGOE_ADMIT: "invited,staked,paid" });
+    ok(regHel.status === 0 && (await readAll(regHel.out)).size === 6, "composes with RGOE_HELIOS=1 (6 files; RGOE_ADMIT=invited,staked,paid admits both what helios anchors and what the registrar sells)");
+    const regHelNoPaid = render(work, "registrar-helios-nopaid", { ...REG, ...HEL });
+    ok(regHelNoPaid.status !== 0 && /RGOE_REGISTRAR=1 sells paid leaves but RGOE_ADMIT=invited,staked does not admit them/.test(regHelNoPaid.stderr), "…and RGOE_HELIOS=1's invited,staked WITHOUT paid is refused when the registrar sells");
 
     // ---------------------------------------------------------------- 8. from-block passthrough
     console.log("RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS (eth_getLogs start blocks):");
@@ -338,6 +360,58 @@ async function main() {
       const files = await readAll(r.out);
       ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `${Object.keys(env)[0]} empty == default (golden untouched)`);
     }
+
+    // ---------------------------------------------------------------- 9. admission policy + rails (T-FEAT-9)
+    console.log("RGOE_ADMIT / RGOE_PAY_PROTOCOLS / registrar on a gateway-only box (T-FEAT-9):");
+    // default = invited: both units carry Environment=RGOE_ADMIT=invited (this IS the golden now)
+    ok(unitEnv(got.get("etc/systemd/system/rgoe-gateway.service"), "RGOE_ADMIT") === "invited" && unitEnv(got.get("etc/systemd/system/rgoe-heartbeat.service"), "RGOE_ADMIT") === "invited", "default render: gateway + heartbeat units carry RGOE_ADMIT=invited (max-anon default; golden regenerated for T-FEAT-9)");
+    ok(!/RGOE_(GROUP_CONTRACT|PAID_ACCESS_CONTRACT|RPC_URL)=/.test(got.get("etc/systemd/system/rgoe-gateway.service")), "default gateway unit carries no contract / RPC (invited needs none)");
+    for (const spelling of ["invited", "INVITED", " invited ", ""]) {
+      const r = render(work, "admit-inv", { RGOE_ADMIT: spelling });
+      const files = await readAll(r.out);
+      ok(r.status === 0 && files.size === got.size && [...got].every(([f, b]) => files.get(f) === b), `RGOE_ADMIT=${JSON.stringify(spelling)} == default (case/space tolerant; empty = the default)`);
+    }
+    const STK = { RGOE_ADMIT: "paid,staked,invited", RGOE_GROUP_CONTRACT: "0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC", RGOE_PAID_ACCESS_CONTRACT: "0x1111111111111111111111111111111111111111", RGOE_RPC_URL: "https://rpc.example/v1/KEY" };
+    const stk = render(work, "admit-all", STK);
+    const stkFiles = await readAll(stk.out);
+    const gwS = stkFiles.get("etc/systemd/system/rgoe-gateway.service"), hbS = stkFiles.get("etc/systemd/system/rgoe-heartbeat.service");
+    ok(stk.status === 0 && /admit=invited,staked,paid/.test(stk.stdout) && unitEnv(gwS, "RGOE_ADMIT") === "invited,staked,paid" && unitEnv(hbS, "RGOE_ADMIT") === "invited,staked,paid", "RGOE_ADMIT=paid,staked,invited -> normalized to the canonical anonymity order invited,staked,paid in both units");
+    ok(unitEnv(gwS, "RGOE_GROUP_CONTRACT") === STK.RGOE_GROUP_CONTRACT && unitEnv(gwS, "RGOE_PAID_ACCESS_CONTRACT") === STK.RGOE_PAID_ACCESS_CONTRACT && unitEnv(gwS, "RGOE_RPC_URL") === STK.RGOE_RPC_URL && unitEnv(gwS, "RGOE_ROOT_PROVIDER") === null, "gateway unit carries the staked + paid contracts + RPC (node provider; helios off)");
+    ok(!/RGOE_(GROUP_CONTRACT|PAID_ACCESS_CONTRACT|RPC_URL)=/.test(hbS), "heartbeat unit carries the policy only (no contracts)");
+    const stripAll = (u) => u.split("\n").filter((l) => !/^Environment=RGOE_(GROUP_CONTRACT|PAID_ACCESS_CONTRACT|RPC_URL)=/.test(l)).join("\n").replace("Environment=RGOE_ADMIT=invited,staked,paid", "Environment=RGOE_ADMIT=invited");
+    ok(stripAll(gwS) === got.get("etc/systemd/system/rgoe-gateway.service") && stripAll(hbS) === got.get("etc/systemd/system/rgoe-heartbeat.service"), "…otherwise byte-identical to the default units");
+    ok(stkFiles.get("etc/tor/torrc.d-rgoe") === torrc && stkFiles.get("etc/systemd/system/rgoe-bootnode.service") === got.get("etc/systemd/system/rgoe-bootnode.service"), "policy does not touch torrc / bootnode unit");
+    const stkOnly = render(work, "admit-staked", { RGOE_ADMIT: "staked", RGOE_GROUP_CONTRACT: STK.RGOE_GROUP_CONTRACT, RGOE_RPC_URL: STK.RGOE_RPC_URL });
+    const gwSO = await readFile(join(stkOnly.out, "etc/systemd/system/rgoe-gateway.service"), "utf8");
+    ok(stkOnly.status === 0 && unitEnv(gwSO, "RGOE_ADMIT") === "staked" && unitEnv(gwSO, "RGOE_GROUP_CONTRACT") === STK.RGOE_GROUP_CONTRACT && unitEnv(gwSO, "RGOE_PAID_ACCESS_CONTRACT") === null, "RGOE_ADMIT=staked alone: staked contract only, no members.json needed, no paid");
+    for (const [env, re] of [
+      [{ RGOE_ADMIT: "onchain" }, /RGOE_ADMIT must be a comma list drawn from invited, staked, paid/],
+      [{ RGOE_ADMIT: "static,onchain" }, /RGOE_ADMIT must be/],
+      [{ RGOE_ADMIT: "invited,,paid" }, /RGOE_ADMIT must be/],
+      [{ RGOE_ADMIT: "invited,staked" }, /RGOE_ADMIT names staked: needs RGOE_GROUP_CONTRACT/],
+      [{ RGOE_ADMIT: "invited,staked", RGOE_GROUP_CONTRACT: "0x12" }, /RGOE_ADMIT names staked: needs RGOE_GROUP_CONTRACT/],
+      [{ RGOE_ADMIT: "invited,paid" }, /RGOE_ADMIT names paid: needs RGOE_PAID_ACCESS_CONTRACT/],
+      [{ RGOE_ADMIT: "invited,staked", RGOE_GROUP_CONTRACT: STK.RGOE_GROUP_CONTRACT }, /RGOE_ADMIT names invited,staked: needs RGOE_RPC_URL/],
+      [{ RGOE_ADMIT: "paid", RGOE_PAID_ACCESS_CONTRACT: STK.RGOE_PAID_ACCESS_CONTRACT, RGOE_RPC_URL: "ftp://x" }, /needs RGOE_RPC_URL/],
+    ]) {
+      const r = render(work, "admit-bad", env);
+      ok(r.status !== 0 && re.test(r.stderr), `rejected up front (fail closed): ${JSON.stringify(env)}`);
+    }
+    // rails subset -> registrar unit + bootnode advert + heartbeat advert all carry it, normalized
+    const mppOnly = render(work, "pay-mpp", { ...REG, RGOE_PAY_PROTOCOLS: "MPP" });
+    const mppFiles = await readAll(mppOnly.out);
+    ok(mppOnly.status === 0 && /pay=mpp/.test(mppOnly.stdout) && ["rgoe-registrar", "rgoe-bootnode", "rgoe-heartbeat"].every((u) => unitEnv(mppFiles.get(`etc/systemd/system/${u}.service`), "RGOE_PAY_PROTOCOLS") === "mpp"), "RGOE_PAY_PROTOCOLS=MPP -> `mpp` in the registrar unit, the bootnode advert and the heartbeat advert");
+    const both = render(work, "pay-both", { ...REG, RGOE_PAY_PROTOCOLS: "mpp,x402" });
+    ok(both.status === 0 && unitEnv(await readFile(join(both.out, "etc/systemd/system/rgoe-registrar.service"), "utf8"), "RGOE_PAY_PROTOCOLS") === "x402,mpp", "RGOE_PAY_PROTOCOLS=mpp,x402 -> canonical order x402,mpp");
+    // registrar on a GATEWAY-ONLY box: rides the gateway onion; heartbeat advertises it; no bootnode unit
+    const gwReg = render(work, "registrar-gw-only", { ...REG, RGOE_BOOTNODE_ONION: ONION });
+    const gwRegFiles = await readAll(gwReg.out);
+    ok(gwReg.status === 0 && [...gwRegFiles.keys()].join(",") === "etc/systemd/system/rgoe-gateway.service,etc/systemd/system/rgoe-heartbeat.service,etc/systemd/system/rgoe-registrar.service,etc/tor/torrc.d-rgoe", `gateway-only + registrar renders gateway + heartbeat + registrar units, no bootnode (${[...gwRegFiles.keys()].join(", ")})`);
+    const gwRegT = hsBlocks(gwRegFiles.get("etc/tor/torrc.d-rgoe"));
+    ok(gwRegT.length === 1 && gwRegT[0].dir === "/var/lib/tor/rgoe-gateway" && gwRegT[0].lines.join("|") === "HiddenServicePort 80 127.0.0.1:8443|HiddenServicePort 8878 127.0.0.1:8878|HiddenServicePoWDefensesEnabled 0", "torrc: ONE HS block (gateway) with port 80 + EXTRA port 8878 (the registrar rides the GATEWAY onion), then the PoW line");
+    const ruG = gwRegFiles.get("etc/systemd/system/rgoe-registrar.service"), hbG = gwRegFiles.get("etc/systemd/system/rgoe-heartbeat.service");
+    ok(unitEnv(ruG, "RGOE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "RGOE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "RGOE_REGISTRAR_ADVERTISE") === "1" && unitEnv(hbG, "RGOE_BOOTNODE_ONION") === ONION + ".onion", "registrar + heartbeat name the GATEWAY onion as the registrar onion; heartbeat still announces to the remote bootnode");
+    ok(unitEnv(gwRegFiles.get("etc/systemd/system/rgoe-gateway.service"), "RGOE_ADMIT") === "invited,paid", "gateway-only gateway unit admits invited,paid");
 
     // ---------------------------------------------------------------- 5. other guards
     console.log("guards:");
