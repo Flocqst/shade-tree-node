@@ -67,10 +67,10 @@ admission, staticDirectory}`; schema in `network/README.md`). Status: **live** s
 | admission | **`stake`** since 2026-08-17 (later): `RGOE_STAKE_MODE=onchain` against `GatewayRegistry` `0x94ECeD0C…A868` (bond 0.001 ETH); the fleet operator `0xc8606C75…7f02` is staked and both heartbeats sign the onion↔operator auth (`announced (staked=true)`), one stake backs both onions (`docs/BOOTNODE.md` "The onion is never on chain") |
 | gateway-1 onion (region `na`, NYC) | `yaxo4ywgoizk4yiylx66k3vjsgcj5waruumgi6dgds4fgaihd2eh7yqd.onion` |
 | gateway-2 onion (region `na`, SFO) | `av4m256h4wwgwdmg74wnqem7s7l333h6755sroydlbcq62ptkmawtwid.onion` (gateway-only box, `bootstrap.sh` `RGOE_BOOTNODE_ONION` mode, T-DEPLOY-2) |
-| gateway slashing | on-chain (`RGOE_SLASH_CONTRACT` = `StakedReputationSet` `0xdAE242AE…20FC`) on both gateways since 2026-08-17 (later) |
+| gateway slashing | on-chain, routed: primary `RGOE_SLASH_CONTRACT` = rln-v4 `StakedReputationSet` `0xFe48De8b…9d25` (flipped from rln-v3 2026-08-17 21:28 UTC), plus `PaidAccessSet` for paid leaves (`makeRoutingSlasher`) |
 | onion PoW | off (`RGOE_ENABLE_POW=0`; a `pow: no` client tor could not reach a PoW onion) |
-| membership root | committed `group/members.json` (PoC fallback), 8 members |
-| ref deployed | droplet-1 `main` @ `cb237e07`; droplet-2 `main` @ `d8a6530` |
+| membership roots | union (`RGOE_ROOTS=static,onchain`): committed `group/members.json` (8 invited) ∪ rln-v4 `StakedReputationSet` `0xFe48De8b…9d25` (staked, tiers 8/32) ∪ `PaidAccessSet` `0x4e8C2Bf5…4111` (bought over 402); since 2026-08-17 23:35 UTC, see `docs/GO-LIVE-LOG-2026-08-17.md` "(payments, later)" |
+| ref deployed | both `main` @ `6c4940c` (2026-08-18 00:06 UTC; earlier `cb237e07` / `d8a6530` / `af225c2`) |
 
 `RGOE_NETWORK=sepolia` now resolves `RGOE_BOOTNODE_ONION` + `RGOE_DIR_SIGNER` to the values
 above, so `RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client` discovers the fleet through the

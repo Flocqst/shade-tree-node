@@ -267,7 +267,7 @@ Boxes: droplet-1 (bootnode + gateway-1) and droplet-2 (gateway-2). Both updated 
 `RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111`,
 `RGOE_GROUP_CONTRACT=0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25` (rln-v4 set),
 `RGOE_ROOTS=static,onchain`, `RGOE_PAID_MIN_LEAVES=8`, and — after the incident below —
-`RGOE_FROM_BLOCK=0xafa5ad`.
+`RGOE_FROM_BLOCK=0xafa30d` (11510541, the rln-v4 deploy block).
 
 ### Incident: gateway crash-loop on the public RPC's eth_getLogs cap (23:34 UTC)
 
@@ -275,7 +275,7 @@ Boxes: droplet-1 (bootnode + gateway-1) and droplet-2 (gateway-2). Both updated 
 |---|---|
 | **symptom** | after `daemon-reload` + restart with the drop-in, `rgoe-gateway` on both boxes crash-looped at startup: `Error: eth_getLogs: exceed maximum block range: 50000` at `lib/root-provider.mjs:139 rpc` ← `:195` (`fetchMemberLogs`) ← `currentRoots` ← `lib/rln.mjs:298 loadGroupOnchain` ← `gateway/gateway.mjs:272 refresh` ← `initRoots`; `main().catch` → exit 1 → systemd `Restart=always` every 3 s. Members.json friends were down too (the process never reached `listen`). |
 | **cause** | `RGOE_FROM_BLOCK` unset ⇒ `fetchMemberLogs` asked for `[0x0, finalized]` in ONE call; the public Sepolia RPC in the record (`ethereum-sepolia-rpc.publicnode.com`) caps one `eth_getLogs` at 50 000 blocks and refuses the call outright. The startup `refresh()` had no fail-soft path, so an unreadable chain source killed the whole gateway even though the static root was loaded. |
-| **fix (live)** | `Environment=RGOE_FROM_BLOCK=0xafa5ad` added to `paid.conf` on both boxes (reported as "11510541, the rln-v4 deploy block"; **note** `0xafa5ad` = 11511213 while 11510541 = `0xafa30d`, and a read-only `eth_getLogs` from `0xafa5ad` on the public RPC returns no events for either set — the boxes evidently scanned enough to yield 3 roots, so verify the exact drop-in value when the code roll happens; with the code fix below the variable is unnecessary), `daemon-reload`, restart. Both gateways came up. |
+| **fix (live)** | `Environment=RGOE_FROM_BLOCK=0xafa30d` (11510541, rln-v4 deploy block; verified on both boxes) added to `paid.conf`, `daemon-reload`, restart. Both gateways came up. Code roll 2026-08-18 00:06 UTC: both boxes to `main@6c4940c` (PR #55), the variable removed from `paid.conf`, gateways restarted, `roots: members.json + staked + paid trustedRoots=3` again with no pin. |
 | **code follow-up** | this PR (`root-provider: chunked eth_getLogs, record-derived from-block, fail-soft startup`): `fetchMemberLogs` pages the scan in `RGOE_LOGS_CHUNK` windows and halves on any range/size refusal; each contract starts at its deploy block from the network record (`fromBlockFor`; `RGOE_FROM_BLOCKS` per set); finalized reads continue incrementally; `initRoots` fails SOFT when a static root exists (`rgoe_gateway_root_source_degraded`) and closed only with no root at all; `bootstrap.sh` passes `RGOE_FROM_BLOCK(S)` into the unit; `docs/OPERATOR.md` "Public RPC log-range caps". The fleet still runs the env hot-fix; the code is rolled separately. |
 
 ### After the fix — observed on both gateways (journal, no IPs)
