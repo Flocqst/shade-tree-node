@@ -62,6 +62,9 @@ const M = {
   // T-FEAT-7: trusted roots per source (source=static|staked|paid, contract=address|members.json)
   // and the paid set's live leaf count (its anonymity set; the floor is RGOE_PAID_MIN_LEAVES).
   rootsBySource: metrics.gauge("rgoe_gateway_trusted_roots", "Trusted admission roots right now, by source (static members.json / staked contract / paid contract)."),
+  // 1 while a root SOURCE could not be read on its last refresh (the gateway keeps serving with the
+  // sources it has: last-known-good roots + members.json), 0 once it reads again. Alert on it.
+  rootDegraded: metrics.gauge("rgoe_gateway_root_source_degraded", "1 = this root source failed its last refresh (serving without it / on its last-known-good); 0 = healthy."),
   paidLeaves: metrics.gauge("rgoe_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet (anonymity set of paid members); compare with the RGOE_PAID_MIN_LEAVES floor."),
 };
 
@@ -142,6 +145,7 @@ let localLeaves = null;
 // Test seam (gateway/*.selftest.mjs, lib/zk-artifacts.selftest.mjs): install the accepted
 // root set directly so a handler can be driven without initRoots()/members.json/a chain.
 export function _setRecentRoots(roots) { recentRoots = new Set(Array.from(roots || []).map(String)); }
+export function _getRecentRoots() { return new Set(recentRoots); }
 
 // resolveSlashTier(identitySecret) -> { commitment, limit, resolved }: the leaf to slash and
 // the tier it sits at. Reputation tiers (T-FEAT-8) make the leaf depend on the member's
@@ -210,14 +214,33 @@ export function describeRootSources({ static: st, contracts = [] } = {}) {
   return "roots: " + (parts.join(" + ") || "(none)");
 }
 
-async function initRoots() {
-  const contracts = configuredContracts();
-  const want = resolveRootSources({ contracts });
-  const rpcUrl = process.env.RGOE_RPC_URL || "http://127.0.0.1:8545";
+// initRoots({ ... }) -> { count, contracts, degraded }: load every configured root source into
+// recentRoots and keep it refreshed. Injectable (contracts / want / loadStatic / makeProvider /
+// watchFile) so gateway/root-sources.selftest.mjs can drive the STARTUP posture without a chain:
+//
+//   FAIL-SOFT vs FAIL-CLOSED at startup (fleet crash-loop 2026-08-17, docs/GO-LIVE-LOG-2026-08-17.md):
+//   an on-chain source that cannot be read at startup (RPC down, log-range cap, bad contract) is
+//   logged LOUDLY (`root source UNAVAILABLE at startup`), gauged rgoe_gateway_root_source_degraded=1,
+//   and retried by the provider's own poll (onChange fires the moment it reads roots) -- PROVIDED
+//   some root is trusted already (the static members.json root, or another chain source). With NO
+//   root at all the gateway still exits nonzero (an admission set of nothing is not a gateway;
+//   systemd restarts it, which is the retry). A source that fails on a LATER refresh keeps its
+//   last-known-good (lib/root-provider.mjs withCache) exactly as before.
+export async function initRoots({
+  contracts = configuredContracts(),
+  want = resolveRootSources({ contracts }),
+  rpcUrl = process.env.RGOE_RPC_URL || "http://127.0.0.1:8545",
+  loadStatic = loadGroup,
+  makeProvider = (addrs) => makeRootProvider(undefined, { contracts: addrs }), // node|light per RGOE_ROOT_PROVIDER
+  watchFile = (path, cb) => watch(path, { persistent: false }, cb),
+  quiet = false,
+} = {}) {
   let staticRoot = null;
   let staticCount = 0;
   let chainRoots = [];
   let perSource = [];
+  const degraded = new Set(); // contracts (lowercased) whose last refresh failed
+  const kindOf = (contract) => (contracts.find((c) => c.address.toLowerCase() === String(contract || "").toLowerCase()) || {}).kind || "staked";
   const recompute = () => {
     const union = new Set();
     if (want.static && staticRoot) union.add(String(staticRoot));
@@ -225,15 +248,15 @@ async function initRoots() {
     recentRoots = union;
     if (want.static) M.rootsBySource.set(staticRoot ? 1 : 0, { source: "static", contract: "members.json" });
     for (const p of perSource) {
-      const kind = (contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked";
-      M.rootsBySource.set(p.roots.length, { source: kind, contract: p.contract || "?" });
+      M.rootsBySource.set(p.roots.length, { source: kindOf(p.contract), contract: p.contract || "?" });
     }
+    if (want.onchain) for (const c of contracts) M.rootDegraded.set(degraded.has(c.address.toLowerCase()) ? 1 : 0, { source: c.kind, contract: c.address });
   };
 
   // Static members.json: root + leaves (leaves feed the local slash-tier resolution).
   if (want.static) {
     const load = async () => {
-      const { root, count, leaves } = await loadGroup();
+      const { root, count, leaves } = await loadStatic();
       staticRoot = root;
       staticCount = count;
       localLeaves = new Set((leaves || []).map(String));
@@ -242,7 +265,7 @@ async function initRoots() {
     };
     await load();
     try {
-      watch(MEMBERS_PATH, { persistent: false }, () => load().catch(() => {}));
+      watchFile(MEMBERS_PATH, () => load().catch(() => {}));
     } catch { /* watch is best-effort */ }
   }
 
@@ -267,18 +290,34 @@ async function initRoots() {
     }
   };
   if (want.onchain) {
-    provider = makeRootProvider(undefined, { contracts: contracts.map((c) => c.address) }); // node|light per RGOE_ROOT_PROVIDER
+    provider = makeProvider(contracts.map((c) => c.address));
     const refresh = async () => {
       const r = await loadGroupOnchain(provider);
       chainRoots = r.recentRoots || [];
       perSource = r.perSource || [{ contract: provider.contract || contracts[0].address, roots: chainRoots.slice(), leafCount: r.leafCount ?? null }];
+      degraded.clear();
+      for (const e of r.errors || []) degraded.add(String(e.contract || "").toLowerCase());
       recompute();
       for (const e of r.errors || []) log.warn("root source failed this refresh; keeping its last-known-good", { contract: e.contract, err: e.error });
     };
-    await refresh();
+    try {
+      await refresh();
+    } catch (e) {
+      // EVERY chain source failed at startup. Fail soft only if some root is already trusted.
+      if (want.static && staticRoot) {
+        for (const c of contracts) degraded.add(c.address.toLowerCase());
+        chainRoots = [];
+        perSource = contracts.map((c) => ({ contract: c.address, roots: [], leafCount: null, error: e.message }));
+        recompute();
+        log.error("root source UNAVAILABLE at startup; serving with members.json only until it reads (retrying every poll; rgoe_gateway_root_source_degraded=1)", { contracts: contracts.map((c) => `${c.kind}(${c.address})`), err: e.message, hint: /block range|exceed/i.test(e.message) ? "public RPC eth_getLogs cap: set RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS to the deploy block(s), or lower RGOE_LOGS_CHUNK (docs/OPERATOR.md 'public RPC log-range caps')" : undefined });
+      } else {
+        throw new Error(`no admission root available: ${e.message} (and no static members.json root to fall back on) -- refusing to start with an empty admission set`);
+      }
+    }
     provider.onChange?.(() => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
   }
   recompute();
+  if (quiet) return { count: want.static ? staticCount : null, contracts, degraded: Array.from(degraded), provider };
 
   // Startup lines. `root source: on-chain RootProvider` / `members.json (PoC fallback)` are the
   // pre-T-FEAT-7 substrings scripts grep; the ABI-file `roots:` line names every source.
@@ -296,7 +335,7 @@ async function initRoots() {
     ...Object.fromEntries(perSource.map((p) => [`${(contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked"}:${String(p.contract || "").slice(0, 10)}`, p.roots.length])),
   });
   if (want.onchain) await checkPaidFloor(true);
-  return { count: want.static ? staticCount : null, contracts };
+  return { count: want.static ? staticCount : null, contracts, degraded: Array.from(degraded), provider };
 }
 
 // ---- share-collecting spent-set (RLN slashing at PoC fidelity) --------------

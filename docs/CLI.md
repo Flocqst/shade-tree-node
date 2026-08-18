@@ -78,4 +78,4 @@ Every `--flag` sets exactly one `RGOE_*` env var (from `FLAG_ENV` in `bin/rgoe.m
 | `--register-key` | `RGOE_REGISTER_KEY` | gateway announce / heartbeat |
 | `--bond` | `RGOE_BOND` | gateway announce / heartbeat |
 
-Some env vars have no flag and must be set in the environment directly: `RGOE_SLASH_RECEIVER`, `RGOE_MEMBERS_FILE`, `RGOE_PAID_MIN_LEAVES`, `RGOE_CONFIRMATIONS`, `RGOE_STAKE_CACHE_MS`, `RGOE_FRESHNESS_ROOTS`, `RGOE_FROM_BLOCK`, `RGOE_DIRECTORY_CACHE`, `RGOE_DIRECTORY_REFRESH_MS`, `RGOE_SLOTS`, `RGOE_RLN_IDENTIFIER`, and the demo/test vars. See `docs/CONFIG.md`.
+Some env vars have no flag and must be set in the environment directly: `RGOE_SLASH_RECEIVER`, `RGOE_MEMBERS_FILE`, `RGOE_PAID_MIN_LEAVES`, `RGOE_CONFIRMATIONS`, `RGOE_STAKE_CACHE_MS`, `RGOE_FRESHNESS_ROOTS`, `RGOE_FROM_BLOCK`, `RGOE_FROM_BLOCKS`, `RGOE_LOGS_CHUNK`, `RGOE_DIRECTORY_CACHE`, `RGOE_DIRECTORY_REFRESH_MS`, `RGOE_SLOTS`, `RGOE_RLN_IDENTIFIER`, and the demo/test vars. See `docs/CONFIG.md`.

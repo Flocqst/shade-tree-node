@@ -254,6 +254,48 @@ waiting; nothing about the purchase has to be redone.
 
 ### Left open (payments)
 
-1. Egress-after-purchase (above) — one gateway env change after #51 merges.
+1. Egress-after-purchase (above) — one gateway env change after #51 merges. **DONE later tonight**, see the next section.
 2. Real USDC instead of tUSD: `RGOE_PAY_ASSET=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` in the registrar unit (+ prices in 6-dec USDC), restart. Needs a funded buyer.
 3. Insert batching / dwell time (blur the settle→insert chain-timing link) — `insertBatch` exists on the contract; the registrar inserts per order today.
+
+## 2026-08-17 (payments, later): gateways trust the paid set + buy→egress proven `[RECEIPT T-FEAT-7 egress-after-purchase]`
+
+Boxes: droplet-1 (bootnode + gateway-1) and droplet-2 (gateway-2). Both updated to
+`main@af225c2` (PR #51 merged). No funds moved in this step (reads + Tor traffic only).
+
+**Config (drop-in `/etc/systemd/system/rgoe-gateway.service.d/paid.conf` on BOTH gateways):**
+`RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111`,
+`RGOE_GROUP_CONTRACT=0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25` (rln-v4 set),
+`RGOE_ROOTS=static,onchain`, `RGOE_PAID_MIN_LEAVES=8`, and — after the incident below —
+`RGOE_FROM_BLOCK=0xafa5ad`.
+
+### Incident: gateway crash-loop on the public RPC's eth_getLogs cap (23:34 UTC)
+
+| | |
+|---|---|
+| **symptom** | after `daemon-reload` + restart with the drop-in, `rgoe-gateway` on both boxes crash-looped at startup: `Error: eth_getLogs: exceed maximum block range: 50000` at `lib/root-provider.mjs:139 rpc` ← `:195` (`fetchMemberLogs`) ← `currentRoots` ← `lib/rln.mjs:298 loadGroupOnchain` ← `gateway/gateway.mjs:272 refresh` ← `initRoots`; `main().catch` → exit 1 → systemd `Restart=always` every 3 s. Members.json friends were down too (the process never reached `listen`). |
+| **cause** | `RGOE_FROM_BLOCK` unset ⇒ `fetchMemberLogs` asked for `[0x0, finalized]` in ONE call; the public Sepolia RPC in the record (`ethereum-sepolia-rpc.publicnode.com`) caps one `eth_getLogs` at 50 000 blocks and refuses the call outright. The startup `refresh()` had no fail-soft path, so an unreadable chain source killed the whole gateway even though the static root was loaded. |
+| **fix (live)** | `Environment=RGOE_FROM_BLOCK=0xafa5ad` added to `paid.conf` on both boxes (reported as "11510541, the rln-v4 deploy block"; **note** `0xafa5ad` = 11511213 while 11510541 = `0xafa30d`, and a read-only `eth_getLogs` from `0xafa5ad` on the public RPC returns no events for either set — the boxes evidently scanned enough to yield 3 roots, so verify the exact drop-in value when the code roll happens; with the code fix below the variable is unnecessary), `daemon-reload`, restart. Both gateways came up. |
+| **code follow-up** | this PR (`root-provider: chunked eth_getLogs, record-derived from-block, fail-soft startup`): `fetchMemberLogs` pages the scan in `RGOE_LOGS_CHUNK` windows and halves on any range/size refusal; each contract starts at its deploy block from the network record (`fromBlockFor`; `RGOE_FROM_BLOCKS` per set); finalized reads continue incrementally; `initRoots` fails SOFT when a static root exists (`rgoe_gateway_root_source_degraded`) and closed only with no root at all; `bootstrap.sh` passes `RGOE_FROM_BLOCK(S)` into the unit; `docs/OPERATOR.md` "Public RPC log-range caps". The fleet still runs the env hot-fix; the code is rolled separately. |
+
+### After the fix — observed on both gateways (journal, no IPs)
+
+- `roots: members.json + staked(0xFe48…) + paid(0x4e8C…) trustedRoots=3` — three sources unioned.
+- `paid-access anonymity set: 3 leaves (floor K=8) — BELOW the floor` (the smoke leaf + the two
+  buyers; warned, not refused, as designed).
+
+### Buy → egress (laptop, over Tor)
+
+| buyer | command | result |
+|---|---|---|
+| x402 buyer (leaf index 1, tier 8; a member secret that was NEVER enrolled in members.json nor staked) | `RGOE_NETWORK=sepolia rgoe client --limit 8` (+ `RGOE_FROM_BLOCK`, see note) | egressed **3/3** requests via **gateway-2** (`av4m256h…`); `curl -x 127.0.0.1:8888 https://api.ipify.org` returned gateway-2's exit IP |
+| MPP buyer (leaf index 2, tier 32) | `… rgoe client --limit 32` | egressed via **gateway-1** (`yaxo4ywg…`) |
+
+The client needed `RGOE_FROM_BLOCK` as well (its leaf discovery rebuilds the paid tree from the
+same event log over the same public RPC and hit the same 50k cap) — this PR makes that unnecessary
+on the client too (`loadGroupFromContract` pages and starts at the record's deploy block).
+
+**T-FEAT-7 is complete end to end:** 402 quote → x402 / MPP settlement → operator insert → paid
+root trusted by the fleet → the buyer egresses with a proof under the PAID tree, indistinguishable
+on the wire from a staked or members.json member.
+

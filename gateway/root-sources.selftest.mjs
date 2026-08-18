@@ -6,7 +6,8 @@
 //
 //   node gateway/root-sources.selftest.mjs
 
-import { resolveRootSources, describeRootSources, makeRoutingSlasher, makeOnchainSlasher, PAID_MIN_LEAVES } from "./gateway.mjs";
+import { resolveRootSources, describeRootSources, makeRoutingSlasher, makeOnchainSlasher, PAID_MIN_LEAVES, initRoots, _getRecentRoots, _setRecentRoots } from "./gateway.mjs";
+import { registry as gatewayMetrics } from "../lib/metrics.mjs";
 import { identityFor, identitySecretOf, deriveCommitment, K_SLOTS } from "../lib/rln.mjs";
 
 let failures = 0;
@@ -103,6 +104,63 @@ async function main() {
     // single-contract slasher: holds() exposed
     const single = await makeOnchainSlasher({ ethers, wallet, address: "0xP", receiver: "0xR" });
     ok((await single.holds(secret)).limit === 32 && (await single.holds(secretC)) === null && single.address === "0xP", "makeOnchainSlasher.holds(secret) names the tier the contract holds (or null)");
+  }
+
+  // 5. STARTUP posture of initRoots (fleet crash-loop 2026-08-17: eth_getLogs range cap at boot):
+  //    a chain source that cannot be read at startup is FAIL-SOFT when a static root is trusted
+  //    (serve members.json, gauge degraded=1, recover on the provider's next successful read) and
+  //    FAIL-CLOSED (throws -> exit) when NO root would be trusted at all.
+  {
+    console.log("\ninitRoots startup posture (fail-soft with a static root / fail-closed without):");
+    const staticRoot = "424242";
+    const loadStatic = async () => ({ root: staticRoot, count: 2, leaves: ["1", "2"] });
+    const noWatch = () => {};
+    // a provider that fails N times, then serves roots; onChange delivers a manual `poll()` hook
+    const flaky = (failures0, roots) => {
+      let left = failures0; let cb = null;
+      const p = {
+        contract: "0xA",
+        currentRoots: async () => { if (left > 0) { left--; throw new Error("eth_getLogs: exceed maximum block range: 50000"); } return { roots, observedAtBlock: 5, finalized: true, leafCount: roots.length }; },
+        onChange: (fn) => { cb = fn; return () => {}; },
+        describe: () => ({ provider: "node", contract: "0xA" }),
+        poll: async () => { if (cb) await cb(); },
+      };
+      return p;
+    };
+    const A = { address: "0xA", kind: "staked" };
+    const scrape = () => gatewayMetrics.render();
+
+    // fail-soft: static root present, chain down at boot
+    _setRecentRoots([]);
+    let prov = flaky(1, ["777"]);
+    let r = await initRoots({ contracts: [A], want: { static: true, onchain: true }, loadStatic, makeProvider: () => prov, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
+    ok(r.degraded.join() === "0xa" && _getRecentRoots().has(staticRoot) && _getRecentRoots().size === 1, "chain source down at boot + members.json root -> starts DEGRADED serving the static root only");
+    ok(/rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 1/.test(scrape()), "rgoe_gateway_root_source_degraded{contract=\"0xA\"} 1");
+    await prov.poll(); // the provider's own poll recovers -> refresh merges the chain root
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has(staticRoot) && /rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "next successful read -> chain root unioned in, degraded back to 0 (no restart needed)");
+
+    // fail-closed: no static root at all -> throws (main() exits nonzero; systemd restarts = the retry)
+    _setRecentRoots([]);
+    let threw = null;
+    try { await initRoots({ contracts: [A], want: { static: false, onchain: true }, loadStatic, makeProvider: () => flaky(9, ["777"]), watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" }); } catch (e) { threw = e.message; }
+    ok(/no admission root available/.test(threw || "") && /exceed maximum block range/.test(threw || ""), "chain source down + NO static root -> refuses to start (fail closed), naming the RPC error");
+    // fail-closed too when members.json is wanted but EMPTY (root null): nothing to serve
+    threw = null;
+    try { await initRoots({ contracts: [A], want: { static: true, onchain: true }, loadStatic: async () => ({ root: null, count: 0, leaves: [] }), makeProvider: () => flaky(9, ["777"]), watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" }); } catch (e) { threw = e.message; }
+    ok(/no admission root available/.test(threw || ""), "an EMPTY members.json is not a fallback root -> still fail closed");
+
+    // partial failure inside a composite (one of two chain sources) is degraded, not fatal, and heals
+    _setRecentRoots([]);
+    const P = { address: "0xP", kind: "paid" };
+    const good = { contract: "0xP", currentRoots: async () => ({ roots: ["999"], observedAtBlock: 5, finalized: true, leafCount: 1 }), onChange: () => () => {}, describe: () => ({ provider: "node", contract: "0xP" }) };
+    const badChild = flaky(1, ["777"]);
+    const { CompositeRootProvider } = await import("../lib/root-provider.mjs");
+    const comp = CompositeRootProvider([badChild, good]);
+    r = await initRoots({ contracts: [A, P], want: { static: false, onchain: true }, loadStatic, makeProvider: () => comp, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
+    ok(r.degraded.join() === "0xa" && _getRecentRoots().has("999") && !_getRecentRoots().has("777"), "one of two chain sources down at boot -> serve the other, that one degraded (composite errors[])");
+    await badChild.poll();
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
+    _setRecentRoots([]);
   }
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: root-sources selftest (${failures} failure${failures === 1 ? "" : "s"})`);
