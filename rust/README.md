@@ -6,10 +6,15 @@ implementation and the source of truth for the wire protocol; this workspace
 reimplements it as a single static binary with embedded Tor. Rationale and the
 JS/Rust boundary: [`../docs/adr/0001-client-language.md`](../docs/adr/0001-client-language.md).
 
-Status: **T-RUST-2 — deterministic client MVP.** The full deterministic pipeline
-is implemented and conformance-checked against `testdata/vectors.json`
-byte-for-byte; the two non-deterministic LIVE pieces (RLN Groth16 proving, the Tor
-dial) are cleanly stubbed and deferred to **T-RUST-2b** (see [Deferred](#deferred-t-rust-2b)).
+Status (2026-08-17): **shipped.** The deterministic pipeline below is conformance-checked
+against `testdata/vectors.json` byte-for-byte, and the two LIVE pieces that were once
+stubbed (RLN Groth16 proving via `rgoe-rln`, the Tor dial via embedded arti) are implemented
+behind the `live` feature: the `-live` binary egressed through the live 2-gateway fleet on
+go-live day (`docs/GO-LIVE-LOG-2026-08-17.md`), rotates across gateways, negotiates ZK
+artifact ids, and checks its embedded artifacts against the lock at startup. Release
+binaries come from `.github/workflows/release.yml` on a `v*` tag (`INSTALL.md`). The section
+below is the original T-RUST-2 MVP description, kept as the map of the deterministic core;
+"Deferred (T-RUST-2b)" is historical (T-RUST-2b/2c/3/4 all landed, `docs/SHIP-PLAN.md`).
 
 ## What this MVP does (deterministic, conformance-backed)
 

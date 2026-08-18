@@ -594,7 +594,21 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   keeping unlinkability. *Accept:* two tiers with different K, each proven in ZK; the gateway enforces
   the proven tier; a member cannot claim a tier they lack. *Depends on:* the RLN circuit taking a
   tier as a range-checked public input (T-DEV adjacent).
-- [ ] **T-FEAT-7 (P3) Payment layer.** Wire the anonymous-payment design (`docs/PAYMENTS.md`:
+- [x] **T-FEAT-7 (P3) Payment layer.** DONE 2026-08-17 (PRs #50, #51, #52, #53, #55) per the user's decision to ship
+  **x402 + MPP over HTTP 402, settled on the deployment chain** (supersedes PAYMENTS.md's native-ETH deposit/sweep on
+  Layer 1; on-chain tree + off-chain redemption via the existing RLN proof unchanged — ADR 0007). Layer 1:
+  `contracts/PaidAccessSet.sol` (operator-insert-only tree, tiers, slash, storage slot 3; Sepolia
+  `0x4e8C2Bf5d3c5454A04837401095fce2646484111`), `payments/registrar.mjs` on the bootnode onion :8878 (x402 v2
+  `PAYMENT-REQUIRED`/`PAYMENT-SIGNATURE` + MPP `WWW-Authenticate: Payment`/`Authorization: Payment`; verify → operator-
+  submitted EIP-3009 `transferWithAuthorization` → `insert`; idempotent store; hardening), `rgoe pay` (buyer needs no gas),
+  `payments/wire.mjs` written from the primary specs. Layer 2: gateway root union static ∪ staked ∪ paid
+  (`gateway/gateway.mjs:initRoots`, `lib/root-provider.mjs:CompositeRootProvider`), routed slasher, floor WARN, client leaf
+  discovery, `rgoe leaves` Rust bridge. LIVE: registrar on box-1; x402 (tier 8) and MPP (tier 32) purchases from fresh
+  zero-ETH buyers settled + inserted on Sepolia; both buyers then egressed through the fleet with only their bought leaf
+  (`docs/GO-LIVE-LOG-2026-08-17.md` "(payments)" + "(payments, later)"). Settle asset today = self-deployed EIP-3009 test
+  token (`0xCe0C9F88…a3A8`; Circle's Sepolia USDC faucet is captcha-gated) — real USDC is a one-env swap. Known limits:
+  buyer→operator transfer + tier bucket public on chain (Layer-0 hop is the buyer's choice), operator is its own x402
+  facilitator, no leaf expiry (subscription semantics), no insert batching/dwell yet. Original spec: Wire the anonymous-payment design (`docs/PAYMENTS.md`:
   Cashu or an on-chain Privacy-Pools-funded stake) as an optional admission path, so egress can be
   paid-for without rebuilding the identity graph. *Accept:* a paid credential admits a member with
   no link to the funding source; scoped as its own sub-plan.
@@ -1026,3 +1040,9 @@ Append one line per completed task: `- YYYY-MM-DD  T-XXX-n  <what shipped>  (<co
   for a different DO account than the agent-devops tofu state — only `-target` applies are safe with it. Open: second
   provider/ASN, monitoring 6.1–6.4, ceremony (issue #6), T-FEAT-7, Etherscan verification of rln-v4, rotate the fleet
   operator hot key (it was echoed into a session log 2026-08-17).
+- 2026-08-17/18  ship-day (loop-35d)  T-FEAT-7 payments SHIPPED as x402 + MPP over HTTP 402 (user decision; PAYMENTS.md
+  Layer 1 superseded): PaidAccessSet on Sepolia (#50), multi-root gateway + routed slasher (#51), registrar + `rgoe pay` +
+  live purchases (#52/#53), buy→egress proven for both rails, then a live crash-loop (public RPC 50k-block `eth_getLogs`
+  cap on the paid-root scan) hot-fixed and fixed in code (#55: chunked scans, record-derived from-block, fail-soft startup);
+  fleet rolled to main@6c4940c. README/JOIN/QUICKSTART/CLIENTS rewritten to the live state (#54). SHIP-PLAN now 111/112:
+  only T-HARD-1's human half (the ceremony, issue #6) is open.
