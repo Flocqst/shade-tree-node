@@ -23,7 +23,8 @@ CLI (`rgoe`) for every role. Write-up with the design and the exit-blocking benc
   `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, tiers 8/32, refundable bond, tiered slash) and
   paid (`PaidAccessSet` `0x4e8C2Bf5d3c5454A04837401095fce2646484111`, operator-inserted after
   an HTTP 402 payment). Each gateway provider chooses which of the three it honors
-  (`RGOE_ADMIT`, default `invited`, the maximum-anonymity mode) and whether it sells.
+  (`RGOE_ADMIT`, default `invited`, the maximum-anonymity mode) and whether it sells
+  ([ADR 0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md)).
 - **Payments live on Sepolia**, x402 v2 and MPP, one EIP-3009 authorization signed by the
   buyer (no gas), settled by the operator, who is its own facilitator. Per provider: a
   registrar is opt-in and `RGOE_PAY_PROTOCOLS` picks the rails. Settle asset today is a test
@@ -259,7 +260,7 @@ public evidence. Full ledger: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) §4
 | [`docs/CEREMONY.md`](docs/CEREMONY.md) | Trusted-setup runbook (not run) |
 | [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md), [`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md), [`docs/RECEIPTS.md`](docs/RECEIPTS.md) | Wire formats + bootnode HTTP API; artifact-version negotiation; signed egress receipts |
 | [`docs/CLIENTS.md`](docs/CLIENTS.md), [`docs/SDK.md`](docs/SDK.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | Client modes, the `RgoeClient` SDK, routing tools and agents through the fleet |
-| [`docs/adr/`](docs/adr/) | Decision records: client language, onion never on chain, bootnode is a cache, RLN, governed slash, tiers, paid access |
+| [`docs/adr/`](docs/adr/) | Decision records: client language, onion never on chain, bootnode is a cache, RLN, governed slash, tiers, paid access, [0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md) per-gateway admission and payment choice |
 | [`docs/exit-blocking-benchmark.md`](docs/exit-blocking-benchmark.md), [`docs/residential-proxies.md`](docs/residential-proxies.md), [`docs/residential-proxy-providers.md`](docs/residential-proxy-providers.md) | The benchmark; what residential proxies do to your privacy; a provider taxonomy |
 | [`docs/MUTATION-TESTING.md`](docs/MUTATION-TESTING.md) | Mutation-testing setup and surviving mutants |
 | [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md), [`docs/ROADMAP.md`](docs/ROADMAP.md) | The shipping backlog and release gates; the forward roadmap |
