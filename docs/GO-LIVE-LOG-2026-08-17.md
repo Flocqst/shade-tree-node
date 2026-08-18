@@ -299,3 +299,33 @@ on the client too (`loadGroupFromContract` pages and starts at the record's depl
 root trusted by the fleet → the buyer egresses with a proof under the PAID tree, indistinguishable
 on the wire from a staked or members.json member.
 
+## 2026-08-18 — per-gateway admission policy rolled (T-FEAT-9, PR #58, ADR 0008)
+
+Main `c6be15e` (PR #58: `RGOE_ADMIT` per gateway, default `invited` = max-anon; registrar
+`RGOE_PAY_PROTOCOLS`; signed caps `admits` + `pay`; client filtering + `--max-anon`) rolled to both
+boxes at 06:36–06:37 UTC — `git fetch --depth 1 origin main && checkout FETCH_HEAD && npm install
+--omit=dev`, then unit drop-ins, `daemon-reload`, restart. Heterogeneous by design (the user's intent:
+each PROVIDER chooses; the demo shows two different choices).
+
+| box | drop-ins (values only; no secrets) | observed after restart (journal, no IPs) |
+|---|---|---|
+| **anon-egress** (bootnode + gateway-1 + registrar) | `rgoe-gateway.service.d/paid.conf`: `RGOE_ADMIT=invited,staked,paid` (replaces `RGOE_ROOTS=static,onchain`), `RGOE_GROUP_CONTRACT`, `RGOE_PAID_ACCESS_CONTRACT`, `RGOE_PAID_MIN_LEAVES=8`; `rgoe-heartbeat.service.d/admit.conf`: `RGOE_ADMIT=invited,staked,paid` + `RGOE_REGISTRAR_ADVERTISE=1`, `RGOE_REGISTRAR_PORT=8878`, `RGOE_REGISTRAR_ONION=<bootnode onion>`, `RGOE_PAY_ASSET`, `RGOE_PAY_PRICES=8=100000,32=400000`, `RGOE_PAY_CHAIN_ID=11155111`, `RGOE_PAY_PROTOCOLS=x402,mpp`; `rgoe-registrar.service.d/protocols.conf` + `rgoe-bootnode.service.d/pay.conf`: `RGOE_PAY_PROTOCOLS=x402,mpp` | gateway: `admits: invited+staked+paid source=RGOE_ADMIT`, `roots: members.json + staked(0xFe48…) + paid(0x4e8C…) trustedRoots=3`, `slash: routing over primary(0xFe48…) + paid(0x4e8C…)`; heartbeat: `capabilities advertised (signed): {"admits":["invited","staked","paid"],"pay":{"protocols":["x402","mpp"],"port":8878,…,"onion":"kssrk54k…"},"proto":{…}}` → `announced (staked=true, ttl=900s)`; registrar: `… RGOE_PAY_PROTOCOLS=x402,mpp`; bootnode: `advertising 402 registrar in /health … protocols=["x402","mpp"]`, `persistence: reloaded gateways loaded=2` |
+| **rgoe-gw-04** (gateway-2, gateway-only) | `rgoe-gateway.service.d/paid.conf`: `RGOE_ADMIT=invited,staked` + `RGOE_GROUP_CONTRACT` (`RGOE_ROOTS` and `RGOE_PAID_ACCESS_CONTRACT` removed — no paid leaves, no registrar); `rgoe-heartbeat.service.d/admit.conf`: `RGOE_ADMIT=invited,staked` | gateway: `admits: invited+staked source=RGOE_ADMIT`, `roots: members.json + staked(0xFe48…) trustedRoots=2`, `slash: on-chain via=0xFe48… abi="rln-v4 tiered"`; heartbeat: `capabilities advertised (signed): {"region":"na","admits":["invited","staked"],"proto":{…}}` → `announced (staked=true, ttl=900s)` |
+
+### Verified from the laptop (Tor SOCKS 9260)
+
+- `GET /directory` on the bootnode onion (signer pinned from `bootnode.json`): gateway-1
+  `admits=["invited","staked","paid"]` + `pay={protocols:["x402","mpp"],port:8878,onion:"kssrk54k…"}`,
+  gateway-2 `admits=["invited","staked"]`, no `pay`; both entries carry a `capsSig` (the bootnode
+  passes the gateway-signed caps through; the client re-verifies them against each onion key).
+- **x402 buyer** (paid leaf, tier 8): `RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 rgoe client --limit 8`,
+  4 requests: every `SELECT api.ipify.org:443 leaf=paid candidates=yaxo4ywgoizk..[invited,staked,paid]`
+  (ONE candidate: gateway-2 filtered out by policy) → `TUNNEL … slot=0..3 via yaxo4ywgoizk4yiy..onion`;
+  the egress IP returned by `api.ipify.org` == box-1's public IP (not printed here). The buyer routes
+  ONLY to gateway-1 now.
+- **invited member (alice, members.json) with `--max-anon`**: refused before any dial with exactly
+  `--max-anon: no invited-only gateway in the directory (a gateway qualifies only when its signed caps
+  say admits=[invited]); fleet: yaxo4ywgoizk..=[invited,staked,paid] av4m256h4wwg..=[invited,staked]`
+  — the correct outcome: neither demo gateway is invited-only, and the client says so instead of
+  dialing a mixed-population gateway.
+
