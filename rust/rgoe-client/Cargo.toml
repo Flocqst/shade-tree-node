@@ -46,7 +46,13 @@ hex = "0.4"
 # with `cargo tree`), but compression stays OFF regardless: the client dials a single onion
 # and frames one JSON line, so directory compression buys nothing. `onion-service-client`
 # is what lets arti CONNECT to a `.onion` (v3 HS client). tokio drives arti's async runtime.
-arti-client = { version = "0.45", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
+# `static-sqlite` (release-fix, v0.1.1): arti's directory cache (tor-dirmgr) uses rusqlite;
+# without it rusqlite links the SYSTEM libsqlite3 (`-lsqlite3` / `sqlite3.lib`), which does
+# not exist on the windows-latest runner (LNK1181: cannot open input file 'sqlite3.lib') and
+# makes the linux/macos `live` binaries dynamically depend on the host's libsqlite3. The
+# feature turns on `rusqlite/bundled` (the SQLite amalgamation compiled in via `cc`), so
+# the `live` binary is self-contained on every runner OS — the whole point of the client.
+arti-client = { version = "0.45", default-features = false, features = ["tokio", "rustls", "onion-service-client", "static-sqlite"], optional = true }
 tor-rtcompat = { version = "0.45", default-features = false, features = ["tokio", "rustls"], optional = true }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util", "net", "time"], optional = true }
 # arg parsing is hand-rolled (no clap) to keep the dep tree tiny; a small seeded PRNG
