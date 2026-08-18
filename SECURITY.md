@@ -66,9 +66,9 @@ instead.
   operator's address and the tier are public on chain by design; a payment the
   operator never inserts has public evidence but no on-chain recourse
   (`docs/PAYMENTS.md` "Leak ledger", `docs/THREAT-MODEL.md` §5).
-- Anything under "What is and is not anonymous" and "Not done" in the README
-  that is called out as deliberately out of scope or an operator responsibility
-  (sourcing clean egress IPs, rendezvous DoS with PoW off, one operator, and so on).
+- Anything under "What is and is not anonymous" and "Not done" in `docs/OVERVIEW.md`
+  (and the README "What it does not protect against") that is called out as deliberately
+  out of scope or an operator responsibility (sourcing clean egress IPs, rendezvous DoS with PoW off, one operator, and so on).
 
 See `docs/SHIP-PLAN.md` for the full residual list and its priorities.
 
