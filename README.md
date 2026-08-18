@@ -18,13 +18,17 @@ CLI (`rgoe`) for every role. Write-up with the design and the exit-blocking benc
   `d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73`; `RGOE_NETWORK=sepolia`
   reads both from [`network/sepolia/`](network/sepolia/README.md). Record:
   [`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md).
-- **Three ways in**, and today's fleet admits all three: invited (a leaf in the committed
-  `group/members.json`), staked (`StakedReputationSet` rln-v4
-  `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, tiers 8/32, refundable bond, tiered slash) and
-  paid (`PaidAccessSet` `0x4e8C2Bf5d3c5454A04837401095fce2646484111`, operator-inserted after
-  an HTTP 402 payment). Each gateway provider chooses which of the three it honors
-  (`RGOE_ADMIT`, default `invited`, the maximum-anonymity mode) and whether it sells
-  ([ADR 0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md)).
+- **Three ways in.** Invited (a leaf in the committed `group/members.json`), staked
+  (`StakedReputationSet` rln-v4 `0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25`, tiers 8/32,
+  refundable bond, tiered slash) and paid (`PaidAccessSet`
+  `0x4e8C2Bf5d3c5454A04837401095fce2646484111`, operator-inserted after an HTTP 402 payment).
+  Each gateway provider chooses which of the three it honors (`RGOE_ADMIT`, default `invited`,
+  the maximum-anonymity mode) and whether it sells
+  ([ADR 0008](docs/adr/0008-per-gateway-admission-and-payment-choice.md)). The live fleet is
+  heterogeneous on purpose since 2026-08-18: gateway-1 admits `invited,staked,paid` and sells
+  over x402 and MPP; gateway-2 admits `invited,staked` and sells nothing. So a paid buyer
+  routes to gateway-1 only, and `--max-anon` refuses both today (neither is invited-only) and
+  says so.
 - **Payments live on Sepolia**, x402 v2 and MPP, one EIP-3009 authorization signed by the
   buyer (no gas), settled by the operator, who is its own facilitator. Per provider: a
   registrar is opt-in and `RGOE_PAY_PROTOCOLS` picks the rails. Settle asset today is a test
@@ -85,8 +89,9 @@ set that holds your leaf) and the client only picks gateways whose signed `admit
 that source (a gateway advertising no policy is assumed to admit every path during the
 rollout). `--max-anon` (`RGOE_MAX_ANON=1`) goes further: it uses only gateways whose signed
 `admits` is exactly `invited`, so a gateway that also sells or stakes access, or advertises no
-policy, is refused, and it refuses to run at all with a paid or staked leaf (those paths leave an on-chain footprint, so
-"max anon" would be a lie). Order of the paths, most to least anonymous: invited, staked, paid.
+policy, is refused, and it refuses to run at all with a paid or staked leaf (those paths leave
+an on-chain footprint, so "max anon" would be a lie). On today's fleet it refuses both gateways,
+naming each one's policy. Order of the paths, most to least anonymous: invited, staked, paid.
 
 **The Rust binary** (`rgoe-0.1.1-<target>-live`, no Node, no tor daemon; the default
 non-live binary verifies, selects and fetches directories but does not egress):
@@ -209,9 +214,9 @@ The proof hides the leaf; the request hides the IP. What differs is how you got 
 
 | path | on-chain footprint | who can link what | default admitted? |
 |---|---|---|---|
-| invited | none | the operator knows it handed you a secret; nobody can tell which requests are yours | yes (`RGOE_ADMIT=invited`) |
-| staked | `register(commitment, limit)` from your wallet, `bondFor(limit)` posted | wallet ↔ commitment ↔ tier bucket, public; requests still unlinkable to the leaf | opt-in (`staked`); live fleet: yes |
-| paid | your address → operator transfer (tier price) and the operator's `insert(commitment, limit)` a block or two later | "this address bought from this operator" and the tier, public; the operator learns commitment ↔ payer; requests still unlinkable | opt-in (`paid`); live fleet: yes |
+| invited | none | the operator knows it handed you a secret; nobody can tell which requests are yours | yes (`RGOE_ADMIT=invited`); live fleet: both gateways |
+| staked | `register(commitment, limit)` from your wallet, `bondFor(limit)` posted | wallet ↔ commitment ↔ tier bucket, public; requests still unlinkable to the leaf | opt-in (`staked`); live fleet: both gateways |
+| paid | your address → operator transfer (tier price) and the operator's `insert(commitment, limit)` a block or two later | "this address bought from this operator" and the tier, public; the operator learns commitment ↔ payer; requests still unlinkable | opt-in (`paid`); live fleet: gateway-1 only |
 
 Facts that hold for all three: the gateway sees a rendezvous circuit, never your IP; which
 root a proof opens (invited / staked / paid) is a public signal, so your crowd is that set's
