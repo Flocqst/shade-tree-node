@@ -464,7 +464,7 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 - **Knowing your own exit.** A member knowing which gateway it egresses through is not the threat
   (`docs/ROADMAP.md` #3); multi-hop gateways are deliberately not the plan.
 - **Payments, sourcing clean egress IPs, rendezvous/onion DoS.** Operator responsibilities / out of
-  scope per the README "Scope" section and `SECURITY.md`.
+  scope per the README "What it does not protect against", `docs/OVERVIEW.md` and `SECURITY.md`.
 - **Sybil operators inflating rotation odds (A6).** Rotation spreads a member across the live fleet;
   a Sybil that runs many gateways raises its share of any one member's traffic. Staking
   (`admission=stake`) raises the cost but does not eliminate it; the anonymity argument rests on
