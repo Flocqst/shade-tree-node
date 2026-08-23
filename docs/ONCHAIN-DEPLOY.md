@@ -23,10 +23,10 @@ as **addresses** so a real pre-deployed RLN/Groth16 verifier can be wired in.
 | contract | constructor args | role |
 |---|---|---|
 | `GatewayRegistry` | `bond, unbonding, minUnbonding, owner` | gateway-operator stake the bootnode reads for `stake`-mode admission; `owner` is the slashing/governance authority (`0` ⇒ deployer). |
-| `StakedReputationSet` | `bond, unbonding, minUnbonding, withdrawVerifier, hasher, extraLimits[], extraBonds[]` | member admission set (register at a tier / ZK-exit / time-locked withdraw / tiered slash) with the on-chain root (`currentRoot`, slot 3). `bond` is the DEFAULT tier (limit 8); `extraLimits/extraBonds` are the other admitted tiers (T-FEAT-8b, `RGOE_TIER_LIMITS` / `RGOE_TIER_BONDS_WEI`). Skipped when `RGOE_DEPLOY_STAKED=0`; `GatewayRegistry` skipped when `RGOE_DEPLOY_REGISTRY=0` (its address then comes from `RGOE_GATEWAY_REGISTRY` for the record). |
-| `RateCommitmentHasher` | — | the real tiered Poseidon rate-commitment hasher (`commitmentOf(secret, limit)`), deployed when `RGOE_COMMITMENT_HASHER` is unset. Links the external `PoseidonT2` / `PoseidonT3` libraries (deployed alongside, or reused via `--libraries`, see §5). |
-| `WithdrawGroth16Verifier` + `WithdrawVerifier` | — | the REAL Groth16 exit-auth verifier (T-DEV-1), deployed when `RGOE_WITHDRAW_VERIFIER` is unset and `RGOE_DEPLOY_REAL_VERIFIER=1`. VK = the untrusted dev phase-2 (testnet-only until T-HARD-1). |
-| `MockWithdrawVerifier` | — | **testnet-only** fallback, deployed **only** when `RGOE_WITHDRAW_VERIFIER` is unset and `RGOE_DEPLOY_REAL_VERIFIER` is not `1`. NOT zero-knowledge (the secret is revealed in calldata); the script prints a `WARNING` when it deploys it. |
+| `StakedReputationSet` | `bond, unbonding, minUnbonding, withdrawVerifier, hasher, extraLimits[], extraBonds[]` | member admission set (register at a tier / ZK-exit / time-locked withdraw / tiered slash) with the on-chain root (`currentRoot`, slot 3). `bond` is the DEFAULT tier (limit 8); `extraLimits/extraBonds` are the other admitted tiers (T-FEAT-8b, `SHADE_TREE_TIER_LIMITS` / `SHADE_TREE_TIER_BONDS_WEI`). Skipped when `SHADE_TREE_DEPLOY_STAKED=0`; `GatewayRegistry` skipped when `SHADE_TREE_DEPLOY_REGISTRY=0` (its address then comes from `SHADE_TREE_GATEWAY_REGISTRY` for the record). |
+| `RateCommitmentHasher` | — | the real tiered Poseidon rate-commitment hasher (`commitmentOf(secret, limit)`), deployed when `SHADE_TREE_COMMITMENT_HASHER` is unset. Links the external `PoseidonT2` / `PoseidonT3` libraries (deployed alongside, or reused via `--libraries`, see §5). |
+| `WithdrawGroth16Verifier` + `WithdrawVerifier` | — | the REAL Groth16 exit-auth verifier (T-DEV-1), deployed when `SHADE_TREE_WITHDRAW_VERIFIER` is unset and `SHADE_TREE_DEPLOY_REAL_VERIFIER=1`. VK = the untrusted dev phase-2 (testnet-only until T-HARD-1). |
+| `MockWithdrawVerifier` | — | **testnet-only** fallback, deployed **only** when `SHADE_TREE_WITHDRAW_VERIFIER` is unset and `SHADE_TREE_DEPLOY_REAL_VERIFIER` is not `1`. NOT zero-knowledge (the secret is revealed in calldata); the script prints a `WARNING` when it deploys it. |
 
 `minUnbonding` is the `F + E + C` lower bound (freshness window + epoch + slash-confirmation
 margin) both constructors enforce, so a misconfigured short unbonding window is rejected
@@ -39,19 +39,19 @@ or any L2 by changing only `--rpc-url` and the env.
 
 | var | default | meaning |
 |---|---|---|
-| `RGOE_BOND_WEI` | `0.01 ether` | fixed stake denomination, in wei (use a testnet-frugal value, e.g. `1000000000000000` = 0.001 ETH). |
-| `RGOE_UNBONDING` | `300` | exit time-lock, seconds. |
-| `RGOE_MIN_UNBONDING` | `270` | `F+E+C` lower bound the constructors enforce. |
-| `RGOE_GATEWAY_OWNER` | `0` (⇒ deployer) | `GatewayRegistry` slashing / governance address. Set to a DAO/multisig for a persistent deployment. |
-| `RGOE_DEPLOY_STAKED` | `1` | `1` = also deploy `StakedReputationSet`; `0` = `GatewayRegistry` only. |
-| `RGOE_DEPLOY_REGISTRY` | `1` | `0` = do NOT deploy a `GatewayRegistry`; record `RGOE_GATEWAY_REGISTRY` instead (a member-set-only redeploy next to a live registry, e.g. rln-v4). |
-| `RGOE_TIER_LIMITS` | `""` (default tier 8 only) | extra admitted tiers, comma-separated userMessageLimits (`"32"`, `"32,64"`): ascending, distinct, `1..65535`, `!= 8`. |
-| `RGOE_TIER_BONDS_WEI` | `""` | the bond of each extra tier, wei, same length as `RGOE_TIER_LIMITS`, each nonzero (Sepolia rln-v4: `4000000000000000` for tier 32). Tier 8 always costs `RGOE_BOND_WEI`. |
-| `RGOE_WITHDRAW_VERIFIER` | `0` (⇒ deploy) | pre-deployed `IWithdrawVerifier` address (must take `(commitment, limit, context, proof)`). |
-| `RGOE_DEPLOY_REAL_VERIFIER` | `0` | `1` = deploy the REAL Groth16 `WithdrawVerifier` when `RGOE_WITHDRAW_VERIFIER` is unset (else the Mock). |
-| `RGOE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | pre-deployed `ICommitmentHasher` address (must implement the TIERED `commitmentOf(secret, limit)`; the rln-v3 hasher `0x08F9a754…ae6D` pins K=8 and cannot be reused). |
-| `RGOE_RPC_URL` | `http://127.0.0.1:8545` | endpoint; also recorded into the output JSON. |
-| `RGOE_DEPLOY_OUT` | `contracts/deployed.local.json` | JSON output path. Point at a scratch file for simulation; leave default for the real deploy so the gateway/lib pick the addresses up. |
+| `SHADE_TREE_BOND_WEI` | `0.01 ether` | fixed stake denomination, in wei (use a testnet-frugal value, e.g. `1000000000000000` = 0.001 ETH). |
+| `SHADE_TREE_UNBONDING` | `300` | exit time-lock, seconds. |
+| `SHADE_TREE_MIN_UNBONDING` | `270` | `F+E+C` lower bound the constructors enforce. |
+| `SHADE_TREE_GATEWAY_OWNER` | `0` (⇒ deployer) | `GatewayRegistry` slashing / governance address. Set to a DAO/multisig for a persistent deployment. |
+| `SHADE_TREE_DEPLOY_STAKED` | `1` | `1` = also deploy `StakedReputationSet`; `0` = `GatewayRegistry` only. |
+| `SHADE_TREE_DEPLOY_REGISTRY` | `1` | `0` = do NOT deploy a `GatewayRegistry`; record `SHADE_TREE_GATEWAY_REGISTRY` instead (a member-set-only redeploy next to a live registry, e.g. rln-v4). |
+| `SHADE_TREE_TIER_LIMITS` | `""` (default tier 8 only) | extra admitted tiers, comma-separated userMessageLimits (`"32"`, `"32,64"`): ascending, distinct, `1..65535`, `!= 8`. |
+| `SHADE_TREE_TIER_BONDS_WEI` | `""` | the bond of each extra tier, wei, same length as `SHADE_TREE_TIER_LIMITS`, each nonzero (Sepolia rln-v4: `4000000000000000` for tier 32). Tier 8 always costs `SHADE_TREE_BOND_WEI`. |
+| `SHADE_TREE_WITHDRAW_VERIFIER` | `0` (⇒ deploy) | pre-deployed `IWithdrawVerifier` address (must take `(commitment, limit, context, proof)`). |
+| `SHADE_TREE_DEPLOY_REAL_VERIFIER` | `0` | `1` = deploy the REAL Groth16 `WithdrawVerifier` when `SHADE_TREE_WITHDRAW_VERIFIER` is unset (else the Mock). |
+| `SHADE_TREE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | pre-deployed `ICommitmentHasher` address (must implement the TIERED `commitmentOf(secret, limit)`; the rln-v3 hasher `0x08F9a754…ae6D` pins K=8 and cannot be reused). |
+| `SHADE_TREE_RPC_URL` | `http://127.0.0.1:8545` | endpoint; also recorded into the output JSON. |
+| `SHADE_TREE_DEPLOY_OUT` | `contracts/deployed.local.json` | JSON output path. Point at a scratch file for simulation; leave default for the real deploy so the gateway/lib pick the addresses up. |
 
 ## 3. Prerequisites
 
@@ -59,16 +59,16 @@ or any L2 by changing only `--rpc-url` and the env.
   cheatcode interface is vendored in `test/Cheats.sol`.
 - **An RPC endpoint** for the target chain. Sepolia has a keyless public one already wired
   into `foundry.toml` (`sepolia_public = https://ethereum-sepolia-rpc.publicnode.com`);
-  override with your own via `RGOE_RPC_URL`.
+  override with your own via `SHADE_TREE_RPC_URL`.
 - **A funded deployer key** on the target chain (deploy cost is a few million gas — well
   under 0.05 Sepolia ETH). Fund it from a faucet for Sepolia, or bridge for an L2.
 - **The key handled via a keystore, never inline.** Do **not** paste a raw private key on
   the command line (it lands in shell history and `ps`). Import it once into Foundry's
   encrypted keystore:
   ```bash
-  cast wallet import rgoe-deployer --interactive   # paste key once; prompts for a password
+  cast wallet import shade-tree-deployer --interactive   # paste key once; prompts for a password
   ```
-  then reference it by name with `--account rgoe-deployer` (Foundry prompts for the
+  then reference it by name with `--account shade-tree-deployer` (Foundry prompts for the
   password at deploy time). Hardware wallets (`--ledger` / `--trezor`) work too.
 
 ## 4. Dry run FIRST (no funds, no live chain)
@@ -78,13 +78,13 @@ sent, no key is touched. Point the output at a scratch file so the committed
 `contracts/deployed.local.json` is untouched:
 
 ```bash
-RGOE_DEPLOY_OUT=cache/deployed.sim.json \
+SHADE_TREE_DEPLOY_OUT=cache/deployed.sim.json \
 forge script contracts/script/DeployRegistry.s.sol:DeployRegistry
 ```
 
 Read the `== Logs ==` block: confirm `chainid`, the bond/unbonding params, and that the
 `WARNING: deployed Mock...` lines appear **only** if you intend to use the testnet mocks.
-Then run the same command with your real env (`RGOE_RPC_URL`, bond, owner, verifier/hasher)
+Then run the same command with your real env (`SHADE_TREE_RPC_URL`, bond, owner, verifier/hasher)
 still **without** `--broadcast` to confirm the numbers before spending anything.
 
 ## 5. Live deploy (OPERATOR ONLY)
@@ -94,17 +94,17 @@ still **without** `--broadcast` to confirm the numbers before spending anything.
 
 ```bash
 # 1. Point at the target chain + params.
-export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com   # or your L2 RPC
-export RGOE_BOND_WEI=1000000000000000        # 0.001 ETH — testnet-frugal
-export RGOE_UNBONDING=300 RGOE_MIN_UNBONDING=270
-export RGOE_GATEWAY_OWNER=0x<governance-multisig>   # omit to default to the deployer
-# For a real member set, also export RGOE_WITHDRAW_VERIFIER / RGOE_COMMITMENT_HASHER.
-# Leave RGOE_DEPLOY_OUT unset so it writes contracts/deployed.local.json.
+export SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com   # or your L2 RPC
+export SHADE_TREE_BOND_WEI=1000000000000000        # 0.001 ETH — testnet-frugal
+export SHADE_TREE_UNBONDING=300 SHADE_TREE_MIN_UNBONDING=270
+export SHADE_TREE_GATEWAY_OWNER=0x<governance-multisig>   # omit to default to the deployer
+# For a real member set, also export SHADE_TREE_WITHDRAW_VERIFIER / SHADE_TREE_COMMITMENT_HASHER.
+# Leave SHADE_TREE_DEPLOY_OUT unset so it writes contracts/deployed.local.json.
 
 # 2. Broadcast (encrypted keystore; prompts for the password — no inline key).
 forge script contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$RGOE_RPC_URL" \
-  --account rgoe-deployer \
+  --rpc-url "$SHADE_TREE_RPC_URL" \
+  --account shade-tree-deployer \
   --broadcast
 ```
 
@@ -113,20 +113,20 @@ in the same run (see §6 for the manual path). The broadcast writes a receipt bu
 `broadcast/DeployRegistry.s.sol/<chainId>/` and the addresses to
 `contracts/deployed.local.json`.
 
-**`GatewayRegistry`-only** (skip the member set): add `RGOE_DEPLOY_STAKED=0`.
+**`GatewayRegistry`-only** (skip the member set): add `SHADE_TREE_DEPLOY_STAKED=0`.
 
 **Member-set-only redeploy next to a live registry (how rln-v4 was deployed, 2026-08-17):**
 
 ```bash
-export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-RGOE_DEPLOY_STAKED=1 RGOE_DEPLOY_REGISTRY=0 \
-RGOE_GATEWAY_REGISTRY=0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868 \
-RGOE_DEPLOY_REAL_VERIFIER=1 \
-RGOE_BOND_WEI=1000000000000000 RGOE_TIER_LIMITS=32 RGOE_TIER_BONDS_WEI=4000000000000000 \
-RGOE_UNBONDING=300 RGOE_MIN_UNBONDING=270 \
-RGOE_DEPLOY_OUT=./cache/sepolia-rln-v4.local.json \
+export SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+SHADE_TREE_DEPLOY_STAKED=1 SHADE_TREE_DEPLOY_REGISTRY=0 \
+SHADE_TREE_GATEWAY_REGISTRY=0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868 \
+SHADE_TREE_DEPLOY_REAL_VERIFIER=1 \
+SHADE_TREE_BOND_WEI=1000000000000000 SHADE_TREE_TIER_LIMITS=32 SHADE_TREE_TIER_BONDS_WEI=4000000000000000 \
+SHADE_TREE_UNBONDING=300 SHADE_TREE_MIN_UNBONDING=270 \
+SHADE_TREE_DEPLOY_OUT=./cache/sepolia-rln-v4.local.json \
 forge script contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$RGOE_RPC_URL" --private-key "$K" \
+  --rpc-url "$SHADE_TREE_RPC_URL" --private-key "$K" \
   --libraries contracts/PoseidonT2.sol:PoseidonT2:0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55 \
   --libraries contracts/PoseidonT3.sol:PoseidonT3:0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022 \
   --broadcast --slow
@@ -136,7 +136,7 @@ Simulate first (drop `--broadcast`), then broadcast. Notes from that run: `--lib
 the Poseidon libraries the rln-v3 deploy left on Sepolia (their runtime bytecode was compared
 with `forge inspect … deployedBytecode` vs `cast code` first — identical apart from the
 library's own PUSH20 self-address; saves ~5.4M gas); `--slow` waits for each receipt (the
-deployer key was in concurrent use by `rgoe register-gateway`); `RGOE_DEPLOY_OUT` must stay
+deployer key was in concurrent use by `shade-tree register-gateway`); `SHADE_TREE_DEPLOY_OUT` must stay
 under the repo (`foundry.toml` `fs_permissions`); `$K` is loaded into the shell from SOPS and
 never echoed. Cost: 4 CREATEs, 3.37M gas, ~0.0036 ETH at ~1.0 gwei
 (`network/sepolia/rln-v4-broadcast.json`).
@@ -151,13 +151,13 @@ never echoed. Cost: 4 CREATEs, 3.37M gas, ~0.0036 ETH at ~1.0 gwei
    forge verify-contract <addr> contracts/GatewayRegistry.sol:GatewayRegistry \
      --chain sepolia --etherscan-api-key <key> \
      --constructor-args $(cast abi-encode "c(uint256,uint256,uint256,address)" \
-       "$RGOE_BOND_WEI" "$RGOE_UNBONDING" "$RGOE_MIN_UNBONDING" "$RGOE_GATEWAY_OWNER")
+       "$SHADE_TREE_BOND_WEI" "$SHADE_TREE_UNBONDING" "$SHADE_TREE_MIN_UNBONDING" "$SHADE_TREE_GATEWAY_OWNER")
    ```
    For `StakedReputationSet` the constructor signature is
    `c(uint256,uint256,uint256,address,address,uint256[],uint256[])` (bond, unbonding,
    minUnbonding, withdrawVerifier, hasher, extraLimits, extraBonds), and it links the two
    Poseidon libraries (`--libraries …` as at deploy).
-4. Sanity-read the on-chain params: `cast call <GatewayRegistry> "BOND()(uint256)" --rpc-url "$RGOE_RPC_URL"`
+4. Sanity-read the on-chain params: `cast call <GatewayRegistry> "BOND()(uint256)" --rpc-url "$SHADE_TREE_RPC_URL"`
    and `"owner()(address)"` should echo what you deployed with; for the set,
    `"currentRoot()(uint256)"` (a fresh set == the empty depth-20 root
    `10354334201938752428558948798274962999644820234654929486063894213598717249307`),
@@ -183,13 +183,13 @@ node scripts/record-deploy.mjs --network sepolia --all --force \
 
 For a redeploy of an existing slot, then hand-edit the free-form keys: bump `release`, move
 the previous addresses under `superseded.<old-release>`, and refresh `params` / `note` /
-`liveIntegration` (see the rln-v4-tiers record). `RGOE_NETWORK=sepolia` resolves
-`RGOE_GROUP_CONTRACT` to whatever `contracts.stakedReputationSet` says, so the record IS the
+`liveIntegration` (see the rln-v4-tiers record). `SHADE_TREE_NETWORK=sepolia` resolves
+`SHADE_TREE_GROUP_CONTRACT` to whatever `contracts.stakedReputationSet` says, so the record IS the
 switch for every `--network` caller; the FLEET units (agent-devops group vars) are flipped
 separately (§8).
 
-From then on `RGOE_NETWORK=sepolia` supplies `RGOE_GATEWAY_REGISTRY` + `RGOE_RPC_URL` to the
-bootnode (`rgoe bootnode --network sepolia --admission stake`), `rgoe register-gateway`, and the
+From then on `SHADE_TREE_NETWORK=sepolia` supplies `SHADE_TREE_GATEWAY_REGISTRY` + `SHADE_TREE_RPC_URL` to the
+bootnode (`shade-tree bootnode --network sepolia --admission stake`), `shade-tree register-gateway`, and the
 client's stake re-verification, with explicit env still overriding.
 
 The bootnode/gateway/lib otherwise find the contracts through env vars (see `docs/CONFIG.md`,
@@ -197,23 +197,23 @@ The bootnode/gateway/lib otherwise find the contracts through env vars (see `doc
 
 | var | where | purpose |
 |---|---|---|
-| `RGOE_GATEWAY_REGISTRY` | `rgoe-bootnode` unit (+ `rgoe register-gateway`) | `GatewayRegistry` address. Required for `onchain` stake mode and `register-gateway`. |
-| `RGOE_RPC_URL` | bootnode + any on-chain caller | JSON-RPC endpoint for all reads/writes. |
-| `RGOE_STAKE_MODE=onchain` | `rgoe-bootnode` unit | switch admission from the `mock` (chainless) verifier to the on-chain `isStaked` eth_call. Auto-selects `onchain` when `RGOE_GATEWAY_REGISTRY` is set. |
-| `RGOE_BOOTNODE_ADMISSION=stake` | `rgoe-bootnode` unit | require a live gateway stake for admission (default is `open`). |
+| `SHADE_TREE_GATEWAY_REGISTRY` | `shade-tree-bootnode` unit (+ `shade-tree register-gateway`) | `GatewayRegistry` address. Required for `onchain` stake mode and `register-gateway`. |
+| `SHADE_TREE_RPC_URL` | bootnode + any on-chain caller | JSON-RPC endpoint for all reads/writes. |
+| `SHADE_TREE_STAKE_MODE=onchain` | `shade-tree-bootnode` unit | switch admission from the `mock` (chainless) verifier to the on-chain `isStaked` eth_call. Auto-selects `onchain` when `SHADE_TREE_GATEWAY_REGISTRY` is set. |
+| `SHADE_TREE_BOOTNODE_ADMISSION=stake` | `shade-tree-bootnode` unit | require a live gateway stake for admission (default is `open`). |
 
 `register-gateway` / `register-onchain` also fall back to reading
 `contracts/deployed.local.json` (`gatewayRegistry`, `rpcUrl`) when the env is unset, so on
 the deployer box the JSON record alone is enough for those scripts. On the fleet, set the
 env explicitly on the units (the JSON is machine-local and gitignored). For member-side
-slashing wire `RGOE_GROUP_CONTRACT` (`StakedReputationSet`) + `RGOE_RPC_URL` per
+slashing wire `SHADE_TREE_GROUP_CONTRACT` (`StakedReputationSet`) + `SHADE_TREE_RPC_URL` per
 `network/README.md`.
 
 Then turn on staking end to end (per `bootnode/deploy/README.md`):
 
-1. Deploy (this runbook) and set the four vars above on the `rgoe-bootnode` unit.
-2. Stake the operator: `rgoe register-gateway` with the operator key funded on that chain.
-3. Add `RGOE_GW_OPERATOR_KEY=<operator-key>` to the `rgoe-heartbeat` unit so the heartbeat
+1. Deploy (this runbook) and set the four vars above on the `shade-tree-bootnode` unit.
+2. Stake the operator: `shade-tree register-gateway` with the operator key funded on that chain.
+3. Add `SHADE_TREE_GW_OPERATOR_KEY=<operator-key>` to the `shade-tree-heartbeat` unit so the heartbeat
    signs the durable onion↔operator authorization.
 
 ## 8. Composition with T-DEPLOY-3 (infra-as-code)
@@ -223,20 +223,20 @@ This is the on-chain half of the deploy; the fleet half is the OpenTofu + Ansibl
 
 1. **Contracts (this runbook)** → deploy on Sepolia/L2, get the `GatewayRegistry` address.
 2. **Fleet (agent-devops)** → provision/retrofit the gateway droplets and render their
-   systemd units. Set `RGOE_GATEWAY_REGISTRY` / `RGOE_RPC_URL` / `RGOE_STAKE_MODE` /
-   `RGOE_BOOTNODE_ADMISSION` as host/group vars so the generated `rgoe-bootnode` unit
+   systemd units. Set `SHADE_TREE_GATEWAY_REGISTRY` / `SHADE_TREE_RPC_URL` / `SHADE_TREE_STAKE_MODE` /
+   `SHADE_TREE_BOOTNODE_ADMISSION` as host/group vars so the generated `shade-tree-bootnode` unit
    comes up pointed at the deployed contract — not by hand-ssh.
-3. **Register + heartbeat** → `rgoe register-gateway` from a funded operator key, then the
+3. **Register + heartbeat** → `shade-tree register-gateway` from a funded operator key, then the
    heartbeat signs the onion↔operator binding.
 
 Keep the contract address in the agent-devops inventory (group vars) as the single source of
 truth for the fleet; `contracts/deployed.local.json` stays the deployer-box local cache.
 
 **Flipping the fleet to a new member set (rln-v3 → rln-v4-tiers).** The live gateways slash
-against `RGOE_SLASH_CONTRACT` (rln-v3 `0xdAE242AE…20FC` at the time of writing) and gate on
+against `SHADE_TREE_SLASH_CONTRACT` (rln-v3 `0xdAE242AE…20FC` at the time of writing) and gate on
 `group/members.json`; the rln-v4 set `0xFe48De8b…9d25` is live and recorded but the units were
 deliberately NOT flipped in the same change (that is a live-fleet config change: agent-devops
-group vars `RGOE_SLASH_CONTRACT` (+ `RGOE_GROUP_CONTRACT` for on-chain root mode) → re-render
+group vars `SHADE_TREE_SLASH_CONTRACT` (+ `SHADE_TREE_GROUP_CONTRACT` for on-chain root mode) → re-render
 → restart, per `docs/DEPLOYMENT.md`; never a hand-ssh edit). Until then a member staked on
 rln-v4 is admitted by an rln-v4-rooted gateway and slashable there, while the fleet's
 members.json gateways keep slashing tier-8 leaves on rln-v3. The gateway auto-detects which
@@ -254,20 +254,20 @@ it; the gateway unions both roots).
 
 | var | default | meaning |
 |---|---|---|
-| `RGOE_PAY_LIMITS` | `8,32` | tiers this set admits (comma-separated userMessageLimits; ascending, distinct, `1..65535`, must include `8`). No prices: pricing lives on the 402 rail. |
-| `RGOE_PAY_OPERATOR` | `0` (⇒ deployer) | the registrar / insert authority (`insert`, `insertBatch`, `setOperator`). Rotate later with the two-step `setOperator` / `acceptOperator`. |
-| `RGOE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | the TIERED hasher; on Sepolia reuse the live rln-v4 one `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586`. |
-| `RGOE_RPC_URL` / `RGOE_DEPLOY_OUT` | as §2 | output JSON default `contracts/paid-access.local.json` (gitignored). |
+| `SHADE_TREE_PAY_LIMITS` | `8,32` | tiers this set admits (comma-separated userMessageLimits; ascending, distinct, `1..65535`, must include `8`). No prices: pricing lives on the 402 rail. |
+| `SHADE_TREE_PAY_OPERATOR` | `0` (⇒ deployer) | the registrar / insert authority (`insert`, `insertBatch`, `setOperator`). Rotate later with the two-step `setOperator` / `acceptOperator`. |
+| `SHADE_TREE_COMMITMENT_HASHER` | `0` (⇒ deploy `RateCommitmentHasher`) | the TIERED hasher; on Sepolia reuse the live rln-v4 one `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586`. |
+| `SHADE_TREE_RPC_URL` / `SHADE_TREE_DEPLOY_OUT` | as §2 | output JSON default `contracts/paid-access.local.json` (gitignored). |
 
 Simulate, then broadcast (how Sepolia was deployed, 2026-08-17):
 
 ```bash
-export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-RGOE_PAY_LIMITS=8,32 \
-RGOE_COMMITMENT_HASHER=0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586 \
-RGOE_DEPLOY_OUT=./cache/sepolia-paid-access.local.json \
+export SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+SHADE_TREE_PAY_LIMITS=8,32 \
+SHADE_TREE_COMMITMENT_HASHER=0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586 \
+SHADE_TREE_DEPLOY_OUT=./cache/sepolia-paid-access.local.json \
 forge script contracts/script/DeployPaidAccess.s.sol:DeployPaidAccess \
-  --rpc-url "$RGOE_RPC_URL" --private-key "$K" \
+  --rpc-url "$SHADE_TREE_RPC_URL" --private-key "$K" \
   --libraries contracts/PoseidonT2.sol:PoseidonT2:0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55 \
   --libraries contracts/PoseidonT3.sol:PoseidonT3:0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022 \
   --broadcast --slow
@@ -278,7 +278,7 @@ PoseidonT2 link forge would deploy a fresh PoseidonT2 even though the hasher is 
 the dry run showed an extra 3.2M-gas CREATE2 until it was linked). Result: one CREATE,
 2,071,319 gas (~0.0022 ETH at ~1.08 gwei), `network/sepolia/paid-access-broadcast.json`.
 
-Verify (`cast call <addr> … --rpc-url "$RGOE_RPC_URL"`): `"currentRoot()(uint256)"` == the
+Verify (`cast call <addr> … --rpc-url "$SHADE_TREE_RPC_URL"`): `"currentRoot()(uint256)"` == the
 empty depth-20 root `10354334201938752428558948798274962999644820234654929486063894213598717249307`
 == `cast storage <addr> 3`, `"allowedLimits()(uint256[])"`, `"DEFAULT_LIMIT()(uint256)"` 8,
 `"ROOT_STORAGE_SLOT()(uint256)"` 3, `"operator()(address)"`, `"hasher()(address)"`,
@@ -286,11 +286,11 @@ empty depth-20 root `10354334201938752428558948798274962999644820234654929486063
 signature for explorer verification: `c(address,address,uint256[])` (operator, hasher, limits),
 linking PoseidonT3.
 
-Record: `rgoe record-deploy --network sepolia --contract paidAccessSet --from-broadcast
+Record: `shade-tree record-deploy --network sepolia --contract paidAccessSet --from-broadcast
 broadcast/DeployPaidAccess.s.sol/11155111/run-latest.json` fills `contracts.paidAccessSet` +
 `deployTxs` + `deployBlocks` (the release name stays; hand-add the free-form `paidAccessSet`
-block as in the Sepolia record). From then on `RGOE_NETWORK=sepolia` supplies
-`RGOE_PAID_ACCESS_CONTRACT`.
+block as in the Sepolia record). From then on `SHADE_TREE_NETWORK=sepolia` supplies
+`SHADE_TREE_PAID_ACCESS_CONTRACT`.
 
 Smoke (operator key): `cast send <addr> "insert(uint256,uint256)" <leaf> 8 --private-key …`,
 then `currentRoot()` == `lib/rln.mjs newGroup([leaf]).root`, `limitOf(leaf)` 8, `leafCount()`
@@ -306,4 +306,4 @@ shows the nomination in between; `setOperator(0x0)` cancels.
 
 *Reference implementation, unaudited, testnet-only. The mocks are not zero-knowledge; a
 production member set needs the real RLN/Groth16 verifier + rate-commitment hasher wired via
-`RGOE_WITHDRAW_VERIFIER` / `RGOE_COMMITMENT_HASHER` (see T-HARD-1, trusted setup).*
+`SHADE_TREE_WITHDRAW_VERIFIER` / `SHADE_TREE_COMMITMENT_HASHER` (see T-HARD-1, trusted setup).*

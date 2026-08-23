@@ -1,4 +1,4 @@
-# RGOE Protocol API
+# Shade Tree Protocol API
 
 Wire-format and HTTP-API contract for the bootnode and its record types. This is the
 reimplementation target for the Rust conformance client (T-RUST-1). Every claim cites a
@@ -12,8 +12,8 @@ Golden fixtures: [`testdata/vectors.json`](../testdata/vectors.json). See [Confo
 | --- | --- | --- | --- |
 | `ANNOUNCE_VERSION` | `1` | announce record `v` field | `bootnode/announce.mjs:34` |
 | directory `version` | `1` | signed-directory `version` field | `bootnode/server.mjs:127` |
-| envelope `v` | `3` | egress-envelope `v` field | `client/rgoe-client.mjs:91` |
-| signal prefix | `rgoe:v3` | request-signal line 1 | `lib/rln.mjs:125` |
+| envelope `v` | `3` | egress-envelope `v` field | `client/shade-tree-client.mjs:91` |
+| signal prefix | `shade-tree:v3` | request-signal line 1 | `lib/rln.mjs:125` |
 | onion | v3 | Tor onion address version byte `0x03` | `lib/directory.mjs:104` |
 
 "v3" is the protocol generation (RLN v3). The announce/directory internal `version`/`v`
@@ -108,9 +108,9 @@ Built by `bootnode/announce.mjs:51` `buildAnnounce`; verified by `:80` `verifyAn
 | `admits` | subset of `invited, staked, paid` in THAT order (the anonymity order, `ADMIT_PATHS`), deduped, lowercased | ≤ 3 by construction | T-FEAT-9 |
 | `pay` | `{ protocols: subset of [x402, mpp] in that order (non-empty), onion?: lowercased v3 onion (only when the registrar rides ANOTHER onion than the gateway's), port: 1..65535, asset: lowercased 0x-hex-40, chain: "eip155:<1..16 digits>", tiers: { "<limit 1..65535, canonical integer key>": "<atomic price, 1..40 decimal digits>" } sorted by numeric limit }`; a `pay` missing any of protocols/port/asset/chain/tiers is dropped WHOLE | 1..8 tiers (`MAX_CAPS_PAY_TIERS`) | T-FEAT-9 |
 
-`admits` is the gateway's ADMISSION POLICY (`RGOE_ADMIT`, `docs/adr/0008`): which membership
+`admits` is the gateway's ADMISSION POLICY (`SHADE_TREE_ADMIT`, `docs/adr/0008`): which membership
 roots it trusts. Absent = a legacy gateway (a client assumes it may admit any path during the
-rollout). `pay` is present iff the provider SELLS access (`RGOE_REGISTRAR_ADVERTISE=1` on its
+rollout). `pay` is present iff the provider SELLS access (`SHADE_TREE_REGISTRAR_ADVERTISE=1` on its
 heartbeat); its shape is the bootnode `/health` `pay` object plus `onion`. Both are unforgeable
 by the bootnode: they ride under `onionSig` and `capsSig`, so a widened/narrowed policy fails
 `bad-caps-sig` at `verifyAnnounce` / `verifyDirectory`. Pinned: `testdata/vectors.json`
@@ -129,7 +129,7 @@ Durable (no timestamp): one signature authorizes the onion for as long as the op
 staked. Message string, `bootnode/announce.mjs:45` `operatorAuthMessage`:
 
 ```
-RGOE gateway operator authorization\nonion=<onion>\noperator=<operator-lowercased>
+Shade Tree gateway operator authorization\nonion=<onion>\noperator=<operator-lowercased>
 ```
 
 `\n` are literal newline bytes (`0x0a`). `<operator>` is `String(operator).toLowerCase()`.
@@ -210,7 +210,7 @@ clients still probe and fail over (`lib/directory.mjs:264` `reportHealth`).
 
 ### 4.2 Pinned-signer model
 
-The client pins ONE signer pubkey (`RGOE_DIR_SIGNER`, printed at bootnode startup,
+The client pins ONE signer pubkey (`SHADE_TREE_DIR_SIGNER`, printed at bootnode startup,
 `bootnode/server.mjs:197`). `verifyDirectory(dir, pinnedSignerHex)`:
 
 1. `dir.signature` must exist.
@@ -280,14 +280,14 @@ per-gateway onion↔pubkey binding (section 4.3, reasons 5–6) is then checked 
 | — | success | `{ ok:true, signers:[matched…], threshold }` |
 
 Golden vector: `testdata/vectors.json` `thresholdDirectory` (2-of-3, fixed seeds; its canonical
-bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/rgoe-proto`
+bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/shade-tree-proto`
 `verify_directory_threshold(dir, pinned_signers)` consumes this shape (T-FEAT-9b);
 `verify_directory` remains the single-signer path.
 
 ## 5. Bootnode HTTP API
 
 Server: `bootnode/server.mjs:151` `makeServer`. All responses
-`content-type: application/json`. Listens on loopback (`127.0.0.1:RGOE_BOOTNODE_PORT`, default
+`content-type: application/json`. Listens on loopback (`127.0.0.1:SHADE_TREE_BOOTNODE_PORT`, default
 `8877`) behind its own onion service.
 
 ### 5.1 Routes
@@ -300,7 +300,7 @@ Server: `bootnode/server.mjs:151` `makeServer`. All responses
 | POST | `/announce` | `200 { ok:true, onion, staked, ttl }` | `:167` |
 
 - `/health`: `count` = live entry count; `admission` = `"open"|"stake"`; `signer` = pinned
-  signer pubkey hex; `pay` (T-FEAT-7, ONLY when `RGOE_REGISTRAR_ADVERTISE` is set) =
+  signer pubkey hex; `pay` (T-FEAT-7, ONLY when `SHADE_TREE_REGISTRAR_ADVERTISE` is set) =
   `{ port, protocols:["x402","mpp"], asset, chain:"eip155:<id>", tiers:{"<limit>":"<amount>"} }`,
   the discovery pointer to the operator's 402 registrar on this same onion (section 5.4).
 - `/gateway/<onion>`: `<onion>` is `decodeURIComponent`-ed; the registry appends `.onion` if
@@ -326,14 +326,14 @@ Registry: `bootnode/server.mjs:76` `makeRegistry`.
 
 | Control | Default | Env | Effect |
 | --- | --- | --- | --- |
-| `admission` | `open` | `RGOE_BOOTNODE_ADMISSION` | `open` = onion-sig only; `stake` sets `requireStake` (operator sig + live stake enforced) |
-| `ttlSec` | `900` | `RGOE_BOOTNODE_TTL` | seconds an entry stays live without re-announce |
-| `maxEntries` | `10000` | `RGOE_BOOTNODE_MAX_ENTRIES` | a NEW onion is refused `registry-full` when full (after a sweep); existing onions still refresh |
-| `minReannounceSec` | `5` | `RGOE_BOOTNODE_MIN_REANNOUNCE` | a resident onion re-announcing sooner is refused `rate-limited` |
+| `admission` | `open` | `SHADE_TREE_BOOTNODE_ADMISSION` | `open` = onion-sig only; `stake` sets `requireStake` (operator sig + live stake enforced) |
+| `ttlSec` | `900` | `SHADE_TREE_BOOTNODE_TTL` | seconds an entry stays live without re-announce |
+| `maxEntries` | `10000` | `SHADE_TREE_BOOTNODE_MAX_ENTRIES` | a NEW onion is refused `registry-full` when full (after a sweep); existing onions still refresh |
+| `minReannounceSec` | `5` | `SHADE_TREE_BOOTNODE_MIN_REANNOUNCE` | a resident onion re-announcing sooner is refused `rate-limited` |
 | `MAX_WEIGHT` | `1000` | (const) | stored weight = `max(0, min(1000, weight))`; `weight` non-finite -> `100` (`:97`,`:100`) |
 | request body cap | `64 KiB` | (const) | `readBody` max (`:142`); overflow -> `400 bad-json:body too large` |
-| global announce bucket | `66.7/s`, burst `1000` | `RGOE_BOOTNODE_ANNOUNCE_RATE` / `_BURST` | `makeAnnounceBucket`: the LAST gate before `verifyAnnounce`; overflow -> `429 global-rate-limited` + `Retry-After` (T-HARD-4) |
-| HTTP slow-client limits | 10 s / 30 s / 5 s / 8 KiB | `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` etc. | `HTTP_LIMITS`: headers / request / keep-alive timeouts (`408`) + max header size (`431`) (T-HARD-4) |
+| global announce bucket | `66.7/s`, burst `1000` | `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` / `_BURST` | `makeAnnounceBucket`: the LAST gate before `verifyAnnounce`; overflow -> `429 global-rate-limited` + `Retry-After` (T-HARD-4) |
+| HTTP slow-client limits | 10 s / 30 s / 5 s / 8 KiB | `SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS` etc. | `HTTP_LIMITS`: headers / request / keep-alive timeouts (`408`) + max header size (`431`) (T-HARD-4) |
 
 Registry-level announce reasons (returned as `400 { err:<reason> }`), checked BEFORE the
 signature verify (`:87`,`:88`):
@@ -353,8 +353,8 @@ report.
 The operator's payment endpoint, published as an EXTRA virtual port of an onion the box runs:
 the bootnode onion (`http://<bootnode-onion>:8878/`) or — T-FEAT-9 — the GATEWAY onion on a
 gateway-only box (`http://<gateway-onion>:8878/`; the gateway's signed `caps.pay` says where,
-§3.0.1); loopback `127.0.0.1:RGOE_REGISTRAR_PORT`. Both machine-payment dialects on one route
-set — but only the rails the provider ENABLED (`RGOE_PAY_PROTOCOLS`, default both) are served:
+§3.0.1); loopback `127.0.0.1:SHADE_TREE_REGISTRAR_PORT`. Both machine-payment dialects on one route
+set — but only the rails the provider ENABLED (`SHADE_TREE_PAY_PROTOCOLS`, default both) are served:
 a disabled rail gets NO challenge header in any 402, is absent from `pay.protocols`, and a
 `POST /pay` carrying its header is refused `400 { ok:false, err:"protocol-disabled",
 protocol:"x402"|"mpp", protocols:[<enabled>], detail }` before any parsing. Wire formats in
@@ -368,7 +368,7 @@ protocol:"x402"|"mpp", protocols:[<enabled>], detail }` before any parsing. Wire
 | POST | `/pay` + `Authorization: Payment <b64url credential>` | `200 { …same…, protocol:"mpp" }` + `Payment-Receipt: <b64url { status:"success", method:"evm", challengeId, reference:<settleTx>, timestamp, chainId }>` | credential `payload.type` MUST be `"authorization"` (EIP-3009); `nonce == keccak256(id ‖ realm)`; body must match the challenge `digest` |
 | GET | `/pay/status/<nonce>` | `200 { ok:true, orders:[{ state, asset, payer, nonce, commitment, limit, settleTx, insertTx, leafIndex, root }] }` | `state` ∈ `settling|settled|inserted|failed`; `404 not-found`; `400 bad-nonce` |
 | GET | `/health` | `200 { ok:true, pay:{…offer…}, paidAccessSet, leafCount, root, orders }` | |
-| GET | `/metrics` | Prometheus text | `rgoe_registrar_quotes_total{route}`, `rgoe_registrar_payments_total{protocol,result,reason}`, `rgoe_registrar_txs_total{kind,result}`, `rgoe_registrar_orders`, `rgoe_registrar_inflight` |
+| GET | `/metrics` | Prometheus text | `shade_tree_registrar_quotes_total{route}`, `shade_tree_registrar_payments_total{protocol,result,reason}`, `shade_tree_registrar_txs_total{kind,result}`, `shade_tree_registrar_orders`, `shade_tree_registrar_inflight` |
 
 Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
 
@@ -388,13 +388,13 @@ stored receipt (no second settle/insert).
 ## 6. Egress envelope v3
 
 The envelope is NOT part of the bootnode HTTP API. The client sends it to a GATEWAY onion over
-a Tor SOCKS tunnel (`client/rgoe-client.mjs:184` `_dial`, destination port `80`) as
+a Tor SOCKS tunnel (`client/shade-tree-client.mjs:184` `_dial`, destination port `80`) as
 `JSON.stringify(envelope) + "\n"` (`:218`). The gateway replies with ONE newline-terminated
 JSON line: `{ ok:true }` on admit, else `{ ok:false, err:"gate:<reason>" }` or another
 `err` (`gateway/gateway.mjs:205`,`:240`). Documented here because the same wire format the
 Rust client emits must satisfy `verifyEnvelope`.
 
-### 6.1 Wire shape — `client/rgoe-client.mjs:82` `buildEnvelope`
+### 6.1 Wire shape — `client/shade-tree-client.mjs:82` `buildEnvelope`
 
 ```jsonc
 {
@@ -418,9 +418,9 @@ phase-2 output) the proof was generated with, so a gateway running a dual-VK rol
 (`docs/CEREMONY.md` §6) verifies under the matching vkey. Value = `<circuit>-<sha256(verification_
 key.json bytes) hex[0:16]>` — grammar `^[a-z0-9][a-z0-9._-]{0,63}$` — i.e. literally the vkey's
 hash prefix in `testdata/zk-artifacts.lock.json` (`circuits.rln.artifactId`), derived identically
-by the JS client (`artifactIdOf`), the Rust client (`rgoe_proto::artifact_id_of`, from its embedded
-bytes) and the gateway (from the files `RGOE_ZK_ARTIFACTS` names). OPTIONAL and additive: an
-envelope WITHOUT it is treated as the gateway's LEGACY id (`RGOE_ZK_ARTIFACT_LEGACY`, default the
+by the JS client (`artifactIdOf`), the Rust client (`shade_tree_proto::artifact_id_of`, from its embedded
+bytes) and the gateway (from the files `SHADE_TREE_ZK_ARTIFACTS` names). OPTIONAL and additive: an
+envelope WITHOUT it is treated as the gateway's LEGACY id (`SHADE_TREE_ZK_ARTIFACT_LEGACY`, default the
 lock's `previousArtifactId` else the built-in id), so an un-upgraded client keeps working while
 that id is accepted and is rejected `artifact-retired:<id>` once it is not; a gateway that predates
 the field ignores it. The client sends the NEWEST of its own sets that the gateway advertises in
@@ -429,7 +429,7 @@ its signed caps (`caps.artifacts`, §3), else optimistically its newest (`select
 `nullifier`, `externalNullifier`, and `share` are copies of the proof's public signals but are
 NON-authoritative: `verifyEnvelope` reads them from `proof.snarkProof.publicSignals` (`ps`), not
 from the envelope copies (`lib/rln.mjs:288` header). `publicSignals` field set is
-`{ y, root, nullifier, x, externalNullifier }` (`client/rgoe-client.mjs:214`).
+`{ y, root, nullifier, x, externalNullifier }` (`client/shade-tree-client.mjs:214`).
 
 **Reputation tiers carry NO wire field (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** The
 member's per-epoch budget (`userMessageLimit`) is a PRIVATE circuit input hashed into its leaf and
@@ -442,7 +442,7 @@ gateway MUST NOT be sent one. Enforcement is the root (`wrong-group-root`) + the
 `lib/rln.mjs:124` `requestSignal`:
 
 ```
-requestSignal(target, nonce) = `rgoe:v3\n${target}\n${nonce}`
+requestSignal(target, nonce) = `shade-tree:v3\n${target}\n${nonce}`
 ```
 
 The circuit public `x` is `calculateSignalHash(message)` = `keccak256(utf8(message)) >> 8`
@@ -488,7 +488,7 @@ Fail-closed, FIRST failure returned. `ps = proof.snarkProof.publicSignals`;
 | — | success | `{ ok:true, reason:"ok", nullifier, externalNullifier, share:{x,y}, artifact }` from `ps` |
 
 Step 3b (`lib/zk-artifacts.mjs` `resolveArtifact`) is a cheap map lookup on the accepted set
-`{artifactId -> vkey}` (`RGOE_ZK_ARTIFACTS`; default = the built-in vkey under its own id): absent
+`{artifactId -> vkey}` (`SHADE_TREE_ZK_ARTIFACTS`; default = the built-in vkey under its own id): absent
 field ⇒ the legacy id, then the same rules. Its three rejections additionally return `label` (the
 bounded metrics key: `bad-artifact` / `artifact-retired` / `artifact-unknown`, never the id) and
 `artifacts` (the accepted ids), which the gateway writes back as `{ ok:false, err:"gate:<reason>",
@@ -524,11 +524,11 @@ Epoch clock: `epoch = floor(nowMs/1000 / EPOCH_SECONDS)`, `EPOCH_SECONDS` defaul
 6. `requestSignal` string, `signalFieldSafe`, and the target-binding hash.
 7. `artifactIdOf` (sha256 prefix of the vkey bytes), `canonicalCaps.artifacts`, and `selectArtifact`
    (T-HARD-8; the Rust client also hash-checks its embedded artifacts against the embedded lock at
-   startup, `rust/rgoe-rln/src/artifacts.rs`).
+   startup, `rust/shade-tree-rln/src/artifacts.rs`).
 8. `canonicalCaps.admits` (anonymity order, deduped) and `canonicalCaps.pay` (bounded, numeric tier
    order) + the admission-aware selection rule (T-FEAT-9: keep gateways whose `admits` include the
-   client's leaf source; absent `admits` = keep; `--max-anon` = exactly `["invited"]`), `rgoe_proto`
-   `canonical_admits` / `canonical_pay`, `rgoe-client` `filter_by_admission`.
+   client's leaf source; absent `admits` = keep; `--max-anon` = exactly `["invited"]`), `shade_tree_proto`
+   `canonical_admits` / `canonical_pay`, `shade-tree-client` `filter_by_admission`.
 
 ## 8. Ambiguities / notes
 

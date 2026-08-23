@@ -221,7 +221,7 @@ await test("default OFF: sharedTally:null and no-arg produce the identical T-FEA
 
 await test("makeConfiguredFleetTally() returns null unless a transport is wired (OFF by default)", async () => {
   assert.equal(makeConfiguredFleetTally({ env: {} }), null, "no env, no transport => null");
-  assert.equal(makeConfiguredFleetTally({ env: { RGOE_FLEET_TALLY: "1" } }), null, "flag set but no bundled transport => still null (fail-open)");
+  assert.equal(makeConfiguredFleetTally({ env: { SHADE_TREE_FLEET_TALLY: "1" } }), null, "flag set but no bundled transport => still null (fail-open)");
   const t = makeConfiguredFleetTally({ transport: makeLoopbackTransport() });
   assert.ok(t && typeof t.has === "function" && typeof t.record === "function", "an injected transport yields a live tally");
   t.close();

@@ -1,11 +1,11 @@
-# Fleet: egress discovery and per-request gateway selection
+# Fleet: egress discovery and per-tunnel gateway selection
 
 **Status: design; most of it is now built.** The directory library, its signature and
-onion-control binding, per-request selection, and the shim wiring are written and
+onion-control binding, per-tunnel selection, and the shim wiring are written and
 tested (`lib/directory.mjs`, `client/selection.mjs`, `group/directory.example.json`,
-the `RGOE_DIRECTORY` path in `client/shim.mjs`); live discovery through a bootnode is
+the `SHADE_TREE_DIRECTORY` path in `client/shim.mjs`); live discovery through a bootnode is
 `bootnode/` (`docs/BOOTNODE.md`); the shared per-epoch spent-nullifier tally across
-gateways is `gateway/fleet-tally.mjs` (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, opt-in,
+gateways is `gateway/fleet-tally.mjs` (`SHADE_TREE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, opt-in,
 fail-open — it shares only `(nullifier, epoch)`, so a replay to a second gateway is
 rejected but cross-gateway *share* exchange for reconstruction is not wired). What is
 *not* built is the on-chain-sourced directory (the onion is deliberately never on chain,
@@ -13,7 +13,7 @@ ADR 0002; `GatewayRegistry` stakes an operator address only). The "fleet budget 
 compose" section below is the original analysis that motivated the tally. This expands
 [ROADMAP v1](ROADMAP-v1.md) item 3 into a spec; read that first for the framing.
 
-The PoC has one gateway and the client pins it (`RGOE_ONION` or `tor/hs/hostname`).
+The PoC has one gateway and the client pins it (`SHADE_TREE_ONION` or `tor/hs/hostname`).
 Two costs, from the roadmap, restated so this doc stands alone:
 
 - **No discovery.** Onion addresses are handed out of band. There is no way to add or
@@ -66,7 +66,7 @@ canonical serialization (fixed field order, whitespace-independent; see
 bundle time. A swapped or edited file fails the check and is rejected, not trusted.
 There is deliberately no trust-on-first-use default: an unpinned directory is exactly
 the poisoning surface the signature exists to close, so directory mode is off until a
-pin is set (`RGOE_DIR_SIGNER`, or a hardcoded constant in a real bundle).
+pin is set (`SHADE_TREE_DIR_SIGNER`, or a hardcoded constant in a real bundle).
 
 **Onion-control binding, two layers.** A poisoned or mis-signed directory must not be
 able to graft a hostile address:
@@ -106,11 +106,11 @@ able to graft a hostile address:
   signer — was narrowed by ADR 0002 (`docs/adr/0002-onion-never-on-chain.md`): the
   **stake** is on chain (`GatewayRegistry`, keyed by operator address) but the onion never
   is; the onion↔stake binding is the operator's signature on the announce, re-checkable
-  by clients (`RGOE_VERIFY_STAKE`). Rebuilding the gateway *set* purely from chain is not
+  by clients (`SHADE_TREE_VERIFY_STAKE`). Rebuilding the gateway *set* purely from chain is not
   a client path (see the status map in [ROADMAP.md](ROADMAP.md)). See
   [the reconciliation with ONCHAIN.md](#reconciliation-with-onchainmd) below.
 
-## Per-request selection in the shim (shim-as-router)
+## Per-tunnel selection in the shim (shim-as-router)
 
 `curl` stays dumb; the shim is the router. Per CONNECT:
 
@@ -128,8 +128,8 @@ able to graft a hostile address:
    EWMA. This health is the client's local view and is never written back to the signed
    file.
 
-`RGOE_ONION` still forces a single gateway (debug pin, or when a caller genuinely
-wants a fixed egress IP). With no `RGOE_DIRECTORY`, the single-onion path is exactly
+`SHADE_TREE_ONION` still forces a single gateway (debug pin, or when a caller genuinely
+wants a fixed egress IP). With no `SHADE_TREE_DIRECTORY`, the single-onion path is exactly
 the PoC's, untouched.
 
 **Rotation is free, cryptographically.** The membership proof is gateway-independent:
@@ -149,14 +149,14 @@ State this precisely, because rotation on its own is a weaker guarantee than it 
 | 1 gateway (PoC today) | 100% of targets, under one constant per-epoch nullifier |
 | N gateways, **non-colluding**, rotation only | ~1/N of targets each, each under the *same* per-epoch nullifier |
 | N gateways, **colluding**, rotation only | 100% reassembled: they join their logs on the shared per-epoch nullifier |
-| N gateways + item 1 (distinct nullifier per request) | ~1/N each, and colluding gateways **cannot** rejoin: no shared key across requests |
+| N gateways + item 1 (distinct nullifier per tunnel) | ~1/N each, and colluding gateways **cannot** rejoin: no shared key across requests |
 
 The load-bearing line: **rotation alone does not defeat colluding gateways.** A
 member's per-epoch nullifier is constant, so a colluding set matches it across their
 logs and rebuilds the whole profile regardless of how the requests were spread. You
 need [item 1](ROADMAP-v1.md#1-unlinkable-rate-limiting-decouple-linkability-from-the-rate-window)
-(a distinct nullifier per request) for rotation to actually buy anything against
-collusion. **Rotation + per-request unlinkable nullifiers** is the combination that
+(a distinct nullifier per tunnel) for rotation to actually buy anything against
+collusion. **Rotation + per-tunnel unlinkable nullifiers** is the combination that
 delivers "no operator, even a colluding set, can profile a member." Neither piece is
 sufficient alone. Against a purely *non*-colluding fleet, rotation alone already cuts
 each operator's view to ~1/N, which is the honest win it does deliver.
@@ -198,7 +198,7 @@ budget is counted once across the fleet. Two shapes:
 **Shared accounting reintroduces a cross-gateway linkage point.** A shared spent-set is,
 by construction, a place where one nullifier is observed across gateways, which is the
 profiling join we spread traffic to avoid. It is safe **only when paired with item 1**:
-per-request nullifiers make the shared tally a set of unrelated counters instead of a
+per-tunnel nullifiers make the shared tally a set of unrelated counters instead of a
 member's cross-gateway profile. So the ordering constraint is real: ship item 1 before,
 or with, shared budget accounting, never shared accounting alone.
 
@@ -219,9 +219,9 @@ splitting shares across gateways. With it, a shared view of `(nullifier, epoch) 
 lets whichever gateway crosses the two-share threshold reconstruct and slash. So the
 shared tally is not only how you enforce one budget across the fleet; under
 ONCHAIN.md's slashing it is also the *only* thing that makes the slash uncircumventable
-by rotation. And it must still be paired with item 1's per-request nullifiers so that
+by rotation. And it must still be paired with item 1's per-tunnel nullifiers so that
 the shared share-set is not also a profile. This is the tightest three-way coupling in
-the design: **fleet rotation, shared accounting, and per-request nullifiers have to
+the design: **fleet rotation, shared accounting, and per-tunnel nullifiers have to
 ship together to be simultaneously private, rate-capped, and slashable.**
 
 ## The directory as a trust and availability surface
@@ -236,7 +236,7 @@ implements.
 | Poisoned list grafts hostile onion | Egress via attacker's IP | Static `pubkey == onionToPubkey(onion)` binding at load |
 | Listed onion an attacker briefly fronts | Egress via attacker | Live onion-control challenge (`verifyOnionControl`; wire into handshake) |
 | Directory onion dead / unreachable | Fleet unusable | Last-known-good cache; `loadDirectory` degrades to previous good list |
-| Stale list, some gateways gone | Dial timeouts | Per-request failover + local health marks them `down` |
+| Stale list, some gateways gone | Dial timeouts | Per-tunnel failover + local health marks them `down` |
 | Signer key compromised | Attacker signs a hostile list | Rotate the pin (bundle update); endgame: on-chain root removes the signer entirely |
 
 The invariant: a dead or poisoned directory degrades to the **previous good fleet**,
@@ -288,8 +288,8 @@ kind of thing.
 
 So service staking buys **Sybil-cost and skin-in-the-game, not clean automatic
 slashing.** The defenses against a rogue gateway's *primary* harm — metadata — stay
-where they already are, client-side and cryptographic: per-request rotation across the
-fleet plus item 1's per-request nullifiers, so no single gateway (rogue or honest) ever
+where they already are, client-side and cryptographic: per-tunnel rotation across the
+fleet plus item 1's per-tunnel nullifiers, so no single gateway (rogue or honest) ever
 sees enough to build a profile in the first place, backed by health/reputation feedback
 that down-weights misbehaving or unreliable gateways regardless of their stake. Staking
 complements those; it does not replace them. Concretely:
@@ -335,20 +335,20 @@ the gap. Padding belongs to the network-observer project, not here.
 The mitigations are structural, and they are exactly the two features this next version
 adopts:
 
-- **Per-request rotation** cuts the fraction of your traffic any one gateway (rogue or
+- **Per-tunnel rotation** cuts the fraction of your traffic any one gateway (rogue or
   honest) receives to ~1/N, so a rogue gateway can only correlate the share that lands on
   it.
-- **Per-request nullifiers** (ROADMAP-v1 #1) cap the *blast radius* of each successful
+- **Per-tunnel nullifiers** (ROADMAP-v1 #1) cap the *blast radius* of each successful
   correlation to a **single request** instead of the whole epoch. With the constant
   per-epoch nullifier, one correlation hit attributes every request that epoch; with
-  per-request nullifiers it attributes one stream.
+  per-tunnel nullifiers it attributes one stream.
 - **Entry guards** (Tor) make owning the client end expensive — becoming someone's first
   hop needs a large share of guard bandwidth, not just "a bunch of nodes" — and
   **AS-diverse gateways** (below) lower the odds one network sees both ends.
 
 None of this *beats* a true both-ends adversary; nothing deployed does. It makes owning
 the client end costly and caps the damage of each hit to one request. That is the honest
-guarantee, and it is why rotation + per-request nullifiers are load-bearing here, not
+guarantee, and it is why rotation + per-tunnel nullifiers are load-bearing here, not
 cosmetic.
 
 ## AS diversity (adversarial-review finding 11)
@@ -376,7 +376,7 @@ a cryptographic check.
 Gateway A forwarding to a gateway B that A selects is **not** the plan. It only moves
 the knowledge to A and doubles the latency. Per the framing above and in the roadmap,
 knowing your own exit is not the threat; one operator seeing all of a member is. Client-
-side per-request rotation addresses that threat directly. Multi-hop pays real latency to
+side per-tunnel rotation addresses that threat directly. Multi-hop pays real latency to
 hide the exit from the client, which was never what needed hiding. If a future threat
 model wants the client blind to its exit, that is a different project with a different
 justification; it is not this one.
@@ -387,21 +387,21 @@ justification; it is not this one.
 |---|---|
 | `lib/directory.mjs` | Load + verify a signed directory (ed25519, pinned signer), onion↔pubkey binding, onion-control check, weighted `pickGateway` / `selectionOrder`, `reportHealth`, last-known-good `loadDirectory`. On-chain mode is a TODO behind the same shape. |
 | `client/selection.mjs` | Shim-facing: `directoryEnabled()`, `selectCandidates()` (weighted pick + failover order), `reportResult()`. Refreshes lazily, carries health across refresh, degrades to cache. |
-| `client/shim.mjs` | `RGOE_DIRECTORY` path: per-CONNECT candidate order with dial-timeout failover and health feedback. `RGOE_ONION` and the single-onion path are unchanged. |
+| `client/shim.mjs` | `SHADE_TREE_DIRECTORY` path: per-CONNECT candidate order with dial-timeout failover and health feedback. `SHADE_TREE_ONION` and the single-onion path are unchanged. |
 | `group/directory.example.json` | A signed 3-gateway example with real, internally-consistent v3 onions. |
 | `group/sign-directory.mjs` | Mint the signer key and (re)sign a directory; with no args mints the example. |
-| `bootnode/deploy/bootstrap.sh` | Fleet bring-up per box. `RGOE_BOOTNODE_ONION=<onion>` = gateway-only box that joins an existing bootnode (no local bootnode unit/HS); `RGOE_ENABLE_POW=1` = onion PoW defense (default `0`); `RGOE_GATEWAY_REGION=<bucket>` = region in signed caps. Table: `bootnode/deploy/README.md`. |
+| `bootnode/deploy/bootstrap.sh` | Fleet bring-up per box. `SHADE_TREE_BOOTNODE_ONION=<onion>` = gateway-only box that joins an existing bootnode (no local bootnode unit/HS); `SHADE_TREE_ENABLE_POW=1` = onion PoW defense (default `0`); `SHADE_TREE_GATEWAY_REGION=<bucket>` = region in signed caps. Table: `bootnode/deploy/README.md`. |
 
 Enable directory mode:
 
 ```bash
-export RGOE_DIRECTORY=group/directory.example.json
-export RGOE_DIR_SIGNER=<pinned signer pubkey printed by sign-directory.mjs>
-# RGOE_SECRET as usual; the shim now rotates gateways per request with failover.
+export SHADE_TREE_DIRECTORY=group/directory.example.json
+export SHADE_TREE_DIR_SIGNER=<pinned signer pubkey printed by sign-directory.mjs>
+# SHADE_TREE_SECRET as usual; the shim now rotates gateways per tunnel with failover.
 ```
 
 The one-line integration is already in the shim's connect handler
-(`const onions = await candidateOnions()`); with no `RGOE_DIRECTORY` set,
+(`const onions = await candidateOnions()`); with no `SHADE_TREE_DIRECTORY` set,
 `candidateOnions()` returns the single pinned onion and nothing changes.
 
 ## Reconciliation with ONCHAIN.md
@@ -428,5 +428,5 @@ Two seams touch the parallel on-chain track. Both are now resolved in
    reconstructs and slashes. Whether that tally lives in a replicated KV, a gossip
    tally, or on chain is an implementation choice; the key and the two values are the
    contract between the two designs, and it must still be paired with item 1's
-   per-request nullifiers so the shared tally is a set of unrelated counters, not a
+   per-tunnel nullifiers so the shared tally is a set of unrelated counters, not a
    profile.

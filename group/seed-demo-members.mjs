@@ -55,7 +55,7 @@ const card =
       (k) =>
         `## ${k.label}\n\n` +
         "```bash\n" +
-        `export RGOE_SECRET=${k.secret}\n` +
+        `export SHADE_TREE_SECRET=${k.secret}\n` +
         "```\n\n" +
         `commitment (public, in the set): \`${k.commitment}\`\n`
     )

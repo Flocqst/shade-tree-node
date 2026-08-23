@@ -1,7 +1,7 @@
-# Reputation-gated onion egress: build, deployment, and validation
+# Shade Tree: build, deployment, and validation
 
 **Status: historical report of the June 2026 single-gateway PoC (live and verified at
-the time, both ends).** The current system (RLN per-request proofs, on-chain stake,
+the time, both ends).** The current system (RLN per-tunnel proofs, on-chain stake,
 bootnode fleet) is described in `README.md` and `docs/ROADMAP.md`. A clean-IP egress, reachable only
 through Tor, that forwards to the clearnet for clients who prove in zero knowledge
 that they belong to a curated set, and drops everyone else before a byte leaves.
@@ -47,8 +47,8 @@ node, and the gateway never learns the client IP.
   outbound-only.
 - Tor installed from the official Tor Project apt repo, so `tor --list-modules`
   reports `pow: yes`. The onion proof-of-work DoS defense is enabled in the torrc.
-- The gateway and its tor run as two durable `systemd` services (`rgoe-tor`,
-  `rgoe-gateway`), enabled, so they survive disconnect and reboot and restart on
+- The gateway and its tor run as two durable `systemd` services (`shade-tree-tor`,
+  `shade-tree-gateway`), enabled, so they survive disconnect and reboot and restart on
   failure. The gateway binds `127.0.0.1:8443`; Tor maps the onion `:80` to it.
 - The reputation set (`group/members.json`, public commitments only) was shipped to
   the box. Member secrets never left the laptops. The gateway holds no secret.
@@ -128,7 +128,7 @@ per-party worst case):
 Server (the egress box): `bash scripts/run-gateway.sh` prints the onion. Full
 procedure, invariants, and a verification matrix are in [`DEPLOY.md`](DEPLOY.md).
 
-Laptop: `export RGOE_ONION=<onion>` then `bash scripts/run-client.sh` and
+Laptop: `export SHADE_TREE_ONION=<onion>` then `bash scripts/run-client.sh` and
 `bash scripts/verify.sh`. To hand the egress to a friend, give them their own key
 and [`JOIN.md`](JOIN.md); they run `bash scripts/join.sh <onion> <secret>`.
 

@@ -8,7 +8,7 @@
 // the gate. Each success also fetches api.ipify over the tunnel and records the
 // egress IP, so we keep proving the path end to end.
 //
-//   RGOE_ONION=<onion> node experiments/soak.mjs <seconds> <concurrency>
+//   SHADE_TREE_ONION=<onion> node experiments/soak.mjs <seconds> <concurrency>
 import { readFile, appendFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -19,14 +19,14 @@ import { proveMembership, currentEpoch } from "../lib/semaphore.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
-const ONION = (process.env.RGOE_ONION || "").replace(/\.onion$/, "");
-const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9260);
+const ONION = (process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "");
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9260);
 const DURATION = Number(process.argv[2] || 3600) * 1000;
 const CONC = Number(process.argv[3] || 6);
 const THOST = "api.ipify.org", TPORT = 443;
 const OUT = process.env.SOAK_OUT || "/tmp/soak.jsonl";
 const IPRE = /[0-9]{1,3}(\.[0-9]{1,3}){3}/;
-if (!ONION) { console.error("set RGOE_ONION"); process.exit(1); }
+if (!ONION) { console.error("set SHADE_TREE_ONION"); process.exit(1); }
 
 const keys = JSON.parse(await readFile(join(ROOT, "keys.local.json"), "utf8"));
 const scope = currentEpoch();
@@ -57,7 +57,7 @@ function once(proof) {
         stage = "tls";
         const tsock = tls.connect({ socket: s, servername: THOST, rejectUnauthorized: false }, () => {
           stage = "http";
-          tsock.write("GET / HTTP/1.1\r\nHost: " + THOST + "\r\nUser-Agent: rgoe-soak\r\nConnection: close\r\n\r\n");
+          tsock.write("GET / HTTP/1.1\r\nHost: " + THOST + "\r\nUser-Agent: shade-tree-soak\r\nConnection: close\r\n\r\n");
         });
         let body = "", code = null;
         tsock.setTimeout(20000, () => finish("timeout:http"));

@@ -9,7 +9,7 @@
 ## Context
 
 Membership was binary: every member proved against the same leaf formula and got the
-same per-epoch budget `K` (`K_SLOTS = 8`, `RGOE_SLOTS`). T-FEAT-8 asks for a spectrum:
+same per-epoch budget `K` (`K_SLOTS = 8`, `SHADE_TREE_SLOTS`). T-FEAT-8 asks for a spectrum:
 "a member with higher on-chain stake (or accrued good behavior) proves, in zero knowledge,
 a budget tier and gets a larger `K`, without revealing which member" — two tiers with
 different `K`, each proven in ZK, the gateway enforcing the proven tier, and no member able
@@ -60,7 +60,7 @@ limit. Nothing else changes:
   `members.json`, or the contract) decides who may hold which limit.
 - **Slashing names the right leaf.** After an over-spend the gateway holds the
   reconstructed `identitySecret` but not the tier. `resolveSlashLeaf(secret, { tiers,
-  hasLeaf })` derives one candidate per known tier (`RGOE_TIERS`, always containing `K`)
+  hasLeaf })` derives one candidate per known tier (`SHADE_TREE_TIERS`, always containing `K`)
   and picks the one present in the local set; with no leaves (on-chain root mode) it falls
   back to the default tier's leaf (`resolved:false`, a warn) — the pre-tier behaviour and the
   only leaf today's on-chain hasher can slash (see Consequences).
@@ -71,9 +71,9 @@ limit. Nothing else changes:
 Surface (all default to `K_SLOTS`, so pre-tier files, leaves, and wire bytes are unchanged):
 `rateCommitmentOf(identity, limit)`, `deriveCommitment(identitySecret, limit)`,
 `proveForSlot(.., { limit })`, `groupFromIdentities([{ identity, limit }])`,
-`RgoeClient({ limit })` / `RGOE_LIMIT`, `rgoe enroll --limit N`, `rgoe identity --limit N`
+`ShadeTreeClient({ limit })` / `SHADE_TREE_LIMIT`, `shade-tree enroll --limit N`, `shade-tree identity --limit N`
 (writes `limit` into the Rust identity file only when non-default), Rust `--k` (defaults to
-the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
+the identity file's `limit`, else 8), gateway `SHADE_TREE_TIERS`.
 
 ## Consequences
 
@@ -82,7 +82,7 @@ the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
 - The tier is a per-leaf, admission-time fact. Changing a member's tier = removing its
   leaf and admitting a new one (the member re-enrols at the new limit; the identity secret
   can stay). There is no "upgrade in place".
-- A member must run its client with the limit its leaf was enrolled with (`RGOE_LIMIT`,
+- A member must run its client with the limit its leaf was enrolled with (`SHADE_TREE_LIMIT`,
   identity-file `limit`, `--k`); a mismatch fails at prove time, never on the wire.
 - **On chain, tiers are admitted since rln-v4-tiers (T-FEAT-8b).** The redeployed
   `StakedReputationSet` records the tier at `register(commitment, limit)` and requires that
@@ -93,7 +93,7 @@ the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
   (hasher pinned K=8, unslashable tiered leaves) is superseded and only remains the live
   fleet's slash target until its units are flipped. Tier changes are still re-enrolment
   (a new leaf, a new stake); the table on Sepolia is {8, 32}.
-- The gateway's `RGOE_TIERS` is bookkeeping for the slash path, not a policy: proof
+- The gateway's `SHADE_TREE_TIERS` is bookkeeping for the slash path, not a policy: proof
   verification does not consult it. Against rln-v4 the on-chain slasher unions it with the
   contract's `allowedLimits()` and resolves the tier of a reconstructed secret via
   `limitOf(candidateLeaf)` (`gateway/gateway.mjs makeOnchainSlasher`), so an over-spend at
@@ -121,11 +121,11 @@ the identity file's `limit`, else 8), gateway `RGOE_TIERS`.
 - `circuits/rln/ARTIFACTS.md` — leaf formula, `RLN(20,16)`, public-signal order.
 - `lib/rln.mjs` — `K_SLOTS`, `MAX_LIMIT`, `normLimit`, `parseTiers`/`TIERS`,
   `rateCommitmentOf`, `deriveCommitment(s)`, `resolveSlashLeaf`, `proveForSlot({ limit })`.
-- `gateway/gateway.mjs` — `deriveSlashLeaf`, `RGOE_TIERS` startup line.
-- `client/rgoe-client.mjs` — `makeSlotPool({ K })`, `RgoeClient({ limit })`, `buildEnvelope`.
+- `gateway/gateway.mjs` — `deriveSlashLeaf`, `SHADE_TREE_TIERS` startup line.
+- `client/shade-tree-client.mjs` — `makeSlotPool({ K })`, `ShadeTreeClient({ limit })`, `buildEnvelope`.
 - `lib/identity-file.mjs`, `group/identity.mjs`, `group/enroll.mjs` — `--limit`.
-- `rust/rgoe-client/src/main.rs` (`IdentityFile.limit`, `--k`), `rust/rgoe-client/src/slotcursor.rs`
-  (`MAX_LIMIT`), `rust/rgoe-rln/src/tree.rs` (`rate_commitment`), `rust/rgoe-rln/tests/tree_parity.rs`.
+- `rust/shade-tree-client/src/main.rs` (`IdentityFile.limit`, `--k`), `rust/shade-tree-client/src/slotcursor.rs`
+  (`MAX_LIMIT`), `rust/shade-tree-rln/src/tree.rs` (`rate_commitment`), `rust/shade-tree-rln/tests/tree_parity.rs`.
 - Tests: `lib/tiers.selftest.mjs` (fast), `test/reputation-tiers.selftest.mjs` (real proofs).
 - `docs/ONCHAIN.md` "Tiers on chain" — the contract side (shipped: `contracts/StakedReputationSet.sol`,
   `contracts/RateCommitmentHasher.sol`, `contracts/WithdrawVerifier.sol`,

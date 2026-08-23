@@ -48,7 +48,7 @@ desync the spent-set. Reasons, in cheap→expensive order:
    (accepts a `Set` or `Array`; `Array.from` normalizes both — unchanged).
 3b. `bad-artifact:*` / `artifact-retired:<id>` / `artifact-unknown:<id>` — (T-HARD-8) the
    envelope's optional `artifact` id must resolve to a vkey in the gateway's accepted set
-   (`RGOE_ZK_ARTIFACTS`; absent field ⇒ the legacy id). Cheap map lookup; see
+   (`SHADE_TREE_ZK_ARTIFACTS`; absent field ⇒ the legacy id). Cheap map lookup; see
    `docs/PROTOCOL-VERSIONING.md` "Artifact-version negotiation".
 4. `invalid-proof` / `verify-threw:*` — the RLN Groth16 verify under THAT vkey (last, expensive).
 
@@ -84,7 +84,7 @@ desync the spent-set. Reasons, in cheap→expensive order:
 ## Removed / renamed exports
 
 Gone (v2 PoC): `slotScope`, `shareFor`, `slotNullifier`, `validSlotFor`,
-`COMMITMENT_SCHEME`, and `deriveCommitment`'s scheme argument / `RGOE_COMMITMENT_SCHEME`
+`COMMITMENT_SCHEME`, and `deriveCommitment`'s scheme argument / `SHADE_TREE_COMMITMENT_SCHEME`
 (there is now exactly one coherent leaf; no scheme flag).
 
 New helpers: `RLN_IDENTIFIER`, `externalNullifierFor(epoch)`, `identitySecretOf(identity)`,

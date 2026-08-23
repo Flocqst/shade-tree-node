@@ -38,7 +38,7 @@ export const planner = new ClaudeCodeAgent({
     "You turn a milestone + its research into a plan with TEETH: ordered steps, machine-checkable " +
     "acceptance criteria, and concrete validation_commands that actually exist in this repo " +
     "(e.g. `forge test --match-contract GatewayRegistryTest`, `node bootnode/selftest.mjs`, " +
-    "`node bin/rgoe.mjs doctor`). Review is cheap on a plan and miserable on a diff, so make the " +
+    "`node bin/shade-tree.mjs doctor`). Review is cheap on a plan and miserable on a diff, so make the " +
     "plan verifiable. " + JSON_CONTRACT,
 });
 
@@ -88,7 +88,7 @@ export const e2eRunner = new ClaudeCodeAgent({
   allowedTools: ["Bash", "Read"],
   instructions:
     "You run the full local suite and assert it green: `forge test`, `node bootnode/selftest.mjs`, " +
-    "`node gateway/shim.selftest.mjs`, `node lib/rln.selftest.mjs`, and `node bin/rgoe.mjs doctor`. " +
+    "`node gateway/shim.selftest.mjs`, `node lib/rln.selftest.mjs`, and `node bin/shade-tree.mjs doctor`. " +
     "Report passed + a one-line summary + any failures verbatim. Never call it done without an e2e run. " + JSON_CONTRACT,
 });
 

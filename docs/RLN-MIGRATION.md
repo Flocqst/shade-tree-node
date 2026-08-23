@@ -14,7 +14,7 @@ Progress:
 - **P3-live** — fresh Sepolia deploy (`0xdAE242AE…20FC`) + live integration PASS: stake →
   normal use → over-spend → on-chain slash (`0xc0f99e96…39efb`). `network/sepolia/
   integration-report-rln.md`. ✓
-- **P4 fleet + live Tor** — all 3 DO gateways (egress-01, egress-02, rgoe-03) re-provisioned
+- **P4 fleet + live Tor** — all 3 DO gateways (egress-01, egress-02, shade-tree-03) re-provisioned
   onto the RLN branch (rlnjs installed, wired to `0xdAE242AE…20FC`); live round-trip over Tor
   confirmed, rotating across all three, laptop IP absent from every gateway log. ✓
 
@@ -140,7 +140,7 @@ section below._
   (RLN gives it natively). Unit test: prove→verify, 2-share reconstruct, K-limit. No chain,
   no Tor. *Gate: rln.selftest green.*
 - **P2 — on-chain group + membership-from-chain.** Point the gateway at
-  `RGOE_GROUP_CONTRACT` (on-chain root mode already exists); verify an RLN proof built
+  `SHADE_TREE_GROUP_CONTRACT` (on-chain root mode already exists); verify an RLN proof built
   against the on-chain-reconstructed root passes. Register a member, watch the gateway
   accept them with **no members.json**. *Gate: stake → recognized, on anvil.*
 - **P3 — real slashing + exit.** Wire the Groth16 withdraw verifier (or graft the timelock);

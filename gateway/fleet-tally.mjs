@@ -12,14 +12,14 @@
 // ---- what crosses the wire, and why it is NOT a linkability channel ----------
 // The ONLY data a gateway shares is the pair (nullifier, epoch). Nothing else — never the
 // member's identity/commitment, never `share.y` (the secret evaluation a slash reconstructs
-// from), never the egress `target`, never the request nonce, never `share.x`.
+// from), never the egress `target`, never the tunnel nonce, never `share.x`.
 //
 // A nullifier is H(identitySecret, externalNullifier) (lib/rln.mjs): a per-EPOCH,
-// per-request value that is PSEUDORANDOM and UNLINKABLE to the member (ROADMAP #1 — this is
+// per-tunnel value that is PSEUDORANDOM and UNLINKABLE to the member (ROADMAP #1 — this is
 // the same property that already lets a single gateway dedup on the nullifier without
-// learning who the member is, or tying two of their requests together). Sharing it adds NO
+// learning who the member is, or tying two of their tunnels together). Sharing it adds NO
 // linkability beyond what the admitting gateway already has: a peer learns only "some
-// request with nullifier N happened in epoch E" — exactly what N's own gateway learns, and
+// tunnel with nullifier N happened in epoch E" — exactly what N's own gateway learns, and
 // N reveals neither identity nor target. Crucially, because `share.y` never crosses the
 // wire, a peer CANNOT reconstruct the identitySecret from the tally, so the tally is not a
 // slashing/deanonymization side channel either. (This is why fleet-wide slashing is a
@@ -211,14 +211,14 @@ export function makeFleetTally({
 //     bucket up to maxPerEpoch (the FleetTally flood cap) — memory stays bounded, and past the
 //     cap we simply stop recording (lose dedup, never deny). It cannot cause a fleet-wide
 //     outage. The only "harm" is a false-positive replay-reject on a nullifier it injected —
-//     but a live nullifier is H(identitySecret, externalNullifier), per-request pseudorandom
+//     but a live nullifier is H(identitySecret, externalNullifier), per-tunnel pseudorandom
 //     and unpredictable, so a flooder cannot pre-image a FUTURE honest member's nullifier to
 //     get it pre-rejected. Its garbage collides with nothing real. Damage stays on the flooder.
 //   * Response reads are byte-capped so a hostile peer cannot stream an unbounded reply at us.
-//   * No new linkability: same argument as the loopback — only the per-request pseudorandom
+//   * No new linkability: same argument as the loopback — only the per-tunnel pseudorandom
 //     nullifier + epoch crosses, which the admitting gateway already holds.
 
-const DEFAULT_PUSH_TIMEOUT_MS = Number(process.env.RGOE_FLEET_TALLY_TIMEOUT_MS) || 4000;
+const DEFAULT_PUSH_TIMEOUT_MS = Number(process.env.SHADE_TREE_FLEET_TALLY_TIMEOUT_MS) || 4000;
 const DEFAULT_WIRE_MAX_BYTES = 8 * 1024; // an announcement is ~a hundred bytes; this is headroom
 
 // Plain node:http POST of a JSON body to a bare host:port peer. Bounded, timed, no reton-body.
@@ -353,7 +353,7 @@ export function makeHttpTallyTransport({
   };
 }
 
-// Parse RGOE_FLEET_TALLY_LISTEN ("host:port" | "port") -> { host, port }. Default 127.0.0.1:0
+// Parse SHADE_TREE_FLEET_TALLY_LISTEN ("host:port" | "port") -> { host, port }. Default 127.0.0.1:0
 // (Tor maps the gateway's onion to a local port; a bare port is fine for private-net/dev).
 function parseListen(raw) {
   const s = String(raw || "").trim();
@@ -364,26 +364,26 @@ function parseListen(raw) {
 
 // main()-side factory: return a configured FleetTally, or null when none is wired.
 //
-// OFF BY DEFAULT is the point. With no `RGOE_FLEET_TALLY_PEERS`, this returns null and the
+// OFF BY DEFAULT is the point. With no `SHADE_TREE_FLEET_TALLY_PEERS`, this returns null and the
 // gateway keeps EXACTLY today's per-gateway behavior (makeSpentSet({ sharedTally:null }) is
-// byte-identical to T-FEAT-12). Set `RGOE_FLEET_TALLY_PEERS` (comma-separated peer gateways —
+// byte-identical to T-FEAT-12). Set `SHADE_TREE_FLEET_TALLY_PEERS` (comma-separated peer gateways —
 // `.onion` over Tor, or host:port on a private net) to turn on the real HTTP-push transport;
-// `RGOE_FLEET_TALLY_LISTEN` (host:port | port) sets the inbound endpoint (default 127.0.0.1:0).
-// An explicit `transport` (tests) short-circuits both. The legacy RGOE_FLEET_TALLY flag with no
+// `SHADE_TREE_FLEET_TALLY_LISTEN` (host:port | port) sets the inbound endpoint (default 127.0.0.1:0).
+// An explicit `transport` (tests) short-circuits both. The legacy SHADE_TREE_FLEET_TALLY flag with no
 // peers still just logs a note and stays off (fail-open).
 export function makeConfiguredFleetTally({ env = process.env, transport = null } = {}) {
   if (transport) return makeFleetTally({ transport });
-  const peers = String(env.RGOE_FLEET_TALLY_PEERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const peers = String(env.SHADE_TREE_FLEET_TALLY_PEERS || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (peers.length) {
-    const listen = parseListen(env.RGOE_FLEET_TALLY_LISTEN);
-    const path = env.RGOE_FLEET_TALLY_PATH || "/fleet-tally";
+    const listen = parseListen(env.SHADE_TREE_FLEET_TALLY_LISTEN);
+    const path = env.SHADE_TREE_FLEET_TALLY_PATH || "/fleet-tally";
     const t = makeHttpTallyTransport({ listen, peers, path });
     log.info("fleet tally transport: HTTP push (nullifier+epoch only; 1-hop; fail-open)", { peers: peers.length, listen: `${listen.host}:${listen.port}`, path });
     return makeFleetTally({ transport: t });
   }
-  const want = env.RGOE_FLEET_TALLY;
+  const want = env.SHADE_TREE_FLEET_TALLY;
   if (want && String(want) !== "0" && String(want) !== "") {
-    log.warn("RGOE_FLEET_TALLY set but no peers (RGOE_FLEET_TALLY_PEERS) configured; staying per-gateway (fail-open)", { requested: String(want) });
+    log.warn("SHADE_TREE_FLEET_TALLY set but no peers (SHADE_TREE_FLEET_TALLY_PEERS) configured; staying per-gateway (fail-open)", { requested: String(want) });
   }
   return null; // default + unconfigured: per-gateway behavior, byte-identical
 }

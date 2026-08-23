@@ -1,6 +1,6 @@
-# Benchmarking the crypto in a reputation-gated Tor egress
+# Benchmarking the crypto in a access-gated Tor egress
 
-[reputation-gated-onion-egress](https://github.com/dmarzzz/reputation-gated-onion-egress) is a Tor onion service that egresses to the clearnet only for clients who present a zero-knowledge proof of membership in a curated set. No login, no account, and the gateway never learns who you are. The proof is a Semaphore membership proof, scoped to a daily epoch so the same member produces the same nullifier within a day (that is the rate limit) and a fresh one across days (that is the unlinkability).
+[shade-tree-node](https://github.com/dmarzzz/shade-tree-node) is a Tor onion service that egresses to the clearnet only for clients who present a zero-knowledge proof of membership in a curated set. No login, no account, and the gateway never learns who you are. The proof is a Semaphore membership proof, scoped to a daily epoch so the same member produces the same nullifier within a day (that is the rate limit) and a fresh one across days (that is the unlinkability).
 
 Two cryptographic costs run in that system, and they sit on opposite sides:
 
@@ -19,7 +19,7 @@ I wanted the real numbers for both, isolated from the network. So this benchmark
 
 Proof timing is identity-independent by construction, so the accounts are ephemeral identities sized to match the real set. That keeps the script portable and still measures per-account spread, which is the honest way to answer "does it vary by member."
 
-Script: [`experiments/bench-crypto.mjs`](https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/experiments/bench-crypto.mjs). Raw results are attached as JSON.
+Script: [`experiments/bench-crypto.mjs`](https://github.com/dmarzzz/shade-tree-node/blob/main/experiments/bench-crypto.mjs). Raw results are attached as JSON.
 
 ## Results
 
@@ -53,8 +53,8 @@ So the cost asymmetry is exactly backwards from the naive read, and exactly righ
 ## Reproduce
 
 ```bash
-git clone https://github.com/dmarzzz/reputation-gated-onion-egress
-cd reputation-gated-onion-egress && npm install
+git clone https://github.com/dmarzzz/shade-tree-node
+cd shade-tree-node && npm install
 BENCH_LABEL=mybox node experiments/bench-crypto.mjs
 # tune: BENCH_ACCOUNTS, BENCH_GEN (proofs per account), BENCH_VERIFY (re-verifies per proof)
 ```

@@ -1,4 +1,4 @@
-// The two HTTP-402 wire formats the registrar speaks and `rgoe pay` consumes, implemented directly
+// The two HTTP-402 wire formats the registrar speaks and `shade-tree pay` consumes, implemented directly
 // from the primary specs (fetched 2026-08-17; no SDK — see docs/PAYMENTS.md "Why no x402 SDK"):
 //
 //   x402 v2 (coinbase/x402 specs/x402-specification-v2.md + specs/transports-v2/http.md +
@@ -65,11 +65,11 @@ export function parsePrices(spec) {
   const out = {};
   for (const part of String(spec || "").split(",").map((s) => s.trim()).filter(Boolean)) {
     const m = /^([1-9][0-9]{0,4})=([1-9][0-9]*)$/.exec(part);
-    if (!m || Number(m[1]) > 65535) throw new Error(`RGOE_PAY_PRICES: bad entry "${part}" (want <limit>=<atomic-amount>, e.g. 8=100000)`);
-    if (out[m[1]]) throw new Error(`RGOE_PAY_PRICES: duplicate tier ${m[1]}`);
+    if (!m || Number(m[1]) > 65535) throw new Error(`SHADE_TREE_PAY_PRICES: bad entry "${part}" (want <limit>=<atomic-amount>, e.g. 8=100000)`);
+    if (out[m[1]]) throw new Error(`SHADE_TREE_PAY_PRICES: duplicate tier ${m[1]}`);
     out[m[1]] = m[2];
   }
-  if (!Object.keys(out).length) throw new Error("RGOE_PAY_PRICES: empty (e.g. 8=100000,32=400000)");
+  if (!Object.keys(out).length) throw new Error("SHADE_TREE_PAY_PRICES: empty (e.g. 8=100000,32=400000)");
   return out;
 }
 export function tierForAmount(offer, amount) {

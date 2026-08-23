@@ -1,9 +1,9 @@
-// The gateway: a reputation-gated egress proxy, published as a Tor onion service.
+// The gateway: a Shade Tree proxy, published as a Tor onion service.
 //
 // It listens on 127.0.0.1:8443 (Tor maps <addr>.onion:80 -> here). For each
 // incoming connection it:
-//   1. reads a single newline-terminated v3 JSON envelope
-//      { v:3, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
+//   1. reads a single newline-terminated v4 JSON envelope
+//      { v:4, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
 //   2. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
 //        externalNullifier is current/previous epoch's               (cheap)
 //        share.x == proof's committed public x                        (cheap)
@@ -23,9 +23,9 @@
 // via lib/root-provider.mjs) so TRUSTED_ROOT is a recent-roots SET refreshed on
 // membership change, not only a static members.json. T-FEAT-7 (docs/PAYMENTS.md): the
 // accepted set is the UNION of every ADMITTED root SOURCE — the static members.json
-// (invited friends / PoC), each StakedReputationSet in RGOE_GROUP_CONTRACT (a comma list),
-// and the PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT. WHICH of those this gateway admits is
-// the provider's choice, RGOE_ADMIT=invited[,staked][,paid] (T-FEAT-9, docs/adr/0008): the
+// (invited friends / PoC), each StakedReputationSet in SHADE_TREE_GROUP_CONTRACT (a comma list),
+// and the PaidAccessSet in SHADE_TREE_PAID_ACCESS_CONTRACT. WHICH of those this gateway admits is
+// the provider's choice, SHADE_TREE_ADMIT=invited[,staked][,paid] (T-FEAT-9, docs/adr/0008): the
 // default is `invited` alone — the maximum-anonymity mode — even when contract addresses are
 // configured; see initRoots() / resolveAdmission(). A configured-but-not-admitted contract is
 // neither a root source nor a slash target.
@@ -52,24 +52,24 @@ const MAX_ENVELOPE = 64 * 1024;
 // ---- metrics (T-MON-2) ------------------------------------------------------
 // Registered against the process-wide registry at import time: this only fills in-memory
 // state and binds NO port. The gateway speaks raw TCP, so /metrics is exposed by a SEPARATE
-// loopback http server started only when RGOE_METRICS_PORT is set (see main()). Off by
+// loopback http server started only when SHADE_TREE_METRICS_PORT is set (see main()). Off by
 // default => existing behavior and every selftest are byte-for-byte unchanged. All
 // increments below sit on cold branches / the connect callback, never the per-byte pipe.
 const M = {
-  requests: metrics.counter("rgoe_gateway_requests_total", "Requests by result=pass|drop (+ reason on drop)."),
-  slashes: metrics.counter("rgoe_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
-  verify: metrics.histogram("rgoe_gateway_verify_seconds", "verifyEnvelope() latency in seconds (cheap-first checks + Groth16)."),
+  tunnels: metrics.counter("shade_tree_gateway_tunnels_total", "Tunnels by result=pass|drop (+ reason on drop)."),
+  slashes: metrics.counter("shade_tree_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
+  verify: metrics.histogram("shade_tree_gateway_verify_seconds", "verifyEnvelope() latency in seconds (cheap-first checks + Groth16)."),
   // Established tunnels closed by the gateway itself (not by either peer), by reason. Kept
-  // SEPARATE from requests_total: a tunnel that idles out already counted as result=pass, so
-  // counting it again as a drop would double-count the request (T-HARD-4).
-  tunnelCloses: metrics.counter("rgoe_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
+  // SEPARATE from tunnels_total: a tunnel that idles out already counted as result=pass, so
+  // counting it again as a drop would double-count the tunnel (T-HARD-4).
+  tunnelCloses: metrics.counter("shade_tree_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
   // T-FEAT-7: trusted roots per source (source=static|staked|paid, contract=address|members.json)
-  // and the paid set's live leaf count (its anonymity set; the floor is RGOE_PAID_MIN_LEAVES).
-  rootsBySource: metrics.gauge("rgoe_gateway_trusted_roots", "Trusted admission roots right now, by source (static members.json / staked contract / paid contract)."),
+  // and the paid set's live leaf count (its anonymity set; the floor is SHADE_TREE_PAID_MIN_LEAVES).
+  rootsBySource: metrics.gauge("shade_tree_gateway_trusted_roots", "Trusted admission roots right now, by source (static members.json / staked contract / paid contract)."),
   // 1 while a root SOURCE could not be read on its last refresh (the gateway keeps serving with the
   // sources it has: last-known-good roots + members.json), 0 once it reads again. Alert on it.
-  rootDegraded: metrics.gauge("rgoe_gateway_root_source_degraded", "1 = this root source failed its last refresh (serving without it / on its last-known-good); 0 = healthy."),
-  paidLeaves: metrics.gauge("rgoe_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet (anonymity set of paid members); compare with the RGOE_PAID_MIN_LEAVES floor."),
+  rootDegraded: metrics.gauge("shade_tree_gateway_root_source_degraded", "1 = this root source failed its last refresh (serving without it / on its last-known-good); 0 = healthy."),
+  paidLeaves: metrics.gauge("shade_tree_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet (anonymity set of paid members); compare with the SHADE_TREE_PAID_MIN_LEAVES floor."),
 };
 
 // ---- endpoint hardening knobs (T-HARD-4) -----------------------------------
@@ -77,21 +77,22 @@ const M = {
 // spent one proof) is bounded here, env-configurable with safe defaults. `envInt` keeps the
 // convention of the rest of this file (unset/garbage => default) but ALLOWS an explicit 0, which
 // disables the corresponding timeout/limit (an operator opt-out, never the default).
-//   RGOE_ENVELOPE_TIMEOUT_MS      absolute deadline for the newline-terminated envelope, measured
+//   SHADE_TREE_ENVELOPE_TIMEOUT_MS      absolute deadline for the newline-terminated envelope, measured
 //                                 from connect (default 30000 — the value that was hard-coded
 //                                 before; a slow-loris that never sends the newline, or dribbles
 //                                 one byte per N seconds, is cut at the deadline: the timer is
 //                                 NOT reset by activity). Drop reason `envelope-timeout`.
-//   RGOE_TUNNEL_IDLE_TIMEOUT_MS   inactivity timeout on the ESTABLISHED relay: no bytes in EITHER
+//   SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS   inactivity timeout on the ESTABLISHED relay: no bytes in EITHER
 //                                 direction for this long => both sockets destroyed (default
 //                                 300000 = 5 min; 0 = never). Counted `idle-timeout` in
-//                                 rgoe_gateway_tunnel_closes_total. Also bounds an upstream
+//                                 shade_tree_gateway_tunnel_closes_total. Also bounds an upstream
 //                                 connect that black-holes (never completes, never errors).
-//   RGOE_MAX_CONNS                max concurrent client connections to the gateway, counted from
+//   SHADE_TREE_MAX_CONNS                max concurrent client connections to the gateway, counted from
 //                                 accept (default 1024; 0 = unlimited). Over => reply
 //                                 `too-many-connections` and close, BEFORE reading any envelope.
-//   RGOE_MAX_CONNS_PER_NULLIFIER  max concurrent tunnels a single nullifier may hold open
-//                                 (default 8; 0 = unlimited). The RLN budget counts REQUESTS, not
+//   SHADE_TREE_MAX_CONNS_PER_NULLIFIER  max concurrent tunnels a single nullifier may hold open
+//                                 (default 8; 0 = unlimited). The RLN budget counts admitted
+//                                 CONNECT tunnels, not application requests inside them, and not
 //                                 open tunnels: an exact-envelope honest retry inside the replay
 //                                 window is admitted idempotently, so without this cap one proof
 //                                 could pin N idle tunnels open. Over => `nullifier-conn-limit`.
@@ -102,10 +103,10 @@ function envInt(name, dflt) {
   return Number.isFinite(n) && n >= 0 ? n : dflt;
 }
 export const HARDENING = Object.freeze({
-  envelopeTimeoutMs: envInt("RGOE_ENVELOPE_TIMEOUT_MS", 30000),
-  idleTimeoutMs: envInt("RGOE_TUNNEL_IDLE_TIMEOUT_MS", 300000),
-  maxConns: envInt("RGOE_MAX_CONNS", 1024),
-  maxConnsPerNullifier: envInt("RGOE_MAX_CONNS_PER_NULLIFIER", 8),
+  envelopeTimeoutMs: envInt("SHADE_TREE_ENVELOPE_TIMEOUT_MS", 30000),
+  idleTimeoutMs: envInt("SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS", 300000),
+  maxConns: envInt("SHADE_TREE_MAX_CONNS", 1024),
+  maxConnsPerNullifier: envInt("SHADE_TREE_MAX_CONNS_PER_NULLIFIER", 8),
 });
 
 // Concurrent-connection accounting. Pure + injectable (the selftest drives it directly and via
@@ -153,7 +154,7 @@ export function _getRecentRoots() { return new Set(recentRoots); }
 
 // resolveSlashTier(identitySecret) -> { commitment, limit, resolved }: the leaf to slash and
 // the tier it sits at. Reputation tiers (T-FEAT-8) make the leaf depend on the member's
-// PRIVATE limit, so try every tier this gateway knows (RGOE_TIERS; always includes K) and pick
+// PRIVATE limit, so try every tier this gateway knows (SHADE_TREE_TIERS; always includes K) and pick
 // the one present in the local set. Without leaves (on-chain root mode) the local resolution
 // falls back to the default tier's leaf (resolved:false); the on-chain slasher then finishes
 // the job against the tiered contract's `limitOf` (T-FEAT-8b, makeSlasher below).
@@ -173,19 +174,19 @@ export function deriveSlashLeaf(identitySecret, opts = {}) {
 }
 
 // ---- admission policy: which root SOURCES this gateway trusts (T-FEAT-7 / T-FEAT-9) --------
-// RGOE_ADMIT=invited[,staked][,paid] names the ADMISSION PATHS (docs/adr/0008, anonymity order
+// SHADE_TREE_ADMIT=invited[,staked][,paid] names the ADMISSION PATHS (docs/adr/0008, anonymity order
 // most -> least: invited > staked > paid). Each path is one root source:
-//   invited  the members.json file (MEMBERS_PATH / RGOE_MEMBERS_FILE)
-//   staked   every StakedReputationSet in RGOE_GROUP_CONTRACT   (requires it to be configured)
-//   paid     the PaidAccessSet in RGOE_PAID_ACCESS_CONTRACT     (requires it to be configured)
-// DEFAULT `invited` — even when RGOE_NETWORK / env supply contract addresses: a provider opts
+//   invited  the members.json file (MEMBERS_PATH / SHADE_TREE_MEMBERS_FILE)
+//   staked   every StakedReputationSet in SHADE_TREE_GROUP_CONTRACT   (requires it to be configured)
+//   paid     the PaidAccessSet in SHADE_TREE_PAID_ACCESS_CONTRACT     (requires it to be configured)
+// DEFAULT `invited` — even when SHADE_TREE_NETWORK / env supply contract addresses: a provider opts
 // into the less-anonymous paths explicitly. A path whose contract is missing FAILS CLOSED at
-// startup (never a silently smaller admission set). RGOE_ROOTS (T-FEAT-7: static,onchain) is a
+// startup (never a silently smaller admission set). SHADE_TREE_ROOTS (T-FEAT-7: static,onchain) is a
 // DEPRECATED alias -- static->invited, onchain->staked+paid (whichever are configured) -- accepted
-// with a startup warning; RGOE_ADMIT wins when both are set. Exported + pure for the selftest.
+// with a startup warning; SHADE_TREE_ADMIT wins when both are set. Exported + pure for the selftest.
 //   -> { admits: [..canonical order..], static, onchain, contracts: [ADMITTED contracts only],
-//        explicit, source: "RGOE_ADMIT" | "RGOE_ROOTS" | "default", warnings: [..] }
-export function resolveAdmission({ admit = process.env.RGOE_ADMIT, roots = process.env.RGOE_ROOTS, contracts = configuredContracts(), warn = (m, f) => log.warn(m, f) } = {}) {
+//        explicit, source: "SHADE_TREE_ADMIT" | "SHADE_TREE_ROOTS" | "default", warnings: [..] }
+export function resolveAdmission({ admit = process.env.SHADE_TREE_ADMIT, roots = process.env.SHADE_TREE_ROOTS, contracts = configuredContracts(), warn = (m, f) => log.warn(m, f) } = {}) {
   const staked = contracts.filter((c) => c.kind === "staked");
   const paid = contracts.filter((c) => c.kind === "paid");
   const rawAdmit = String(admit ?? "").trim();
@@ -194,27 +195,27 @@ export function resolveAdmission({ admit = process.env.RGOE_ADMIT, roots = proce
   let admits, source;
   if (rawAdmit) {
     admits = parseAdmit(rawAdmit);
-    source = "RGOE_ADMIT";
-    if (rawRoots) warnings.push("RGOE_ROOTS is ignored because RGOE_ADMIT is set (RGOE_ROOTS is a deprecated alias; drop it)");
+    source = "SHADE_TREE_ADMIT";
+    if (rawRoots) warnings.push("SHADE_TREE_ROOTS is ignored because SHADE_TREE_ADMIT is set (SHADE_TREE_ROOTS is a deprecated alias; drop it)");
   } else if (rawRoots) {
     admits = admitsFromRoots(rawRoots, { hasStaked: staked.length > 0, hasPaid: paid.length > 0 });
-    source = "RGOE_ROOTS";
-    warnings.push(`RGOE_ROOTS is DEPRECATED (static->invited, onchain->staked+paid): set RGOE_ADMIT=${admits.join(",")} instead`);
+    source = "SHADE_TREE_ROOTS";
+    warnings.push(`SHADE_TREE_ROOTS is DEPRECATED (static->invited, onchain->staked+paid): set SHADE_TREE_ADMIT=${admits.join(",")} instead`);
   } else {
     admits = [...DEFAULT_ADMIT];
     source = "default";
-    if (contracts.length) warnings.push(`RGOE_ADMIT is unset: admitting ${admits.join(",")} ONLY (the maximum-anonymity default); the configured ${contracts.map((c) => `${c.kind}(${c.address})`).join(" + ")} is NOT trusted until you set RGOE_ADMIT=${ADMIT_ORDER.filter((p) => p === "invited" || contracts.some((c) => c.kind === p)).join(",")}`);
+    if (contracts.length) warnings.push(`SHADE_TREE_ADMIT is unset: admitting ${admits.join(",")} ONLY (the maximum-anonymity default); the configured ${contracts.map((c) => `${c.kind}(${c.address})`).join(" + ")} is NOT trusted until you set SHADE_TREE_ADMIT=${ADMIT_ORDER.filter((p) => p === "invited" || contracts.some((c) => c.kind === p)).join(",")}`);
   }
-  if (admits.includes("staked") && staked.length === 0) throw new Error(`${source} names staked but no StakedReputationSet is configured (set RGOE_GROUP_CONTRACT, or RGOE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
-  if (admits.includes("paid") && paid.length === 0) throw new Error(`${source} names paid but no PaidAccessSet is configured (set RGOE_PAID_ACCESS_CONTRACT, or RGOE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
+  if (admits.includes("staked") && staked.length === 0) throw new Error(`${source} names staked but no StakedReputationSet is configured (set SHADE_TREE_GROUP_CONTRACT, or SHADE_TREE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
+  if (admits.includes("paid") && paid.length === 0) throw new Error(`${source} names paid but no PaidAccessSet is configured (set SHADE_TREE_PAID_ACCESS_CONTRACT, or SHADE_TREE_NETWORK with a contracts.json that has one) -- refusing to start with a smaller admission set than requested`);
   for (const w of warnings) warn(w, { source });
   const admitted = contracts.filter((c) => admits.includes(c.kind));
   return { admits, static: admits.includes("invited"), onchain: admitted.length > 0, contracts: admitted, explicit: source !== "default", source, warnings };
 }
 
-// Back-compat shim for the deprecated RGOE_ROOTS spelling (T-FEAT-7): { static, onchain, explicit }.
+// Back-compat shim for the deprecated SHADE_TREE_ROOTS spelling (T-FEAT-7): { static, onchain, explicit }.
 // Unset spec = the T-FEAT-9 default (invited only). Kept exported for older callers/tests.
-export function resolveRootSources({ spec = process.env.RGOE_ROOTS, contracts = configuredContracts() } = {}) {
+export function resolveRootSources({ spec = process.env.SHADE_TREE_ROOTS, contracts = configuredContracts() } = {}) {
   const raw = String(spec == null ? "" : spec).trim();
   if (raw === "") return { static: true, onchain: false, explicit: false };
   const admits = admitsFromRoots(raw, { hasStaked: contracts.some((c) => c.kind === "staked"), hasPaid: contracts.some((c) => c.kind === "paid") });
@@ -224,7 +225,7 @@ export function resolveRootSources({ spec = process.env.RGOE_ROOTS, contracts = 
 // The paid set's anonymity-set floor K (docs/PAYMENTS.md open item 3): below it the gateway WARNS
 // at startup and on every refresh that crosses it, and NEVER refuses — the floor is a deployment
 // parameter, not a proven bound; it is logged so an operator can see how thin the set is.
-export const PAID_MIN_LEAVES = Number(process.env.RGOE_PAID_MIN_LEAVES || 8);
+export const PAID_MIN_LEAVES = Number(process.env.SHADE_TREE_PAID_MIN_LEAVES || 8);
 
 // PaidAccessSet.leafCount() over raw JSON-RPC (selector precomputed; no ethers on this path).
 // Returns null when the contract has no such view (a StakedReputationSet) or the call fails.
@@ -253,7 +254,7 @@ export function describeRootSources({ static: st, contracts = [] } = {}) {
 //
 //   FAIL-SOFT vs FAIL-CLOSED at startup (fleet crash-loop 2026-08-17, docs/GO-LIVE-LOG-2026-08-17.md):
 //   an on-chain source that cannot be read at startup (RPC down, log-range cap, bad contract) is
-//   logged LOUDLY (`root source UNAVAILABLE at startup`), gauged rgoe_gateway_root_source_degraded=1,
+//   logged LOUDLY (`root source UNAVAILABLE at startup`), gauged shade_tree_gateway_root_source_degraded=1,
 //   and retried by the provider's own poll (onChange fires the moment it reads roots) -- PROVIDED
 //   some root is trusted already (the static members.json root, or another chain source). With NO
 //   root at all the gateway still exits nonzero (an admission set of nothing is not a gateway;
@@ -262,13 +263,13 @@ export function describeRootSources({ static: st, contracts = [] } = {}) {
 export async function initRoots({
   contracts = null,
   want = null,
-  rpcUrl = process.env.RGOE_RPC_URL || "http://127.0.0.1:8545",
+  rpcUrl = process.env.SHADE_TREE_RPC_URL || "http://127.0.0.1:8545",
   loadStatic = loadGroup,
-  makeProvider = (addrs) => makeRootProvider(undefined, { contracts: addrs }), // node|light per RGOE_ROOT_PROVIDER
+  makeProvider = (addrs) => makeRootProvider(undefined, { contracts: addrs }), // node|light per SHADE_TREE_ROOT_PROVIDER
   watchFile = (path, cb) => watch(path, { persistent: false }, cb),
   quiet = false,
 } = {}) {
-  // Admission policy (T-FEAT-9): with no injected `want`, resolve RGOE_ADMIT over the configured
+  // Admission policy (T-FEAT-9): with no injected `want`, resolve SHADE_TREE_ADMIT over the configured
   // contracts and NARROW `contracts` to the admitted ones (a configured-but-not-admitted set is
   // never read). Tests inject { contracts, want } directly and skip the env resolution.
   if (!want) {
@@ -352,7 +353,7 @@ export async function initRoots({
         chainRoots = [];
         perSource = contracts.map((c) => ({ contract: c.address, roots: [], leafCount: null, error: e.message }));
         recompute();
-        log.error("root source UNAVAILABLE at startup; serving with members.json only until it reads (retrying every poll; rgoe_gateway_root_source_degraded=1)", { contracts: contracts.map((c) => `${c.kind}(${c.address})`), err: e.message, hint: /block range|exceed/i.test(e.message) ? "public RPC eth_getLogs cap: set RGOE_FROM_BLOCK / RGOE_FROM_BLOCKS to the deploy block(s), or lower RGOE_LOGS_CHUNK (docs/OPERATOR.md 'public RPC log-range caps')" : undefined });
+        log.error("root source UNAVAILABLE at startup; serving with members.json only until it reads (retrying every poll; shade_tree_gateway_root_source_degraded=1)", { contracts: contracts.map((c) => `${c.kind}(${c.address})`), err: e.message, hint: /block range|exceed/i.test(e.message) ? "public RPC eth_getLogs cap: set SHADE_TREE_FROM_BLOCK / SHADE_TREE_FROM_BLOCKS to the deploy block(s), or lower SHADE_TREE_LOGS_CHUNK (docs/OPERATOR.md 'public RPC log-range caps')" : undefined });
       } else {
         throw new Error(`no admission root available: ${e.message} (and no static members.json root to fall back on) -- refusing to start with an empty admission set`);
       }
@@ -368,12 +369,12 @@ export async function initRoots({
   const stateRootSource = desc ? (desc.provider === "composite" ? Array.from(new Set(desc.children.map((c) => c.stateRootSource))).join(" | ") : desc.stateRootSource) : undefined;
   if (want.onchain) {
     // stateRoot source is logged verbatim so an operator can see whether the admission root is
-    // anchored to the sync committee (RGOE_HELIOS_RPC_URL) or merely RPC-trusted (T-DEV-9b).
-    log.info("root source: on-chain RootProvider", { provider: process.env.RGOE_ROOT_PROVIDER || "node", contracts: contracts.length, recentRoots: chainRoots.length, ...(stateRootSource ? { stateRootSource } : {}) });
+    // anchored to the sync committee (SHADE_TREE_HELIOS_RPC_URL) or merely RPC-trusted (T-DEV-9b).
+    log.info("root source: on-chain RootProvider", { provider: process.env.SHADE_TREE_ROOT_PROVIDER || "node", contracts: contracts.length, recentRoots: chainRoots.length, ...(stateRootSource ? { stateRootSource } : {}) });
   }
   if (want.static) log.info(want.onchain ? "root source: members.json (static, unioned with the chain)" : "root source: members.json (PoC fallback)", { members: staticCount });
   // T-FEAT-9: the admission POLICY line (what this provider chose), then the T-FEAT-7 sources line.
-  log.info(describeAdmits(admits), { source: want.source || "injected", policy: "RGOE_ADMIT (default invited = max-anon; docs/adr/0008)" });
+  log.info(describeAdmits(admits), { source: want.source || "injected", policy: "SHADE_TREE_ADMIT (default invited = max-anon; docs/adr/0008)" });
   log.info(describeRootSources({ static: want.static, contracts: want.onchain ? contracts : [] }), {
     trustedRoots: recentRoots.size,
     ...(want.static ? { static: staticRoot ? 1 : 0 } : {}),
@@ -401,10 +402,10 @@ export async function initRoots({
 //   The seen-envelope cache fingerprints each admitted envelope by (nullifier, share.x,
 //   nonce) and records WHEN it was first seen HERE. On an identical share.x under a live
 //   nullifier:
-//     - age <= RGOE_REPLAY_WINDOW_MS  => an in-flight HONEST retry (e.g. a dropped
+//     - age <= SHADE_TREE_REPLAY_WINDOW_MS  => an in-flight HONEST retry (e.g. a dropped
 //       connection re-sent within a few seconds). Idempotent: action "replay", ok:true,
 //       NO second egress, NO slash. This preserves the deterministic-retry allowance.
-//     - age  > RGOE_REPLAY_WINDOW_MS  (or a fingerprint we never recorded, e.g. same
+//     - age  > SHADE_TREE_REPLAY_WINDOW_MS  (or a fingerprint we never recorded, e.g. same
 //       share.x under a different nonce) => an ABUSIVE late replay. Rejected ok:false,
 //       action/reason "replayed-envelope"; the handler counts the drop metric + logs.
 //
@@ -435,7 +436,7 @@ export function makeSpentSet({
   slash,
   sharedTally = null,
   ttlMs = 2 * EPOCH_SECONDS * 1000,
-  replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000,
+  replayWindowMs = Number(process.env.SHADE_TREE_REPLAY_WINDOW_MS) || 5000,
   now = () => Date.now(),
 } = {}) {
   const seen = new Map();    // nullifier -> { xs:Set, first:share, slashed:bool, at:number }
@@ -515,7 +516,7 @@ export function makeSpentSet({
 }
 
 // ---- on-chain slash submitter (ethers, hot key) -----------------------------
-// The gateway's slashing is NOT anonymous and does not need to be: RGOE_SLASH_KEY is
+// The gateway's slashing is NOT anonymous and does not need to be: SHADE_TREE_SLASH_KEY is
 // an operational hot key, deliberately separate from any member secret. Address +
 // rpc come from contracts/deployed.local.json (or env). ethers is imported lazily so
 // the gateway still runs without it (falls back to a dry-run log).
@@ -530,26 +531,26 @@ async function readDeployed() {
 // `rootContracts` = the ADMITTED root contracts (initRoots().contracts; T-FEAT-9): only those are
 // appended as routing targets. Defaults to every configured contract for callers without a policy.
 async function makeSlasher({ rootContracts = configuredContracts() } = {}) {
-  const key = process.env.RGOE_SLASH_KEY;
+  const key = process.env.SHADE_TREE_SLASH_KEY;
   const deployed = await readDeployed();
-  // Slash TARGETS (T-FEAT-7 routing). RGOE_SLASH_CONTRACT (or a deployed.local.json) is the
+  // Slash TARGETS (T-FEAT-7 routing). SHADE_TREE_SLASH_CONTRACT (or a deployed.local.json) is the
   // PRIMARY — it may name a set that is NOT a root source (the fleet's superseded rln-v3 set,
   // still slashable), which is why it stays independent of the root config. Every configured
-  // root contract (the RGOE_GROUP_CONTRACT list + RGOE_PAID_ACCESS_CONTRACT) THAT THIS GATEWAY
-  // ADMITS (RGOE_ADMIT, T-FEAT-9) is appended, so an over-spender is slashed on WHICHEVER contract
+  // root contract (the SHADE_TREE_GROUP_CONTRACT list + SHADE_TREE_PAID_ACCESS_CONTRACT) THAT THIS GATEWAY
+  // ADMITS (SHADE_TREE_ADMIT, T-FEAT-9) is appended, so an over-spender is slashed on WHICHEVER contract
   // holds its leaf (`limitOf(leaf) != 0`, per makeRoutingSlasher). A configured contract the
   // policy does not admit is not routed to. One address => the plain single-contract slasher.
-  const primary = process.env.RGOE_SLASH_CONTRACT || deployed.stakedReputationSet
+  const primary = process.env.SHADE_TREE_SLASH_CONTRACT || deployed.stakedReputationSet
     || deployed.StakedReputationSet || deployed.address || null;
   const targets = [];
   const push = (address, kind) => { if (address && !targets.some((t) => t.address.toLowerCase() === address.toLowerCase())) targets.push({ address, kind }); };
   push(primary, "primary");
   for (const c of rootContracts) push(c.address, c.kind);
-  const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
-  const receiver = process.env.RGOE_SLASH_RECEIVER || null;
+  const rpcUrl = process.env.SHADE_TREE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
+  const receiver = process.env.SHADE_TREE_SLASH_RECEIVER || null;
 
   if (!key || targets.length === 0) {
-    log.info("slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_SLASH_CONTRACT/RGOE_GROUP_CONTRACT/RGOE_PAID_ACCESS_CONTRACT to submit on chain)");
+    log.info("slash: DRY-RUN (set SHADE_TREE_SLASH_KEY + deployed.local.json/SHADE_TREE_SLASH_CONTRACT/SHADE_TREE_GROUP_CONTRACT/SHADE_TREE_PAID_ACCESS_CONTRACT to submit on chain)");
     return async (commitment, secret, tier) => {
       // Log the (public) commitment leaf only; never any bytes of the reconstructed secret.
       log.info("SLASH (dry-run)", { commitment: String(commitment).slice(0, 18) + "..", ...(tier && tier.limit != null ? { limit: tier.limit } : {}) });
@@ -583,7 +584,7 @@ async function makeSlasher({ rootContracts = configuredContracts() } = {}) {
 //           already the operator's; the leaf is zeroed so the over-spender's access ends).
 // Detected ONCE at startup by probing `DEFAULT_LIMIT()` (v4/paid only). Against a tiered set the
 // tier is resolved in this order: the local resolution (members.json leaves), else the contract's
-// own record — `limitOf` over the candidate leaves of every known tier (RGOE_TIERS ∪
+// own record — `limitOf` over the candidate leaves of every known tier (SHADE_TREE_TIERS ∪
 // allowedLimits()); a leaf the contract does not hold is not slashable on it anyway.
 // The returned function also carries `.holds(secret, tier)` -> { leaf, limit } | null (does THIS
 // contract hold a live leaf of the secret?), `.address` and `.tiered`, for makeRoutingSlasher.
@@ -660,7 +661,7 @@ export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) 
 
 // makeRoutingSlasher({ ethers, wallet, contracts: [{ address, kind }], receiver }) — T-FEAT-7:
 // one makeOnchainSlasher per contract; a reconstructed secret is slashed on the FIRST contract
-// (in the given order: RGOE_SLASH_CONTRACT primary, then the RGOE_GROUP_CONTRACT list, then the
+// (in the given order: SHADE_TREE_SLASH_CONTRACT primary, then the SHADE_TREE_GROUP_CONTRACT list, then the
 // paid set) whose `holds(secret)` says it carries a live leaf of it — a paid over-spender lands on
 // the PaidAccessSet (leaf zeroed, root changes), a staked one on its StakedReputationSet. If NO
 // contract holds it (a members.json-only member, or a set this gateway is not configured to
@@ -691,25 +692,23 @@ export async function makeRoutingSlasher({ ethers, wallet, contracts, receiver }
 // ---- wire protocol ----------------------------------------------------------
 
 // ---- protocol version negotiation (T-FEAT-11) -------------------------------
-// The wire envelope is v3-with-nonce today. To let the format evolve to v4+ without a flag
-// day, the gateway declares the INCLUSIVE range of envelope versions it can parse, checks the
+// Shade Tree starts at v4. The gateway declares the INCLUSIVE range of envelope versions it
+// can parse, checks the
 // incoming envelope's `v` against it BEFORE any field is read, and — on a mismatch — advertises
 // its range back to the client so the client can re-select (or fail closed with a precise error).
 //
 // PROTO_MIN/PROTO_MAX are the SINGLE source of truth for the gateway's supported range. Bump
-// PROTO_MAX (and add a v4 parser) to ship a new format; raise PROTO_MIN only to DROP an old one.
-// Today both are 3, so the range is exactly {3}. Directory/announce advertisement of this range
-// is a deliberate FOLLOW-UP (T-FEAT-10 capability advertisement) — this task keeps negotiation to
-// the client<->gateway handshake and does not touch bootnode/announce or lib/directory.
-export const PROTO_MIN = 3;
-export const PROTO_MAX = 3;
+// PROTO_MAX when a new format ships; raise PROTO_MIN only after the old parser is removed.
+// The research preview intentionally has no v3 compatibility alias: the rename and new signal
+// domain are one breaking v4 boundary. Signed directory capabilities advertise this range.
+export const PROTO_MIN = 4;
+export const PROTO_MAX = 4;
 export const PROTO_RANGE = { min: PROTO_MIN, max: PROTO_MAX };
 
-// An envelope with NO `v` is the pre-negotiation v3 wire (older clients / the shim before this
-// change). Backward-compat rule: absent version == v3, then checked against the range like any
-// other. So a legacy client keeps working while the range includes 3, and is cleanly rejected
-// (unsupported-version:3) once a future gateway raises PROTO_MIN past 3 — never a silent mis-parse.
-const LEGACY_ENVELOPE_VERSION = 3;
+// An envelope with NO `v` is classified as the old v3 wire, then rejected against the v4-only
+// range. Keeping the classification makes the error precise without accepting a protocol whose
+// proof domain was renamed.
+export const LEGACY_ENVELOPE_VERSION = 3;
 
 // Decide whether we can parse an envelope of version `v`, WITHOUT reading any other field. Pure +
 // exported so the selftest drives every branch directly. Returns:
@@ -855,8 +854,8 @@ function matchEgressPattern(pat, host, port) {
 
 // Built once from env at import (unset => default `*:443`, empty deny => today's rule).
 const egressPolicy = makeEgressPolicy({
-  allow: process.env.RGOE_EGRESS_ALLOW,
-  deny: process.env.RGOE_EGRESS_DENY,
+  allow: process.env.SHADE_TREE_EGRESS_ALLOW,
+  deny: process.env.SHADE_TREE_EGRESS_DENY,
 });
 
 // Returns { ok:true, host, port } for an admitted target, else { ok:false, reason }.
@@ -885,17 +884,17 @@ function validTarget(target) {
 // connects. It writes NO bytes, carries NO member traffic, and reads NO data — a pure
 // connect()/close liveness check, exactly as metadata-only as the :443 tunnel it guards.
 // It touches nothing else: request handling, metrics, the spent-set/replay cache, policy,
-// and shutdown are all untouched (this is off the hot path and never runs per-request).
+// and shutdown are all untouched (this is off the hot path and never runs per-tunnel).
 //
 // Default target 1.1.1.1:443 (Cloudflare — an always-up anycast host reachable from anywhere
-// with working egress). Override with RGOE_EGRESS_CHECK_TARGET (host:port). Timeout is short
-// (RGOE_EGRESS_CHECK_TIMEOUT_MS, default 5000ms) so a beat is never blocked for long. The
+// with working egress). Override with SHADE_TREE_EGRESS_CHECK_TARGET (host:port). Timeout is short
+// (SHADE_TREE_EGRESS_CHECK_TIMEOUT_MS, default 5000ms) so a beat is never blocked for long. The
 // connector is injected so the selftest drives it with a fake — no real network in the test.
-export const EGRESS_CHECK_TARGET = process.env.RGOE_EGRESS_CHECK_TARGET || "1.1.1.1:443";
+export const EGRESS_CHECK_TARGET = process.env.SHADE_TREE_EGRESS_CHECK_TARGET || "1.1.1.1:443";
 
 export function checkEgress({
   target = EGRESS_CHECK_TARGET,
-  timeoutMs = Number(process.env.RGOE_EGRESS_CHECK_TIMEOUT_MS) || 5000,
+  timeoutMs = Number(process.env.SHADE_TREE_EGRESS_CHECK_TIMEOUT_MS) || 5000,
   connect = net.connect,
 } = {}) {
   return new Promise((resolve) => {
@@ -926,20 +925,20 @@ export function checkEgress({
 // ---- signed egress success receipts (T-FEAT-13) -----------------------------
 // OPTIONAL and ADDITIVE. When enabled, a SUCCESSFUL egress reply carries an extra `receipt`
 // field: a small object signed by THIS gateway's onion-control key attesting "I (this onion)
-// served a request at epoch E" (lib/receipt.mjs). A client holding the gateway's directory
+// opened a tunnel at epoch E" (lib/receipt.mjs). A client holding the gateway's directory
 // pubkey verifies it and accumulates it as gateway liveness/quality evidence (feeds T-FEAT-4).
 //
 // PRIVACY: the receipt carries NO member identity, NO nullifier (not even a prefix), NO share,
-// NO target, NO request nonce, NO fine timestamp/counter — only { v, onion, coarse-epoch, ok }.
+// NO target, NO tunnel nonce, NO fine timestamp/counter — only { v, onion, coarse-epoch, ok }.
 // So it can be verified by anyone yet links to neither the member nor the target. See the field
 // table in lib/receipt.mjs and docs/RECEIPTS.md.
 //
-// DEFAULT OFF. With RGOE_RECEIPTS unset the success reply is EXACTLY `{ ok: true }` — byte-for-
+// DEFAULT OFF. With SHADE_TREE_RECEIPTS unset the success reply is EXACTLY `{ ok: true }` — byte-for-
 // byte today's path. The receipt signer + identity load happen ONLY when enabled, so an env
 // without an onion identity file is never affected. `makeReceipt` is injected into makeHandler
 // so the selftest drives it without a real onion or process.
 export function receiptsEnabled() {
-  return String(process.env.RGOE_RECEIPTS ?? "0") === "1";
+  return String(process.env.SHADE_TREE_RECEIPTS ?? "0") === "1";
 }
 
 // The connect-success reply. With no receipt signer this returns the ORIGINAL `{ ok: true }`
@@ -957,9 +956,9 @@ export function successAck(makeReceipt) {
 }
 
 // Load the gateway's onion identity ({ onion, seed }) — the SAME file the heartbeat announces
-// with (RGOE_GW_IDENTITY, default tor/hs/identity.local.json). Only called when receipts are on.
+// with (SHADE_TREE_GW_IDENTITY, default tor/hs/identity.local.json). Only called when receipts are on.
 async function loadReceiptIdentity() {
-  const path = process.env.RGOE_GW_IDENTITY || join(HERE, "..", "tor", "hs", "identity.local.json");
+  const path = process.env.SHADE_TREE_GW_IDENTITY || join(HERE, "..", "tor", "hs", "identity.local.json");
   const id = JSON.parse(await readFile(path, "utf8"));
   if (!id.onion || !id.seed) throw new Error(`identity file ${path} missing onion/seed (run bootnode/keygen.mjs)`);
   return id;
@@ -974,7 +973,7 @@ async function makeReceiptSigner() {
   try {
     id = await loadReceiptIdentity();
   } catch (e) {
-    log.warn("receipts requested (RGOE_RECEIPTS=1) but identity unavailable; receipts DISABLED", { err: e.message });
+    log.warn("receipts requested (SHADE_TREE_RECEIPTS=1) but identity unavailable; receipts DISABLED", { err: e.message });
     return null;
   }
   log.info("egress receipts: ON — signing success receipts with onion-control key", { onion: id.onion.slice(0, 16) + "..onion" });
@@ -1009,7 +1008,7 @@ export function makeHandler(spentSet, {
     // attacker holding sockets open (with or without an envelope) is bounded at maxConns. The
     // release is bound to `close`, which every exit path below reaches (destroy() or a natural end).
     if (!limiter.acquire()) {
-      M.requests.inc({ result: "drop", reason: "too-many-connections" });
+      M.tunnels.inc({ result: "drop", reason: "too-many-connections" });
       reply(socket, { ok: false, err: "too-many-connections" });
       return socket.destroy();
     }
@@ -1022,7 +1021,7 @@ export function makeHandler(spentSet, {
     } catch (e) {
       // `reason` is our own bounded tag (never client bytes): envelope-timeout for the slow-loris
       // deadline, envelope-too-large for the size cap, bad-envelope for close-before-newline / JSON.
-      M.requests.inc({ result: "drop", reason: e.reason || "bad-envelope" });
+      M.tunnels.inc({ result: "drop", reason: e.reason || "bad-envelope" });
       reply(socket, { ok: false, err: "bad-envelope:" + e.message });
       return socket.destroy();
     }
@@ -1037,7 +1036,7 @@ export function makeHandler(spentSet, {
       const vv = acceptEnvelopeVersion(env.v);
       if (!vv.ok) {
         log.warn("drop", { reason: vv.reason, target: env.target });
-        M.requests.inc({ result: "drop", reason: vv.label });
+        M.tunnels.inc({ result: "drop", reason: vv.label });
         reply(socket, { ok: false, err: vv.reason, proto: vv.proto });
         return socket.destroy();
       }
@@ -1053,7 +1052,7 @@ export function makeHandler(spentSet, {
         // Metrics use the bounded `label` when the lib supplies one (the T-HARD-8 artifact
         // rejections carry the offending id in `reason`; the label is the coarse key), else the
         // reason itself as before.
-        M.requests.inc({ result: "drop", reason: v.label ?? v.reason });
+        M.tunnels.inc({ result: "drop", reason: v.label ?? v.reason });
         // An artifact rejection advertises the accepted ids back (like `proto` on a version
         // reject) so the client can re-select a mutual artifact set or fail closed precisely.
         reply(socket, v.artifacts ? { ok: false, err: "gate:" + v.reason, artifacts: v.artifacts } : { ok: false, err: "gate:" + v.reason });
@@ -1062,7 +1061,7 @@ export function makeHandler(spentSet, {
 
       const tgt = validTarget(env.target);
       if (!tgt.ok) {
-        M.requests.inc({ result: "drop", reason: tgt.reason });
+        M.tunnels.inc({ result: "drop", reason: tgt.reason });
         reply(socket, { ok: false, err: tgt.reason });
         return socket.destroy();
       }
@@ -1076,7 +1075,7 @@ export function makeHandler(spentSet, {
       const res = await spentSet.admit(v.nullifier, v.share, { nonce: env.nonce, epoch: v.externalNullifier });
       if (!res.ok) {
         log.warn("drop", { reason: res.reason, nullifier: String(v.nullifier).slice(0, 10) + ".." });
-        M.requests.inc({ result: "drop", reason: res.reason });
+        M.tunnels.inc({ result: "drop", reason: res.reason });
         reply(socket, { ok: false, err: res.reason });
         return socket.destroy();
       }
@@ -1088,7 +1087,7 @@ export function makeHandler(spentSet, {
       // tunnels open at once. Released on close of THIS socket only.
       if (!limiter.acquireNullifier(v.nullifier)) {
         log.warn("drop", { reason: "nullifier-conn-limit", nullifier: String(v.nullifier).slice(0, 10) + "..", open: limiter.nullifierCount(v.nullifier) });
-        M.requests.inc({ result: "drop", reason: "nullifier-conn-limit" });
+        M.tunnels.inc({ result: "drop", reason: "nullifier-conn-limit" });
         reply(socket, { ok: false, err: "nullifier-conn-limit" });
         return socket.destroy();
       }
@@ -1099,7 +1098,7 @@ export function makeHandler(spentSet, {
       const upstream = connect(tgt.port, tgt.host, () => {
         established = true;
         log.info("egress", { target: `${tgt.host}:${tgt.port}`, nullifier: String(v.nullifier).slice(0, 10) + "..", externalNullifier: String(v.externalNullifier).slice(0, 10) + ".." });
-        M.requests.inc({ result: "pass" });
+        M.tunnels.inc({ result: "pass" });
         // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
         // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
         reply(socket, successAck(makeReceipt));
@@ -1118,7 +1117,7 @@ export function makeHandler(spentSet, {
       // "one side idle for idleTimeoutMs" == "no bytes in EITHER direction" — either timer firing
       // means the tunnel is dead weight and both ends are torn down. Armed on the upstream from
       // creation, so a black-holed connect (never completes, never errors) is bounded too. Idle
-      // relay: counted in tunnel_closes (the request already counted as pass); a connect that
+      // relay: counted in tunnel_closes (the tunnel already counted as pass); a connect that
       // never completes: counted as a drop `upstream-timeout` (never passed).
       if (idleTimeoutMs > 0) {
         const onIdle = () => {
@@ -1126,7 +1125,7 @@ export function makeHandler(spentSet, {
             M.tunnelCloses.inc({ reason: "idle-timeout" });
             log.info("tunnel closed: idle-timeout", { target: `${tgt.host}:${tgt.port}`, idleMs: idleTimeoutMs });
           } else {
-            M.requests.inc({ result: "drop", reason: "upstream-timeout" });
+            M.tunnels.inc({ result: "drop", reason: "upstream-timeout" });
             reply(socket, { ok: false, err: "upstream:ETIMEDOUT" });
           }
           upstream.destroy();
@@ -1149,7 +1148,7 @@ export function makeHandler(spentSet, {
 // let in-flight tunnels drain, then exit 0. If they outlive the grace window we
 // force-destroy the stragglers and exit nonzero. server.close(cb) fires cb once the
 // listener is shut AND every existing connection has ended, so the openSockets set is
-// needed only to force-close on timeout (never consulted per-request).
+// needed only to force-close on timeout (never consulted per-tunnel).
 //
 // Factored out + fully injectable (server, timer, onExit) so the selftest can drive it
 // with a fake server + fake sockets + a fake clock, no real process signals involved.
@@ -1185,7 +1184,7 @@ export function makeGracefulShutdown(server, {
 
 // ---- ZK artifact set (T-HARD-8 dual-VK rollout window) ----------------------
 // Load the accepted {artifactId -> vkey} set at startup so a mis-configured window
-// (RGOE_ZK_ARTIFACTS pointing an id at the wrong file, a missing vkey, ...) is a loud startup
+// (SHADE_TREE_ZK_ARTIFACTS pointing an id at the wrong file, a missing vkey, ...) is a loud startup
 // error, never a silently-wrong accepted set. verifyEnvelope reads the same process-wide set.
 function initArtifacts() {
   const set = getArtifactSet(); // throws with a precise message on a bad config
@@ -1193,7 +1192,7 @@ function initArtifacts() {
     accepted: set.ids,
     legacy: set.legacyId,
     legacyStatus: set.legacyAccepted ? "accepted (window open: field-less envelopes verify under it)" : "RETIRED (field-less / explicit-legacy envelopes => artifact-retired)",
-    source: set.explicit ? "RGOE_ZK_ARTIFACTS" : "built-in circuits/rln/verification_key.json",
+    source: set.explicit ? "SHADE_TREE_ZK_ARTIFACTS" : "built-in circuits/rln/verification_key.json",
   });
   return set;
 }
@@ -1209,7 +1208,7 @@ async function main() {
   const spentSet = makeSpentSet({ slash, sharedTally });
   setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000).unref();
 
-  // Optional signed success receipts (T-FEAT-13); null unless RGOE_RECEIPTS=1.
+  // Optional signed success receipts (T-FEAT-13); null unless SHADE_TREE_RECEIPTS=1.
   const makeReceipt = await makeReceiptSigner();
 
   const limiter = makeConnLimiter();
@@ -1220,14 +1219,14 @@ async function main() {
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
 
   // Active-tunnels gauge reads openSockets.size at scrape time (the same set draining uses).
-  metrics.gauge("rgoe_gateway_active_tunnels", "Open egress tunnels right now.").setCollect(() => openSockets.size);
+  metrics.gauge("shade_tree_gateway_active_tunnels", "Open egress tunnels right now.").setCollect(() => openSockets.size);
 
-  // Loopback /metrics on a SEPARATE http server, ONLY when RGOE_METRICS_PORT is set.
+  // Loopback /metrics on a SEPARATE http server, ONLY when SHADE_TREE_METRICS_PORT is set.
   // Default OFF keeps the gateway a pure TCP server (existing behavior + tests unchanged).
-  const metricsPort = Number(process.env.RGOE_METRICS_PORT || 0);
+  const metricsPort = Number(process.env.SHADE_TREE_METRICS_PORT || 0);
   let metricsServer = null;
   if (metricsPort > 0) {
-    const metricsHost = process.env.RGOE_METRICS_HOST || "127.0.0.1";
+    const metricsHost = process.env.SHADE_TREE_METRICS_HOST || "127.0.0.1";
     metricsServer = makeMetricsServer(metrics);
     metricsServer.listen(metricsPort, metricsHost, () => log.info("metrics endpoint up", { url: `http://${metricsHost}:${metricsPort}/metrics`, scope: "loopback" }));
   }
@@ -1235,19 +1234,19 @@ async function main() {
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     // "gateway up on <host>:<port>" substring preserved for scripts/integration-sepolia.mjs.
     log.info(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}`, { epoch: currentEpoch(), epochSeconds: EPOCH_SECONDS });
-    const allowDesc = process.env.RGOE_EGRESS_ALLOW || "*:443";
-    const denyDesc = process.env.RGOE_EGRESS_DENY || "";
+    const allowDesc = process.env.SHADE_TREE_EGRESS_ALLOW || "*:443";
+    const denyDesc = process.env.SHADE_TREE_EGRESS_DENY || "";
     const dflt = allowDesc === "*:443" && !denyDesc;
     log.info(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
     log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
-    log.info(`tiers: per-leaf userMessageLimit (private to the proof); default K=${K_SLOTS}; slash-leaf candidates RGOE_TIERS=[${TIERS.join(",")}]`);
-    const replayWindowMs = Number(process.env.RGOE_REPLAY_WINDOW_MS) || 5000;
+    log.info(`tiers: per-leaf userMessageLimit (private to the proof); default K=${K_SLOTS}; slash-leaf candidates SHADE_TREE_TIERS=[${TIERS.join(",")}]`);
+    const replayWindowMs = Number(process.env.SHADE_TREE_REPLAY_WINDOW_MS) || 5000;
     log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
     if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");
     log.info("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
   });
 
-  const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);
+  const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);
   const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "gateway" });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));

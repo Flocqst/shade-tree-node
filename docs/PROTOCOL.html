@@ -230,7 +230,7 @@ so within an epoch a member always produces the same nullifier
 (rate-limit without identity) and across epochs it rotates (unlinkable
 over time). The gateway meters a per-nullifier budget per epoch.
 Measured: proof generation 240ms (laptop) to 800ms (2 vCPU gateway),
-once per epoch, cached client-side; verification 10 to 32ms per request,
+once per epoch, cached client-side; verification 10 to 32ms per tunnel,
 account-independent within noise, so timing does not fingerprint the
 member.</p>
 <p>We are adding access granted by <strong>payment</strong> rather than
@@ -255,7 +255,7 @@ exactly the party that can censor, reorder, and observe. L1 has no
 sequencer. Here L1 is the anonymity choice, not a tax paid for one.</li>
 <li><strong>Cheap and scalable.</strong> Cost and state grow with active
 users on hardware we control, not with block space. No expensive
-operation per message: per-request cost is a cached token check, never a
+operation per message: per-tunnel cost is a cached token check, never a
 fresh proof or on-chain tx.</li>
 </ol>
 <h2 id="two-use-cases-two-economics">3. Two use cases, two
@@ -453,13 +453,13 @@ distribution that flattens it? What is the right <code>K</code>, and can
 it adapt without itself leaking volume?</li>
 <li><strong>Pricing an externality you cannot observe.</strong>
 Formalize the griefing game: an adversary whose utility is poisoning IPs
-(not use), paying per request, versus an operator rotating IPs from fee
+(not use), paying per tunnel, versus an operator rotating IPs from fee
 revenue and capping per-IP exposure at <code>E</code> per epoch. Is
 there an <code>f</code> and <code>E</code> making griefing a strictly
 losing trade, and what is the equilibrium? This is the mechanism-design
 heart and the part we are least sure of.</li>
 <li><strong>Quality vs quantity.</strong> Metered payment bounds volume
-but not per-request harm: one query can poison an IP. Is there an
+but not per-tunnel harm: one query can poison an IP. Is there an
 anonymity-preserving way to gate on request behavior, or to attach
 reputation that travels with the credential and degrades on misbehavior,
 without deanonymizing the holder? Or is pure pricing the ceiling under

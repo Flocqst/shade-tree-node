@@ -1,6 +1,6 @@
 # Threat model
 
-This is the consolidated, auditor-facing threat model for the reputation-gated onion egress
+This is the consolidated, auditor-facing threat model for the Shade Tree
 system. It names the assets, the actors and adversary classes, states what each party is trusted
 for and — more importantly — what it is *not* trusted for, and maps each security property to the
 exact code that enforces it (`file:function`). It ends with the known residual risks (honestly, and
@@ -35,8 +35,8 @@ Ground rules for this document:
 
 **Honest actors**
 
-- **Member (client).** Holds a membership secret, proves membership per request, selects a gateway
-  per request, egresses over a Tor rendezvous with no exit node. Anonymous to the gateway (the
+- **Member (client).** Holds a membership secret, proves membership per tunnel, selects a gateway
+  per tunnel, egresses over a Tor rendezvous with no exit node. Anonymous to the gateway (the
   gateway sees `127.0.0.1`).
 - **Gateway / operator.** Runs an onion service that proxies member egress to a public IP. Optionally
   stakes an operator address on chain. Pays the gas to slash a member over-spender.
@@ -79,7 +79,7 @@ nor for authenticity of the list beyond what the pinned signer covers, nor as a 
 hostile bootnode can at worst **omit** a gateway or briefly list one whose stake lapsed — it cannot
 **inject** one. "The bootnode is a cache, not a trust root" is the load-bearing sentence here.
 
-**The pinned directory signer (`RGOE_DIR_SIGNER`).**
+**The pinned directory signer (`SHADE_TREE_DIR_SIGNER`).**
 Trusted for: authenticating *which list* is the fleet. NOT trusted with a default — there is
 intentionally **no default signer** (`client/selection.mjs:parsePinnedSigners`); an unpinned
 directory is trust-on-first-use, exactly the poisoning surface the signature closes. Even a
@@ -88,16 +88,16 @@ onion↔pubkey binding is checked independently per entry (see §5).
 
 **The on-chain registry / RPC.**
 Trusted like any node read. Stake/root reads default to `latest` (dev-chain friendly) and can be
-pinned to a confirmation depth for reorg safety (`RGOE_CONFIRMATIONS`,
+pinned to a confirmation depth for reorg safety (`SHADE_TREE_CONFIRMATIONS`,
 `lib/gateway-registry.mjs:blockTag`, `lib/root-provider.mjs`). NOT trusted to be reorg-safe at
 default settings — that is an operator config. The **onion is never on chain**
 (`contracts/GatewayRegistry.sol`): only an operator *address* stakes, so the fleet stays
 un-enumerable and one stake can rotate across many onions.
-*Lever: the RPC lies about the admission root.* With `RGOE_ROOT_PROVIDER=node` the RPC is
+*Lever: the RPC lies about the admission root.* With `SHADE_TREE_ROOT_PROVIDER=node` the RPC is
 trusted for the root outright (event reconstruction; the solo-staker's own node). With
-`RGOE_ROOT_PROVIDER=light` the root's slot **value** is proven by EIP-1186 proofs, so the only
+`SHADE_TREE_ROOT_PROVIDER=light` the root's slot **value** is proven by EIP-1186 proofs, so the only
 remaining lie is the block `stateRoot` the proof is anchored to (a fake header + a proof
-consistent with it admits the attacker's tree). **That lever is closed when `RGOE_HELIOS_RPC_URL`
+consistent with it admits the attacker's tree). **That lever is closed when `SHADE_TREE_HELIOS_RPC_URL`
 is set** (T-DEV-9b, `lib/helios-root.mjs`): the header comes from a local Helios verifying RPC
 (beacon sync-committee signed), the RPC's header is cross-checked and a divergence is rejected
 with a precise `stateRoot mismatch` reason; Helios unreachable / wrong chain fails closed. The
@@ -114,7 +114,7 @@ admission policy inherently leaks (enrollment is publicly timestamped; `docs/ROA
 Trusted for: nothing cryptographic about the member. It sees a member's `host:port` targets
 (metadata only, never plaintext) for requests routed to it. NOT trusted to be non-colluding — the
 defense against a colluding operator set is RLN's per-slot nullifiers (a colluding set still cannot
-rejoin a member's requests) combined with per-request rotation.
+rejoin a member's requests) combined with per-tunnel rotation.
 
 ---
 
@@ -126,7 +126,7 @@ Each row cites the enforcing function. "Enforced" means verified present in the 
 ### 4.1 Client anonymity to the gateway
 The gateway terminates a Tor rendezvous and sees `127.0.0.1` for every request; there is no exit
 node and no client IP on the wire. **Enforced** by the transport (onion service dial in the shim /
-`client/rgoe-client.mjs`), not by app crypto. Adversary A1/A4.
+`client/shade-tree-client.mjs`), not by app crypto. Adversary A1/A4.
 
 ### 4.2 Membership soundness
 A request carries a real RLN Groth16 proof of membership in a `rateCommitment` leaf of the depth-20
@@ -134,9 +134,9 @@ tree, checked against the currently-accepted root set. **Enforced** by
 `lib/rln.mjs:verifyEnvelope` (check 3 root membership + check 4 Groth16 verify) over
 `recentRoots`. A forged set fails the root check; a bad proof fails verification. Adversary A5.
 
-### 4.3 Per-request unlinkability + rate cap (RLN)
+### 4.3 Per-tunnel unlinkability + rate cap (RLN)
 The RLN nullifier is a function of the identity, the per-epoch `externalNullifier`, and a **private
-`messageId` (slot)**; a member rotates the slot per request, yielding distinct, mutually-unlinkable
+`messageId` (slot)**; a member rotates the slot per tunnel, yielding distinct, mutually-unlinkable
 nullifiers, capped at `K` per epoch (`K_SLOTS`, default 8). **Enforced** by
 `lib/rln.mjs:proveForSlot` (`messageId = i`, range-checked in the circuit) and the top-of-file RLN
 semantics comment; the gateway keys its spent-set on the proof's *public-signal* nullifier
@@ -192,7 +192,7 @@ The whole list is ed25519-signed by a pinned signer, and the pinned argument is 
 (+ `normalizePinnedSigners`): the signature must verify under *some* pinned key AND the declared
 `dir.signer`, when present, must itself be pinned — this is an allowlist, not "trust any signer"; an
 unpinned or wrong signer is rejected (`signer-not-pinned` / `bad-signature`). Rotation without a
-flag day: `RGOE_DIR_SIGNER` accepts a comma-separated `{old,new}` overlap set
+flag day: `SHADE_TREE_DIR_SIGNER` accepts a comma-separated `{old,new}` overlap set
 (`client/selection.mjs:parsePinnedSigners`; T-HARD-5, built). Adversary A2.
 
 ### 4.8 Onion↔key self-authentication (poisoned-directory defense)
@@ -219,7 +219,7 @@ An ed25519 directory signature is valid forever, so a hostile/replaying bootnode
 - **Monotonic issued floor** (`lastAcceptedIssued`): a *fresh* directory whose `issued` predates the
   newest already accepted is rejected (`directory rollback rejected`); the last-known-good cache is
   exempt but still raises the floor. Stops *in-session* rollback.
-- **Absolute max-age bound** (`RGOE_DIRECTORY_MAX_AGE_MS` + skew grace): a *fresh* directory older
+- **Absolute max-age bound** (`SHADE_TREE_DIRECTORY_MAX_AGE_MS` + skew grace): a *fresh* directory older
   than the bound is rejected (`directory too stale`). **OFF by default** (T-FEAT-21), so a cold-start
   client with no prior state has *no* staleness bound unless configured — see §5. Both fail closed to
   the last-good in-memory fleet / cache. Adversary A2.
@@ -242,7 +242,7 @@ chain-read failure hard-rejecting rather than silently passing) against
 
 ### 4.12 Client zero-trust operator re-verification
 The signed directory carries a bootnode `staked`/`operator` label the client cannot check from the
-entry alone. With `RGOE_VERIFY_STAKE=1` the client refuses to take the label on faith: for every
+entry alone. With `SHADE_TREE_VERIFY_STAKE=1` the client refuses to take the label on faith: for every
 entry claiming stake it fetches `GET /gateway/<onion>` and re-runs the same two proofs
 (`verifyAnnounce` sigs + live `isStaked`), dropping any that fail. **Enforced** by
 `client/selection.mjs:reverifyGateway` / `filterReverified` (T-DEV-5). **OFF by default**, so the
@@ -259,22 +259,22 @@ confused with an announce/directory signature by the same onion key. Deliberatel
 identity, nullifier (or any prefix), share, target `host:port`, request nonce, fine timestamp, or a
 counter. Consequence stated honestly in-code: two receipts from one gateway in one epoch are
 byte-identical, so a receipt proves gateway liveness, not that *your* request egressed — the missing
-per-request binding is exactly the linkability channel refused. The client-side tally that consumes
+per-tunnel binding is exactly the linkability channel refused. The client-side tally that consumes
 receipts is local-only, off by default, never transmitted
-(`client/selection.mjs:reportReceipt`, `RGOE_RECEIPT_SCORING`). Adversary A1.
+(`client/selection.mjs:reportReceipt`, `SHADE_TREE_RECEIPT_SCORING`). Adversary A1.
 
 ### 4.14 On-chain stake / root reorg-safety
 Stake and root reads can be pinned to a confirmation depth so a reorg cannot flip an admission
 decision under the gateway. **Enforced** by `lib/gateway-registry.mjs:blockTag` (reads at
-`head - RGOE_CONFIRMATIONS`, or `finalized`) and `lib/root-provider.mjs` (confirmation-depth
+`head - SHADE_TREE_CONFIRMATIONS`, or `finalized`) and `lib/root-provider.mjs` (confirmation-depth
 `eth_getLogs` up to `head - N` / `finalized`). **Default is `latest`** (dev-chain friendly), so
-reorg safety is opt-in via `RGOE_CONFIRMATIONS` — an honest default-config caveat, not a guarantee.
+reorg safety is opt-in via `SHADE_TREE_CONFIRMATIONS` — an honest default-config caveat, not a guarantee.
 Adversary A2.
 
 ### 4.14b Multi-root admission: static + staked + paid sets (T-FEAT-7)
 The gateway admits a proof under ANY root in the union of its configured sources — the static
-`members.json`, each `StakedReputationSet` in `RGOE_GROUP_CONTRACT`, the `PaidAccessSet` in
-`RGOE_PAID_ACCESS_CONTRACT` (`gateway/gateway.mjs:initRoots`, `lib/root-provider.mjs:
+`members.json`, each `StakedReputationSet` in `SHADE_TREE_GROUP_CONTRACT`, the `PaidAccessSet` in
+`SHADE_TREE_PAID_ACCESS_CONTRACT` (`gateway/gateway.mjs:initRoots`, `lib/root-provider.mjs:
 CompositeRootProvider`). Soundness per source is unchanged (§4.2: the proof still opens a leaf under
 one trusted root); what the union changes is WHO can add a leaf: the operator (members.json, and the
 paid set's operator-only `insert` after an off-chain 402 payment) and anyone who posts a bond
@@ -282,7 +282,7 @@ paid set's operator-only `insert` after an off-chain 402 payment) and anyone who
 registrar key mints admissions (never money: the contract holds none). Anonymity within the union:
 a proof reveals which ROOT it opens (the root is a public signal), i.e. whether the member is a
 static, staked or paid member, and nothing finer — the paid set's crowd is its live leaf count,
-logged against `RGOE_PAID_MIN_LEAVES` (WARN, never refuse; the floor is a parameter, not a bound).
+logged against `SHADE_TREE_PAID_MIN_LEAVES` (WARN, never refuse; the floor is a parameter, not a bound).
 Slashing routes to the contract that holds the leaf (`limitOf`), so a paid over-spender loses its
 leaf on the paid set and a staked one its bond; a members.json member is only ever dry-run/primary
 slashed as before. **Enforced** in `gateway/gateway.mjs:makeRoutingSlasher`; tested in
@@ -301,7 +301,7 @@ three different weights (the ANONYMITY ORDER, most → least):
 Consequences and what is enforced:
 - A gateway that admits several paths MIXES these crowds; a member's proof still shows only its
   root, but a member who wants the strongest guarantee should route only to gateways whose whole
-  population is invited. Hence `RGOE_ADMIT` on the gateway (`gateway/gateway.mjs:resolveAdmission`;
+  population is invited. Hence `SHADE_TREE_ADMIT` on the gateway (`gateway/gateway.mjs:resolveAdmission`;
   the DEFAULT is `invited` ALONE, even when contract addresses are configured; a named path whose
   contract is missing fails CLOSED at startup) and the client's `--max-anon` (`client/selection.mjs
   filterByAdmission`: keep ONLY gateways whose SIGNED `admits` is exactly `["invited"]`; a
@@ -318,13 +318,13 @@ Consequences and what is enforced:
 - What the client's CHOICE leaks: nothing new to the gateway (it already sees the root); to the
   bootnode nothing (the client fetches the whole directory and filters locally); the leaf-source
   label appears only in the client's own log/events (`SELECT … leaf=paid`).
-- The registrar's rail choice (`RGOE_PAY_PROTOCOLS`) is a business knob with no anonymity delta
+- The registrar's rail choice (`SHADE_TREE_PAY_PROTOCOLS`) is a business knob with no anonymity delta
   (both rails settle the same EIP-3009 transfer, §4.17); a disabled rail's payload is refused
   `400 protocol-disabled` before any parsing (one less parser reachable by an unauthenticated peer).
 - Slashing routes only over ADMITTED contracts (`makeSlasher({ rootContracts })`): a leaf in an
   un-admitted set could never have egressed here.
 **Enforced** in `gateway/gateway.mjs:resolveAdmission/initRoots`, `client/selection.mjs:
-filterByAdmission`, `client/rgoe-client.mjs:_admission`, `lib/directory.mjs:canonicalAdmits`;
+filterByAdmission`, `client/shade-tree-client.mjs:_admission`, `lib/directory.mjs:canonicalAdmits`;
 tested in `gateway/admission.selftest.mjs`, `client/admission-filter.selftest.mjs`,
 `lib/admission-caps.selftest.mjs`, `test/paid-access.selftest.mjs` §7. Adversaries A1, A2, A4.
 
@@ -344,22 +344,22 @@ Adversary A1.
 ### 4.16 Endpoint DoS levers (slow-loris, connection pinning, verify floods) — CLOSED (T-HARD-4)
 Both listeners bound what an *unauthenticated* peer can cost before it has proven anything, and
 what a member can cost with one proof. **Enforced** by:
-- `gateway/gateway.mjs:readEnvelope` — absolute envelope deadline (`RGOE_ENVELOPE_TIMEOUT_MS`,
+- `gateway/gateway.mjs:readEnvelope` — absolute envelope deadline (`SHADE_TREE_ENVELOPE_TIMEOUT_MS`,
   30 s from connect, not re-armed by dribbled bytes) => drop `envelope-timeout`; size cap =>
   `envelope-too-large`.
-- `gateway/gateway.mjs:makeHandler` — relay idle timeout on both sockets (`RGOE_TUNNEL_IDLE_TIMEOUT_MS`,
+- `gateway/gateway.mjs:makeHandler` — relay idle timeout on both sockets (`SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS`,
   5 min; either socket idle == no bytes in either direction) => `tunnel_closes{idle-timeout}`; a
   black-holed upstream connect is bounded by the same timer (`upstream-timeout`); a permanent
   socket error sink closes the **half-close crash** (a partial envelope + FIN used to raise an
   unhandled `EPIPE` on the error reply and kill the whole gateway process — one connection, full
   outage; found by the T-HARD-4 selftest, confirmed against `main` before the fix).
-- `gateway/gateway.mjs:makeConnLimiter` — `RGOE_MAX_CONNS` (1024) concurrent sockets, refused at
-  accept before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+- `gateway/gateway.mjs:makeConnLimiter` — `SHADE_TREE_MAX_CONNS` (1024) concurrent sockets, refused at
+  accept before any read (`too-many-connections`); `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
   tunnels per nullifier (`nullifier-conn-limit`), checked *after* `spentSet.admit` so a slashable
   second distinct share is never hidden by the cap. Slots released on close; the per-nullifier map
   is bounded by open sockets.
 - `bootnode/server.mjs:makeAnnounceBucket` — GLOBAL announce token bucket, the last gate before
-  `verifyAnnounce` (`RGOE_BOOTNODE_ANNOUNCE_RATE`/`_BURST`, default 66.7/s, burst 1000 = 2×maxEntries/
+  `verifyAnnounce` (`SHADE_TREE_BOOTNODE_ANNOUNCE_RATE`/`_BURST`, default 66.7/s, burst 1000 = 2×maxEntries/
   heartbeat and maxEntries/10): an attacker minting fresh onions gets at most `burst` ed25519 verifies
   in an instant, then `rate`/s (was: up to `maxEntries` in one burst); `429` + `Retry-After`; cheap
   per-onion/full rejects are checked first and consume no token; legit heartbeats at default cadence
@@ -400,7 +400,7 @@ recovery), `test/Eip3009Token.t.sol`.
 irreducible for any prepaid service; the settle tx and `GET /pay/status/<nonce>` are the public
 evidence). The operator trusts its RPC as everywhere else. **The operator learns
 `commitment ↔ payer`** (it must, to insert), and a chain observer sees `payer → operator` plus the
-tier: Layer 0 (a fresh, pool-funded address) is the buyer's mitigation, stated in `rgoe pay`'s
+tier: Layer 0 (a fresh, pool-funded address) is the buyer's mitigation, stated in `shade-tree pay`'s
 output and `docs/JOIN.md`. The gateway is unchanged: it sees an RLN proof over the paid root,
 never a leaf or a payer.
 
@@ -420,13 +420,13 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
   respectively; the TIER BUCKET (which `limit` was bought) is public in the insert event; use is
   unlinkable to both (the proof hides the leaf). Mitigations are the buyer's Layer-0 hop (a fresh
   address / account funded through a pool of their choice), the operator batching inserts (dwell
-  time between payment and insert), and a healthy paid crowd (`RGOE_PAID_MIN_LEAVES`). Which
+  time between payment and insert), and a healthy paid crowd (`SHADE_TREE_PAID_MIN_LEAVES`). Which
   root a proof opens (static / staked / paid) is public to the gateway (§4.14b).
 
 - **Cross-fleet replay / rate is fleet-wide only when the tally is on (T-FEAT-20/20b, ROADMAP-v1
   #1/#3).** §4.6 defends *one* gateway. The shared per-epoch nullifier tally
-  (`gateway/fleet-tally.mjs`, `RGOE_FLEET_TALLY_PEERS`) rejects a replay at a second gateway and
-  shares only `(nullifier, epoch)` (RLN's per-request nullifiers keep it from being a linkability
+  (`gateway/fleet-tally.mjs`, `SHADE_TREE_FLEET_TALLY_PEERS`) rejects a replay at a second gateway and
+  shares only `(nullifier, epoch)` (RLN's per-tunnel nullifiers keep it from being a linkability
   channel), but it is **opt-in and fail-open**: a fleet without it lets a malicious gateway fan a
   captured envelope to peers (each accepts it once), and a member spreading requests across `N`
   gateways gets up to `N`× its intended budget.
@@ -446,11 +446,11 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 - **Cold-start directory staleness (T-FEAT-21).** The rollback floor (§4.9) only bounds staleness
   *within* a session; the absolute max-age bound is **off by default**, so a brand-new client can
   accept a validly-signed but months-old directory from a replaying bootnode. Set
-  `RGOE_DIRECTORY_MAX_AGE_MS` to close it.
+  `SHADE_TREE_DIRECTORY_MAX_AGE_MS` to close it.
 - **Stale `staked` label by default (T-DEV-5).** Client zero-trust operator re-verification (§4.12)
   exists but is **off by default**; the default path trusts the bootnode's operator↔onion pairing
   label.
-- **Reorg safety off by default (§4.14).** `latest` reads unless `RGOE_CONFIRMATIONS` is set.
+- **Reorg safety off by default (§4.14).** `latest` reads unless `SHADE_TREE_CONFIRMATIONS` is set.
 - **Capability/version advertisement is opt-in on the gateway side (T-FEAT-10/10b, §4.15).** Signed
   and onion-bound when present; a gateway that advertises nothing is treated as default-capable
   only, and the version range echoed on a rejection is unsigned (fail-closed either way).

@@ -58,7 +58,7 @@ So a hostile bootnode can at worst *omit* a gateway, or list one whose stake lat
   "nonce": "<hex>",          // one-shot within the window
   "onionSig": "<ed25519>",   // by the onion's OWN key over {v,onion,weight,ts,nonce}  (onion control)
   "operator": "0x..",        // optional (admission=stake)
-  "operatorSig": "<ecdsa>"   // personal_sign("RGOE gateway operator authorization\nonion=..\noperator=..")
+  "operatorSig": "<ecdsa>"   // personal_sign("Shade Tree gateway operator authorization\nonion=..\noperator=..")
 }
 ```
 
@@ -80,7 +80,7 @@ judgment. See [`GatewayRegistry.sol`](../contracts/GatewayRegistry.sol).
 
 ## The onion identity
 
-`rgoe keygen <hsDir>` (`bootnode/keygen.mjs`) mints one ed25519 seed and writes both:
+`shade-tree keygen <hsDir>` (`bootnode/keygen.mjs`) mints one ed25519 seed and writes both:
 
 - Tor's HS key files (`hs_ed25519_secret_key`, `hs_ed25519_public_key`, `hostname`) so Tor
   publishes exactly this onion, and
@@ -94,7 +94,7 @@ and "the key we sign with."
 ## Liveness
 
 A bootnode entry is soft state with a TTL (`--ttl`, default 900s). A gateway proves liveness
-by continuing to announce (`rgoe heartbeat`, every `--interval` seconds); a dead gateway ages
+by continuing to announce (`shade-tree heartbeat`, every `--interval` seconds); a dead gateway ages
 out without anyone deregistering it. Clients cache the last-known-good directory, so a dead or
 poisoned bootnode degrades to the previous good fleet, never to nothing.
 
@@ -103,14 +103,14 @@ logs one of `announced`, `announce rejected: <reason>` (the bootnode said no, or
 something that is not a JSON object), or `announce failed: <err> (will retry next interval)` (the
 bootnode was unreachable over Tor). Every outcome is retried on the next `--interval`; a rejected
 or unreachable gateway simply ages out via the TTL. Operator configuration is resolved once at
-startup and fails fast on any misconfiguration (see `docs/CONFIG.md`, `RGOE_GW_OPERATOR*`);
+startup and fails fast on any misconfiguration (see `docs/CONFIG.md`, `SHADE_TREE_GW_OPERATOR*`);
 `bootnode/heartbeat.selftest.mjs` pins operator resolution, the announce bytes against
 `testdata/vectors.json`, every failure path, and that no seed or operator key ever reaches a log.
 
 ### Surviving a restart
 
 The live set is in-memory by default, so a bootnode restart would blank the fleet until every
-gateway's next heartbeat. Set `RGOE_BOOTNODE_STORE=<path>` (the deploy sets it automatically) to
+gateway's next heartbeat. Set `SHADE_TREE_BOOTNODE_STORE=<path>` (the deploy sets it automatically) to
 turn on **write-through persistence**: every accepted announce is mirrored to a small JSON file
 and reloaded on boot. Reload is not blind trust — each stored record is re-run through the same
 announce verification (onion control, and in stake mode a live on-chain `isStaked` re-check), and
@@ -123,23 +123,23 @@ long-dead gateway or inject an onion nobody controls.
 
 The bootnode is the one new single-point-of-availability the fleet adds. **Federation** closes
 that: run more than one bootnode and let them gossip, so discovery survives any one going dark.
-Off by default — with no `RGOE_BOOTNODE_PEERS` set, a bootnode is byte-for-byte the standalone one
+Off by default — with no `SHADE_TREE_BOOTNODE_PEERS` set, a bootnode is byte-for-byte the standalone one
 above.
 
 ```bash
 # each bootnode lists the OTHER bootnodes' onions
-RGOE_BOOTNODE_PEERS=<peerA>.onion,<peerB>.onion \
-RGOE_BOOTNODE_ONION=<this-bootnode>.onion \
-RGOE_BOOTNODE_FED_INTERVAL=60 \
-  rgoe bootnode ...
+SHADE_TREE_BOOTNODE_PEERS=<peerA>.onion,<peerB>.onion \
+SHADE_TREE_BOOTNODE_ONION=<this-bootnode>.onion \
+SHADE_TREE_BOOTNODE_FED_INTERVAL=60 \
+  shade-tree bootnode ...
 ```
 
 | env | default | meaning |
 |---|---|---|
-| `RGOE_BOOTNODE_PEERS` | *(empty → off)* | comma-list of peer bootnode onions to federate with |
-| `RGOE_BOOTNODE_FED_INTERVAL` | `60` | seconds between pull cycles |
-| `RGOE_BOOTNODE_FED_MAX_PULL` | `maxEntries` | max gateways pulled per peer per cycle (bounds a hostile peer) |
-| `RGOE_BOOTNODE_ONION` | *(unset)* | this bootnode's own onion, filtered out of the peer set |
+| `SHADE_TREE_BOOTNODE_PEERS` | *(empty → off)* | comma-list of peer bootnode onions to federate with |
+| `SHADE_TREE_BOOTNODE_FED_INTERVAL` | `60` | seconds between pull cycles |
+| `SHADE_TREE_BOOTNODE_FED_MAX_PULL` | `maxEntries` | max gateways pulled per peer per cycle (bounds a hostile peer) |
+| `SHADE_TREE_BOOTNODE_ONION` | *(unset)* | this bootnode's own onion, filtered out of the peer set |
 
 ### Cache, not trust root — applied to gossip
 
@@ -169,7 +169,7 @@ from the peer's `GET /gateway/<onion>`. Every pulled announce is then re-run thr
   e.g. one heartbeated to us directly). An announce whose `ts + ttl` already lapsed is dropped
   (`stale-gossip`).
 - **The existing DoS caps still hold.** `maxEntries` bounds what is admitted (a new gossiped onion is
-  refused when full); `RGOE_BOOTNODE_FED_MAX_PULL` bounds how many gateways we fetch from any one peer,
+  refused when full); `SHADE_TREE_BOOTNODE_FED_MAX_PULL` bounds how many gateways we fetch from any one peer,
   so a hostile peer advertising a giant directory cannot make us do unbounded per-gateway fetches.
 - **Fail-soft.** A down peer (fetch throws) is skipped; one failing gateway fetch doesn't abort the
   peer; one failing peer doesn't abort the cycle. Federation is strictly additive — it only *consumes*
@@ -188,8 +188,8 @@ that shape (full table: `bootnode/deploy/README.md`, `docs/CONFIG.md` "Deploy"):
 
 | env | default | meaning |
 |---|---|---|
-| `RGOE_BOOTNODE_ONION` | *(unset → this box runs its own bootnode)* | set to an existing bootnode's onion for a **gateway-only** box: no `rgoe-bootnode` unit, no bootnode HS; the heartbeat announces to that remote bootnode |
-| `RGOE_ENABLE_POW` | `0` | onion PoW DoS defense on the bootnode + gateway onions this box publishes (`1` = on; off by default because `pow: no` client tors cannot reach a PoW onion) |
+| `SHADE_TREE_BOOTNODE_ONION` | *(unset → this box runs its own bootnode)* | set to an existing bootnode's onion for a **gateway-only** box: no `shade-tree-bootnode` unit, no bootnode HS; the heartbeat announces to that remote bootnode |
+| `SHADE_TREE_ENABLE_POW` | `0` | onion PoW DoS defense on the bootnode + gateway onions this box publishes (`1` = on; off by default because `pow: no` client tors cannot reach a PoW onion) |
 
 ## Endpoint hardening (T-HARD-4)
 
@@ -211,10 +211,10 @@ boot is exempt (local work, still fully re-verified).
 Sizing (defaults; every number derives from the registry constants + the fleet heartbeat):
 
 ```
-legit sustained load  = N gateways × 1 announce / RGOE_BOOTNODE_HEARTBEAT,   N ≤ maxEntries
+legit sustained load  = N gateways × 1 announce / SHADE_TREE_BOOTNODE_HEARTBEAT,   N ≤ maxEntries
                       = maxEntries / heartbeat = 10000 / 300 = 33.3 announces/s at FULL capacity
-rate  (refill/s)      = 2 × maxEntries / heartbeat = 66.7/s          RGOE_BOOTNODE_ANNOUNCE_RATE
-burst (capacity)      = max(100, maxEntries / 10)  = 1000            RGOE_BOOTNODE_ANNOUNCE_BURST
+rate  (refill/s)      = 2 × maxEntries / heartbeat = 66.7/s          SHADE_TREE_BOOTNODE_ANNOUNCE_RATE
+burst (capacity)      = max(100, maxEntries / 10)  = 1000            SHADE_TREE_BOOTNODE_ANNOUNCE_BURST
 ```
 
 So a fleet at the registry cap, heartbeating at the default cadence, draws half the refill and
@@ -223,16 +223,16 @@ the bucket never drains; a fleet of up to `burst` gateways re-announcing in perf
 attacker minting fresh onions gets at most `burst` verifies up front and then `rate`/s — 1000
 then 66.7/s instead of 10000 in a burst. A throttled legit heartbeat is not lost: it retries at
 its next beat (TTL 900 s = 3 beats), so a healthy gateway is never aged out by the bucket. Only
-fleets *larger* than `burst` that restart in lockstep need `RGOE_BOOTNODE_ANNOUNCE_BURST` raised.
+fleets *larger* than `burst` that restart in lockstep need `SHADE_TREE_BOOTNODE_ANNOUNCE_BURST` raised.
 
 ### HTTP slow-client limits
 
 Node's `http.Server` defaults leave slow-loris open (headers 60 s, whole request 300 s, headers
 16 KiB, enforced every 30 s). Every bootnode request is small and fast, so `makeServer` sets:
-headers within `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` (10 s), whole request within
-`RGOE_BOOTNODE_REQUEST_TIMEOUT_MS` (30 s) → `408` + close; idle keep-alive closed after
-`RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS` (5 s); headers over `RGOE_BOOTNODE_MAX_HEADER_BYTES`
-(8 KiB) → `431`; enforced every `RGOE_BOOTNODE_CONN_CHECK_MS` (1 s). The 64 KiB body cap on
+headers within `SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS` (10 s), whole request within
+`SHADE_TREE_BOOTNODE_REQUEST_TIMEOUT_MS` (30 s) → `408` + close; idle keep-alive closed after
+`SHADE_TREE_BOOTNODE_KEEPALIVE_TIMEOUT_MS` (5 s); headers over `SHADE_TREE_BOOTNODE_MAX_HEADER_BYTES`
+(8 KiB) → `431`; enforced every `SHADE_TREE_BOOTNODE_CONN_CHECK_MS` (1 s). The 64 KiB body cap on
 `/announce` is unchanged.
 
 *Accept (proven in `bootnode/hardening.selftest.mjs`, real sockets + a verify spy):* a
@@ -245,12 +245,12 @@ scenario 7 replays the burst + slow-loris as attack narratives.
 ## Client side
 
 ```bash
-rgoe client --secret <hex> --bootnode <bootnode-onion> --dir-signer <bootnode-signer-pubkey>
+shade-tree client --secret <hex> --bootnode <bootnode-onion> --dir-signer <bootnode-signer-pubkey>
 ```
 
 The client fetches `/directory` over Tor (`bootnode/fetch.mjs`), verifies it against the
 pinned signer, and feeds it into the existing weighted rotation + failover
-(`client/selection.mjs`). Everything downstream — per-request RLN proof, gateway rotation,
+(`client/selection.mjs`). Everything downstream — per-tunnel RLN proof, gateway rotation,
 slot rotation — is unchanged; the bootnode only changes *how the fleet is discovered*.
 
 ## Verify it end to end (no Tor, no chain)

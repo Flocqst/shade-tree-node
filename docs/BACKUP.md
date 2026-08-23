@@ -1,6 +1,6 @@
 # Encrypted key backup / restore
 
-`rgoe backup` and `rgoe restore` encrypt and recover the secret key material an operator cannot
+`shade-tree backup` and `shade-tree restore` encrypt and recover the secret key material an operator cannot
 afford to lose. This replaces the manual `tar | gpg` recipe in [OPERATOR.md](./OPERATOR.md#backup):
 it uses only Node's built-in crypto (`node:crypto`), so it works with no `gpg` installed.
 
@@ -18,26 +18,26 @@ Everything else in the tree (e.g. `hostname`, `hs_ed25519_public_key`) is ignore
 
 ## Usage
 
-The passphrase is passed **only** via the `RGOE_BACKUP_PASSPHRASE` environment variable — never on
+The passphrase is passed **only** via the `SHADE_TREE_BACKUP_PASSPHRASE` environment variable — never on
 the command line (so it never lands in your shell history or the process list) and never logged.
 
 ```bash
 # Back up: encrypt every secret under deploy-state/ into one file.
-export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
-rgoe backup deploy-state rgoe-keys-$(date +%F).rgoebak
-# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+export SHADE_TREE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+shade-tree backup deploy-state shade-tree-keys-$(date +%F).shade-tree-backup
+# then move the .shade-tree-backup file to an off-box, encrypted-at-rest location.
 
 # Restore: decrypt back into a directory (refuses to clobber existing files).
-export RGOE_BACKUP_PASSPHRASE='…the same passphrase…'
-rgoe restore rgoe-keys-2026-08-13.rgoebak deploy-state          # add --force to overwrite
+export SHADE_TREE_BACKUP_PASSPHRASE='…the same passphrase…'
+shade-tree restore shade-tree-keys-2026-08-13.shade-tree-backup deploy-state          # add --force to overwrite
 ```
 
 Restored files are written with restrictive perms (secrets `0600`, directories `0700`), so the
 onion address and pinned signer survive a rebuild and clients keep working. Restore refuses to
 overwrite existing files unless you pass `--force`.
 
-Paths may also be supplied via env (`RGOE_BACKUP_SRC` / `RGOE_BACKUP_OUT` for backup,
-`RGOE_BACKUP_IN` / `RGOE_BACKUP_DEST` for restore) for non-interactive/automated runs.
+Paths may also be supplied via env (`SHADE_TREE_BACKUP_SRC` / `SHADE_TREE_BACKUP_OUT` for backup,
+`SHADE_TREE_BACKUP_IN` / `SHADE_TREE_BACKUP_DEST` for restore) for non-interactive/automated runs.
 
 ## Crypto
 
@@ -57,5 +57,5 @@ passphrase means the backup is unrecoverable, by design. Store the passphrase se
 backup file (a password manager or your normal secrets vault), and treat it with the same care as
 the keys themselves.
 
-The operator EOA key (`RGOE_GW_OPERATOR_KEY` / `RGOE_REGISTER_KEY` / `RGOE_SLASH_KEY`) is **not**
+The operator EOA key (`SHADE_TREE_GW_OPERATOR_KEY` / `SHADE_TREE_REGISTER_KEY` / `SHADE_TREE_SLASH_KEY`) is **not**
 covered here — back it up with your normal wallet backups.

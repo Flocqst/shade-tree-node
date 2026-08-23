@@ -1,6 +1,6 @@
 # Contributing
 
-A reference implementation of reputation-gated onion egress, live on testnet,
+A reference implementation of Shade Tree, live on testnet,
 unaudited (see [`SECURITY.md`](SECURITY.md)). Contributions are welcome; this
 page is how to run the tests and the house rules a change must hold to.
 

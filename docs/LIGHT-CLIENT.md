@@ -1,17 +1,17 @@
 # Light-client integration: trust-minimized reads of the reputation root
 
 **Status: built (option A, sidecar), opt-in.** `LightClientRootProvider`
-(`lib/root-provider.mjs`, `RGOE_ROOT_PROVIDER=light`) verifies the contract's `currentRoot`
+(`lib/root-provider.mjs`, `SHADE_TREE_ROOT_PROVIDER=light`) verifies the contract's `currentRoot`
 storage slot against a block header's `stateRoot` via an EIP-1186 `eth_getProof` MPT proof
 (SHIP-PLAN T-DEV-9), and since T-DEV-9b the `stateRoot` itself can be anchored to the beacon
-sync committee instead of the RPC's header: set `RGOE_HELIOS_RPC_URL` to a LOCAL
+sync committee instead of the RPC's header: set `SHADE_TREE_HELIOS_RPC_URL` to a LOCAL
 [a16z/helios](https://github.com/a16z/helios) verifying JSON-RPC and the provider takes the
 header from it (`lib/helios-root.mjs`, `makeHeliosTrustedStateRoot`), cross-checks the RPC's
 header against it, and rejects with a precise reason if they differ. Then the whole chain
 sync-committee → stateRoot → account proof → storage proof → root is verified end to end and
 the RPC is a dumb pipe. Unset, behaviour is unchanged (RPC-trusted stateRoot) and the gateway
 logs so at startup. The **Decision, how-to and receipt** section below is the operator part;
-the default is still the trusted-node provider (`RGOE_ROOT_PROVIDER=node`), which is the right
+the default is still the trusted-node provider (`SHADE_TREE_ROOT_PROVIDER=node`), which is the right
 default for a solo operator; the rest of this doc is the design for the *other* provider, so an
 operator who does not run a full node can still read the reputation-set root without trusting
 an RPC. It is written to be reviewed by someone who knows the Helios internals, so it
@@ -27,10 +27,10 @@ gain). The pieces:
 
 | piece | where |
 |---|---|
-| the hook implementation | `lib/helios-root.mjs` — `makeHeliosTrustedStateRoot({ rpcUrl, chainId?, upstreamRpcUrl? })` → `trustedStateRoot(tag)` = Helios `eth_getBlockByNumber(tag,false)` → `{ stateRoot, number, hash }`; first use checks Helios `eth_chainId` against `RGOE_HELIOS_CHAIN_ID` (else the RPC's own `eth_chainId`); unreachable / mismatch / null block / malformed header all **throw** (fail closed, reason names `helios`) |
-| wiring | `lib/root-provider.mjs` — `RGOE_HELIOS_RPC_URL` set ⇒ `LightClientRootProvider` installs the hook, anchors the proof to Helios' `stateRoot`, and **cross-checks** the RPC's header for the same block number: `stateRoot mismatch at block N: RPC (…) claims X but the anchor (helios (sync-committee verified)) attests Y` ⇒ rejected before any proof is fetched. `describe().stateRootSource` and the gateway startup log say `helios (sync-committee verified)` vs `rpc header (TRUSTED, not verified; …)`. Results carry `stateRootVerified: true|false`. `RGOE_HELIOS_RPC_URL` with `RGOE_ROOT_PROVIDER=node` is refused (would look verified without being so) |
+| the hook implementation | `lib/helios-root.mjs` — `makeHeliosTrustedStateRoot({ rpcUrl, chainId?, upstreamRpcUrl? })` → `trustedStateRoot(tag)` = Helios `eth_getBlockByNumber(tag,false)` → `{ stateRoot, number, hash }`; first use checks Helios `eth_chainId` against `SHADE_TREE_HELIOS_CHAIN_ID` (else the RPC's own `eth_chainId`); unreachable / mismatch / null block / malformed header all **throw** (fail closed, reason names `helios`) |
+| wiring | `lib/root-provider.mjs` — `SHADE_TREE_HELIOS_RPC_URL` set ⇒ `LightClientRootProvider` installs the hook, anchors the proof to Helios' `stateRoot`, and **cross-checks** the RPC's header for the same block number: `stateRoot mismatch at block N: RPC (…) claims X but the anchor (helios (sync-committee verified)) attests Y` ⇒ rejected before any proof is fetched. `describe().stateRootSource` and the gateway startup log say `helios (sync-committee verified)` vs `rpc header (TRUSTED, not verified; …)`. Results carry `stateRootVerified: true|false`. `SHADE_TREE_HELIOS_RPC_URL` with `SHADE_TREE_ROOT_PROVIDER=node` is refused (would look verified without being so) |
 | tests | `lib/helios-root.selftest.mjs` (fake Helios + fake RPC in-process: hook honoured, chainId mismatch, unreachable, RPC-lies-about-stateRoot both stale-honest and self-consistent-fake, tag mapping, "Helios lies" boundary, node-mode guard), `lib/root-provider-light.selftest.mjs` §8 |
-| sidecar | `bootnode/deploy/bootstrap.sh` `RGOE_HELIOS=1` (opt-in, default render unchanged): installs the **pinned** release `helios 0.11.1` (`helios_linux_{amd64,arm64}.tar.gz`, sha256 `339bf4ce…62ddb` / `20132e1f…5dab6`, verified before install; other versions need `RGOE_HELIOS_SHA256`), renders `rgoe-helios.service` (loopback `127.0.0.1:8546`, endpoints via `EXECUTION_RPC`/`CONSENSUS_RPC` env, same sandbox as the other units + `MemoryDenyWriteExecute`), and points the gateway unit at it (`RGOE_ROOT_PROVIDER=light`, `RGOE_HELIOS_RPC_URL`, `RGOE_RPC_URL`, `RGOE_GROUP_CONTRACT`, ordered after the sidecar). `bootnode/deploy/README.md` has the tunables |
+| sidecar | `bootnode/deploy/bootstrap.sh` `SHADE_TREE_HELIOS=1` (opt-in, default render unchanged): installs the **pinned** release `helios 0.11.1` (`helios_linux_{amd64,arm64}.tar.gz`, sha256 `339bf4ce…62ddb` / `20132e1f…5dab6`, verified before install; other versions need `SHADE_TREE_HELIOS_SHA256`), renders `shade-tree-helios.service` (loopback `127.0.0.1:8546`, endpoints via `EXECUTION_RPC`/`CONSENSUS_RPC` env, same sandbox as the other units + `MemoryDenyWriteExecute`), and points the gateway unit at it (`SHADE_TREE_ROOT_PROVIDER=light`, `SHADE_TREE_HELIOS_RPC_URL`, `SHADE_TREE_RPC_URL`, `SHADE_TREE_GROUP_CONTRACT`, ordered after the sidecar). `bootnode/deploy/README.md` has the tunables |
 
 **How-to (by hand, any box).** Helios 0.11.1 CLI (checked against the README and
 `helios ethereum --help` on 2026-08-17):
@@ -43,11 +43,11 @@ tar xzf helios.tgz && install -m 0755 helios /usr/local/bin/helios      # tarbal
 # 2. run it: consensus (beacon API with the light-client endpoints) + execution (must serve eth_getProof)
 helios ethereum --network sepolia \
   --consensus-rpc https://lodestar-sepolia.chainsafe.io \
-  --execution-rpc "$RGOE_RPC_URL" \
-  --rpc-bind-ip 127.0.0.1 --rpc-port 8546 --data-dir /var/lib/rgoe-helios \
+  --execution-rpc "$SHADE_TREE_RPC_URL" \
+  --rpc-bind-ip 127.0.0.1 --rpc-port 8546 --data-dir /var/lib/shade-tree-helios \
   --checkpoint 0x<recent FINALIZED beacon block root>     # or --load-external-fallback
 # 3. point the gateway at it
-export RGOE_ROOT_PROVIDER=light RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546 RGOE_GROUP_CONTRACT=0x… RGOE_RPC_URL=…
+export SHADE_TREE_ROOT_PROVIDER=light SHADE_TREE_HELIOS_RPC_URL=http://127.0.0.1:8546 SHADE_TREE_GROUP_CONTRACT=0x… SHADE_TREE_RPC_URL=…
 ```
 
 Flags: `-n/--network mainnet|sepolia|holesky`, `-c/--consensus-rpc`, `-e/--execution-rpc`,
@@ -64,17 +64,17 @@ each URL/checkpoint flag also reads an env var of the same name (`EXECUTION_RPC`
 - **Checkpoint.** `--load-external-fallback` lets Helios fetch a checkpoint from public
   services; a pinned `--checkpoint` (a recent *finalized* beacon block root, e.g.
   `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second
-  source) is the more trust-minimized bootstrap. `RGOE_HELIOS_CHECKPOINT` in bootstrap.sh.
+  source) is the more trust-minimized bootstrap. `SHADE_TREE_HELIOS_CHECKPOINT` in bootstrap.sh.
 - **Public execution RPCs have short `eth_getProof` windows.** The provider proves the root at
   the *finalized* block (≥64 slots behind head); publicnode / tenderly / 1rpc serve proofs only
   ~32 blocks back (publicnode inconsistently across backends), so `eth_getProof: distance to
-  target block exceeds maximum proof window` is what you get most of the time. `RGOE_RPC_URL`
+  target block exceeds maximum proof window` is what you get most of the time. `SHADE_TREE_RPC_URL`
   for the light provider must be an RPC that serves proofs at finalized (own node, or an
   archive-capable provider such as Alchemy/Infura). This is an availability limit of the RPC,
   not a trust issue; the last-known-good root keeps gating meanwhile.
 - **Helios' own head lags** (`latest` errors `out of sync: N seconds behind` while it catches
   up; "inconsistent block history detected" warnings on the public consensus endpoint). Read
-  at **finalized** (`RGOE_CONFIRMATIONS=0`, the default); a `head-N` hex tag is served only
+  at **finalized** (`SHADE_TREE_CONFIRMATIONS=0`, the default); a `head-N` hex tag is served only
   inside Helios' recent window.
 - **After a good read, a lying RPC does not stall the gate.** `withCache` returns the
   last-known-good verified root flagged `stale:true` with the mismatch reason in `error`; a
@@ -88,9 +88,9 @@ against Sepolia with `--consensus-rpc https://lodestar-sepolia.chainsafe.io`,
 `0x79c0ea030b4f2ba9bf03f1188c4bdc8a263e6b8f1c4bc3bd1d24c1274552ceac` (that moment's
 finalized header root); it reported `consensus client in sync with checkpoint` and followed
 four finality advances (11510059 → 11510090 → 11510122 → 11510152). The real
-`makeRootProvider()` (`RGOE_ROOT_PROVIDER=light`, `RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546`,
-`RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
-`RGOE_GROUP_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`) returned, e.g.:
+`makeRootProvider()` (`SHADE_TREE_ROOT_PROVIDER=light`, `SHADE_TREE_HELIOS_RPC_URL=http://127.0.0.1:8546`,
+`SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
+`SHADE_TREE_GROUP_CONTRACT=0xdAE242AE3eCD18e5F74d5e96332fCD4682EB20FC`) returned, e.g.:
 
 ```
 describe: {"provider":"light","mode":"proof","stateRootSource":"helios (sync-committee verified)","stateRootVerified":true,…}
@@ -117,9 +117,9 @@ at block 11510548), the same `helios 0.11.1` sidecar (fresh run, checkpoint
 `0x73aa8e286e4a520bd5c3d437e84098540801742501b829ddea901a20421522a9` = that moment's finalized
 header root from lodestar-sepolia, cross-checked equal on publicnode's beacon API;
 `consensus client in sync with checkpoint`; finality followed 11510496 → 11510528 → 11510558)
-and the real `makeRootProvider()` (`RGOE_ROOT_PROVIDER=light`,
-`RGOE_HELIOS_RPC_URL=http://127.0.0.1:8546`, `RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
-`RGOE_GROUP_CONTRACT=0xFe48De8b…9d25`) returned:
+and the real `makeRootProvider()` (`SHADE_TREE_ROOT_PROVIDER=light`,
+`SHADE_TREE_HELIOS_RPC_URL=http://127.0.0.1:8546`, `SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com`,
+`SHADE_TREE_GROUP_CONTRACT=0xFe48De8b…9d25`) returned:
 
 ```
 describe: {"provider":"light","mode":"proof","stateRootSource":"helios (sync-committee verified)","stateRootVerified":true,"contract":"0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25"}
@@ -197,7 +197,7 @@ Three, in the order I would reach for them.
 **A. Helios as a local verifying RPC proxy (recommended default).** Helios already runs
 as a local JSON-RPC server that only returns consensus-verified results, executing
 `eth_call` locally against light-client-verified state. So the integration is almost
-nothing on our side: run Helios as a local process and point `RGOE_RPC_URL` at its
+nothing on our side: run Helios as a local process and point `SHADE_TREE_RPC_URL` at its
 endpoint. The existing `NodeRootProvider` (docs/ONCHAIN.md, `lib/root-provider.mjs`) then
 reads `root()` and gets light-client security for free, because the "node" it is talking
 to is a verifying client rather than a trusted upstream. This collapses "trusted vs
@@ -276,7 +276,7 @@ the same `C ≈ 13 min` slash-confirmation margin that sizes the unbonding bound
 1. **Checkpoint source.** What is the right weak-subjectivity checkpoint source for an
    unattended gateway — a pinned checkpoint at bundle time, a checkpoint-sync endpoint, a
    small set cross-checked? This is the biggest residual trust and the thing most worth an
-   expert opinion. *As shipped:* `RGOE_HELIOS_CHECKPOINT` (operator-pinned finalized root)
+   expert opinion. *As shipped:* `SHADE_TREE_HELIOS_CHECKPOINT` (operator-pinned finalized root)
    or, unset, Helios' `--load-external-fallback`; still open which to make the default.
 2. **Sidecar vs embedded.** For the Rust gateway, is embedding Helios as a crate the
    intended integration, or is the local-RPC-proxy deployment (option A) preferred even

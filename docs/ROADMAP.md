@@ -4,7 +4,7 @@
 against the first Semaphore PoC. Several of its headline items have since moved into
 the implementation: members self-generate identities, the client/gateway use a real
 RLN Groth16 circuit, an on-chain staked reputation set exists, and the client has a
-fleet-aware library with per-request gateway rotation. The remaining work is no
+fleet-aware library with per-tunnel gateway rotation. The remaining work is no
 longer “make the PoC less toy.” It is to turn the construction into a coherent
 network with explicit security properties, discovery, fleet-wide accountability,
 egress-reputation management, and payment interoperability.
@@ -34,17 +34,17 @@ mapped onto the sections below, so the roadmap reads as *remaining* work rather 
 | Section | Built | Where |
 |---|---|---|
 | 2.1 fleet-wide RLN evidence exchange | **partial** — shared spent-nullifier tally across gateways (only `(nullifier, epoch)` on the wire, fail-open) catches a replay to a second gateway; cross-fleet *share* exchange and reconstruction is not wired | `gateway/fleet-tally.mjs`, `docs/FLEET.md` |
-| 2.4 client leak resistance | **partial** — per-request Tor circuit isolation, endpoint hardening (bounded reads, strict parsers, adversarial tests on every wire surface) | `client/`, `test/adversarial.selftest.mjs`, `test/protocol-adversarial.selftest.mjs` |
+| 2.4 client leak resistance | **partial** — per-tunnel Tor circuit isolation, endpoint hardening (bounded reads, strict parsers, adversarial tests on every wire surface) | `client/`, `test/adversarial.selftest.mjs`, `test/protocol-adversarial.selftest.mjs` |
 | 3.1 discover onions, not egress IPs | **built** — the onion is never on chain; `GatewayRegistry` stakes an operator address only | `contracts/GatewayRegistry.sol`, ADR 0002 |
 | 3.2 boot node = liveness layer, not trust root | **built** — announces carry onion-control (ed25519) + optional operator-stake signature; clients re-verify; bootnode can omit but not inject | `bootnode/`, ADR 0003, `docs/BOOTNODE.md` |
 | 3.2 gateway record | **built (subset)** — signed `{ports, region, proto}` capability advertisement; clients select by capability and fail closed. `payment` and `sequence` fields not yet in the record | `lib/directory.mjs`, `bootnode/announce.mjs` |
-| 3.3 / 3.4 join + client bootstrap | **built** — `rgoe register-gateway` / `heartbeat`; client queries bootnode over Tor, verifies, caches last-known-good, rotates with failover | `bin/rgoe.mjs`, `docs/QUICKSTART.md` |
+| 3.3 / 3.4 join + client bootstrap | **built** — `shade-tree register-gateway` / `heartbeat`; client queries bootnode over Tor, verifies, caches last-known-good, rotates with failover | `bin/shade-tree.mjs`, `docs/QUICKSTART.md` |
 | 3.5 bootstrap v0 (one onion) | **built** | `bootnode/server.mjs` |
 | 3.5 bootstrap v1 (mirrors) | **built** — bootnode federation with gossip; every gossiped gateway re-verified through the full announce path; M-of-N threshold-signed directory removes the single signer | `bootnode/federation.mjs`, `lib/directory.mjs` (threshold) |
 | 3.5 bootstrap v2 (on-chain registry + mirrors) | **built (registry)** — `GatewayRegistry` live on Sepolia; client can rebuild the *member* root from chain via EIP-1186 light-client proof; rebuilding the *gateway* set purely from chain is not yet a client path | `contracts/GatewayRegistry.sol`, `docs/LIGHT-CLIENT.md` |
 | 3.5 bootstrap v3 (DHT) | not planned | — |
 | 4–8 payments / x402 / MPP / zkAPI | **design only** | `docs/PAYMENTS.md`, sections below |
-| Distributable client | **built** — Rust `rgoe` over embedded arti Tor, Groth16 RLN proof accepted byte-for-byte by the JS gateway, release binaries | `rust/`, `docs/CLIENTS.md` |
+| Distributable client | **built** — Rust `shade-tree` over embedded arti Tor, Groth16 RLN proof accepted byte-for-byte by the JS gateway, release binaries | `rust/`, `docs/CLIENTS.md` |
 
 Not built and human-gated: the production trusted-setup ceremony and the first live
 deployment (see SHIP-PLAN T-HARD-1 / T-DEPLOY-*).
@@ -63,7 +63,7 @@ The roadmap starts from the code that exists now, not from the June PoC.
 | Over-spend consequence | two distinct shares under one nullifier reconstruct the identity secret and can slash the rate-commitment leaf |
 | Request binding | RLN signal binds the proof to `(target, requestNonce)`; deterministic retry reuses the same signal |
 | Admission | local set fallback plus `StakedReputationSet` / on-chain registration path |
-| Fleet client | `RgoeClient`, signed directory support, weighted per-request gateway selection and failover |
+| Fleet client | `ShadeTreeClient`, signed directory support, weighted per-tunnel gateway selection and failover |
 | Transport | TCP `CONNECT :443`; TLS remains end-to-end between client and destination |
 | Payments | separate design exists in [PAYMENTS.md](PAYMENTS.md), but payment is not part of the live request path |
 
@@ -325,7 +325,7 @@ A gateway record can look roughly like:
 
 ```json
 {
-  "protocol": "rgoe/1",
+  "protocol": "shade-tree/1",
   "onion": "...onion",
   "gatewayKey": "...",
   "sequence": 42,
@@ -397,7 +397,7 @@ decentralized than several self-verifying mirrors.
 
 Do not conflate gateway discovery with paid-API discovery. x402 and MPP both have service
 metadata/discovery mechanisms. Those tell an agent **what API exists and how it wants to
-be paid**. RGOE boot nodes tell the client **which anonymous egress gateways exist**.
+be paid**. Shade Tree boot nodes tell the client **which anonymous egress gateways exist**.
 The client can consume both, but they are different trust domains.
 
 ---
@@ -406,11 +406,11 @@ The client can consume both, but they are different trust domains.
 
 There are two payment questions and they should not be mixed:
 
-1. **Pay for RGOE itself.** How does a member buy/stake/renew access without making its
+1. **Pay for Shade Tree itself.** How does a member buy/stake/renew access without making its
    later requests linkable to the payer? The strongest current design is still
    [PAYMENTS.md](PAYMENTS.md): anonymous on-chain deposit / commitment plus off-chain ZK
    redemption, with no required facilitator.
-2. **Use RGOE to access a paid downstream API.** How does an anonymous client satisfy an
+2. **Use Shade Tree to access a paid downstream API.** How does an anonymous client satisfy an
    x402, MPP, or future zkAPI payment challenge while preserving the desired privacy
    properties?
 
@@ -434,28 +434,28 @@ The general payment API should therefore expose a policy such as:
 x402 V2 is an HTTP `402 Payment Required` payment standard with pluggable payment
 schemes, facilitators, discovery, and current schemes including exact, usage-bounded
 (`upto`), and batch-settlement patterns. Treat x402 as a protocol adapter, not as the
-identity model of RGOE.
+identity model of Shade Tree.
 
 ### 5.1 x402-A: transport compatibility — P1, very small
 
-First prove that an ordinary x402 buyer can use the existing local RGOE proxy unchanged:
-TLS and the HTTP 402/payment headers remain end-to-end between client and API; RGOE is
+First prove that an ordinary x402 buyer can use the existing local Shade Tree proxy unchanged:
+TLS and the HTTP 402/payment headers remain end-to-end between client and API; Shade Tree is
 only the transport. Add an interoperability test and example before adding custom code.
 
 **Privacy.** This hides the client's network IP from the API, but the API still sees
 whatever wallet/payment identifier x402 exposes. It is **network-private, not
 payer-anonymous**.
 
-### 5.2 x402-B: native `RgoeClient` buyer adapter — P1
+### 5.2 x402-B: native `ShadeTreeClient` buyer adapter — P1
 
-Add an x402-aware request loop to the library for agents that use `RgoeClient.fetch`
+Add an x402-aware request loop to the library for agents that use `ShadeTreeClient.fetch`
 directly rather than a generic HTTP proxy:
 
-1. make request through RGOE;
+1. make request through Shade Tree;
 2. receive the destination's 402 challenge end-to-end;
 3. invoke the configured x402 payment method;
-4. retry through RGOE with the payment credential;
-5. return the x402 receipt alongside the RGOE gateway receipt.
+4. retry through Shade Tree with the payment credential;
+5. return the x402 receipt alongside the Shade Tree gateway receipt.
 
 Start with `exact`; add `upto` / batch settlement only when there is a real workload that
 needs them.
@@ -467,14 +467,14 @@ Instead:
 
 1. client receives the destination's x402 challenge over its end-to-end TLS connection;
 2. client sends the challenge over a separate authenticated onion control request to its
-   selected RGOE gateway/payment service;
+   selected Shade Tree gateway/payment service;
 3. the gateway pays/signs with a gateway-owned x402 wallet and returns the payment
    credential to the client;
 4. client retries the destination request end-to-end using that credential;
-5. member is charged separately through its RGOE anonymous balance/credit mechanism.
+5. member is charged separately through its Shade Tree anonymous balance/credit mechanism.
 
 The destination can now link the payment to the **gateway**, which is already the public
-egress identity, rather than to the hidden member. This turns RGOE into a privacy adapter
+egress identity, rather than to the hidden member. This turns Shade Tree into a privacy adapter
 for machine payments without giving the gateway plaintext API content.
 
 **Open issue.** Pricing and fraud risk move to the gateway: it must not spend a $10
@@ -482,10 +482,10 @@ payment for a member whose anonymous balance covers $0.10. The authorization fro
 to gateway therefore has to bind `maxAmount`, destination/challenge hash, expiry, and
 idempotency before the gateway signs or settles anything.
 
-### 5.4 x402 seller mode for RGOE access — optional
+### 5.4 x402 seller mode for Shade Tree access — optional
 
-RGOE itself could respond with x402 to sell access. That is useful for adoption, but a
-plain x402 purchase can reveal a payer wallet to the RGOE operator. If seller mode is
+Shade Tree itself could respond with x402 to sell access. That is useful for adoption, but a
+plain x402 purchase can reveal a payer wallet to the Shade Tree operator. If seller mode is
 added, label it a convenience/privacy-weaker mode unless issuance is blinded or the
 payment buys an anonymously redeemable commitment as in `PAYMENTS.md`.
 
@@ -505,21 +505,21 @@ its TypeScript stack also supports compatible x402 exact flows.
 
 ### 6.1 MPP-A: direct charge compatibility — P1
 
-As with x402, first make the simple path work through the RGOE transport. A client gets
+As with x402, first make the simple path work through the Shade Tree transport. A client gets
 an MPP 402 Challenge, signs an authorization Credential, and receives a Receipt. This
 should remain end-to-end through the tunnel.
 
-**Privacy.** The destination sees the MPP payment identity/credential semantics. RGOE
+**Privacy.** The destination sees the MPP payment identity/credential semantics. Shade Tree
 hides the client IP but does not magically make that payment unlinkable.
 
 ### 6.2 MPP-B: native client adapter — P1/P2
 
-Expose MPP from `RgoeClient` so an agent can select `charge` as a payment method without
+Expose MPP from `ShadeTreeClient` so an agent can select `charge` as a payment method without
 running a separate proxy stack. Reuse one internal `PaymentAdapter` interface for both
 MPP and x402 so we do not fork the request lifecycle.
 
 MPP already supports x402 exact through the `mppx` SDK, so an implementation should
-investigate whether `mppx` can be the compatibility layer while RGOE remains the custom
+investigate whether `mppx` can be the compatibility layer while Shade Tree remains the custom
 transport.
 
 ### 6.3 MPP-C: gateway-owned sessions — P2
@@ -529,17 +529,17 @@ usage because the client authorizes a funded session once and then incrementally
 the cumulative authorization off the hot on-chain path.
 
 A member-owned session, however, is intentionally persistent state with a merchant and
-can become a stable payment pseudonym. For the strongest RGOE privacy mode, make the
+can become a stable payment pseudonym. For the strongest Shade Tree privacy mode, make the
 **gateway/payment service own the MPP session** to the API while anonymous members debit
 against the gateway internally. The destination sees one or more gateway payment
 sessions, not a member session.
 
-This pairs naturally with per-request gateway selection only if session routing is
+This pairs naturally with per-tunnel gateway selection only if session routing is
 explicit: either pin paid traffic to a gateway for the lifetime of that gateway-owned
 session, or let several gateways maintain independent provider sessions and select among
 them. Do not accidentally move a member-specific session identifier across gateways.
 
-### 6.4 MPP seller mode for RGOE access — optional
+### 6.4 MPP seller mode for Shade Tree access — optional
 
 MPP can also sell the egress service itself via charge/session/subscription. As with
 x402 seller mode, this is an interoperability/convenience path and must not overwrite
@@ -552,13 +552,13 @@ Official references: <https://mpp.dev/> and the MPP session/discovery specificat
 ## 7. zkAPI / anonymous API usage credits — research track
 
 **Status: theoretical. There is no implementation to integrate today.** Treat zkAPI
-as a protocol research project that can later become a payment method for RGOE, x402,
+as a protocol research project that can later become a payment method for Shade Tree, x402,
 or MPP rather than pretending an SDK exists.
 
 The intended primitive is an **anonymous prepaid API credit**:
 
 1. user funds or acquires a credit commitment;
-2. per request, the client proves in zero knowledge that it owns a valid credit and
+2. per tunnel, the client proves in zero knowledge that it owns a valid credit and
    presents a request-specific nullifier;
 3. the service verifies the proof and checks that nullifier against a spent set before
    serving;
@@ -566,7 +566,7 @@ The intended primitive is an **anonymous prepaid API credit**:
 5. repeated/double use is rejected and, where RLN-style construction is used, can be
    made punishable.
 
-This is closely aligned with RGOE because both systems are already asking the same
+This is closely aligned with Shade Tree because both systems are already asking the same
 question: **how do I authorize a scarce action without naming the authorized actor?**
 
 ### 7.1 The central design fork: online check vs channel
@@ -638,7 +638,7 @@ stablecoin/card payments, bilateral sessions, or anonymous ZK credits.
 
 ---
 
-## 8. One payment adapter layer inside RGOE
+## 8. One payment adapter layer inside Shade Tree
 
 Do not implement x402, MPP, and zkAPI as three unrelated branches in the networking
 code. Add a small internal interface that separates payment negotiation from transport.
@@ -652,7 +652,7 @@ PaymentAdapter
   consumeReceipt(response) -> receipt
 ```
 
-`RgoeClient` owns transport and gateway selection; payment adapters own payment
+`ShadeTreeClient` owns transport and gateway selection; payment adapters own payment
 negotiation. The gateway directory/bootstrap record may advertise supported delegated
 payment modes, but payment support must not be confused with gateway authenticity.
 
@@ -689,15 +689,15 @@ GitHub directory update, and compromise of one boot node cannot insert a fake ga
 
 ### Phase C — payment interoperability (P1/P2)
 
-- x402 transport test, then `RgoeClient` x402 exact adapter;
+- x402 transport test, then `ShadeTreeClient` x402 exact adapter;
 - MPP direct `charge` test and adapter;
 - unified `PaymentAdapter` interface and privacy-mode policy;
 - prototype delegated-payer control flow while preserving end-to-end destination TLS;
 - evaluate gateway-owned MPP sessions for high-frequency paid APIs;
-- keep native RGOE access funding in `PAYMENTS.md` as the strongest payer-use-unlinkable
+- keep native Shade Tree access funding in `PAYMENTS.md` as the strongest payer-use-unlinkable
   mode.
 
-**Exit condition:** an agent can reach paid x402/MPP APIs through RGOE with an explicit,
+**Exit condition:** an agent can reach paid x402/MPP APIs through Shade Tree with an explicit,
 tested choice between direct payment identity and gateway-delegated payment identity.
 
 ### Phase D — zkAPI research and prototype (research/P2+)

@@ -1,5 +1,5 @@
-// T-FEAT-9 gateway ADMISSION POLICY (fast lane, no chain, no Tor): RGOE_ADMIT resolution + fail-closed
-// misconfig + the deprecated RGOE_ROOTS alias (warning) + the `admits:` startup line + initRoots
+// T-FEAT-9 gateway ADMISSION POLICY (fast lane, no chain, no Tor): SHADE_TREE_ADMIT resolution + fail-closed
+// misconfig + the deprecated SHADE_TREE_ROOTS alias (warning) + the `admits:` startup line + initRoots
 // narrowing (a configured-but-not-admitted contract is never read; its root is NOT trusted, so a
 // proof under it is dropped `wrong-group-root` at the cheap-first check) + slasher routing over the
 // ADMITTED contracts only. The anvil twin with real proofs is test/paid-access.selftest.mjs (slow lane).
@@ -23,11 +23,11 @@ async function main() {
   {
     ok(JSON.stringify(ADMIT_ORDER) === '["invited","staked","paid"]', "ADMIT_ORDER = invited > staked > paid (the anonymity order, docs/adr/0008)");
     ok(JSON.stringify(parseAdmit(" Paid , invited ,paid ")) === '["invited","paid"]', "parseAdmit: case/space tolerant, deduped, canonical anonymity order");
-    ok(throws(() => parseAdmit("invited,onchain"), /unknown admission path "onchain"/), "parseAdmit rejects an unknown name (RGOE_ROOTS words are not RGOE_ADMIT words)");
+    ok(throws(() => parseAdmit("invited,onchain"), /unknown admission path "onchain"/), "parseAdmit rejects an unknown name (SHADE_TREE_ROOTS words are not SHADE_TREE_ADMIT words)");
     ok(throws(() => parseAdmit(" , "), /no admission path selected/), "parseAdmit rejects an empty list");
-    ok(JSON.stringify(admitsFromRoots("static,onchain", { hasStaked: true, hasPaid: true })) === '["invited","staked","paid"]', "RGOE_ROOTS alias: static,onchain -> invited+staked+paid");
-    ok(JSON.stringify(admitsFromRoots("onchain", { hasStaked: false, hasPaid: true })) === '["paid"]', "RGOE_ROOTS=onchain with only a paid set -> paid");
-    ok(throws(() => admitsFromRoots("onchain", {}), /no contract is configured/), "RGOE_ROOTS=onchain without a contract still errors (as T-FEAT-7)");
+    ok(JSON.stringify(admitsFromRoots("static,onchain", { hasStaked: true, hasPaid: true })) === '["invited","staked","paid"]', "SHADE_TREE_ROOTS alias: static,onchain -> invited+staked+paid");
+    ok(JSON.stringify(admitsFromRoots("onchain", { hasStaked: false, hasPaid: true })) === '["paid"]', "SHADE_TREE_ROOTS=onchain with only a paid set -> paid");
+    ok(throws(() => admitsFromRoots("onchain", {}), /no contract is configured/), "SHADE_TREE_ROOTS=onchain without a contract still errors (as T-FEAT-7)");
     ok(describeAdmits(["paid", "invited"]) === "admits: invited+paid" && describeAdmits([]) === "admits: (none)", "describeAdmits renders the canonical `admits: invited+paid` line");
     ok(JSON.stringify(parsePayProtocols("")) === '["x402","mpp"]' && JSON.stringify(parsePayProtocols("MPP")) === '["mpp"]' && JSON.stringify(parsePayProtocols("mpp,x402")) === '["x402","mpp"]', "parsePayProtocols: unset = both; subset; canonical order x402,mpp");
     ok(throws(() => parsePayProtocols("x402,lightning"), /unknown payment protocol "lightning"/), "parsePayProtocols rejects an unknown rail");
@@ -36,7 +36,7 @@ async function main() {
     ok(envFlag("1") && envFlag("true") && !envFlag("0") && !envFlag(undefined), "envFlag: 1/true on, 0/unset off");
   }
 
-  console.log("\nresolveAdmission (RGOE_ADMIT; default invited = max-anon; fail closed):");
+  console.log("\nresolveAdmission (SHADE_TREE_ADMIT; default invited = max-anon; fail closed):");
   {
     let c = capture();
     let r = resolveAdmission({ admit: "", roots: "", contracts: [], warn: c.warn });
@@ -44,30 +44,30 @@ async function main() {
     c = capture();
     r = resolveAdmission({ admit: "", roots: "", contracts: [A, P], warn: c.warn });
     ok(JSON.stringify(r.admits) === '["invited"]' && r.static && !r.onchain && r.contracts.length === 0 && !r.explicit, "nothing set, staked+paid CONFIGURED -> STILL invited only (opt-in is explicit; the contracts are not root sources)");
-    ok(c.w.length === 1 && /RGOE_ADMIT is unset: admitting invited ONLY/.test(c.w[0].m) && /set RGOE_ADMIT=invited,staked,paid/.test(c.w[0].m), "…and WARNs at startup, naming the exact RGOE_ADMIT that would trust them");
+    ok(c.w.length === 1 && /SHADE_TREE_ADMIT is unset: admitting invited ONLY/.test(c.w[0].m) && /set SHADE_TREE_ADMIT=invited,staked,paid/.test(c.w[0].m), "…and WARNs at startup, naming the exact SHADE_TREE_ADMIT that would trust them");
     c = capture();
     r = resolveAdmission({ admit: "invited,paid", roots: "", contracts: [A, P], warn: c.warn });
-    ok(JSON.stringify(r.admits) === '["invited","paid"]' && r.static && r.onchain && r.contracts.length === 1 && r.contracts[0].kind === "paid" && r.explicit && r.source === "RGOE_ADMIT" && c.w.length === 0, "RGOE_ADMIT=invited,paid -> members.json + the paid set; the STAKED contract is filtered OUT of the root sources");
+    ok(JSON.stringify(r.admits) === '["invited","paid"]' && r.static && r.onchain && r.contracts.length === 1 && r.contracts[0].kind === "paid" && r.explicit && r.source === "SHADE_TREE_ADMIT" && c.w.length === 0, "SHADE_TREE_ADMIT=invited,paid -> members.json + the paid set; the STAKED contract is filtered OUT of the root sources");
     r = resolveAdmission({ admit: "staked", roots: "", contracts: [A, B, P], warn: () => {} });
-    ok(JSON.stringify(r.admits) === '["staked"]' && !r.static && r.onchain && r.contracts.map((x) => x.address).join() === "0xA,0xB", "RGOE_ADMIT=staked -> every staked set, no members.json, no paid");
+    ok(JSON.stringify(r.admits) === '["staked"]' && !r.static && r.onchain && r.contracts.map((x) => x.address).join() === "0xA,0xB", "SHADE_TREE_ADMIT=staked -> every staked set, no members.json, no paid");
     r = resolveAdmission({ admit: "paid,staked,invited", roots: "", contracts: [A, P], warn: () => {} });
-    ok(JSON.stringify(r.admits) === '["invited","staked","paid"]' && r.contracts.length === 2, "RGOE_ADMIT=paid,staked,invited -> all three (canonical order)");
+    ok(JSON.stringify(r.admits) === '["invited","staked","paid"]' && r.contracts.length === 2, "SHADE_TREE_ADMIT=paid,staked,invited -> all three (canonical order)");
     // fail closed: a named path with no contract behind it
-    ok(throws(() => resolveAdmission({ admit: "invited,staked", roots: "", contracts: [P], warn: () => {} }), /RGOE_ADMIT names staked but no StakedReputationSet is configured .*refusing to start/), "RGOE_ADMIT names staked, only a paid set configured -> refuses to start (never a silently smaller set)");
-    ok(throws(() => resolveAdmission({ admit: "paid", roots: "", contracts: [A], warn: () => {} }), /RGOE_ADMIT names paid but no PaidAccessSet is configured/), "RGOE_ADMIT names paid without RGOE_PAID_ACCESS_CONTRACT -> refuses to start");
-    ok(throws(() => resolveAdmission({ admit: "invited,onchain", roots: "", contracts: [A], warn: () => {} }), /unknown admission path "onchain"/), "RGOE_ADMIT with an RGOE_ROOTS word -> precise error");
+    ok(throws(() => resolveAdmission({ admit: "invited,staked", roots: "", contracts: [P], warn: () => {} }), /SHADE_TREE_ADMIT names staked but no StakedReputationSet is configured .*refusing to start/), "SHADE_TREE_ADMIT names staked, only a paid set configured -> refuses to start (never a silently smaller set)");
+    ok(throws(() => resolveAdmission({ admit: "paid", roots: "", contracts: [A], warn: () => {} }), /SHADE_TREE_ADMIT names paid but no PaidAccessSet is configured/), "SHADE_TREE_ADMIT names paid without SHADE_TREE_PAID_ACCESS_CONTRACT -> refuses to start");
+    ok(throws(() => resolveAdmission({ admit: "invited,onchain", roots: "", contracts: [A], warn: () => {} }), /unknown admission path "onchain"/), "SHADE_TREE_ADMIT with an SHADE_TREE_ROOTS word -> precise error");
     // the deprecated alias
     c = capture();
     r = resolveAdmission({ admit: "", roots: "static,onchain", contracts: [A, P], warn: c.warn });
-    ok(JSON.stringify(r.admits) === '["invited","staked","paid"]' && r.source === "RGOE_ROOTS" && r.contracts.length === 2, "RGOE_ROOTS=static,onchain (deprecated alias) -> invited+staked+paid over the configured contracts");
-    ok(c.w.length === 1 && /RGOE_ROOTS is DEPRECATED/.test(c.w[0].m) && /set RGOE_ADMIT=invited,staked,paid instead/.test(c.w[0].m), "…with the deprecation warning naming the equivalent RGOE_ADMIT");
+    ok(JSON.stringify(r.admits) === '["invited","staked","paid"]' && r.source === "SHADE_TREE_ROOTS" && r.contracts.length === 2, "SHADE_TREE_ROOTS=static,onchain (deprecated alias) -> invited+staked+paid over the configured contracts");
+    ok(c.w.length === 1 && /SHADE_TREE_ROOTS is DEPRECATED/.test(c.w[0].m) && /set SHADE_TREE_ADMIT=invited,staked,paid instead/.test(c.w[0].m), "…with the deprecation warning naming the equivalent SHADE_TREE_ADMIT");
     c = capture();
     r = resolveAdmission({ admit: "", roots: "onchain", contracts: [P], warn: c.warn });
-    ok(JSON.stringify(r.admits) === '["paid"]' && !r.static, "RGOE_ROOTS=onchain with only the paid set -> paid alone (no members.json)");
+    ok(JSON.stringify(r.admits) === '["paid"]' && !r.static, "SHADE_TREE_ROOTS=onchain with only the paid set -> paid alone (no members.json)");
     c = capture();
     r = resolveAdmission({ admit: "invited", roots: "static,onchain", contracts: [A, P], warn: c.warn });
-    ok(JSON.stringify(r.admits) === '["invited"]' && r.source === "RGOE_ADMIT" && c.w.length === 1 && /RGOE_ROOTS is ignored because RGOE_ADMIT is set/.test(c.w[0].m), "both set -> RGOE_ADMIT wins, RGOE_ROOTS ignored with a warning");
-    ok(throws(() => resolveAdmission({ admit: "", roots: "onchain", contracts: [], warn: () => {} }), /RGOE_ROOTS names onchain but no contract is configured/), "RGOE_ROOTS=onchain with no contract -> config error (unchanged)");
+    ok(JSON.stringify(r.admits) === '["invited"]' && r.source === "SHADE_TREE_ADMIT" && c.w.length === 1 && /SHADE_TREE_ROOTS is ignored because SHADE_TREE_ADMIT is set/.test(c.w[0].m), "both set -> SHADE_TREE_ADMIT wins, SHADE_TREE_ROOTS ignored with a warning");
+    ok(throws(() => resolveAdmission({ admit: "", roots: "onchain", contracts: [], warn: () => {} }), /SHADE_TREE_ROOTS names onchain but no contract is configured/), "SHADE_TREE_ROOTS=onchain with no contract -> config error (unchanged)");
     // the back-compat shim
     const rr = resolveRootSources({ spec: "", contracts: [A] });
     ok(rr.static === true && rr.onchain === false && rr.explicit === false, "resolveRootSources('') = the T-FEAT-9 default (invited only), not the T-FEAT-7 union");
@@ -91,20 +91,20 @@ async function main() {
     _setRecentRoots([]); made.length = 0;
     let want = resolveAdmission({ admit: "invited", roots: "", contracts: [A, P], warn: () => {} });
     let r = await initRoots({ contracts: want.contracts, want, loadStatic, makeProvider, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
-    ok(made.length === 0 && _getRecentRoots().size === 1 && _getRecentRoots().has(staticRoot) && r.contracts.length === 0 && JSON.stringify(r.admits) === '["invited"]', "RGOE_ADMIT=invited -> no chain provider built, recentRoots = {members.json root}, initRoots().contracts = [] (nothing to route slashes to)");
+    ok(made.length === 0 && _getRecentRoots().size === 1 && _getRecentRoots().has(staticRoot) && r.contracts.length === 0 && JSON.stringify(r.admits) === '["invited"]', "SHADE_TREE_ADMIT=invited -> no chain provider built, recentRoots = {members.json root}, initRoots().contracts = [] (nothing to route slashes to)");
     // (b) invited,paid: only the paid contract is read; the staked root is NOT trusted
     _setRecentRoots([]); made.length = 0;
     want = resolveAdmission({ admit: "invited,paid", roots: "", contracts: [A, P], warn: () => {} });
     r = await initRoots({ contracts: want.contracts, want, loadStatic, makeProvider, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
-    ok(made.length === 1 && made[0].join() === "0xP" && _getRecentRoots().has(staticRoot) && _getRecentRoots().has(paidRoot) && !_getRecentRoots().has(stakedRoot) && r.contracts.map((c) => c.kind).join() === "paid", "RGOE_ADMIT=invited,paid -> provider over the PAID set only; staked root absent from recentRoots; contracts = [paid] (slash targets)");
+    ok(made.length === 1 && made[0].join() === "0xP" && _getRecentRoots().has(staticRoot) && _getRecentRoots().has(paidRoot) && !_getRecentRoots().has(stakedRoot) && r.contracts.map((c) => c.kind).join() === "paid", "SHADE_TREE_ADMIT=invited,paid -> provider over the PAID set only; staked root absent from recentRoots; contracts = [paid] (slash targets)");
     // (c) the default resolution path (no `want` injected): env-driven, contracts narrowed automatically
     _setRecentRoots([]); made.length = 0;
-    const saved = { admit: process.env.RGOE_ADMIT, roots: process.env.RGOE_ROOTS };
-    process.env.RGOE_ADMIT = "staked"; delete process.env.RGOE_ROOTS;
+    const saved = { admit: process.env.SHADE_TREE_ADMIT, roots: process.env.SHADE_TREE_ROOTS };
+    process.env.SHADE_TREE_ADMIT = "staked"; delete process.env.SHADE_TREE_ROOTS;
     r = await initRoots({ contracts: [A, B, P], loadStatic, makeProvider, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
-    ok(made.length === 1 && made[0].join() === "0xA,0xB" && !_getRecentRoots().has(staticRoot) && _getRecentRoots().has(stakedRoot) && r.count === null && JSON.stringify(r.admits) === '["staked"]', "env RGOE_ADMIT=staked (no want injected) -> initRoots resolves it, narrows to the staked sets, no members.json");
-    if (saved.admit === undefined) delete process.env.RGOE_ADMIT; else process.env.RGOE_ADMIT = saved.admit;
-    if (saved.roots !== undefined) process.env.RGOE_ROOTS = saved.roots;
+    ok(made.length === 1 && made[0].join() === "0xA,0xB" && !_getRecentRoots().has(staticRoot) && _getRecentRoots().has(stakedRoot) && r.count === null && JSON.stringify(r.admits) === '["staked"]', "env SHADE_TREE_ADMIT=staked (no want injected) -> initRoots resolves it, narrows to the staked sets, no members.json");
+    if (saved.admit === undefined) delete process.env.SHADE_TREE_ADMIT; else process.env.SHADE_TREE_ADMIT = saved.admit;
+    if (saved.roots !== undefined) process.env.SHADE_TREE_ROOTS = saved.roots;
 
     // (d) the CHEAP-FIRST reject: under (a)'s roots a proof rooted in the paid tree is dropped
     //     `wrong-group-root` by the real handler, before any SNARK work (lib/rln.mjs verifyEnvelope step 3).
@@ -116,7 +116,7 @@ async function main() {
       const x = String(calculateSignalHash(requestSignal(target, nonce)));
       const ep = currentEpoch();
       const ps = { x, y: "7", root, nullifier: "5" + root, externalNullifier: externalNullifierFor(ep).toString() };
-      return JSON.stringify({ v: 3, target, nonce, proof: { snarkProof: { proof: {}, publicSignals: ps }, epoch: String(ep), rlnIdentifier: "1" }, nullifier: ps.nullifier, externalNullifier: ps.externalNullifier, share: { x, y: "7" } }) + "\n";
+      return JSON.stringify({ v: 4, target, nonce, proof: { snarkProof: { proof: {}, publicSignals: ps }, epoch: String(ep), rlnIdentifier: "1" }, nullifier: ps.nullifier, externalNullifier: ps.externalNullifier, share: { x, y: "7" } }) + "\n";
     };
     const drive = async (line) => {
       const s = new FakeSocket(); handler(s); s.emit("data", Buffer.from(line));

@@ -6,7 +6,7 @@
 
 ## Context
 
-The goal is per-request unlinkable rate limiting: a member should get a fixed budget of
+The goal is per-tunnel unlinkable rate limiting: a member should get a fixed budget of
 requests per epoch, each request should carry a distinct nullifier so even the gateway
 cannot tie a member's requests together, and an over-spender should be punished.
 
@@ -24,7 +24,7 @@ budget is spent" and, in tier 1, leaked which slot index each request used.
 
 Ship real RLN instead of the slot scheme: `rlnjs@3.3.0` against the locally-built
 `circom-rln` v1.0.0 Groth16 artifacts (`lib/rln.mjs`, `circuits/rln/`). One Groth16 proof
-per request proves, in a single circuit:
+per tunnel proves, in a single circuit:
 
 - ownership of the `identitySecret` behind some `rateCommitment` leaf in the depth-20
   tree,

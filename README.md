@@ -1,187 +1,152 @@
-# reputation-gated onion egress
+![A sparse grove casting a patch of shade](assets/shade-tree-banner.webp)
 
-[![ci][ci-badge]][ci-url]
-[![real-tor-e2e][e2e-badge]][e2e-url]
+# Shade Tree
+
+**A small grove for local AI.**
+
+[![CI][ci-badge]][ci-url]
+[![real Tor E2E][e2e-badge]][e2e-url]
 [![release][release-badge]][release-url]
-[![license: MIT][license-badge]][license-url]
+[![MIT][license-badge]][license-url]
 
-**Clean-IP egress from Tor for anyone who can prove, in zero knowledge, that a gateway trusts them.**
+Shade Tree carries HTTPS tunnels from local software through access-gated
+[Tor onion services][tor]. Run the local proxy once, then place an agent—or any
+proxy-aware process—under it without changing the rest of the machine.
 
-**[Install](#install)**
-| [Docs](docs/README.md)
-| [Run a gateway](docs/OPERATOR.md)
-| [Buy access](docs/PAYMENTS.md)
-| [Write-up](https://reputation-gated-egress.vercel.app)
-| [Security](SECURITY.md)
+[Research note][site] · [Docs](docs/README.md) · [Run a node](docs/OPERATOR.md) ·
+[Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
 
 > [!WARNING]
-> Testnet only (Sepolia), one operator on one cloud provider. The ZK artifacts are the untrusted
-> dev set until the ceremony runs ([issue #6][issue-6], [`docs/CEREMONY.md`](docs/CEREMONY.md)).
-> Unaudited. Do not rely on it for real anonymity or real funds.
+> **Research preview.** The public configuration uses Sepolia, the code has not
+> been audited, and the included ZK artifacts are development artifacts. Do not
+> rely on this preview for real funds or security-sensitive anonymity.
 
-## What is it?
+## The shape
 
-Tor exit IPs are a public list, so sites block them (17% of web and 37% of search requests in
-the [exit-blocking benchmark](docs/exit-blocking-benchmark.md)). This project puts the egress
-behind onion services instead: each gateway is a `.onion` reached by rendezvous (no exit
-node, it never sees your IP) that tunnels `CONNECT host:443` from its own clean IP, and it
-admits a request only with one [RLN][rln] membership proof per request. The proof hides
-which leaf you are, a fresh nullifier keeps requests unlinkable, and a second spend on one
-nullifier reconstructs your secret and slashes you. Gateways run as a fleet discovered
-through a bootnode, membership rooted on Sepolia; each provider chooses which set it admits
-(invited, staked, paid) and whether it sells access over HTTP 402. It is **not** a Tor
-modification and **not** a VPN: an application-layer gate on onion services, one CLI (`rgoe`).
-
-```
-client ──SOCKS──> Tor rendezvous (no exit node) ──> gateway.onion ──CONNECT host:443──> destination
-one RLN proof per request (leaf hidden, fresh nullifier)   verify against admitted roots, then tunnel
+```text
+agent ──HTTP CONNECT──> local proxy ──Tor rendezvous──> node.onion ──TLS──> destination
+                         one proof admits one tunnel      destination sees the node IP
 ```
 
-Full diagram, the anonymity table, the numbers, the layout: [`docs/OVERVIEW.md`](docs/OVERVIEW.md).
+The client presents a rate-limited proof of membership before a node opens a
+`CONNECT host:443` tunnel. The node can verify that the proof belongs to an
+admitted set without receiving an account or stable identity. Tor carries the
+client-to-node leg; TLS remains end to end between the local application and
+the destination.
 
-## Install
+The unit is a **tunnel**, not an HTTP request. HTTP/2 and keep-alive may carry
+many application requests inside one admitted tunnel. See the
+[protocol](docs/PROTOCOL.md) and [threat model](docs/THREAT-MODEL.md) for the
+precise guarantees.
+
+## Put an agent under the tree
+
+You need Node.js, a local Tor SOCKS port, and a member secret for the selected
+network.
 
 ```bash
-git clone https://github.com/dmarzzz/reputation-gated-onion-egress && cd reputation-gated-onion-egress
-npm install && npm link          # puts `rgoe` on PATH; `rgoe doctor` checks node, tor, deps, keys
+git clone https://github.com/dmarzzz/shade-tree-node.git
+cd shade-tree-node
+npm ci
+npm link
+shade-tree doctor
 ```
 
-A static Rust client (`rgoe-0.1.1-<target>`, plus `-live` with embedded Tor + prover) is on
-[Releases][release-url]; see [`rust/INSTALL.md`](rust/INSTALL.md). Every install path:
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md).
-
-## Use it
-
-You need a Tor SOCKS port (`bash scripts/start-tor-client.sh` gives you 9260, pass `--tor-port 9260`;
-a system tor is 9050). Every `--flag` is also an `RGOE_*` env var. `RGOE_NETWORK=sepolia` reads the
-live fleet's onion, signer and contracts from [`network/sepolia/`](network/sepolia/README.md).
-
-**I was invited** (someone handed you an `RGOE_SECRET`):
+Start Tor and the local proxy:
 
 ```bash
-RGOE_SECRET=<hex> RGOE_NETWORK=sepolia rgoe client
-curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns a gateway's IP, not yours
+bash scripts/start-tor-client.sh
+SHADE_TREE_SECRET=<hex> SHADE_TREE_NETWORK=sepolia \
+  shade-tree client --tor-port 9260
 ```
 
-**Buy access** (a wallet holding the Sepolia settle asset; no ETH, no gas):
+Then scope routing to one process:
 
 ```bash
-rgoe enroll                                                       # secret + commitment, locally; keep the secret
-rgoe pay --network sepolia --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret   # or --protocol mpp
-RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8         # tier 8 or 32
+shade-tree run -- hermes
+shade-tree run -- curl https://api.ipify.org
 ```
 
-Public on chain: your address paid this operator this tier's price, and the operator
-inserted a commitment. Your requests are not. `--dry-run` shows the exact authorization first.
+`shade-tree run` checks that the local proxy is reachable, sets standard upper-
+and lowercase proxy variables only for the child process, keeps loopback hosts
+outside the proxy, and refuses to launch if the proxy is unavailable. That
+makes it a small integration surface for Hermes and other proxy-aware agents
+while local model servers such as Ollama or vLLM can remain on loopback.
 
-**Stake** (Sepolia ETH; a refundable bond, `bondFor(8)` 0.001 ETH):
+Software that ignores standard proxy environment variables needs an explicit
+HTTP proxy setting pointed at `http://127.0.0.1:8888`. Every flag also has an
+`SHADE_TREE_*` environment-variable form. See [CLI](docs/CLI.md),
+[configuration](docs/CONFIG.md), and the [JavaScript SDK](docs/SDK.md).
+
+## Run a node
+
+A Shade Tree node is a Tor onion service plus a proof-gated HTTPS tunnel. Its
+public IP becomes the destination-facing egress IP, so abuse complaints and IP
+reputation land with the operator.
+
+For a fresh Ubuntu 24.04 host:
 
 ```bash
-rgoe enroll --limit 8
-rgoe register-member <commitment> --limit 8 --network sepolia    # wallet <-> commitment is public
-RGOE_NETWORK=sepolia rgoe client --secret <hex> --limit 8
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+  | sudo bash
 ```
 
-`--max-anon` uses invited-only gateways and refuses to run with a staked or paid leaf.
-Member page: [`docs/JOIN.md`](docs/JOIN.md); every command: [`docs/CLI.md`](docs/CLI.md).
+The bootstrap installs isolated `shade-tree-*` services, creates onion
+identities, and prints the client configuration to share. Admission is
+invited-only unless the operator explicitly enables another set.
 
-## Run a gateway
+Running a client beside a GPU worker, local model server, or Ethereum validator
+is straightforward. Running the **egress node** on that same public IP is a
+separate risk decision: use a dedicated egress IP when possible, keep validator
+keys and authenticated RPC endpoints out of the node, and preserve the
+loopback/onion-only listener boundaries. The [operator guide](docs/OPERATOR.md)
+and [deployment guide](docs/DEPLOYMENT.md) cover both systemd and Compose.
 
-Your box's IP is the egress: destinations see it and abuse complaints come to you. One command
-on a fresh Ubuntu 24.04 box installs Tor + Node and starts bootnode + gateway + heartbeat as systemd units:
+## Boundaries
+
+- The destination sees the node's public IP and can block it.
+- The node sees the destination hostname, port, timing, and byte counts. With
+  HTTPS it does not terminate application TLS.
+- Tor does not prevent an observer who can watch both ends from correlating
+  traffic timing.
+- Staked or paid admission can create public onchain links at enrollment even
+  when individual tunnel proofs do not reveal a leaf.
+- A node may refuse a valid proof. The protocol does not force availability or
+  honest forwarding.
+- Co-locating independent services does not merge their trust boundaries.
+
+## Repository map
+
+| Path | Role |
+| --- | --- |
+| [`client/`](client/) | Local CONNECT proxy, discovery, and node rotation |
+| [`gateway/`](gateway/) | Proof gate and destination tunnel |
+| [`bootnode/`](bootnode/) | Signed node discovery and operator tooling |
+| [`rust/`](rust/) | Rust client, protocol crate, and RLN prover |
+| [`contracts/`](contracts/) | Optional Sepolia membership and operator sets |
+| [`network/`](network/) | Signed test-network records |
+
+## Develop
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+npm ci
+npm test
+(cd rust && cargo test --workspace)
 ```
 
-Three provider decisions, all env vars on that line:
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the test layout and change policy.
+Security reports belong in the private channel described in
+[SECURITY.md](SECURITY.md).
 
-- **What you admit.** `RGOE_ADMIT=invited` (default, maximum anonymity); add `,staked` and/or
-  `,paid`. A named path without its contract fails closed at startup.
-- **What you sell.** `RGOE_REGISTRAR=1 RGOE_PAY_PROTOCOLS=x402,mpp` runs a 402 registrar on the
-  box (needs `paid` in `RGOE_ADMIT`).
-- **Whose fleet.** `RGOE_BOOTNODE_ONION=<onion>` makes it a gateway-only box that joins an
-  existing bootnode (the live one admits staked operators: `rgoe register-gateway` first).
+Shade Tree is open source under the [MIT license](LICENSE).
 
-It prints the onion, the pinned signer and the client command to hand out. `systemctl status
-rgoe-bootnode rgoe-gateway rgoe-heartbeat` and `rgoe doctor` check the box; `curl --socks5-hostname
-127.0.0.1:9050 http://<bootnode-onion>/health` checks it over Tor. Full guide: [`docs/OPERATOR.md`](docs/OPERATOR.md);
-every knob: [`docs/CONFIG.md`](docs/CONFIG.md).
-
-## Status (2026-08-18)
-
-- Live fleet on Sepolia since 2026-08-17: bootnode + 2 gateways (NYC1, SFO3), stake admission
-  ([`docs/GO-LIVE-LOG-2026-08-17.md`](docs/GO-LIVE-LOG-2026-08-17.md)).
-- Three admission paths: invited (`group/members.json`), staked (`StakedReputationSet`, tiers
-  8/32), paid (`PaidAccessSet`); gateway-1 admits all three and sells, gateway-2 admits invited + staked.
-- Payments live: x402 v2 and MPP, one EIP-3009 authorization, settled by the operator; test token today.
-- [v0.1.1][release-url] static Rust client for 7 targets, `-live` for 3; Helios sync-committee
-  anchor for the root read (`RGOE_HELIOS=1`, [`docs/LIGHT-CLIENT.md`](docs/LIGHT-CLIENT.md)).
-- **Not done:** trusted-setup ceremony ([issue #6][issue-6]), audit, more than one
-  provider/ASN, real USDC.
-
-## What it does not protect against
-
-- **End-to-end timing correlation.** Same limit as Tor: watch both ends and you can match them.
-- **The gateway sees the destination.** `host:443` of every request, never the body (TLS is end to end).
-- **Staked or paid admission is linkable on chain.** Wallet to commitment and tier bucket
-  (staked); buyer to operator transfer plus the operator's insert (paid). Fund from a fresh
-  address if that matters; requests stay unlinkable to the leaf.
-- **A prepaid operator can refuse a valid proof.** No on-chain recourse, only public evidence.
-- **Forged proofs until the ceremony.** The dev artifacts' toxic waste is recomputable.
-
-Ledger: [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) (residual risks in section 5).
-
-## For developers
-
-```bash
-npm install && npm test              # every *selftest.mjs + forge test
-(cd rust && cargo test --workspace)  # the Rust client
-```
-
-House rules and test layout: [`CONTRIBUTING.md`](CONTRIBUTING.md). Wire formats and the bootnode
-HTTP API: [`docs/PROTOCOL-API.md`](docs/PROTOCOL-API.md). Decisions: [`docs/adr/`](docs/adr/).
-
-## Getting help
-
-Start with the [docs index](docs/README.md); if it does not answer, open an
-[issue](https://github.com/dmarzzz/reputation-gated-onion-egress/issues) (there is no chat channel).
-
-## Contributing
-
-Contributions are welcome; CI must pass and every change ships its tests. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-## Security
-
-See [`SECURITY.md`](SECURITY.md).
-
-## Acknowledgements
-
-- [Semaphore][semaphore] and [RLN][rln] ([circom-rln][circom-rln]) for the membership proof and the slashing nullifier.
-- [Tor][tor] and [arti][arti] for onion services and the embedded client in the Rust binary.
-- [x402][x402] and [MPP][mpp] for the HTTP 402 rails; [Helios][helios] for the sync-committee anchor.
-
-#### License
-
-<sup>Licensed under the <a href="LICENSE">MIT license</a>.</sup>
-<sub>Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion
-in this repository by you shall be licensed as above, without any additional terms or conditions.</sub>
-
-[ci-badge]: https://github.com/dmarzzz/reputation-gated-onion-egress/actions/workflows/ci.yml/badge.svg
-[ci-url]: https://github.com/dmarzzz/reputation-gated-onion-egress/actions/workflows/ci.yml
-[e2e-badge]: https://github.com/dmarzzz/reputation-gated-onion-egress/actions/workflows/real-tor-e2e.yml/badge.svg
-[e2e-url]: https://github.com/dmarzzz/reputation-gated-onion-egress/actions/workflows/real-tor-e2e.yml
-[release-badge]: https://img.shields.io/github/v/release/dmarzzz/reputation-gated-onion-egress
-[release-url]: https://github.com/dmarzzz/reputation-gated-onion-egress/releases/tag/v0.1.1
-[license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[ci-badge]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/ci.yml
+[e2e-badge]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/real-tor-e2e.yml/badge.svg
+[e2e-url]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/real-tor-e2e.yml
+[release-badge]: https://img.shields.io/github/v/release/dmarzzz/shade-tree-node
+[release-url]: https://github.com/dmarzzz/shade-tree-node/releases/latest
+[license-badge]: https://img.shields.io/badge/license-MIT-59624f.svg
 [license-url]: LICENSE
-[issue-6]: https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6
-[rln]: https://rate-limiting-nullifier.github.io/rln-docs/
-[semaphore]: https://semaphore.pse.dev/
-[circom-rln]: https://github.com/Rate-Limiting-Nullifier/circom-rln
+[site]: https://shade-tree-node.vercel.app
 [tor]: https://www.torproject.org/
-[arti]: https://gitlab.torproject.org/tpo/core/arti
-[x402]: https://github.com/x402-foundation/x402
-[mpp]: https://mpp.dev/
-[helios]: https://github.com/a16z/helios

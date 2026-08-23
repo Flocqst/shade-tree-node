@@ -7,15 +7,15 @@
 // so one stake can back many/rotating onions and the fleet is never enumerable on chain.
 //
 // After staking, authorize your onion off chain and hand it to the heartbeat:
-//   RGOE_GW_OPERATOR_KEY=<this key> rgoe heartbeat --bootnode <onion>
+//   SHADE_TREE_GW_OPERATOR_KEY=<this key> shade-tree heartbeat --bootnode <onion>
 // (the heartbeat signs operatorAuthMessage(onion, operator) durably; see bootnode/heartbeat.mjs).
 //
 // Config:
-//   RGOE_RPC_URL           JSON-RPC endpoint            (default: deployed.rpcUrl or anvil)
-//   RGOE_GATEWAY_REGISTRY  GatewayRegistry address      (default: network/<RGOE_NETWORK>/contracts.json
+//   SHADE_TREE_RPC_URL           JSON-RPC endpoint            (default: deployed.rpcUrl or anvil)
+//   SHADE_TREE_GATEWAY_REGISTRY  GatewayRegistry address      (default: network/<SHADE_TREE_NETWORK>/contracts.json
 //                                                        contracts.gatewayRegistry, else deployed.gatewayRegistry)
-//   RGOE_REGISTER_KEY      operator private key         (default: anvil account #1)
-//   RGOE_BOND              bond in wei                  (default: on-chain BOND())
+//   SHADE_TREE_REGISTER_KEY      operator private key         (default: anvil account #1)
+//   SHADE_TREE_BOND              bond in wei                  (default: on-chain BOND())
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -33,12 +33,12 @@ async function readDeployed() {
 
 async function main() {
   const deployed = await readDeployed();
-  // Resolution: explicit env > committed network record (RGOE_NETWORK) > deployer-local cache.
-  const rpcUrl = process.env.RGOE_RPC_URL || networkDefault("RGOE_RPC_URL") || deployed.rpcUrl || "http://127.0.0.1:8545";
-  const address = process.env.RGOE_GATEWAY_REGISTRY || networkDefault("RGOE_GATEWAY_REGISTRY") || deployed.gatewayRegistry || deployed.GatewayRegistry;
-  const key = process.env.RGOE_REGISTER_KEY || ANVIL_KEY_1;
+  // Resolution: explicit env > committed network record (SHADE_TREE_NETWORK) > deployer-local cache.
+  const rpcUrl = process.env.SHADE_TREE_RPC_URL || networkDefault("SHADE_TREE_RPC_URL") || deployed.rpcUrl || "http://127.0.0.1:8545";
+  const address = process.env.SHADE_TREE_GATEWAY_REGISTRY || networkDefault("SHADE_TREE_GATEWAY_REGISTRY") || deployed.gatewayRegistry || deployed.GatewayRegistry;
+  const key = process.env.SHADE_TREE_REGISTER_KEY || ANVIL_KEY_1;
   if (!address) {
-    console.error("no GatewayRegistry address: set RGOE_GATEWAY_REGISTRY, or RGOE_NETWORK=<name> with contracts.gatewayRegistry recorded, or write contracts/deployed.local.json");
+    console.error("no GatewayRegistry address: set SHADE_TREE_GATEWAY_REGISTRY, or SHADE_TREE_NETWORK=<name> with contracts.gatewayRegistry recorded, or write contracts/deployed.local.json");
     process.exit(1);
   }
 
@@ -55,7 +55,7 @@ async function main() {
     console.log(`operator ${wallet.address} is already staked; nothing to do.`);
     return;
   }
-  const bond = process.env.RGOE_BOND ?? (await contract.BOND());
+  const bond = process.env.SHADE_TREE_BOND ?? (await contract.BOND());
   console.log(`register gateway operator`);
   console.log(`  contract: ${address}`);
   console.log(`  rpc:      ${rpcUrl}`);

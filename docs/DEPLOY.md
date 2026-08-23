@@ -12,7 +12,7 @@ The PoC runs all three pieces (Tor, gateway, shim) on one machine via
   ─────────────────────────────            ─────────────────────
   Tor  → publishes gateway.onion            Tor  → SOCKS only (no onion)
   gateway.mjs  (binds 127.0.0.1:8443)       shim.mjs  (binds 127.0.0.1:8888)
-  trusts root of group/members.json         holds RGOE_SECRET (never leaves)
+  trusts root of group/members.json         holds SHADE_TREE_SECRET (never leaves)
        ▲                                          │
        └──────── Tor rendezvous (6 hops) ◀────────┘
        │
@@ -30,7 +30,7 @@ No application code differs between the two roles. The split is config:
    tree from its copy to generate the proof. One differing byte means different
    roots and the gateway drops every proof as `wrong-group-root`. The file is
    public (only commitments), so copy it freely.
-2. **`RGOE_SECRET` lives only on the laptop.** The droplet never needs a secret;
+2. **`SHADE_TREE_SECRET` lives only on the laptop.** The droplet never needs a secret;
    `run-gateway.sh` does not read one. Putting a secret on the egress box buys
    nothing and widens the blast radius.
 3. **Both clocks on NTP.** The epoch is `floor(now / EPOCH_SECONDS)`, default a
@@ -40,7 +40,7 @@ No application code differs between the two roles. The split is config:
    *ahead* of the gateway proves for a future epoch and is dropped as
    `stale-epoch`. NTP on both removes the asymmetry. `EPOCH_SECONDS` lives in
    shared code (`lib/semaphore.mjs`), so it already matches everywhere; only
-   override `RGOE_EPOCH_SECONDS` if you set it identically on both sides.
+   override `SHADE_TREE_EPOCH_SECONDS` if you set it identically on both sides.
 4. **The gateway binds loopback and egresses :443 only.** It is reachable solely
    through the onion, never the droplet's public IP. Keep it that way (firewall
    below); it is the whole point that no exit node and no public listener sits in
@@ -53,12 +53,12 @@ local command; in production a leaf is added only after whatever admission
 ceremony you choose (stake, invite, proof-of-personhood).
 
 ```bash
-node group/enroll.mjs alice        # prints: export RGOE_SECRET=...  (give to the member)
+node group/enroll.mjs alice        # prints: export SHADE_TREE_SECRET=...  (give to the member)
 # repeat per member; each appends a commitment to group/members.json
 ```
 
 `members.json` is the artifact you ship to the droplet. Each member keeps their
-own `RGOE_SECRET` on their own laptop.
+own `SHADE_TREE_SECRET` on their own laptop.
 
 ## Droplet (gateway role)
 
@@ -73,7 +73,7 @@ sudo apt-get update && sudo apt-get install -y tor
 tor --list-modules | grep pow        # want: pow: yes
 # install Node 18+ (nodesource or nvm)
 
-git clone <this-repo> && cd reputation-gated-onion-egress
+git clone <this-repo> && cd shade-tree-node
 npm install
 # put the authored group/members.json in place (scp it up; it is public)
 
@@ -97,7 +97,7 @@ Operational notes:
   up `tor/hs/` and restore it. To rotate the address, delete it.
 - **PoW DoS defense** is opportunistic: stock Tor lacks the module, so the outer
   rendezvous-flood gate is off unless you build a PoW-capable Tor
-  (`scripts/build-tor-pow.sh`) and point `RGOE_TOR_BIN` at it. Optional; the zk
+  (`scripts/build-tor-pow.sh`) and point `SHADE_TREE_TOR_BIN` at it. Optional; the zk
   proof is the inner gate regardless.
 
 ## Laptop (client role)
@@ -105,20 +105,20 @@ Operational notes:
 Hold the same `group/members.json` and your own secret:
 
 ```bash
-export RGOE_ONION=<addr-from-the-droplet>.onion
-export RGOE_SECRET=<your-secret-from-enroll>
+export SHADE_TREE_ONION=<addr-from-the-droplet>.onion
+export SHADE_TREE_SECRET=<your-secret-from-enroll>
 bash scripts/run-client.sh           # starts a client-only Tor (9260) + the shim
 bash scripts/verify.sh               # receipt: your IP vs the egress IP, RTT, google 200
 ```
 
 To reuse an existing Tor instead of the bundled client Tor (system tor 9050, Tor
-Browser 9150), set `RGOE_TOR_PORT` before running and `run-client.sh` skips
+Browser 9150), set `SHADE_TREE_TOR_PORT` before running and `run-client.sh` skips
 starting its own.
 
 ## Handing it to friends
 
 Give a friend three things: this repo (with `group/members.json` already in it),
-the gateway's `.onion`, and their own `RGOE_SECRET` block from `demo-keys.local.md`.
+the gateway's `.onion`, and their own `SHADE_TREE_SECRET` block from `demo-keys.local.md`.
 They run one command:
 
 ```bash
@@ -141,7 +141,7 @@ Run these against the live droplet. `api.ipify.org` echoes the source IP.
 | 1 | Positive path | `curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json` | Returns the **droplet's** IP, not the laptop's, not a Tor exit. Gateway logs `PASS`. |
 | 2 | Non-member | run the shim with a secret never enrolled | Client cannot build a proof (`leaf at index -1`); nothing egresses. |
 | 3 | Wrong set | give the client a `members.json` the gateway does not trust | Gateway logs `DROP wrong-group-root`; curl gets a failed CONNECT. |
-| 4 | Rate limit | exceed `RGOE_RATE_LIMIT` (default 30) per epoch | Over-budget requests log `DROP rate-limited`; refusal reaches curl. |
+| 4 | Rate limit | exceed `SHADE_TREE_RATE_LIMIT` (default 30) per epoch | Over-budget requests log `DROP rate-limited`; refusal reaches curl. |
 | 5 | IP privacy | `grep <your-public-ip> gateway.log` on the droplet | No match. Rendezvous never reveals the client IP to the gateway. |
 
 ## Pre-flight: simulate the split on one machine
@@ -152,8 +152,8 @@ still crosses the real Tor rendezvous between them.
 
 ```bash
 bash scripts/run-gateway.sh                       # note the printed onion
-export RGOE_ONION=<that-onion>
-export RGOE_SECRET=$(cat .secret)                 # an enrolled member
+export SHADE_TREE_ONION=<that-onion>
+export SHADE_TREE_SECRET=$(cat .secret)                 # an enrolled member
 bash scripts/run-client.sh
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
 ```

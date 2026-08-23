@@ -1,6 +1,6 @@
 # smithers/ — ship the roadmap, durably
 
-This is the [reputation-gated onion egress](../README.md) roadmap encoded as a
+This is the [Shade Tree](../README.md) roadmap encoded as a
 [Smithers](https://smithers.sh) workflow: each milestone in
 [`docs/ROADMAP.md`](../docs/ROADMAP.md) is a node, so a contributor can run the whole
 build durably, watch it, clear the human gates, and resume after a crash instead of

@@ -13,20 +13,20 @@
 // Usage:
 //   node group/register-onchain.mjs <commitment> [--limit N]
 //   node group/enroll.mjs --commitment-only | node group/register-onchain.mjs
-//   rgoe register-member <commitment> --limit 32
+//   shade-tree register-member <commitment> --limit 32
 //
-// Reputation tiers (T-FEAT-8b, docs/adr/0006-reputation-tiers.md): `--limit N` (or RGOE_LIMIT)
-// is the tier the commitment was ENROLLED at (`rgoe enroll --limit N`); the rln-v4 set records
+// Reputation tiers (T-FEAT-8b, docs/adr/0006-reputation-tiers.md): `--limit N` (or SHADE_TREE_LIMIT)
+// is the tier the commitment was ENROLLED at (`shade-tree enroll --limit N`); the rln-v4 set records
 // it and prices the bond per tier (`bondFor(limit)`), so the amount is read from the contract
 // for that tier. Default = 8 (the pre-tier K). Against an rln-v3 set (no tiers) only the
 // default tier is admitted: `register(commitment)` at `BOND()`.
 //
 // Config (all overridable by env; defaults read contracts/deployed.local.json):
-//   RGOE_RPC_URL        JSON-RPC endpoint         (default: deployed.rpcUrl or anvil)
-//   RGOE_GROUP_CONTRACT StakedReputationSet addr  (default: deployed.StakedReputationSet)
-//   RGOE_REGISTER_KEY   funding private key       (default: anvil account #0)
-//   RGOE_LIMIT          tier limit (== --limit)   (default: 8)
-//   RGOE_BOND           bond in wei               (default: on-chain bondFor(limit) / BOND())
+//   SHADE_TREE_RPC_URL        JSON-RPC endpoint         (default: deployed.rpcUrl or anvil)
+//   SHADE_TREE_GROUP_CONTRACT StakedReputationSet addr  (default: deployed.StakedReputationSet)
+//   SHADE_TREE_REGISTER_KEY   funding private key       (default: anvil account #0)
+//   SHADE_TREE_LIMIT          tier limit (== --limit)   (default: 8)
+//   SHADE_TREE_BOND           bond in wei               (default: on-chain bondFor(limit) / BOND())
 //
 // NB: needs the `ethers` dependency (see final report). Imported lazily so this
 // file still parses without it.
@@ -51,9 +51,9 @@ async function readDeployed() {
   }
 }
 
-// --limit <n> | --limit=<n> (or RGOE_LIMIT): the tier the leaf was enrolled at.
+// --limit <n> | --limit=<n> (or SHADE_TREE_LIMIT): the tier the leaf was enrolled at.
 const argv = process.argv.slice(2);
-let limitArg = process.env.RGOE_LIMIT || null;
+let limitArg = process.env.SHADE_TREE_LIMIT || null;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--limit") { limitArg = argv[i + 1]; argv.splice(i, 2); break; }
   if (argv[i].startsWith("--limit=")) { limitArg = argv[i].slice("--limit=".length); argv.splice(i, 1); break; }
@@ -76,13 +76,13 @@ async function main() {
   const commitment = await readCommitment();
   const deployed = await readDeployed();
 
-  const rpcUrl = process.env.RGOE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
-  // RGOE_GROUP_CONTRACT may be a comma list since T-FEAT-7 (several sets trusted by the gateway);
+  const rpcUrl = process.env.SHADE_TREE_RPC_URL || deployed.rpcUrl || "http://127.0.0.1:8545";
+  // SHADE_TREE_GROUP_CONTRACT may be a comma list since T-FEAT-7 (several sets trusted by the gateway);
   // a stake goes to the FIRST — the canonical staked set. (Paid access is inserted by the operator, docs/PAYMENTS.md.)
-  const address = parseContractList(process.env.RGOE_GROUP_CONTRACT)[0] || deployed.StakedReputationSet || deployed.address;
-  const key = process.env.RGOE_REGISTER_KEY || ANVIL_KEY_0;
+  const address = parseContractList(process.env.SHADE_TREE_GROUP_CONTRACT)[0] || deployed.StakedReputationSet || deployed.address;
+  const key = process.env.SHADE_TREE_REGISTER_KEY || ANVIL_KEY_0;
   if (!address) {
-    console.error("no StakedReputationSet address: set RGOE_GROUP_CONTRACT or write contracts/deployed.local.json");
+    console.error("no StakedReputationSet address: set SHADE_TREE_GROUP_CONTRACT or write contracts/deployed.local.json");
     process.exit(1);
   }
 
@@ -117,7 +117,7 @@ async function main() {
     console.error(`contract ${address} has no tier table (rln-v3): only --limit ${K_SLOTS} can be staked there`);
     process.exit(1);
   }
-  const bond = process.env.RGOE_BOND ?? deployed.bond ?? (tiered ? tierBond : await contract.BOND());
+  const bond = process.env.SHADE_TREE_BOND ?? deployed.bond ?? (tiered ? tierBond : await contract.BOND());
 
   console.log(tiered ? `register(${commitment}, ${LIMIT})` : `register(${commitment})`);
   console.log(`  contract: ${address}${tiered ? "" : " (rln-v3, default tier only)"}`);

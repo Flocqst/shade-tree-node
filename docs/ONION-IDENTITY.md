@@ -35,7 +35,7 @@ node scripts/onion-identity.mjs derive ./hs_ed25519_secret_key
 #   => xxxxxxxx…xxxxxx.onion
 
 # 2) RESTORE — rebuild a HiddenServiceDir Tor can publish, from the secret alone.
-node scripts/onion-identity.mjs restore ./hs_ed25519_secret_key /var/lib/tor/rgoe-gateway
+node scripts/onion-identity.mjs restore ./hs_ed25519_secret_key /var/lib/tor/shade-tree-gateway
 #   (add --force to overwrite an existing populated dir)
 ```
 
@@ -61,14 +61,14 @@ dir unless you pass `--force`.
 
 Run this on the **new** box before pointing Tor at the restored dir and starting it:
 
-1. **Recover the secret.** `rgoe restore <backup>.rgoebak <deploy-state>` (see
+1. **Recover the secret.** `shade-tree restore <backup>.shade-tree-backup <deploy-state>` (see
    [BACKUP.md](./BACKUP.md)) decrypts `hs_ed25519_secret_key` back out of the encrypted envelope.
 2. **Derive and compare.** `node scripts/onion-identity.mjs derive <path>/hs_ed25519_secret_key`.
    Confirm the printed onion **exactly equals** the onion the fleet directory advertises for this
-   box (`rgoe directory` / the signed directory JSON). If it does not match, **stop** — you have the
+   box (`shade-tree directory` / the signed directory JSON). If it does not match, **stop** — you have the
    wrong key; do not start Tor, or you will publish a stranger onion.
 3. **Lay it down.** `node scripts/onion-identity.mjs restore <path>/hs_ed25519_secret_key
-   /var/lib/tor/rgoe-<role>`. This writes the secret + public + hostname with correct perms.
+   /var/lib/tor/shade-tree-<role>`. This writes the secret + public + hostname with correct perms.
 4. **Cut over.** Point the `HiddenServiceDir` in the torrc include
    ([`bootnode/deploy/torrc.hardened`](../bootnode/deploy/torrc.hardened)) at that dir and
    `systemctl restart tor`. Tor's own `hostname` will now match step 2.
@@ -83,7 +83,7 @@ makes it a live, wrong onion.**
 - **`scripts/backup.mjs` (T-FEAT-15 / T-DEPLOY-5 backup half)** is the *transport*: it encrypts the
   secret off-box (AES-256-GCM + scrypt) and restores the raw file. It does not know or check *which*
   onion a key is. This tool is the *verification + Tor-layout* half: it turns a bare secret into a
-  checked onion and a publishable HS dir. Typical flow: `rgoe restore …` (get the secret back) →
+  checked onion and a publishable HS dir. Typical flow: `shade-tree restore …` (get the secret back) →
   `onion-identity.mjs derive …` (verify) → `onion-identity.mjs restore …` (place it for Tor).
 - **T-DEPLOY-3 infra-as-code** (OpenTofu + Ansible in `agent-devops`) provisions a *fresh* box and,
   by default, **mints new onions** via [`bootnode/keygen.mjs`](../bootnode/keygen.mjs). To rebuild

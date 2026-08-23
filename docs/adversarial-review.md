@@ -111,7 +111,7 @@ raises the floor.
 ## 5. Gateway operator as metadata/censorship point: MEDIUM (inherent)
 
 Setting aside finding 1 (assume secrets are self-generated), the gateway still sees,
-per request: the per-epoch nullifier, the destination `host:port`, and timing and
+per tunnel: the per-epoch nullifier, the destination `host:port`, and timing and
 volume. With that it can:
 
 - **Profile a pseudonym.** Within an epoch every request from a member shares one
@@ -130,7 +130,7 @@ reach plaintext (egress is `:443` only).
 **Remediation.** This is the residual the project is honest about. The correct
 comparison is the residential proxy, which sees all of the above *plus* a billing
 identity; this design strips the identity. Shrinking the metadata further (cover
-traffic, per-request destinations batched, multiple gateways) is its own project.
+traffic, per-tunnel destinations batched, multiple gateways) is its own project.
 
 ## 6. Network / global passive observer: inherent Tor limit
 
@@ -160,7 +160,7 @@ target host to close it.
 ## 9. Client host / shim: LOW
 
 The shim tunnels TCP and never sees plaintext (TLS is end to end), so a compromised
-shim is a network position, not a content reader. It does hold `RGOE_SECRET`, so a
+shim is a network position, not a content reader. It does hold `SHADE_TREE_SECRET`, so a
 compromised client host is membership theft, the standard key-at-rest concern. Keep
 the secret out of shell history and process listings.
 
@@ -173,7 +173,7 @@ Finding 7 is the *passive* destination: it sees the gateway's egress IP (the sou
 of the clearnet leg) and nothing else. That is benign — the gateway IP is published
 by design. The dangerous variant is a destination that can also become a **member**.
 A member can egress to a URL the destination controls and read the source IP, which
-deterministically maps `onion hash -> egress IP` and tags that IP as an RGOE gateway.
+deterministically maps `onion hash -> egress IP` and tags that IP as an Shade Tree gateway.
 In a multi-gateway fleet (see `docs/ROADMAP.md` §3), the adversary repeats this and
 harvests *every* gateway's IP, then blocklists the set. This is exactly how Tor exits
 are enumerated and killed (route through to a server you control, read the exit IP),
@@ -182,7 +182,7 @@ and it works against any open egress.
 The reason it belongs as its own finding: the membership gate is usually described as
 *rate limiting*, but it is **also the only thing keeping the egress IPs out of an
 adversary's enumeration reach.** Tor exits die because Tor membership is open to
-everyone, including the parties who want to block it. RGOE's sole moat is that the
+everyone, including the parties who want to block it. Shade Tree's sole moat is that the
 adversary cannot join. If admission is open or cheap, the reputation gate collapses to
 Tor's situation and the clean IPs are enumerable and blockable by lunch. So admission
 is not just the sybil/rate boundary (findings 2, 3); it is the **unblockability

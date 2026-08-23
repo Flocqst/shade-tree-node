@@ -281,7 +281,7 @@ revert). No `unchecked` blocks exist in either contract.
 **`initiateExit` (SRS `initiateExit(commitment, proof)`, GR `initiateExit()`)** —
 starts unbonding clock.
 - Access: SRS is ZK-authorized — `if (!withdrawVerifier.verify(commitment, context, proof))
-  revert BadProof()`, with `context = keccak256("RGOE_EXIT", commitment)`. GR is
+  revert BadProof()`, with `context = keccak256("SHADE_TREE_EXIT", commitment)`. GR is
   operator-only implicitly: it reads `stakes[msg.sender]` and reverts `NotStaked` if the
   caller has none, so a non-operator cannot exit another's stake.
 - Preconditions: `bond != 0` (`NotStaked`/`NotMember`) and `exitInitiatedAt == 0`
@@ -298,7 +298,7 @@ starts unbonding clock.
 **`withdraw` (SRS `withdraw(commitment, recipient, proof)`, GR `withdraw(recipient)`)** —
 time-locked payout. This is the CEI-critical path.
 - Access: SRS re-verifies the proof against
-  `context = keccak256("RGOE_WITHDRAW", commitment, recipient)` (`BadProof`). GR is
+  `context = keccak256("SHADE_TREE_WITHDRAW", commitment, recipient)` (`BadProof`). GR is
   operator-only via `stakes[msg.sender]`.
 - Preconditions: `bond != 0` (`NotMember`/`NotStaked`), `exitInitiatedAt != 0`
   (`NotExiting`), and `block.timestamp >= exitInitiatedAt + UNBONDING` (`StillBonded`).

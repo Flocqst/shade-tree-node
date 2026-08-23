@@ -1,6 +1,6 @@
 /** @jsxImportSource smithers-orchestrator */
 /**
- * Ship the reputation-gated onion egress roadmap, durably.
+ * Ship the Shade Tree roadmap, durably.
  *
  * The shape (mirrors ~/orbital-fleet-build):
  *
@@ -39,8 +39,8 @@ const MILESTONES: Milestone[] = [
     validate: ["forge test --match-contract GatewayRegistryTest", "node bootnode/selftest.mjs"],
     notes: "docs/BOOTNODE.md. Gateways announce (onion-control + optional operator stake); onion NEVER on chain; bootnode is a cache, not a trust root." },
   { id: "productionize", title: "Productionization: CLI, Docker, docs, quickstart", status: "open",
-    validate: ["node bin/rgoe.mjs doctor", "node bin/rgoe.mjs help"],
-    notes: "Unified `rgoe` CLI (flags→RGOE_* env), Docker image + compose, docs/QUICKSTART.md + CLI.md + CONFIG.md." },
+    validate: ["node bin/shade-tree.mjs doctor", "node bin/shade-tree.mjs help"],
+    notes: "Unified `shade-tree` CLI (flags→SHADE_TREE_* env), Docker image + compose, docs/QUICKSTART.md + CLI.md + CONFIG.md." },
 ];
 
 const PANEL_LENSES = ["security", "correctness", "operability"];
@@ -112,7 +112,7 @@ export default smithers((ctx) => {
 
         <Task id="e2e" agent={e2eRunner} output={outputs.e2e} label="e2e">
           {`Run the full local suite green: forge test ; node bootnode/selftest.mjs ; ` +
-            `node gateway/shim.selftest.mjs ; node lib/rln.selftest.mjs ; node bin/rgoe.mjs doctor. ` +
+            `node gateway/shim.selftest.mjs ; node lib/rln.selftest.mjs ; node bin/shade-tree.mjs doctor. ` +
             `Report passed + summary + any failures verbatim.`}
         </Task>
 

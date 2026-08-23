@@ -11,8 +11,8 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`OVERVIEW.md`](OVERVIEW.md) | How a request flows, the anonymity ledger per admission path, what is not done and why it matters, the exit-blocking numbers, the repo layout |
 | [`QUICKSTART.md`](QUICKSTART.md) | Path A join the live fleet (invited / buy / stake), Path B the local loop, Path C your own droplet; every install path |
 | [`JOIN.md`](JOIN.md) | The member page: get a leaf, run the client, what is public per path |
-| [`CLI.md`](CLI.md) | Every `rgoe` command with its module and an example |
-| [`CONFIG.md`](CONFIG.md) | Every `RGOE_*` variable, its default, who reads it, its `--flag` |
+| [`CLI.md`](CLI.md) | Every `shade-tree` command with its module and an example |
+| [`CONFIG.md`](CONFIG.md) | Every `SHADE_TREE_*` variable, its default, who reads it, its `--flag` |
 | [`STATUS.md`](STATUS.md) | Historical: the June 2026 single-gateway PoC status (the README "Status" is current) |
 
 ## Use it (clients, SDK, agents)
@@ -20,7 +20,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | Doc | What it is |
 |-----|------------|
 | [`CLIENTS.md`](CLIENTS.md) | Client modes: the local proxy (shim) vs the library, and a planned no-tooling path; leaf source and admission filtering |
-| [`SDK.md`](SDK.md) | The `RgoeClient` SDK surface (`package.json` exports) |
+| [`SDK.md`](SDK.md) | The `ShadeTreeClient` SDK surface (`package.json` exports) |
 | [`ADAPTERS.md`](ADAPTERS.md) | Routing tools and agents (curl, SearXNG, browsers, LLM agents) through the local proxy |
 | [`RECEIPTS.md`](RECEIPTS.md) | Signed egress success receipts: proof a gateway actually served traffic, with no linkability channel |
 | [`PROTOCOL-VERSIONING.md`](PROTOCOL-VERSIONING.md) | Envelope version negotiation (v3-with-nonce today) without a flag day; garbage versions rejected with a reason |
@@ -33,13 +33,13 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`OPERATOR.md`](OPERATOR.md) | Deploy a gateway + bootnode, join the fleet as a new operator, day-2 health and logs, keys, slash response, rotate or retire, config reference, what you admit and what you sell |
 | [`../bootnode/deploy/README.md`](../bootnode/deploy/README.md) | The one-command droplet bootstrap and every tunable it accepts |
 | [`BOOTNODE.md`](BOOTNODE.md) | Live discovery: announce, signed directory, per-gateway signed caps, the trust boundary |
-| [`FLEET.md`](FLEET.md) | Per-request gateway selection, weights, failover, fleet budget |
+| [`FLEET.md`](FLEET.md) | Per-tunnel gateway selection, weights, failover, fleet budget |
 | [`INCIDENT.md`](INCIDENT.md) | Incident playbook |
 | [`SLO.md`](SLO.md) | Service-level objectives and error budget (proposals, recalibrated on live data) |
 | [`BACKUP.md`](BACKUP.md) | Encrypted key backup and restore |
 | [`ONION-IDENTITY.md`](ONION-IDENTITY.md) | Onion continuity: bring a gateway or bootnode back on the same `.onion` (verify before cutover, restore) |
 | [`TOR-HARDENING.md`](TOR-HARDENING.md) | Hardening the Tor layer under a gateway or bootnode |
-| [`LIGHT-CLIENT.md`](LIGHT-CLIENT.md) | Light-client root reads and the Helios sync-committee anchor (`RGOE_HELIOS=1`), with live receipts |
+| [`LIGHT-CLIENT.md`](LIGHT-CLIENT.md) | Light-client root reads and the Helios sync-committee anchor (`SHADE_TREE_HELIOS=1`), with live receipts |
 | [`../monitoring/README.md`](../monitoring/README.md) | Grafana dashboard + Prometheus alert rules on the real metric names |
 | [`../docker/README.md`](../docker/README.md) | Single image and the local compose fleet |
 | [`GO-LIVE.md`](GO-LIVE.md), [`GO-LIVE-LOG-2026-08-17.md`](GO-LIVE-LOG-2026-08-17.md) | The go-live runbook and the record of executing it |
@@ -53,7 +53,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`AUDIT.md`](AUDIT.md) | Trust boundaries, test inventory, suggested review order |
 | [`CONTRACTS-AUDIT.md`](CONTRACTS-AUDIT.md) | Contract invariants and the Foundry evidence |
 | [`adversarial-review.md`](adversarial-review.md) | Per-party worst case |
-| [`CEREMONY.md`](CEREMONY.md) | The trusted-setup runbook (not run; [issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6)) |
+| [`CEREMONY.md`](CEREMONY.md) | The trusted-setup runbook (not run; [issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6)) |
 | [`PROTOCOL.md`](PROTOCOL.md) (+ [`PROTOCOL.html`](PROTOCOL.html)) | The anonymous-paid-access design write-up |
 | [`PROTOCOL-API.md`](PROTOCOL-API.md) | Wire formats and the bootnode HTTP API |
 | [`MUTATION-TESTING.md`](MUTATION-TESTING.md) | Mutation-testing setup and surviving mutants |

@@ -6,8 +6,8 @@ ONCHAIN.md / FLEET.md / LIGHT-CLIENT.md into one coherent demo:
 
 - **A — honesty fixes:** self-enrollment, request-bound signal, deterministic-retry,
   cheap-check reorder.
-- **B — correlation mitigations:** per-request gateway rotation (already scaffolded) +
-  per-request slot nullifiers (ROADMAP-v1 #1 Tier 1, public slots, no custom circuit).
+- **B — correlation mitigations:** per-tunnel gateway rotation (already scaffolded) +
+  per-tunnel slot nullifiers (ROADMAP-v1 #1 Tier 1, public slots, no custom circuit).
 - **C — on-chain staked set + slashing:** `StakedReputationSet` on a local `anvil`,
   trusted **node** root provider, RLN-style share slashing at PoC fidelity.
 
@@ -15,12 +15,12 @@ ONCHAIN.md / FLEET.md / LIGHT-CLIENT.md into one coherent demo:
 
 | Param | Demo | Production | Env |
 |---|---|---|---|
-| Epoch length | 120 s | 3600 s | `RGOE_EPOCH_SECONDS` |
-| Slots per member per epoch `K` | 8 | 30 | `RGOE_SLOTS` |
+| Epoch length | 120 s | 3600 s | `SHADE_TREE_EPOCH_SECONDS` |
+| Slots per member per epoch `K` | 8 | 30 | `SHADE_TREE_SLOTS` |
 | RLN degree `L` per slot | 1 (2nd use of a slot ⇒ slashable) | 1 | — |
 | Bond | 0.01 ETH | policy | contract ctor |
 | Unbonding `U` (≥ F+E+C) | 300 s | 24 h | contract ctor |
-| Freshness window `F` | 1 epoch | 1 epoch | `RGOE_FRESHNESS_ROOTS` |
+| Freshness window `F` | 1 epoch | 1 epoch | `SHADE_TREE_FRESHNESS_ROOTS` |
 | Slash-confirm margin `C` | 30 s (anvil ~instant) | ~13 min (L1 finality) | — |
 
 Short epoch + short unbonding are deliberate so the time-locked withdraw is demonstrable
@@ -31,11 +31,11 @@ in a few minutes on `anvil`; the constraint `U ≥ F + E + C` still holds (120+1
 
 - Scope per slot: `scope(epoch, i) = H(epoch, i)` for `i ∈ [0, K)`.
 - The shim precomputes the epoch's `K` proofs in the background at rollover and rotates
-  through them **one slot per request**, so the hot path just picks the next unused proof
+  through them **one slot per tunnel**, so the hot path just picks the next unused proof
   (near-zero latency; proving is never on the request path).
 - Each slot yields a distinct nullifier `H(secret, scope_i)`, mutually unlinkable to the
   gateway. A member has exactly `K` valid scopes per epoch ⇒ rate capped at `K`.
-- Combine with rotation: the shim picks a slot **and** a gateway per request.
+- Combine with rotation: the shim picks a slot **and** a gateway per tunnel.
 
 ## Request-bound signal + deterministic retry (A)
 
