@@ -110,13 +110,26 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq tor >/dev/null
           sudo systemctl stop tor >/dev/null 2>&1 || true
-          mkdir -p "$RUNNER_TEMP/tor"
-          nohup tor --SocksPort 9050 --DataDirectory "$RUNNER_TEMP/tor" --Log "notice stdout" > "$RUNNER_TEMP/tor.log" 2>&1 &
-          for i in $(seq 1 90); do
-            if grep -q "Bootstrapped 100%" "$RUNNER_TEMP/tor.log" 2>/dev/null; then echo "tor bootstrapped after ~${i}s"; exit 0; fi
-            sleep 1
+          for attempt in 1 2; do
+            tor_dir="$RUNNER_TEMP/tor-$attempt"
+            tor_log="$RUNNER_TEMP/tor-$attempt.log"
+            mkdir -p "$tor_dir"
+            nohup tor --SocksPort 9050 --DataDirectory "$tor_dir" --Log "notice stdout" > "$tor_log" 2>&1 &
+            tor_pid=$!
+            for i in $(seq 1 90); do
+              if grep -q "Bootstrapped 100%" "$tor_log" 2>/dev/null; then
+                echo "tor bootstrapped on attempt $attempt after ~${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+            kill "$tor_pid" >/dev/null 2>&1 || true
+            wait "$tor_pid" >/dev/null 2>&1 || true
+            echo "tor bootstrap attempt $attempt/2 did not complete in 90s"
           done
-          echo "tor did not bootstrap in 90s"; tail -n 20 "$RUNNER_TEMP/tor.log"; exit 1
+          echo "tor did not bootstrap after two clean attempts"
+          tail -n 20 "$RUNNER_TEMP/tor-2.log"
+          exit 1
 
       - name: probe (over Tor, signer-pinned)
         if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'

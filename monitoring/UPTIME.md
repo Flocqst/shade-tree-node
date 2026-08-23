@@ -111,13 +111,17 @@ journal to your log stack). Adjust `User=`, `WorkingDirectory=`, `SHADE_TREE_TOR
 
 `.github/workflows/uptime-probe.yml` runs `*/15 * * * *` (+ `workflow_dispatch`). Set repository
 **variables** (Settings → Secrets and variables → Actions → Variables): `SHADE_TREE_BOOTNODE_ONION` +
-`SHADE_TREE_DIR_SIGNER`, or `SHADE_TREE_NETWORK` (e.g. `sepolia`) to read them from the committed record.
+`SHADE_TREE_DIR_SIGNER`, or `SHADE_TREE_NETWORK` naming a current v4 deployment to read them from its committed record.
 Secrets of the same names are read as a fallback. Until one of those is set the job emits a
 `::notice::` and exits green (it does not even check out the repo), so an unconfigured repo or
 fork never red-flags. A `pending` network record likewise skips green. Once configured, a
 CRITICAL probe fails the run with an `::error::` (which is the alert). GitHub's schedule floor is
 5 minutes but scheduled runs are best-effort and often late, so this is the coarse hosted signal;
 the systemd timer is the 5-minute SLI source.
+
+Hosted Tor bootstrap is occasionally sensitive to a runner's first guard path. The workflow
+makes two bounded attempts with separate data directories before failing the observation; it
+never probes or publishes from a partial bootstrap.
 
 The recorded Sepolia research fleet predates the v4 domain reset. Its hosted observer also sets
 the repository variable `SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS=1`. This is deliberately not derived

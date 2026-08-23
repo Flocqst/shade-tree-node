@@ -151,6 +151,7 @@ function main() {
     const runs = steps.map((s) => s.run || "").join("\n");
     ok(/apt-get install .*tor/.test(runs), "installs tor");
     ok(/--SocksPort 9050/.test(runs) && /Bootstrapped 100%/.test(runs), "starts tor on 9050 and waits for bootstrap");
+    ok(/for attempt in 1 2/.test(runs) && /tor-\$attempt/.test(runs), "retries a stalled Tor bootstrap with a clean data directory");
     ok(/scripts\/uptime-probe\.mjs --format nagios/.test(runs), "runs the probe with --format nagios");
     ok(/scripts\/grove-snapshot\.mjs/.test(runs), "builds the public Grove snapshot with the allowlisting collector");
     const groveStep = steps.find((s) => s.id === "grove");
