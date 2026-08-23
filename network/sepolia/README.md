@@ -1,14 +1,24 @@
-# Sepolia deployment record
+# Sepolia deployment record (pre-v4, retired)
 
-The live deployment on Ethereum Sepolia (chainId 11155111). Machine-readable artifacts
+The earlier research deployment on Ethereum Sepolia (chainId 11155111). Machine-readable artifacts
 alongside: [`contracts.json`](contracts.json) (contract addresses + deploy tx/block),
 [`bootnode.json`](bootnode.json) (fleet discovery record), [`directory.json`](directory.json)
-(signed gateway fleet). This README is the human-readable index; the JSON files are the
-source of truth the client/gateway read (`SHADE_TREE_NETWORK=sepolia`, see `network/README.md`).
+(signed gateway fleet). This README is the human-readable historical index.
+
+> **Retired for current clients.** The deployed nodes predate the Shade Tree envelope-v4
+> boundary and are incompatible with the current client. The machine-readable bootnode and
+> contract records are marked `retired`; selecting `SHADE_TREE_NETWORK=sepolia` therefore
+> supplies no runnable defaults and the client fails closed. Use a local v4 fleet or explicit
+> values from a v4 operator. The public Grove observes this old fleet read-only; its aggregate
+> is not a v4 availability or compatibility claim.
+
+Unless a sentence says otherwise, “live” below records what was verified during the 2026-08-17
+experiment. It does not mean that the service is current or compatible with envelope v4. The
+release name `rln-v4-tiers` referred to an earlier contract/proof iteration, not envelope v4.
 
 ## Staking contracts
 
-Status: **live** — release `rln-v4-tiers`, deployed 2026-08-17 (blocks 11510538–11510541) by
+Status at deployment: **live** — release `rln-v4-tiers`, deployed 2026-08-17 (blocks 11510538–11510541) by
 the fleet operator hot key `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02`. Params: tiers
 {8: 0.001 ETH, 32: 0.004 ETH} (`bondFor(limit)`), unbonding 300s (min 270), `DEFAULT_LIMIT` 8,
 on-chain root at storage slot 3. [`contracts.json`](contracts.json) is the source of truth.
@@ -21,12 +31,12 @@ Live integration (two tiers, on-chain root mode, tier-32 slash):
 | RateCommitmentHasher (`hasher`, tiered `commitmentOf(secret, limit)`) | `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` |
 | WithdrawVerifier (`withdrawVerifier`, REAL Groth16 exit-auth) | `0x522409038aA03FFF998d33C60A37486975695351` over `WithdrawGroth16Verifier` `0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E` (untrusted dev VK, T-HARD-1) |
 | PoseidonT2 / PoseidonT3 (linked libraries) | `0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55` / `0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022` (from the rln-v3 deploy, reused) |
-| PaidAccessSet (T-FEAT-7 paid-access membership tree; operator-inserted, no funds) | [`0x4e8C2Bf5d3c5454A04837401095fce2646484111`](https://sepolia.etherscan.io/address/0x4e8C2Bf5d3c5454A04837401095fce2646484111) — deployed 2026-08-17 at block 11510873, tx `0x9835d062…4086`, operator `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (registrar / insert key), `allowedLimits() == [8, 32]`, same hasher + Poseidon libraries as the staked set, `currentRoot` at slot 3. Payment settles OFF chain (HTTP 402 rails, x402 / MPP); the operator inserts after settlement; `slash` zeroes the leaf and pays nothing. Smoke (one insert at tier 8, root == JS, negatives revert): [`integration-report-paid-access.md`](integration-report-paid-access.md); receipt: [`paid-access-broadcast.json`](paid-access-broadcast.json). `SHADE_TREE_NETWORK=sepolia` supplies `SHADE_TREE_PAID_ACCESS_CONTRACT`. |
-| GatewayRegistry | [`0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`](https://sepolia.etherscan.io/address/0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868) — deployed 2026-08-17 at block 11509783, tx `0x1ae812c1…3ad5dc`, owner `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key); BOND 0.001 ETH, unbonding 300s / min 270s (verified via `cast`: `BOND()`, `owner()`). Receipt bundle: [`gateway-registry-broadcast.json`](gateway-registry-broadcast.json); recorded with `shade-tree record-deploy --network sepolia --from-broadcast …`. `SHADE_TREE_NETWORK=sepolia` now supplies `SHADE_TREE_GATEWAY_REGISTRY` (`docs/ONCHAIN-DEPLOY.md` §7). Unchanged by the rln-v4 redeploy. |
+| PaidAccessSet (T-FEAT-7 paid-access membership tree; operator-inserted, no funds) | [`0x4e8C2Bf5d3c5454A04837401095fce2646484111`](https://sepolia.etherscan.io/address/0x4e8C2Bf5d3c5454A04837401095fce2646484111) — deployed 2026-08-17 at block 11510873, tx `0x9835d062…4086`, operator `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (registrar / insert key), `allowedLimits() == [8, 32]`, same hasher + Poseidon libraries as the staked set, `currentRoot` at slot 3. Payment settles OFF chain (HTTP 402 rails, x402 / MPP); the operator inserts after settlement; `slash` zeroes the leaf and pays nothing. Smoke (one insert at tier 8, root == JS, negatives revert): [`integration-report-paid-access.md`](integration-report-paid-access.md); receipt: [`paid-access-broadcast.json`](paid-access-broadcast.json). The pre-v4 network preset formerly supplied this address. |
+| GatewayRegistry | [`0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868`](https://sepolia.etherscan.io/address/0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868) — deployed 2026-08-17 at block 11509783, tx `0x1ae812c1…3ad5dc`, owner `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key); BOND 0.001 ETH, unbonding 300s / min 270s (verified via `cast`: `BOND()`, `owner()`). Receipt bundle: [`gateway-registry-broadcast.json`](gateway-registry-broadcast.json); recorded with `shade-tree record-deploy --network sepolia --from-broadcast …`. The pre-v4 network preset formerly supplied this address (`docs/ONCHAIN-DEPLOY.md` §7). Unchanged by the rln-v4 redeploy. |
 
-Receipt bundle: [`rln-v4-broadcast.json`](rln-v4-broadcast.json). `SHADE_TREE_NETWORK=sepolia`
-resolves `SHADE_TREE_GROUP_CONTRACT` to the rln-v4 set. Stake at a tier with
-`shade-tree register-member <leaf> --limit 8|32 --network sepolia` (`docs/CLI.md`).
+Receipt bundle: [`rln-v4-broadcast.json`](rln-v4-broadcast.json). The retired network preset
+formerly resolved `SHADE_TREE_GROUP_CONTRACT` to this set. Do not stake through it with a
+current client; use contract and RPC values explicitly supplied by a v4 operator (`docs/CLI.md`).
 
 **Superseded (history only, do not stake there):**
 
@@ -50,13 +60,13 @@ resolves `SHADE_TREE_GROUP_CONTRACT` to the rln-v4 set. Stake at a tier with
 
 | what | value |
 |---|---|
-| settle asset (`payAsset`) | **tUSD** "Test USD" (`test/Eip3009Token.sol`, EIP-3009, 6 decimals, version `"1"`) at [`0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8`](https://sepolia.etherscan.io/address/0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8) — deployed 2026-08-17 by the fleet operator key, tx `0x9561fa31…b234`, block 11511028. Circle's Sepolia USDC `0x1c7D4B19…7238` was verified EIP-3009-capable (`TRANSFER_WITH_AUTHORIZATION_TYPEHASH`, `authorizationState`, `DOMAIN_SEPARATOR == EIP712{USDC,2}`), but its faucet is captcha-gated; real USDC is the one-env swap `SHADE_TREE_PAY_ASSET`. `SHADE_TREE_NETWORK=sepolia` supplies `SHADE_TREE_PAY_ASSET`. |
-| registrar (`registrar`) | `http://<bootnode onion>:8878/` (the bootnode onion in `bootnode.json`, virtual port 8878), protocols `x402` (v2: `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`) + `mpp` (`WWW-Authenticate: Payment` / `Authorization: Payment` / `Payment-Receipt`, method `evm`, intent `charge`, `type=authorization`), prices tier 8 = `100000` (0.10 tUSD), tier 32 = `400000` (0.40 tUSD), payTo = the operator `0xc8606C75…7f02`. Advertised in the bootnode `/health` `pay` block AND (since 2026-08-18, T-FEAT-9) in gateway-1's signed `caps.pay` in `/directory` (`protocols:["x402","mpp"]`, `onion` = the bootnode onion, port 8878); gateway-2 sells nothing. `SHADE_TREE_NETWORK=sepolia` supplies `SHADE_TREE_REGISTRAR_PORT`; `shade-tree pay --network sepolia --limit 8` buys a leaf into the PaidAccessSet above. Live receipts: `docs/GO-LIVE-LOG-2026-08-17.md` "(payments)". |
+| settle asset (`payAsset`) | **tUSD** "Test USD" (`test/Eip3009Token.sol`, EIP-3009, 6 decimals, version `"1"`) at [`0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8`](https://sepolia.etherscan.io/address/0xCe0C9F8822e4841e735d2eDe3a1Db57CfE55a3A8) — deployed 2026-08-17 by the fleet operator key, tx `0x9561fa31…b234`, block 11511028. Circle's Sepolia USDC `0x1c7D4B19…7238` was verified EIP-3009-capable (`TRANSFER_WITH_AUTHORIZATION_TYPEHASH`, `authorizationState`, `DOMAIN_SEPARATOR == EIP712{USDC,2}`), but its faucet is captcha-gated; real USDC was the one-env swap `SHADE_TREE_PAY_ASSET`. The retired preset formerly supplied this asset. |
+| registrar (`registrar`) | `http://<bootnode onion>:8878/` (the bootnode onion in `bootnode.json`, virtual port 8878), protocols `x402` (v2: `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`) + `mpp` (`WWW-Authenticate: Payment` / `Authorization: Payment` / `Payment-Receipt`, method `evm`, intent `charge`, `type=authorization`), prices tier 8 = `100000` (0.10 tUSD), tier 32 = `400000` (0.40 tUSD), payTo = the operator `0xc8606C75…7f02`. It was advertised in the bootnode `/health` `pay` block and (from 2026-08-18, T-FEAT-9) in gateway-1's signed `caps.pay` in `/directory`; gateway-2 sold nothing. These are retained deployment facts, not a current payment endpoint. Receipts: `docs/GO-LIVE-LOG-2026-08-17.md` "(payments)". |
 
 ## Bootnode
 
-[`bootnode.json`](bootnode.json) is the committed discovery record (`{onion, signer,
-admission, staticDirectory}`; schema in `network/README.md`). Status: **live** since
+[`bootnode.json`](bootnode.json) is the retired discovery record (`{onion, signer,
+admission, staticDirectory}`; schema in `network/README.md`). It was verified **live** from
 2026-08-17 (T-DEPLOY-1 + T-DEPLOY-2 + stake admission,
 [`docs/GO-LIVE-LOG-2026-08-17.md`](../../docs/GO-LIVE-LOG-2026-08-17.md)).
 
@@ -72,12 +82,11 @@ admission, staticDirectory}`; schema in `network/README.md`). Status: **live** s
 | membership roots / admission policy (`SHADE_TREE_ADMIT`, T-FEAT-9, `docs/adr/0008`) | **heterogeneous on purpose** since 2026-08-18 06:37 UTC (`docs/GO-LIVE-LOG-2026-08-17.md` "per-gateway admission policy rolled"): **gateway-1** `admits: invited,staked,paid` — committed `group/members.json` (8 invited) ∪ rln-v4 `StakedReputationSet` `0xFe48De8b…9d25` (staked, tiers 8/32) ∪ `PaidAccessSet` `0x4e8C2Bf5…4111` (bought over 402) — and it SELLS (registrar, `SHADE_TREE_PAY_PROTOCOLS=x402,mpp`, advertised as signed `caps.pay`); **gateway-2** `admits: invited,staked` — members.json ∪ the staked set only, no paid leaves, no registrar. Both advertise their policy as signed `caps.admits` in `/directory`. Consequences: a paid buyer's client routes ONLY to gateway-1; an invited member with `--max-anon` is refused by BOTH (neither is invited-only) with a precise error naming each gateway's policy — the intended outcome. (`SHADE_TREE_ROOTS=static,onchain`, the pre-T-FEAT-9 union spelling, is a deprecated alias.) |
 | ref deployed | both `main` @ `c6be15e` (2026-08-18 06:36 UTC, T-FEAT-9 per-gateway admission; earlier `6c4940c` / `cb237e07` / `d8a6530` / `af225c2`) |
 
-`SHADE_TREE_NETWORK=sepolia` now resolves `SHADE_TREE_BOOTNODE_ONION` + `SHADE_TREE_DIR_SIGNER` to the values
-above, so `SHADE_TREE_SECRET=<hex> SHADE_TREE_NETWORK=sepolia shade-tree client` discovers the fleet through the
-bootnode. Cold path (bootnode dark, `docs/INCIDENT.md` #1): the record's `staticDirectory`
-points at [`directory-bootnode.json`](directory-bootnode.json), the bootnode's own signed
-`/directory` export (same signer, both gateways), so `SHADE_TREE_DIRECTORY=network/sepolia/directory-bootnode.json
-SHADE_TREE_DIR_SIGNER=d79f78c3…3a73` still works. The box hosting bootnode + gateway-1 is a
+Before retirement, the network preset resolved the bootnode onion and signer above. Current v4
+clients deliberately receive no defaults from the retired record. Its cold-path
+[`directory-bootnode.json`](directory-bootnode.json) remains as the bootnode's signed
+`/directory` export and research evidence; its valid signature does not make the listed nodes
+v4-compatible. The box hosting bootnode + gateway-1 was a
 DigitalOcean droplet in NYC and gateway-2 is a DigitalOcean droplet in SFO (same AS14061,
 different regions — `docs/GO-LIVE-LOG-2026-08-17.md` names them); their clearnet IPs are
 operational metadata and are not recorded here. The client rotates across both
@@ -85,17 +94,17 @@ operational metadata and are not recorded here. The client rotates across both
 
 ## Legacy gateway fleet (static directory)
 
-Three Shade Tree gateways on DigitalOcean (nyc3), provisioned via
+Three earlier Shade Tree gateways on DigitalOcean (nyc3), provisioned via
 `~/agent-devops` (`shade_tree_gateway` role). Membership gates on the committed
 `group/members.json`; the client rotates across all three per tunnel. **All three
-live** (Tor + gateway systemd units active, onions published). The signed
+were reported **live at the time of this record** (Tor + gateway systemd units active, onions published). The signed
 [`directory.json`](directory.json) is the machine-readable source of truth.
 
-| Gateway | DO droplet | Onion | Status |
+| Gateway | DO droplet | Onion | Recorded status |
 |---|---|---|---|
-| gateway-1 | egress-01 | `kjeyt2gtzcvnbshedns5wvtahtqbqwlmw4e56ku3iuqiykf5mwwdqdad.onion` | live |
-| gateway-2 | egress-02 | `oi73kttiriqhfmoxo42pstfobrhbjxko3gzzs54bovwhs2ayuw64imad.onion` | live |
-| gateway-3 | shade-tree-03 | `spoe2hmwp62w5bg74by7plx54rn4rzjro4bq6qzv5q6ewi4lqlovlbqd.onion` | live |
+| gateway-1 | egress-01 | `kjeyt2gtzcvnbshedns5wvtahtqbqwlmw4e56ku3iuqiykf5mwwdqdad.onion` | live then |
+| gateway-2 | egress-02 | `oi73kttiriqhfmoxo42pstfobrhbjxko3gzzs54bovwhs2ayuw64imad.onion` | live then |
+| gateway-3 | shade-tree-03 | `spoe2hmwp62w5bg74by7plx54rn4rzjro4bq6qzv5q6ewi4lqlovlbqd.onion` | live then |
 
 Onions are the member-facing discovery handles (they are what `directory.json` publishes).
 The droplets' clearnet IPs are operational metadata and are not listed here; they live in
@@ -110,32 +119,22 @@ half (`group/directory-signer.key`) is gitignored. Per-droplet SSH keys are trac
 `~/agent-devops/ansible/files/secrets/*.enc` (SOPS) + the fleet ledger; shade-tree-03 was
 created by OpenTofu, egress-01/02 retrofitted via the Ansible role.
 
-## Using this deployment
+## Connect a current v4 client
 
-Bootnode fleet (live discovery, the default path):
+Do not use this deployment's onions, directories, contracts, registrar, or signer with a
+current checkout. The old commands are intentionally omitted: a signed historical directory
+can still be authentic while every node in it speaks an incompatible protocol.
 
-```bash
-export SHADE_TREE_SECRET=<your enrolled secret>
-bash scripts/start-tor-client.sh                           # laptop tor on SOCKS 9260
-SHADE_TREE_NETWORK=sepolia SHADE_TREE_TOR_PORT=9260 node bin/shade-tree.mjs client   # bootnode onion + signer from bootnode.json
-curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # a gateway's clean IP
-```
-
-Buy a leaf instead of being enrolled (T-FEAT-7; a wallet holding tUSD, no ETH needed):
+For a local v4 fleet, follow [`../../docs/QUICKSTART.md`](../../docs/QUICKSTART.md) Path B. For an
+operator-run v4 fleet, get a freshly issued bootnode onion and pinned directory signer from that
+operator:
 
 ```bash
-SHADE_TREE_NETWORK=sepolia SHADE_TREE_TOR_PORT=9260 node bin/shade-tree.mjs pay --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret
-SHADE_TREE_NETWORK=sepolia SHADE_TREE_TOR_PORT=9260 node bin/shade-tree.mjs pay --limit 32 --protocol mpp  --key-file buyer.key --secret-file ./.secret
+bash scripts/start-tor-client.sh
+shade-tree client --secret <your-secret> --tor-port 9260 \
+  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex>
 ```
 
-Legacy static-directory fleet:
-
-```bash
-export SHADE_TREE_DIRECTORY=network/sepolia/directory.json      # rotate across the legacy fleet
-export SHADE_TREE_DIR_SIGNER=189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321
-export SHADE_TREE_SECRET=<your enrolled secret from demo-keys.local.md>
-bash scripts/run-client.sh
-curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # a gateway's clean IP
-# on-chain slashing (once contracts funded): set SHADE_TREE_GROUP_CONTRACT + SHADE_TREE_RPC_URL
-# from contracts.json on each gateway's env.
-```
+If the v4 operator offers paid or staked admission, use only the registrar, RPC URL, and fresh
+v4 contract addresses they supply. [`../../docs/JOIN.md`](../../docs/JOIN.md) shows those explicit
+forms; none of the values on this page should be substituted into them.

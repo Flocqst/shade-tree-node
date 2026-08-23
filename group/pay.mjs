@@ -5,7 +5,7 @@
 // ordinary `shade-tree client` with the same secret (the gateway trusts the paid root).
 //
 //   shade-tree pay --bootnode <onion> --limit 8 [--protocol x402|mpp] [--key-file <path>] [--dry-run]
-//   shade-tree pay --network sepolia --limit 32 --protocol mpp
+//   shade-tree pay --bootnode <v4-operator-onion> --limit 32 --protocol mpp
 //   shade-tree pay --registrar-url http://127.0.0.1:8878 ...      (no Tor: tests / a local registrar)
 //
 // Flow (x402):  GET  /pay/quote?limit=N          -> 402 + PAYMENT-REQUIRED (accepts[])

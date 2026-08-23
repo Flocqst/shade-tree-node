@@ -1,6 +1,6 @@
 {
   "network": "sepolia",
-  "status": "live",
+  "status": "retired",
   "onion": "kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion",
   "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73",
   "admission": "stake",
@@ -10,6 +10,6 @@
     "signer": "d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73"
   },
   "deployedRef": "main@d8a6530146b13986870eb42299ace1118ebfb0b9",
-  "updated": "2026-08-17",
-  "note": "LIVE since 2026-08-17 (docs/GO-LIVE-LOG-2026-08-17.md, T-DEPLOY-1 + T-DEPLOY-2 + Phase 3): bootnode + gateway-1 (region na, nyc) on droplet-1, gateway-2 (region na, sfo) on droplet-2 announcing to the same bootnode (gateway-only bootstrap mode). Admission STAKE since 2026-08-17 (later): SHADE_TREE_STAKE_MODE=onchain against gatewayRegistry, one staked operator backs both onions via the heartbeat operator auth; on-chain slashing enabled on both gateways. Onion PoW off (SHADE_TREE_ENABLE_POW=0), membership root = committed group/members.json (PoC fallback). staticDirectory is the bootnode's own signed /directory export (same signer, 2 gateways) for the cold path when the bootnode is dark; the LEGACY static fleet directory.json (signer 189f...1321) is untouched next to it. Onions and pubkeys only, never IPs."
+  "updated": "2026-08-23",
+  "note": "RETIRED FROM SHADE TREE v4 on 2026-08-23. This pre-v4 research fleet may remain reachable for the read-only public Grove census, but current clients and nodes must not use it: its envelope and signed capability domains are intentionally incompatible with v4. Historical deployment details: live from 2026-08-17 (docs/GO-LIVE-LOG-2026-08-17.md, T-DEPLOY-1 + T-DEPLOY-2 + Phase 3), with one bootnode and two gateways, stake admission, on-chain slashing, onion PoW off, and the committed group/members.json fallback. staticDirectory is retained as signed migration evidence. Onions and pubkeys only, never IPs."
 }

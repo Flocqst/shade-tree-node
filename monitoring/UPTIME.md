@@ -39,6 +39,7 @@ SHADE_TREE_DIR_SIGNER=<pinned signer pubkey hex> \
 | `SHADE_TREE_DIR_SIGNER` | pinned directory-signer pubkey (hex), **required** | — |
 | `SHADE_TREE_DIR_MAX_AGE_SEC` | maximum accepted age of the signed directory issue time | `300` |
 | `SHADE_TREE_DIR_FUTURE_SEC` | maximum accepted future clock skew for the issue time | `300` |
+| `SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS` | set to `1` only for read-only observation of an explicitly identified pre-v4 fleet; accepts its old capability-signature domain without enabling legacy client/node protocol behavior | off |
 | `SHADE_TREE_NETWORK` | `<name>`: default `SHADE_TREE_BOOTNODE_ONION` + `SHADE_TREE_DIR_SIGNER` from `network/<name>/bootnode.json` (explicit env wins; a `pending` record supplies nothing → misconfig) | — |
 | `SHADE_TREE_PROBE_TIMEOUT_MS` | per-request timeout | `20000` |
 
@@ -61,13 +62,14 @@ OK / `2` CRITICAL:
 
 ```
 OK: bootnode reachable, signed directory fresh
-CRITICAL: bootnode unreachable (timeout)
+CRITICAL: bootnode unreachable
 ```
 
 ## Privacy posture
 
 The JSON format includes a **count** (`fleetSize`) for private operator monitoring, never gateway
-onions or operator addresses, and scrubs any `.onion` out of error text. The Nagios format used by
+onions, onion prefixes, or operator addresses, and reduces directory errors to fixed classes.
+The Nagios format used by
 the hosted workflow, systemd unit, and example cron deliberately omits the count so public Actions
 logs and long-lived journals do not create another exact-count history.
 
@@ -116,6 +118,12 @@ fork never red-flags. A `pending` network record likewise skips green. Once conf
 CRITICAL probe fails the run with an `::error::` (which is the alert). GitHub's schedule floor is
 5 minutes but scheduled runs are best-effort and often late, so this is the coarse hosted signal;
 the systemd timer is the 5-minute SLI source.
+
+The recorded Sepolia research fleet predates the v4 domain reset. Its hosted observer also sets
+the repository variable `SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS=1`. This is deliberately not derived
+from `SHADE_TREE_NETWORK`: a different fleet must never inherit legacy verification accidentally.
+The option only authenticates old signed capability documents for the census; v4 clients and
+nodes do not read it.
 
 The public Grove also requires the `SHADE_TREE_GROVE_SIGNING_KEY` Actions **secret**. Its public
 half is pinned in `network/grove-signing-public.pem`. The read-only probe job signs only the

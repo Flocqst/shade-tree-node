@@ -15,6 +15,15 @@ One tree means one gateway identity in the bootnode directory at observation
 time. The observer fetches `/directory` over Tor and verifies its signature
 against the pinned directory signer before counting entries.
 
+The Sepolia bootnode currently shown here is the earlier, pre-v4 research
+fleet recorded under `network/sepolia/`. Its nodes sign capabilities with the
+pre-v4 domain tag. The hosted observer has an explicit, read-only compatibility
+switch that verifies those signatures before counting. That switch is off by
+default and is not used by client discovery, routing, announcements, or node
+admission; Shade Tree proxies and nodes remain v4-only. When a coordinated v4
+fleet is live, the public source will move to that fleet rather than treating
+the earlier nodes as v4-compatible.
+
 The count means **announced within the bootnode TTL**. It does not necessarily
 mean the gateway was independently reachable. When optional active probing is
 enabled, the signed directory can mark an entry down; the public aggregate does

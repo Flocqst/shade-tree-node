@@ -1,5 +1,11 @@
 # Client modes: shim vs. library (and a planned no-tooling path)
 
+> **v4 status.** The current client speaks envelope v4 only. Obtain a v4 gateway onion or a
+> signed directory and pinned signer from the fleet operator. The committed Sepolia record is
+> the incompatible pre-v4 research deployment and must not be used as the current client's
+> connection profile. The public Grove observes that old fleet read-only; it does not advertise
+> a public v4 endpoint.
+
 The gateway needs a **fresh RLN proof per tunnel** — that is what makes the nullifier,
 the per-epoch rate cap, and the slashing work, so *something* client-side must mint it. What
 varies is where that "something" lives. There are two shipped shapes and one planned.
@@ -23,8 +29,8 @@ import { ShadeTreeClient, cleanUp } from "./client/shade-tree-client.mjs";
 
 const shadeTree = new ShadeTreeClient({
   secret,                                   // enrolled member secret (or SHADE_TREE_SECRET)
-  directory: "…/network/sepolia/directory-bootnode.json",   // a signed directory (the live fleet's cold-path export)
-  dirSigner: "d79f78c3…3a73",               // pins the directory signer (network/sepolia/bootnode.json)
+  directory: "./fleet/directory.json",       // signed export supplied by the v4 operator
+  dirSigner: process.env.SHADE_TREE_DIR_SIGNER, // pinned signer supplied out of band
   torPort: 9260,                            // client Tor SOCKS
   // or: onion: "…"  to pin a single gateway instead of fleet rotation
 });
@@ -42,13 +48,13 @@ cleanUp();  // terminate snarkjs workers so the process can exit
 - `connect("host:443")` → the raw duplex tunnel, if you want your own protocol.
 - Each call rotates gateway + slot and reuses one proof across failover.
 
-Simplest form against the live fleet: run with `SHADE_TREE_NETWORK=sepolia` in the environment and
-construct `new ShadeTreeClient({ secret, torPort })`; the SDK honours the record too
-(`client/selection.mjs` applies it before reading env), so the bootnode onion + signer come
-from `network/sepolia/bootnode.json` and the client discovers the fleet live over Tor.
+For dynamic discovery, set `SHADE_TREE_BOOTNODE_ONION` and `SHADE_TREE_DIR_SIGNER` to the
+operator-supplied v4 values, then construct `new ShadeTreeClient({ secret, torPort })`.
+For a single node, set `SHADE_TREE_ONION` or pass `{ onion }`. There is currently no
+repo-maintained public v4 network profile to select by name.
 
-Runnable example: `examples/agent-fetch.mjs`. Verified live end to end (returns rotating
-fleet gateway IPs, laptop IP absent from gateway logs).
+Runnable example: `examples/agent-fetch.mjs`. Point it at your local fleet or an operator's
+v4 configuration before running it.
 
 ## Leaf source + admission filtering + `--max-anon` (T-FEAT-9, both options)
 
@@ -69,16 +75,20 @@ the `PaidAccessSet` (**paid**) — and each gateway advertises WHICH of those it
   proof or dial — `--max-anon: your leaf is in the paid set (the buyer address -> operator transfer
   and tier bucket are public); an invited-only gateway would reject it (wrong-group-root)…`. No
   invited-only gateway in the directory: `--max-anon: no invited-only gateway in the directory …
-  fleet: …` (on the sepolia demo fleet neither gateway is invited-only, so an invited member with
-  `--max-anon` gets exactly this refusal — the correct outcome, `network/sepolia/README.md`).
+  fleet: …` (if no node in an operator's v4 directory is invited-only, this refusal is the
+  correct outcome).
 - A pinned `onion` is honoured as-is (its policy is unknown to the client; a mismatch surfaces as
   the gateway's `wrong-group-root`), except that `--max-anon` still refuses a staked/paid leaf.
 - Events: `onEvent({ phase:"select", status:"done", leafSource, maxAnon, candidates:[{onion, admits}] })`
   once selection settles (the shim logs it as `SELECT <target> leaf=paid candidates=…`); `tunnel.shadeTree.leafSource`.
 
 ```bash
-SHADE_TREE_NETWORK=sepolia shade-tree client --secret <hex> --max-anon            # invited-only gateways, or a precise refusal
-SHADE_TREE_NETWORK=sepolia shade-tree client --secret <hex> --leaf-source paid --limit 32   # prove from the paid set; paid-admitting gateways only
+shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> \
+  --dir-signer <v4-directory-signer-hex> --max-anon
+
+shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> \
+  --dir-signer <v4-directory-signer-hex> --leaf-source paid --limit 32 \
+  --paid-access-contract <v4-paid-set-address>
 ```
 
 ## Option B — shim (`client/shim.mjs`): a local proxy for unmodified tools
@@ -88,20 +98,18 @@ Use this when the client is a **stock tool** you can't change (browser, curl, an
 `ShadeTreeClient`:
 
 ```bash
-SHADE_TREE_SECRET=0x… SHADE_TREE_NETWORK=sepolia SHADE_TREE_TOR_PORT=9260 node client/shim.mjs   # = `shade-tree client --network sepolia`
+SHADE_TREE_SECRET=0x… SHADE_TREE_TOR_PORT=9260 shade-tree client \
+  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex>
 # then: curl -x http://127.0.0.1:8888 https://api.ipify.org
 ```
 
-`SHADE_TREE_NETWORK=sepolia` is the default way in since the 2026-08-17 go-live: it fills the
-discovery inputs (the live bootnode onion + pinned signer, and the contract addresses) from the
-committed record `network/sepolia/bootnode.json` (`network/README.md`,
-`docs/GO-LIVE-LOG-2026-08-17.md`), and the shim discovers the fleet through the bootnode over
-Tor. Add `SHADE_TREE_LIMIT=32` (`--limit 32`) if your leaf is a tier-32 one; a bought leaf is found in
-the paid set automatically (`docs/PAYMENTS.md`). Explicit env still wins over the record.
+The bootnode onion and signer are a pair: copy both from the v4 operator and pin the signer
+out of band. Add `SHADE_TREE_LIMIT=32` (`--limit 32`) if your leaf is a tier-32 one, plus the
+v4 paid-set address if it is a paid leaf (`docs/PAYMENTS.md`).
 
 Env, if you want to set the pieces yourself: `SHADE_TREE_SECRET`, then one discovery source:
-`SHADE_TREE_BOOTNODE_ONION`+`SHADE_TREE_DIR_SIGNER` (live fleet), `SHADE_TREE_DIRECTORY`+`SHADE_TREE_DIR_SIGNER` (a
-static signed directory, e.g. the cold path `network/sepolia/directory-bootnode.json`), or
+`SHADE_TREE_BOOTNODE_ONION`+`SHADE_TREE_DIR_SIGNER` (operator's v4 fleet),
+`SHADE_TREE_DIRECTORY`+`SHADE_TREE_DIR_SIGNER` (an operator-supplied static signed directory), or
 `SHADE_TREE_ONION` (pin one gateway); plus `SHADE_TREE_TOR_HOST`/`SHADE_TREE_TOR_PORT`. **Gotcha:** in
 directory mode you must set `SHADE_TREE_DIR_SIGNER` or the shim silently falls back to a stale local
 `tor/hs/hostname`.

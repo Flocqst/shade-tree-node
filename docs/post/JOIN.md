@@ -10,7 +10,10 @@ the operator's set). Everything else you generate locally, and your secret never
 your machine.
 
 Status: reference implementation, unaudited, testnet ZK artifacts. It runs end to end
-today but is not yet deployed for real use. Do not put real anonymity needs on it yet.
+in local and operator-run v4 fleets but is not yet deployed here as a public v4 service.
+Do not put real anonymity needs on it yet. The checked-in Sepolia record is the incompatible
+pre-v4 research deployment, not a current connection profile. The public Grove observes that
+old fleet read-only; its count does not advertise v4 client availability.
 See the repo README "Scope" and [`../SHIP-PLAN.md`](../SHIP-PLAN.md).
 
 ## 1. Get a member secret
@@ -43,11 +46,10 @@ shade-tree client --secret $SHADE_TREE_SECRET \
   --dir-signer <bootnode-signer-pubkey>
 ```
 
-For the Sepolia fleet you do not need to copy the two values by hand: the committed record
-`network/sepolia/bootnode.json` carries the bootnode onion + pinned signer (live since
-2026-08-17, `docs/GO-LIVE-LOG-2026-08-17.md`), so `SHADE_TREE_NETWORK=sepolia shade-tree client` (or
-`shade-tree client --network sepolia`) is the whole command. Explicit `--bootnode`/`--dir-signer`
-still win over the record.
+Get both discovery values from the same v4 fleet operator. If the operator gives you one
+gateway onion instead, use `--onion <v4-gateway.onion>` and omit bootnode discovery. Do not
+point this v4 client at `network/sepolia/bootnode.json`; that record and its 2026-08-17
+go-live log are retained as pre-v4 deployment history.
 
 It binds `127.0.0.1:8888` (override with `SHADE_TREE_SHIM_PORT`).
 

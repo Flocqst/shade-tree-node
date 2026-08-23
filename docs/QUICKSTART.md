@@ -1,10 +1,16 @@
 # Quickstart
 
-Join the fleet that is running, or stand up your own (a discovery bootnode, an access-gated
-gateway, and a client). Three paths: **Path A, join the live fleet** (invited with a secret, buy a
-leaf over HTTP 402, or stake one), **Path B, a local loop** to understand the pieces, and
-**Path C, a live droplet** to run your own gateway or fleet (you choose what you admit, default
-invited only, and what you sell).
+Connect to an operator's fleet, or stand up your own (a discovery bootnode, an access-gated
+gateway, and a client). Three paths: **Path A, connect to a v4 fleet** with configuration from
+its operator, **Path B, a local loop** to understand the pieces, and **Path C, a live droplet**
+to run your own gateway or fleet (you choose what you admit, default invited only, and what
+you sell).
+
+> **Current network status.** This checkout speaks envelope v4 only. The committed
+> [`network/sepolia/`](../network/sepolia/README.md) record describes the earlier, incompatible
+> pre-v4 research deployment; it is not a runnable default for this client, payments, or
+> staking. The public Grove observes that old fleet read-only. Its count is a historical-network
+> reachability signal, not evidence that a public v4 fleet is available.
 
 Everything is one CLI: `shade-tree <command> [--flags]`. Install it:
 
@@ -16,32 +22,44 @@ shade-tree doctor        # checks node, tor, deps, keys
 
 Each `--flag` maps to an `SHADE_TREE_*` env var (see [CONFIG.md](CONFIG.md)); either works.
 
-## Path A: join the live fleet (`SHADE_TREE_NETWORK=sepolia`)
+## Path A: connect to an operator's v4 fleet
 
-The fleet went live on 2026-08-17 ([GO-LIVE-LOG-2026-08-17.md](GO-LIVE-LOG-2026-08-17.md)): a
-bootnode, two gateways (New York, San Francisco), stake admission, membership rooted on Sepolia.
-`SHADE_TREE_NETWORK=sepolia` reads the committed record under [`network/sepolia/`](../network/sepolia/README.md)
-(bootnode onion, pinned signer, contract addresses) so you set nothing else. You need a Tor
-SOCKS port: `bash scripts/start-tor-client.sh` starts one on 9260 (or `--tor-port 9050` for a
-system tor).
+Ask the operator for a member secret or enrollment path and either a gateway onion, or the
+v4 bootnode onion plus its pinned directory signer. You need a Tor SOCKS port:
+`bash scripts/start-tor-client.sh` starts one on 9260 (or use `--tor-port 9050` with a system
+Tor). Pinning one gateway is the smallest path:
 
 ```bash
-# handed a member secret (a leaf in group/members.json):
-SHADE_TREE_SECRET=<hex> SHADE_TREE_NETWORK=sepolia shade-tree client --tor-port 9260
+SHADE_TREE_SECRET=<hex> SHADE_TREE_ONION=<v4-gateway.onion> \
+  shade-tree client --tor-port 9260
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json     # a gateway's IP, not yours
+```
 
-# no secret? buy a leaf over HTTP 402 (a wallet holding the settle asset; no gas)...
+For signed discovery and rotation, use both values supplied by the same v4 operator:
+
+```bash
+SHADE_TREE_SECRET=<hex> shade-tree client --tor-port 9260 \
+  --bootnode <v4-bootnode.onion> \
+  --dir-signer <v4-directory-signer-hex>
+```
+
+If that operator enables paid or staked admission, they must also supply the v4 registrar,
+chain, and contract addresses. Do not substitute the checked-in Sepolia values:
+
+```bash
+# paid admission, when offered by the v4 operator
 shade-tree enroll
-shade-tree pay --network sepolia --limit 8 --protocol x402 --key-file buyer.key --secret-file ./.secret   # or --protocol mpp
-SHADE_TREE_NETWORK=sepolia shade-tree client --secret <hex> --limit 8 --tor-port 9260
+shade-tree pay --bootnode <v4-bootnode.onion> --limit 8 \
+  --protocol x402 --key-file buyer.key --secret-file ./.secret
 
-# ...or stake one (Sepolia ETH; tier 8 or 32):
-shade-tree register-member <commitment> --limit 8 --network sepolia
+# staked admission, when offered by the v4 operator
+shade-tree register-member <commitment> --limit 8 \
+  --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
 ```
 
 The client fetches the signed directory over Tor, verifies it against the pinned signer, and
 rotates across the gateways per tunnel. Member page: [JOIN.md](JOIN.md); buying: [PAYMENTS.md](PAYMENTS.md).
-Testnet, untrusted ZK artifacts, one operator: see the README "Status".
+Research preview and untrusted ZK artifacts: see the README "Status".
 
 ## Path B: the local loop (understand the pieces)
 

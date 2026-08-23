@@ -1,7 +1,7 @@
 {
   "network": "sepolia",
   "chainId": 11155111,
-  "status": "live",
+  "status": "retired",
   "release": "rln-v4-tiers",
   "deployer": "0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02",
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",

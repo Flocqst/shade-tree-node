@@ -1,0 +1,100 @@
+// ARCHIVED SOURCE: legacy v1/Semaphore cold-path soak test.
+// This file is preserved for historical reference and is not an executable v4 tool.
+//
+// Force a FRESH Tor rendezvous circuit per request and run
+// for a fixed duration, to measure the pessimistic drop rate and latency.
+//
+// Stream isolation: each request dials the SOCKS port with a unique userId, and
+// Tor (IsolateSOCKSAuth) builds a separate circuit for it. So nothing is warm:
+// every request pays a full rendezvous build and is exposed to build failures.
+// Proofs are valid (8 members, rotated), so any drop is a transport failure, not
+// the gate. Each success also fetches api.ipify over the tunnel and records the
+// egress IP, so we keep proving the path end to end.
+//
+//   SHADE_TREE_ONION=<onion> node experiments/soak.mjs <seconds> <concurrency>
+import { readFile, appendFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import tls from "node:tls";
+import { randomBytes } from "node:crypto";
+import { SocksClient } from "socks";
+import { proveMembership, currentEpoch } from "../lib/semaphore.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, "..");
+const ONION = (process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "");
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9260);
+const DURATION = Number(process.argv[2] || 3600) * 1000;
+const CONC = Number(process.argv[3] || 6);
+const THOST = "api.ipify.org", TPORT = 443;
+const OUT = process.env.SOAK_OUT || "/tmp/soak.jsonl";
+const IPRE = /[0-9]{1,3}(\.[0-9]{1,3}){3}/;
+if (!ONION) { console.error("set SHADE_TREE_ONION"); process.exit(1); }
+
+const keys = JSON.parse(await readFile(join(ROOT, "keys.local.json"), "utf8"));
+const scope = currentEpoch();
+console.log("pregenerating " + keys.length + " proofs for epoch " + scope + "...");
+const proofs = [];
+for (const k of keys) proofs.push(await proveMembership(k.secret, scope));
+console.log("ready. FRESH circuit per request, conc=" + CONC + ", duration=" + (DURATION / 1000) + "s, target=" + THOST);
+
+function once(proof) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let stage = "socks", socket, done = false;
+    const finish = (cat, extra = {}) => { if (done) return; done = true; clearTimeout(overall); try { socket && socket.destroy(); } catch {} resolve({ ok: cat === "ok", cat, ms: Date.now() - t0, ...extra }); };
+    const overall = setTimeout(() => finish("timeout:" + stage), 50000);
+    SocksClient.createConnection({
+      proxy: { host: "127.0.0.1", port: TOR_PORT, type: 5, userId: randomBytes(8).toString("hex"), password: randomBytes(4).toString("hex") },
+      command: "connect", destination: { host: ONION + ".onion", port: 80 }, timeout: 45000,
+    }).then(({ socket: s }) => {
+      socket = s; stage = "envelope";
+      let buf = "";
+      const onEnv = (d) => {
+        buf += d.toString();
+        const nl = buf.indexOf("\n");
+        if (nl < 0) return;
+        s.removeListener("data", onEnv);
+        let rep; try { rep = JSON.parse(buf.slice(0, nl)); } catch { return finish("badreply"); }
+        if (!rep.ok) return finish("gate:" + (rep.err || "?"));
+        stage = "tls";
+        const tsock = tls.connect({ socket: s, servername: THOST, rejectUnauthorized: false }, () => {
+          stage = "http";
+          tsock.write("GET / HTTP/1.1\r\nHost: " + THOST + "\r\nUser-Agent: shade-tree-soak\r\nConnection: close\r\n\r\n");
+        });
+        let body = "", code = null;
+        tsock.setTimeout(20000, () => finish("timeout:http"));
+        tsock.on("data", (d) => { body += d.toString(); if (code === null) { const m = body.match(/^HTTP\/1\.[01] (\d{3})/); if (m) code = m[1]; } });
+        tsock.on("end", () => { const ip = (body.match(IPRE) || [])[0] || null; finish(code === "200" ? "ok" : "http:" + code, { code, ip }); });
+        tsock.on("error", (e) => finish("tls-err:" + (e.code || "x")));
+      };
+      s.on("data", onEnv);
+      s.on("error", (e) => finish("sock-err:" + (e.code || "x")));
+      s.write(JSON.stringify({ v: 1, target: THOST + ":" + TPORT, proof }) + "\n");
+    }).catch((e) => finish("socks-fail:" + (e.code || String(e.message).slice(0, 16))));
+  });
+}
+
+const start = Date.now(), deadline = start + DURATION;
+let n = 0, ok = 0; const cats = {}; const lat = [];
+await writeFile(OUT, "");
+async function worker() {
+  while (Date.now() < deadline) {
+    const r = await once(proofs[n % proofs.length]);
+    n++; if (r.ok) { ok++; lat.push(r.ms); }
+    const c = r.cat.split(":")[0]; cats[c] = (cats[c] || 0) + 1;
+    await appendFile(OUT, JSON.stringify({ t: Date.now() - start, ok: r.ok, cat: r.cat, ms: r.ms, code: r.code || null, ip: r.ip || null }) + "\n");
+  }
+}
+const prog = setInterval(() => {
+  const s = [...lat].sort((a, b) => a - b); const p = q => s.length ? s[Math.floor(q * s.length)] : 0;
+  console.log(`[${Math.round((Date.now() - start) / 1000)}s] n=${n} ok=${ok} (${(100 * ok / (n || 1)).toFixed(1)}%) p50=${(p(0.5) / 1000).toFixed(2)}s p95=${(p(0.95) / 1000).toFixed(2)}s cats=${JSON.stringify(cats)}`);
+}, 60000);
+
+await Promise.all(Array.from({ length: CONC }, () => worker()));
+clearInterval(prog);
+const s = [...lat].sort((a, b) => a - b); const p = q => s.length ? s[Math.floor(q * s.length)] : 0;
+console.log("DONE n=" + n + " ok=" + ok + " (" + (100 * ok / (n || 1)).toFixed(2) + "%) drops=" + (n - ok));
+console.log("cats=" + JSON.stringify(cats));
+console.log("latency(ok)s p50=" + (p(0.5) / 1000).toFixed(2) + " p90=" + (p(0.9) / 1000).toFixed(2) + " p95=" + (p(0.95) / 1000).toFixed(2) + " p99=" + (p(0.99) / 1000).toFixed(2) + " max=" + ((s[s.length - 1] || 0) / 1000).toFixed(2));
+process.exit(0);

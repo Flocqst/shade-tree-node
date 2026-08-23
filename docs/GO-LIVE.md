@@ -1,5 +1,9 @@
 # GO-LIVE runbook: T-DEPLOY-1 + T-DEPLOY-2
 
+> **Historical pre-v4 runbook.** This checklist records the August 2026 research deployment
+> and must not be executed against the current envelope-v4 code. Its Sepolia records are
+> retired; use `QUICKSTART.md`, `OPERATOR.md`, and explicit v4 operator values for new work.
+
 The single ordered checklist for the first live deployment. It composes the existing docs; it
 does not replace them. Every command below exists in this repo (`bin/shade-tree.mjs`,
 `bootnode/deploy/*`, `scripts/*`) or in the cited doc. Where the repo lacks something the

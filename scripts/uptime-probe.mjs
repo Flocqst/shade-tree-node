@@ -18,6 +18,8 @@
 //   SHADE_TREE_DIR_SIGNER       pinned directory-signer pubkey (hex) -- REQUIRED
 //   SHADE_TREE_DIR_MAX_AGE_SEC  oldest accepted signed-directory issue time (default 300)
 //   SHADE_TREE_DIR_FUTURE_SEC   accepted future clock skew for issue time (default 300)
+//   SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS  1 = observation-only verification of the earlier
+//                                  research fleet's capability signatures (default off)
 //   SHADE_TREE_NETWORK          <name>: default BOOTNODE_ONION + DIR_SIGNER from network/<name>/bootnode.json
 //                         (explicit env wins; a pending record supplies nothing -> misconfig)
 //   SHADE_TREE_PROBE_TIMEOUT_MS per-request timeout     (default 20000)
@@ -41,9 +43,17 @@ const boundedSeconds = (value, fallback) => {
 };
 const DIR_MAX_AGE_SEC = boundedSeconds(process.env.SHADE_TREE_DIR_MAX_AGE_SEC, 300);
 const DIR_FUTURE_SEC = boundedSeconds(process.env.SHADE_TREE_DIR_FUTURE_SEC, 300);
+const ACCEPT_PRE_V4_CAPS = /^(1|true|yes|on)$/i.test(process.env.SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS || "");
 
 // Never let an onion address leak into monitor logs via an error string.
 const scrub = (s) => String(s == null ? "" : s).replace(/[a-z2-7]{56}\.onion/gi, "<onion>");
+
+// Directory verifier reasons can include a short onion prefix for a local operator. Publicly
+// hosted probe output needs only the bounded failure class, never that prefix.
+const directoryReason = (reason) => {
+  const label = String(reason || "verification-failed").split(":", 1)[0];
+  return /^[a-z][a-z0-9-]{0,47}$/.test(label) ? label : "verification-failed";
+};
 
 // Parse --format nagios | --format=nagios | --nagios | --format json (default json).
 function parseFormat(argv) {
@@ -100,7 +110,10 @@ export async function observeFleet() {
   // SHADE_TREE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
   // misconfig (fail closed), never a throw out of probe().
   const explicitUrl = !!process.env.SHADE_TREE_BOOTNODE_URL && !process.env.SHADE_TREE_BOOTNODE_ONION;
-  try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return { result, health, directory }; }
+  // The public census may deliberately observe a retired research deployment through explicit
+  // onion/signer inputs. `allowRetired` only suppresses the record-level guard; retired records
+  // still supply zero defaults, so the explicit coordinates remain mandatory.
+  try { applyNetworkEnv(process.env, { allowRetired: true }); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return { result, health, directory }; }
   const pinnedSigner = process.env.SHADE_TREE_DIR_SIGNER;
   const fetchJson = makeFetcher({ preferUrl: explicitUrl });
   if (!fetchJson) { result.reason = "misconfig:set SHADE_TREE_BOOTNODE_ONION or SHADE_TREE_BOOTNODE_URL"; return { result, health, directory }; }
@@ -112,7 +125,7 @@ export async function observeFleet() {
     const healthOk = health?.ok === true;       // the bootnode's own self-report
 
     const dir = await fetchJson("/directory");
-    const v = verifyDirectory(dir, pinnedSigner);
+    const v = verifyDirectory(dir, pinnedSigner, { acceptPreV4Caps: ACCEPT_PRE_V4_CAPS });
     result.signerOk = v.ok;
     const nowSec = Math.floor(Date.now() / 1000);
     result.directoryFresh = v.ok
@@ -123,7 +136,7 @@ export async function observeFleet() {
     result.ok = healthOk && result.signerOk && result.directoryFresh;
     if (result.directoryFresh) directory = dir; // exposed only to trusted local aggregators; never printed here
 
-    if (!v.ok) result.reason = "directory:" + v.reason;
+    if (!v.ok) result.reason = "directory:" + directoryReason(v.reason);
     else if (!result.directoryFresh) result.reason = "directory:issued-outside-freshness-window";
     else if (!healthOk) result.reason = "bootnode health not ok";
   } catch (e) {
@@ -139,10 +152,10 @@ export async function probe() {
 
 function nagiosLine(r) {
   if (r.ok) return "OK: bootnode reachable, signed directory fresh";
-  let why = r.reason || "unhealthy";
-  if (!r.bootnodeReachable) why = "bootnode unreachable" + (r.reason ? ` (${r.reason})` : "");
-  else if (!r.signerOk) why = "directory signer check failed" + (r.reason ? ` (${r.reason})` : "");
-  return `CRITICAL: ${why}`;
+  if (!r.bootnodeReachable) return "CRITICAL: bootnode unreachable";
+  if (!r.signerOk) return "CRITICAL: directory verification failed";
+  if (!r.directoryFresh) return "CRITICAL: signed directory outside freshness window";
+  return "CRITICAL: bootnode health not ok";
 }
 
 // Only run when invoked directly; importing (the selftest) pulls probe() with no side effects.
@@ -158,11 +171,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(JSON.stringify({ ok, bootnodeReachable, signerOk, directoryFresh, fleetSize, ts, ...(reason ? { reason } : {}) }));
       process.exit(ok ? 0 : 1);
     }
-  }).catch((e) => {
-    // Last-resort fail-closed: even an unexpected throw reports unhealthy, never hangs.
+  }).catch(() => {
+    // Last-resort fail-closed: even an unexpected throw reports unhealthy, never hangs or
+    // reflects exception text into hosted/public logs.
     const ts = Math.floor(Date.now() / 1000);
-    if (format === "nagios") { console.log(`CRITICAL: ${scrub(e?.message || e)}`); process.exit(2); }
-    console.log(JSON.stringify({ ok: false, bootnodeReachable: false, signerOk: false, directoryFresh: false, fleetSize: 0, ts, reason: scrub(e?.message || e) }));
+    if (format === "nagios") { console.log("CRITICAL: probe failed"); process.exit(2); }
+    console.log(JSON.stringify({ ok: false, bootnodeReachable: false, signerOk: false, directoryFresh: false, fleetSize: 0, ts, reason: "unexpected-probe-failure" }));
     process.exit(1);
   });
 }

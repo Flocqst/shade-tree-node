@@ -15,7 +15,13 @@ import { spawn, execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { signDirectory, pubkeyToOnion } from "../lib/directory.mjs";
+import {
+  canonicalCaps,
+  canonicalPreV4CapsBytes,
+  ed25519Sign,
+  signDirectory,
+  pubkeyToOnion,
+} from "../lib/directory.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBE = join(HERE, "uptime-probe.mjs");
@@ -37,6 +43,22 @@ function makeSignedDir(signer, n, issued = Math.floor(Date.now() / 1000)) {
     gateways.push({ onion: pubkeyToOnion(gw.pub), pubkey: gw.pub, weight: 100, health: "up" });
   }
   return signDirectory({ version: 1, issued, gateways, signer: signer.pub }, signer.priv);
+}
+
+// The deployed Sepolia research fleet predates the Shade Tree v4 domain reset. This fixture
+// proves the observer can authenticate those old capability signatures only when its explicit
+// compatibility switch is set; ordinary verification stays v4-only.
+function makePreV4CapsDir(signer, issued = Math.floor(Date.now() / 1000)) {
+  const gw = mintEd();
+  const onion = pubkeyToOnion(gw.pub);
+  const caps = canonicalCaps({ ports: [443], proto: { min: 3, max: 3 } });
+  const capsSig = ed25519Sign(canonicalPreV4CapsBytes(onion, caps), gw.priv);
+  return signDirectory({
+    version: 1,
+    issued,
+    gateways: [{ onion, pubkey: gw.pub, weight: 100, health: "up", caps, capsSig }],
+    signer: signer.pub,
+  }, signer.priv);
 }
 
 // The mock bootnode MUST run in its own process: the tests drive the prober with execFileSync
@@ -72,6 +94,7 @@ function runProbe(overrides, args = []) {
   const env = { ...process.env };
   delete env.SHADE_TREE_BOOTNODE_ONION; delete env.SHADE_TREE_BOOTNODE_URL; delete env.SHADE_TREE_DIR_SIGNER; delete env.SHADE_TREE_NETWORK;
   delete env.SHADE_TREE_DIR_MAX_AGE_SEC; delete env.SHADE_TREE_DIR_FUTURE_SEC;
+  delete env.SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS;
   Object.assign(env, overrides);
   try {
     const stdout = execFileSync(process.execPath, [PROBE, ...args], { env, encoding: "utf8" });
@@ -98,6 +121,13 @@ async function main() {
     JSON.stringify({ ok: true, count: FLEET, admission: "open", signer: signer.pub })
   );
   const staleBase = `http://127.0.0.1:${await stalePortP}`;
+  const preV4Dir = makePreV4CapsDir(signer);
+  const preV4Prefix = preV4Dir.gateways[0].onion.slice(0, 12);
+  const { child: preV4Child, port: preV4PortP } = startMockBootnode(
+    JSON.stringify(preV4Dir),
+    JSON.stringify({ ok: true, count: 1, admission: "stake", signer: signer.pub })
+  );
+  const preV4Base = `http://127.0.0.1:${await preV4PortP}`;
   // A port nothing listens on -> connection refused (fast, no hang).
   const deadBase = "http://127.0.0.1:1";
 
@@ -156,7 +186,28 @@ async function main() {
     ok(/^CRITICAL:/.test(nBad.stdout.trim()), "nagios unhealthy -> 'CRITICAL: ...' line");
     ok(!/\.onion/.test(nBad.stdout), "nagios line leaks no onion address");
 
-    // 6. SHADE_TREE_NETWORK RECORD (lib/network-record.mjs) ------------------------
+    // 6. EXPLICIT PRE-v4 OBSERVATION COMPATIBILITY ------------------------
+    console.log("\npre-v4 observation compatibility:");
+    const oldOff = runProbe({ SHADE_TREE_BOOTNODE_URL: preV4Base, SHADE_TREE_DIR_SIGNER: signer.pub });
+    let oldOffJson = {};
+    try { oldOffJson = JSON.parse(oldOff.stdout.trim()); } catch {}
+    ok(oldOff.status !== 0 && oldOffJson.signerOk === false, "pre-v4 caps fail closed by default");
+    ok(!oldOff.stdout.includes(preV4Prefix), "JSON verification reason omits the gateway prefix");
+
+    const oldOn = runProbe({
+      SHADE_TREE_BOOTNODE_URL: preV4Base,
+      SHADE_TREE_DIR_SIGNER: signer.pub,
+      SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS: "1",
+    });
+    let oldOnJson = {};
+    try { oldOnJson = JSON.parse(oldOn.stdout.trim()); } catch {}
+    ok(oldOn.status === 0 && oldOnJson.ok === true && oldOnJson.fleetSize === 1, "explicit observer switch authenticates and counts the pre-v4 fixture");
+
+    const oldNagios = runProbe({ SHADE_TREE_BOOTNODE_URL: preV4Base, SHADE_TREE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
+    ok(oldNagios.status === 2 && oldNagios.stdout.trim() === "CRITICAL: directory verification failed", "hosted failure is fixed and identifier-free");
+    ok(!oldNagios.stdout.includes(preV4Prefix), "Nagios verification failure omits the gateway prefix");
+
+    // 7. SHADE_TREE_NETWORK RECORD (lib/network-record.mjs) ------------------------
     // Explicit env wins over the record (the mock URL + signer still drive the probe); a record
     // that resolves NO bootnode (network/sepolia/bootnode.json is pending, or an unknown network)
     // is a misconfig -> unhealthy, never a throw / hang.
@@ -174,6 +225,7 @@ async function main() {
   } finally {
     child.kill();
     staleChild.kill();
+    preV4Child.kill();
   }
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: uptime-probe selftest (${failures} failure${failures === 1 ? "" : "s"})`);

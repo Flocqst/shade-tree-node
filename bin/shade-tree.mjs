@@ -98,7 +98,7 @@ const COMMANDS = {
   // passphrase is passed only via SHADE_TREE_BACKUP_PASSPHRASE (never on argv), inherited into the child.
   backup:            { script: "scripts/backup.mjs", prepend: ["backup"],  help: "encrypt & back up secret key material (onion seeds + signer key): shade-tree backup <srcDir> <outFile> (SHADE_TREE_BACKUP_PASSPHRASE)" },
   restore:           { script: "scripts/backup.mjs", prepend: ["restore"], help: "restore an encrypted key backup: shade-tree restore <inFile> <destDir> [--force] (SHADE_TREE_BACKUP_PASSPHRASE)" },
-  "record-deploy":   { script: "scripts/record-deploy.mjs", help: "record a broadcast contract deploy into network/<name>/contracts.json: shade-tree record-deploy --network sepolia --from-broadcast <run-latest.json>" },
+  "record-deploy":   { script: "scripts/record-deploy.mjs", help: "record a broadcast contract deploy into network/<name>/contracts.json: shade-tree record-deploy --network <name> --from-broadcast <run-latest.json>" },
 };
 
 // command -> config ROLE (lib/config.mjs). Before spawning a service we validate the effective

@@ -10,7 +10,7 @@
 // Exit 0 = all invariants held; nonzero = a check failed (prints which).
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -131,12 +131,31 @@ async function main() {
   ok(badNet.code === 1 && /SHADE_TREE_NETWORK=no-such-network-zzz/.test(badNet.out) && /no such network/.test(badNet.out), "`--network <unknown>` fails fast in the wrapper before spawning");
   const trav = shadeTreeCli(["record-deploy", "--network", "../lib", "--dry-run"]);
   ok(trav.code === 1 && /bad network name/.test(trav.out), "`--network ../x` (traversal) is rejected");
-  // --force because network/sepolia already records a GatewayRegistry; --dry-run never writes.
+  const retiredMessage = /retired deployment record; select a current v4 network, or unset SHADE_TREE_NETWORK and configure explicit endpoints/;
   const dry = shadeTreeCli(["record-deploy", "--network", "sepolia", "--address", "0x" + "ab".repeat(20), "--force", "--dry-run"]);
-  ok(dry.code === 0 && /supplied .*SHADE_TREE_/.test(dry.out) && /dry-run/.test(dry.out), "`--network sepolia` resolves record defaults (reports supplied vars) and runs the child");
-  ok(!/SHADE_TREE_BOOTNODE_ONION|SHADE_TREE_DIR_SIGNER=/.test(dry.out.replace(/supplied [^\n]*/g, "")), "resolved discovery values are never printed (only the var NAMES)");
+  ok(dry.code === 1 && retiredMessage.test(dry.out) && !/dry-run:/.test(dry.out), "`--network sepolia` rejects the retired pre-v4 record before spawning the child");
   const viaEnv = shadeTreeCli(["record-deploy", "--address", "0x" + "ab".repeat(20), "--force", "--dry-run"], { env: { SHADE_TREE_NETWORK: "sepolia" } });
-  ok(viaEnv.code === 0 && /supplied/.test(viaEnv.out), "SHADE_TREE_NETWORK from the environment works the same as --network");
+  ok(viaEnv.code === 1 && retiredMessage.test(viaEnv.out) && !/dry-run:/.test(viaEnv.out), "SHADE_TREE_NETWORK=sepolia rejects the retired pre-v4 record before spawning the child");
+
+  // Preserve positive coverage with an ephemeral active record. This tests both record-to-env
+  // default resolution and the child spawn without making any committed deployment runnable.
+  const activeName = `selftest-active-${process.pid}`;
+  const activeDir = join(ROOT, "network", activeName);
+  await mkdir(activeDir);
+  try {
+    await writeFile(join(activeDir, "contracts.json"), JSON.stringify({
+      network: activeName,
+      chainId: 31_337,
+      status: "live",
+      rpcUrl: "http://127.0.0.1:8545",
+      contracts: { gatewayRegistry: "0x" + "11".repeat(20) },
+    }, null, 2) + "\n");
+    const active = shadeTreeCli(["record-deploy", "--network", activeName, "--address", "0x" + "ab".repeat(20), "--force", "--dry-run"]);
+    ok(active.code === 0 && /supplied .*SHADE_TREE_GATEWAY_REGISTRY/.test(active.out) && /SHADE_TREE_RPC_URL/.test(active.out) && /dry-run:/.test(active.out), "an active network record still supplies defaults and runs the child");
+    ok(!/SHADE_TREE_GATEWAY_REGISTRY=|SHADE_TREE_RPC_URL=/.test(active.out.replace(/supplied [^\n]*/g, "")), "resolved values are never printed (only the variable names)");
+  } finally {
+    await rm(activeDir, { recursive: true, force: true });
+  }
   const helpRd = shadeTreeCli(["record-deploy", "--help"]);
   ok(helpRd.code === 0 && /record-deploy/.test(helpRd.out), "`shade-tree record-deploy --help` is wired");
 

@@ -1,7 +1,9 @@
 # On-chain deploy runbook: persistent `GatewayRegistry` + `StakedReputationSet` (+ `PaidAccessSet`, §9)
 
 Task: **T-DEPLOY-7** — a persistent on-chain deployment of the stake contracts, wired to
-the live fleet (Sepolia or a chosen L2).
+an operator's v4 fleet (Sepolia or a chosen L2). The checked-in Sepolia record is the
+retired pre-v4 deployment; create a new current record or use explicit v4 values rather
+than updating it in place.
 
 Script: [`contracts/script/DeployRegistry.s.sol`](../contracts/script/DeployRegistry.s.sol)
 (`DeployRegistry`). It deploys `GatewayRegistry` and, unless disabled, `StakedReputationSet`
@@ -173,24 +175,32 @@ truth; `network/README.md`). One command lifts address + tx hash + block from th
 receipt bundle into the committed record, validates it, and refuses a chain mismatch:
 
 ```bash
-node scripts/record-deploy.mjs --network sepolia \
+NETWORK_NAME=your-v4-network
+node scripts/record-deploy.mjs --network "$NETWORK_NAME" \
   --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
-git diff network/sepolia/contracts.json   # contracts/deployTxs/deployBlocks.gatewayRegistry filled
+git diff -- "network/$NETWORK_NAME/contracts.json"   # contracts/deployTxs/deployBlocks.gatewayRegistry filled
 # a member-set redeploy: record every CREATE (set, hasher, verifiers), overwriting the old slots
-node scripts/record-deploy.mjs --network sepolia --all --force \
+node scripts/record-deploy.mjs --network "$NETWORK_NAME" --all --force \
   --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
 ```
 
 For a redeploy of an existing slot, then hand-edit the free-form keys: bump `release`, move
 the previous addresses under `superseded.<old-release>`, and refresh `params` / `note` /
-`liveIntegration` (see the rln-v4-tiers record). `SHADE_TREE_NETWORK=sepolia` resolves
-`SHADE_TREE_GROUP_CONTRACT` to whatever `contracts.stakedReputationSet` says, so the record IS the
-switch for every `--network` caller; the FLEET units (agent-devops group vars) are flipped
-separately (§8).
+`liveIntegration` (see the historical rln-v4-tiers record). For a current, non-retired
+record, `SHADE_TREE_NETWORK=$NETWORK_NAME` resolves `SHADE_TREE_GROUP_CONTRACT` to whatever
+`contracts.stakedReputationSet` says, so the record is the switch for every named-network
+caller; fleet units are flipped separately (§8).
 
-From then on `SHADE_TREE_NETWORK=sepolia` supplies `SHADE_TREE_GATEWAY_REGISTRY` + `SHADE_TREE_RPC_URL` to the
-bootnode (`shade-tree bootnode --network sepolia --admission stake`), `shade-tree register-gateway`, and the
-client's stake re-verification, with explicit env still overriding.
+From then on that current record can supply `SHADE_TREE_GATEWAY_REGISTRY` +
+`SHADE_TREE_RPC_URL` to the bootnode, `shade-tree register-gateway`, and the client's stake
+re-verification, with explicit env still overriding. The equivalent explicit bootnode form is:
+
+```bash
+shade-tree bootnode --admission stake \
+  --gateway-registry <v4-gateway-registry-address> --rpc-url <operator-rpc-url>
+```
+
+Do not reuse `network/sepolia/` for this purpose: it is the retired pre-v4 deployment record.
 
 The bootnode/gateway/lib otherwise find the contracts through env vars (see `docs/CONFIG.md`,
 `docs/OPERATOR.md`). After a live deploy, wire the deployed `GatewayRegistry` address in:
@@ -286,11 +296,11 @@ empty depth-20 root `10354334201938752428558948798274962999644820234654929486063
 signature for explorer verification: `c(address,address,uint256[])` (operator, hasher, limits),
 linking PoseidonT3.
 
-Record: `shade-tree record-deploy --network sepolia --contract paidAccessSet --from-broadcast
-broadcast/DeployPaidAccess.s.sol/11155111/run-latest.json` fills `contracts.paidAccessSet` +
+Record: `shade-tree record-deploy --network <current-v4-network> --contract paidAccessSet --from-broadcast
+broadcast/DeployPaidAccess.s.sol/<chain-id>/run-latest.json` fills `contracts.paidAccessSet` +
 `deployTxs` + `deployBlocks` (the release name stays; hand-add the free-form `paidAccessSet`
-block as in the Sepolia record). From then on `SHADE_TREE_NETWORK=sepolia` supplies
-`SHADE_TREE_PAID_ACCESS_CONTRACT`.
+block as in the historical Sepolia record). A current, non-retired named record can then supply
+`SHADE_TREE_PAID_ACCESS_CONTRACT`; otherwise pin the v4 paid-set address explicitly.
 
 Smoke (operator key): `cast send <addr> "insert(uint256,uint256)" <leaf> 8 --private-key …`,
 then `currentRoot()` == `lib/rln.mjs newGroup([leaf]).root`, `limitOf(leaf)` 8, `leafCount()`

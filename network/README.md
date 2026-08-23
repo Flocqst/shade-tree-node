@@ -1,9 +1,9 @@
 # network/
 
-Canonical deployment artifacts, one folder per network. Everything that identifies a
-live deployment — contract addresses, the fleet's discovery inputs, the gateway onion
-directory, deploy metadata — lives here and is committed, so the repo is the source of
-truth for "what is deployed where."
+Canonical deployment artifacts, one folder per network. Everything that identifies an
+active or retired deployment — contract addresses, the fleet's discovery inputs, the gateway
+onion directory, deploy metadata — lives here and is committed, so the repo records what is
+deployed where without making a retired record runnable.
 
 ```
 network/
@@ -46,10 +46,17 @@ record as "no default". Wired today: `bin/shade-tree.mjs` (every command), `clie
 `lib/gateway-registry.mjs`, `group/register-gateway.mjs`, `scripts/uptime-probe.mjs`.
 
 ```bash
-SHADE_TREE_NETWORK=sepolia SHADE_TREE_SECRET=<hex> shade-tree client       # static directory + pinned signer from the record
-SHADE_TREE_NETWORK=sepolia shade-tree heartbeat                       # announces to the record's bootnode onion (once live)
-SHADE_TREE_NETWORK=sepolia shade-tree register-gateway --register-key <hex>   # once contracts.gatewayRegistry is recorded
+# A current, non-retired record can configure the whole stack by name:
+SHADE_TREE_NETWORK=<current-v4-network> SHADE_TREE_SECRET=<hex> shade-tree client
+SHADE_TREE_NETWORK=<current-v4-network> shade-tree heartbeat
+SHADE_TREE_NETWORK=<current-v4-network> shade-tree register-gateway --register-key <hex>
+
+# With no current record, pin values supplied by the v4 fleet operator instead:
+shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> --dir-signer <v4-signer-hex>
 ```
+
+The checked-in `sepolia` record is retired pre-v4 history and cannot be used in
+place of `<current-v4-network>`.
 
 ## `contracts.json` schema
 
@@ -86,7 +93,9 @@ placeholder string.
 `SHADE_TREE_NETWORK=<name>` resolves `contracts.stakedReputationSet` → `SHADE_TREE_GROUP_CONTRACT`,
 `contracts.paidAccessSet` → `SHADE_TREE_PAID_ACCESS_CONTRACT` (the gateway unions both roots),
 `contracts.gatewayRegistry` → `SHADE_TREE_GATEWAY_REGISTRY` and `rpcUrl` → `SHADE_TREE_RPC_URL`; a null /
-missing slot supplies no default. Free-form documentation keys (`gatewayRegistry`,
+missing slot supplies no default. A record with `status: retired` supplies no runtime defaults;
+selecting a wholly retired network by name fails clearly instead of falling through to a local
+gateway. Its addresses and deploy blocks remain available as historical provenance. Free-form documentation keys (`gatewayRegistry`,
 `paidAccessSet`, `liveIntegration`, …) are not validated.
 
 ### Recording a deploy in one command
@@ -96,9 +105,10 @@ tx hashes + receipts in `broadcast/<Script>.s.sol/<chainId>/run-latest.json` (bo
 gitignored). Lift them into the committed record with:
 
 ```bash
-node scripts/record-deploy.mjs --network sepolia \
+NETWORK_NAME=your-v4-network
+node scripts/record-deploy.mjs --network "$NETWORK_NAME" \
   --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
-# or:  shade-tree record-deploy --network sepolia --from-broadcast …
+# or:  shade-tree record-deploy --network "$NETWORK_NAME" --from-broadcast …
 # manual: --contract gatewayRegistry --address 0x… --tx 0x… --block N
 # a new slot next to a live release (T-FEAT-7): --contract paidAccessSet --from-broadcast broadcast/DeployPaidAccess.s.sol/<chainId>/run-latest.json
 # flags:  --all (every known CREATE in the bundle) --status live --force --dry-run

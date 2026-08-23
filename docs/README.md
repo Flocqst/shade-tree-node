@@ -4,13 +4,18 @@ Every document in `docs/`, one line each, grouped by what you are trying to do. 
 [README](../README.md) is the short front door; [`OVERVIEW.md`](OVERVIEW.md) is the long one.
 A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`](../docs-site/README.md)).
 
+> **Network status:** the current implementation speaks envelope v4 only. The checked-in
+> Sepolia deployment is an incompatible pre-v4 historical record, not a client preset to run.
+> Connect with configuration supplied by a v4 operator or start a local fleet. The public Grove
+> observes the old fleet read-only; it does not advertise public v4 availability.
+
 ## Start here
 
 | Doc | What it is |
 |-----|------------|
 | [`OVERVIEW.md`](OVERVIEW.md) | How a request flows, the anonymity ledger per admission path, what is not done and why it matters, the exit-blocking numbers, the repo layout |
-| [`QUICKSTART.md`](QUICKSTART.md) | Path A join the live fleet (invited / buy / stake), Path B the local loop, Path C your own droplet; every install path |
-| [`JOIN.md`](JOIN.md) | The member page: get a leaf, run the client, what is public per path |
+| [`QUICKSTART.md`](QUICKSTART.md) | Connect with operator-supplied v4 pins, run the local loop, or start your own droplet |
+| [`JOIN.md`](JOIN.md) | The member page: get a leaf, connect to a v4 operator or local fleet, what is public per path |
 | [`CLI.md`](CLI.md) | Every `shade-tree` command with its module and an example |
 | [`CONFIG.md`](CONFIG.md) | Every `SHADE_TREE_*` variable, its default, who reads it, its `--flag` |
 | [`STATUS.md`](STATUS.md) | Historical: the June 2026 single-gateway PoC status (the README "Status" is current) |
@@ -33,7 +38,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`OPERATOR.md`](OPERATOR.md) | Deploy a gateway + bootnode, join the fleet as a new operator, day-2 health and logs, keys, slash response, rotate or retire, config reference, what you admit and what you sell |
 | [`../bootnode/deploy/README.md`](../bootnode/deploy/README.md) | The one-command droplet bootstrap and every tunable it accepts |
 | [`BOOTNODE.md`](BOOTNODE.md) | Live discovery: announce, signed directory, per-gateway signed caps, the trust boundary |
-| [`PUBLIC-GROVE.md`](PUBLIC-GROVE.md) | The public Grove data contract: verified aggregate counts, bounded history, stale behavior, and the fields that never leave the observer |
+| [`PUBLIC-GROVE.md`](PUBLIC-GROVE.md) | The read-only view of the old fleet: verified aggregate counts, bounded history, stale behavior, and fields that never leave the observer |
 | [`FLEET.md`](FLEET.md) | Per-tunnel gateway selection, weights, failover, fleet budget |
 | [`INCIDENT.md`](INCIDENT.md) | Incident playbook |
 | [`SLO.md`](SLO.md) | Service-level objectives and error budget (proposals, recalibrated on live data) |
@@ -44,7 +49,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`../monitoring/README.md`](../monitoring/README.md) | Grafana dashboard + Prometheus alert rules on the real metric names |
 | [`../docker/README.md`](../docker/README.md) | Single image and the local compose fleet |
 | [`GO-LIVE.md`](GO-LIVE.md), [`GO-LIVE-LOG-2026-08-17.md`](GO-LIVE-LOG-2026-08-17.md) | The go-live runbook and the record of executing it |
-| [`../network/README.md`](../network/README.md), [`../network/sepolia/`](../network/sepolia/README.md) | The committed per-network record; the live Sepolia deployment (`contracts.json`, `bootnode.json`, signed directory, integration reports) |
+| [`../network/README.md`](../network/README.md), [`../network/sepolia/`](../network/sepolia/README.md) | Deployment-record schema and the historical pre-v4 Sepolia artifacts (`contracts.json`, `bootnode.json`, signed directory, integration reports) |
 
 ## Design and security
 

@@ -1,5 +1,9 @@
 # Ship plan: from working reference to robustly shipped
 
+> **Historical implementation ledger.** Completed deployment receipts and commands below
+> describe the pre-v4 research fleet. They remain evidence of what ran at the time, not
+> current v4 connection or deployment instructions.
+
 This is the execution roadmap to take Shade Tree from a working,
 tested reference implementation to something robustly deployed, monitored, documented,
 and safe for others to run. It is the source of truth for the autonomous build loop.

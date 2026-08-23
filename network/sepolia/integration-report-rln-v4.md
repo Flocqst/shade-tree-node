@@ -1,5 +1,8 @@
 # Live Sepolia integration — rln-v4-tiers (on-chain tiers + on-chain root)
 
+> **Historical pre-v4 receipt.** “Live” below records the result on 2026-08-17. The Sepolia
+> profile is retired and no longer supplies current Shade Tree runtime defaults.
+
 **Result: PASS.** Two members stake on live Sepolia at DIFFERENT reputation tiers; the
 on-chain `currentRoot()` equals the JS-computed root; the real gateway runs in ON-CHAIN ROOT
 MODE against the new contract; the tier-8 member uses the gateway within its budget, the
@@ -122,10 +125,10 @@ separated here.)
 
 - Local TCP transport to the gateway (the exact bytes Tor delivers), as in the rln-v3 run;
   the fleet-over-Tor path was proven in `integration-report-rln.md` P4 and is unchanged.
-- The **live fleet's slashing still points at rln-v3** (`SHADE_TREE_SLASH_CONTRACT` in agent-devops)
-  and gates on `members.json`; the fleet units were deliberately not flipped in this change
-  (`docs/ONCHAIN-DEPLOY.md` §8). `SHADE_TREE_NETWORK=sepolia` resolves `SHADE_TREE_GROUP_CONTRACT` to the
-  new set.
+- The fleet's slashing still pointed at rln-v3 (`SHADE_TREE_SLASH_CONTRACT` in agent-devops)
+  and gated on `members.json`; the fleet units were deliberately not flipped in this change
+  (`docs/ONCHAIN-DEPLOY.md` §8). At the time, `SHADE_TREE_NETWORK=sepolia` resolved
+  `SHADE_TREE_GROUP_CONTRACT` to the new set. The retired profile no longer does.
 - Circuit + withdraw-verifier VK are still the **untrusted dev phase-2** (T-HARD-1) —
   testnet-only.
 - The tier is DECLARED at registration (the contract cannot see inside a leaf); a mismatched

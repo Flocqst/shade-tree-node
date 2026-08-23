@@ -2,13 +2,15 @@
 
 **Status: design doc; the core is built.** `contracts/StakedReputationSet.sol` (stake,
 ZK-authorized exit/withdraw via `contracts/WithdrawVerifier.sol`, permissionless slash by
-secret reconstruction, on-chain incremental tree + `currentRoot` accessor) is live on Sepolia
-as release `rln-v3` (`network/sepolia/contracts.json`; the live deployment still points at
-`MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3); the gateway reads the root
-through `lib/root-provider.mjs` (`SHADE_TREE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
+secret reconstruction, on-chain incremental tree + `currentRoot` accessor) was deployed on
+Sepolia as release `rln-v3` (`network/sepolia/contracts.json`; that deployment used
+`MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3). The Sepolia record is now
+retired pre-v4 history and must not be used as a current client, gateway, or staking preset.
+The gateway reads a v4 operator's root through `lib/root-provider.mjs`
+(`SHADE_TREE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
 `light` provider, whose stateRoot is anchored to the beacon sync committee when the opt-in Helios
 sidecar is on, `SHADE_TREE_HELIOS_RPC_URL`, T-DEV-9b); `contracts/GatewayRegistry.sol`
-is deployed on Sepolia at `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (block 11509783,
+was deployed in that experiment at `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (block 11509783,
 `network/sepolia/contracts.json`). Read the design below for the reasoning; read
 `docs/CONTRACTS-AUDIT.md` for the invariants as implemented. This is ROADMAP-v1 item #2 ("On-chain reputation
 set") sharpened on two axes the roadmap deliberately left open:
@@ -497,9 +499,10 @@ tier-32 leaf at limit 32 from a gateway holding only roots (tx `0xfff760a6…494
 **Honest limits.** (a) The tier is DECLARED at registration, not proven: a leaf built at X
 registered as Y != X is unslashable AND unexitable (the bond is locked forever), and the
 gateway still enforces the leaf's real budget X, so the mismatch buys nothing
-(`docs/CONTRACTS-AUDIT.md` §3). (b) The live fleet gateways' `SHADE_TREE_SLASH_CONTRACT` still
-points at the superseded rln-v3 set until their units are flipped (`docs/ONCHAIN-DEPLOY.md`
-§8); rln-v4 is what `SHADE_TREE_NETWORK=sepolia` resolves and what new stakes should use.
+(`docs/CONTRACTS-AUDIT.md` §3). (b) During the 2026-08-17 Sepolia experiment, the fleet
+gateways' `SHADE_TREE_SLASH_CONTRACT` still pointed at the superseded rln-v3 set until their
+units were flipped (`docs/ONCHAIN-DEPLOY.md` §8); the later rln-v4 record is retained as
+historical evidence, not as a current staking preset.
 (c) `MAX_LIMIT` is enforced on chain and in `lib/rln.mjs normLimit`; the table on Sepolia is
 {8, 32}, other tiers need a new deployment.
 
@@ -559,8 +562,7 @@ the staked set and is read the same way:
    `liveCount()` is the leaves currently in the root.
 
 **Gateway.** Trusts the UNION of roots: static `members.json` (PoC fallback) ∪ each contract
-in `SHADE_TREE_GROUP_CONTRACT` (comma-separated) ∪ `SHADE_TREE_PAID_ACCESS_CONTRACT` (sugar that appends;
-`SHADE_TREE_NETWORK=sepolia` resolves it from `contracts.paidAccessSet`), one root provider per
+in `SHADE_TREE_GROUP_CONTRACT` (comma-separated) ∪ `SHADE_TREE_PAID_ACCESS_CONTRACT` (sugar that appends), one root provider per
 contract; the slasher resolves which contract holds a reconstructed leaf (`limitOf != 0`) and
 calls that contract's `slash`. Startup: `roots: members.json + staked(0x…) + paid(0x…)` and
 `paid-access anonymity set: N leaves (floor K=SHADE_TREE_PAID_MIN_LEAVES)` — WARN, never refuse,

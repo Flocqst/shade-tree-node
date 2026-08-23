@@ -5,6 +5,11 @@ ledger per admission path, the open caveats and why they matter, the exit-blocki
 the Rust binary, the local loop, and the repository layout. Everything here is also in the
 per-topic docs; this page is the one-screen-per-topic version. Index: [`README.md`](README.md).
 
+> **v4 network status.** This checkout speaks envelope v4. There is no repo-maintained public
+> v4 network profile yet; obtain explicit discovery and contract values from a v4 operator or
+> run the local loop below. The checked-in Sepolia deployment is incompatible pre-v4 history,
+> observed read-only by the public Grove.
+
 ## How it works
 
 The gate is an application-layer protocol on top of Tor, not a Tor modification. Tor cannot
@@ -49,8 +54,9 @@ by rendezvous, so there is no exit node and the gateway never learns the client 
   (paid, `contracts/PaidAccessSet.sol`, [ADR 0007](adr/0007-paid-access.md)), through a
   `RootProvider` (`lib/root-provider.mjs`: node, or an EIP-1186 light client, optionally
   Helios-anchored) and trusts their union. `GatewayRegistry` (`contracts/GatewayRegistry.sol`)
-  holds operator bonds; the live bootnode admits staked operators only. Addresses:
-  [`network/sepolia/contracts.json`](../network/sepolia/contracts.json).
+  holds operator bonds; an operator can configure the bootnode to admit staked operators only.
+  The values in [`network/sepolia/contracts.json`](../network/sepolia/contracts.json) are
+  historical and must not be substituted for current v4 contract inputs.
 - **Payment is a leaf, not a token.** `shade-tree pay` speaks HTTP 402 in x402 v2 or MPP to the
   provider's registrar (`payments/registrar.mjs`), signs one EIP-3009 authorization, the
   operator settles it and inserts the commitment; egress is the same RLN proof
@@ -70,8 +76,9 @@ that source (a gateway advertising no policy is assumed to admit every path duri
 rollout). `--max-anon` (`SHADE_TREE_MAX_ANON=1`) goes further: it uses only gateways whose signed
 `admits` is exactly `invited`, so a gateway that also sells or stakes access, or advertises no
 policy, is refused, and it refuses to run at all with a paid or staked leaf (those paths leave
-an on-chain footprint, so "max anon" would be a lie). On today's fleet it refuses both gateways,
-naming each one's policy. Order of the paths, most to least anonymous: invited, staked, paid.
+an on-chain footprint, so "max anon" would be a lie). If an operator offers no invited-only
+gateway, the client refuses and names each advertised policy. Order of the paths, most to least
+anonymous: invited, staked, paid.
 
 ## The Rust binary
 
@@ -80,9 +87,9 @@ verifies, selects and fetches directories but does not egress ([`rust/INSTALL.md
 
 ```bash
 SHADE_TREE_SECRET=<hex> shade-tree identity --out identity.json              # JS CLI, once: {identitySecret, leaf}
-shade-tree leaves --contract 0x4e8C2Bf5d3c5454A04837401095fce2646484111 --network sepolia --out members.json   # a paid or staked leaf; invited = group/members.json
-./shade-tree-0.1.1-<target>-live egress --bootnode-onion kssrk54kb5kngr4jjdzjouecwjh5ayzbzhamwmvju4kz63vno7hy4uyd.onion \
-  --signer d79f78c369bd9c7b74575eae0c5068e6921f90bfdc97d43af9adc0039f953a73 \
+shade-tree leaves --contract <v4-member-set-address> --rpc-url <operator-rpc-url> --out members.json
+./shade-tree-0.1.1-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
+  --signer <v4-directory-signer-hex> \
   --identity identity.json --members members.json --target api.ipify.org:443
 ```
 
@@ -107,9 +114,9 @@ The proof hides the leaf; the request hides the IP. What differs is how you got 
 
 | path | on-chain footprint | who can link what | default admitted? |
 |---|---|---|---|
-| invited | none | the operator knows it handed you a secret; nobody can tell which requests are yours | yes (`SHADE_TREE_ADMIT=invited`); live fleet: both gateways |
-| staked | `register(commitment, limit)` from your wallet, `bondFor(limit)` posted | wallet ↔ commitment ↔ tier bucket, public; requests still unlinkable to the leaf | opt-in (`staked`); live fleet: both gateways |
-| paid | your address → operator transfer (tier price) and the operator's `insert(commitment, limit)` a block or two later | "this address bought from this operator" and the tier, public; the operator learns commitment ↔ payer; requests still unlinkable | opt-in (`paid`); live fleet: gateway-1 only |
+| invited | none | the operator knows it handed you a secret; nobody can tell which requests are yours from the proof alone | yes (`SHADE_TREE_ADMIT=invited`) |
+| staked | `register(commitment, limit)` from your wallet, `bondFor(limit)` posted | wallet ↔ commitment ↔ tier bucket, public; requests still unlinkable to the leaf from the proof alone | operator opt-in (`staked`) |
+| paid | your address → operator transfer (tier price) and the operator's `insert(commitment, limit)` a block or two later | "this address bought from this operator" and the tier, public; the operator learns commitment ↔ payer; requests still unlinkable from the proof alone | operator opt-in (`paid`) |
 
 Facts that hold for all three: the gateway sees a rendezvous circuit, never your IP; which
 root a proof opens (invited / staked / paid) is a public signal, so your crowd is that set's

@@ -9,11 +9,11 @@
 // result with lib/network-record.mjs, and writes it atomically. It never talks to a chain and
 // never broadcasts anything.
 //
-//   node scripts/record-deploy.mjs --network sepolia \
+//   node scripts/record-deploy.mjs --network devnet \
 //        --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
-//   node scripts/record-deploy.mjs --network sepolia --contract gatewayRegistry \
+//   node scripts/record-deploy.mjs --network devnet --contract gatewayRegistry \
 //        --address 0x... --tx 0x... --block 1234567
-//   (or: shade-tree record-deploy --network sepolia --from-broadcast <run-latest.json>)
+//   (or: shade-tree record-deploy --network <name> --from-broadcast <run-latest.json>)
 //
 // Flags:
 //   --network <name>        network/<name>/contracts.json to update   (or SHADE_TREE_NETWORK)
@@ -115,7 +115,7 @@ export function applyDeployment(record, slot, { address, tx, block }, { force = 
 }
 
 export function recordDeploy(flags, { root = NETWORK_ROOT, log = console.log } = {}) {
-  if (!isNetworkName(flags.network || "")) throw new Error("--network <name> (or SHADE_TREE_NETWORK) is required, e.g. --network sepolia");
+  if (!isNetworkName(flags.network || "")) throw new Error("--network <name> (or SHADE_TREE_NETWORK) is required, e.g. --network devnet");
   const path = join(root, flags.network, "contracts.json");
   if (!existsSync(path)) throw new Error(`no record at ${path} (create network/${flags.network}/contracts.json first, see network/README.md)`);
   const record = JSON.parse(readFileSync(path, "utf8"));

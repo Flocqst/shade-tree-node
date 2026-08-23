@@ -1,5 +1,8 @@
 # Live Sepolia smoke — PaidAccessSet (T-FEAT-7 Layer 1, paid-access membership tree)
 
+> **Historical pre-v4 receipt.** “Live” below records the result on 2026-08-17. The Sepolia
+> profile is retired and no longer supplies current Shade Tree runtime defaults.
+
 **Result: PASS.** The `PaidAccessSet` — the operator-inserted paid-access membership tree of
 `docs/PAYMENTS.md` (payment settles OFF chain over HTTP 402 rails; the contract only records
 which leaves the operator admitted) — is live on Sepolia next to the rln-v4 staked set. One
@@ -88,8 +91,8 @@ Balance 0.04300 → 0.03946 ETH: deploy ≈ 0.0022 ETH + insert ≈ 0.0014 ETH �
   the **client** flow are the other two thirds of T-FEAT-7 and are NOT exercised here.
 - The event-replay root provider needs the two new topics (`Inserted` / `Slashed(commitment,
   limit, index, root)`; both carry the post-update root); the light-client provider (slot 3)
-  is unchanged. `SHADE_TREE_NETWORK=sepolia` already resolves `SHADE_TREE_PAID_ACCESS_CONTRACT` to this
-  address (`lib/network-record.mjs`).
+  is unchanged. At the time, `SHADE_TREE_NETWORK=sepolia` resolved
+  `SHADE_TREE_PAID_ACCESS_CONTRACT` to this address. The retired profile no longer does.
 - The trust statement is unchanged from `docs/PAYMENTS.md`: the operator can decline to
   insert or to honor a valid proof (buyer–seller trust); what the chain gives is a public,
   provable record of exactly which leaves were admitted, and payer↔user unlinkability at

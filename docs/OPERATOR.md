@@ -472,10 +472,11 @@ Since that night the gateway does three things on its own (`lib/root-provider.mj
   window the RPC refuses is halved and retried (down to 8 blocks); pieces are concatenated in
   order. Finalized reads then continue incrementally (only the new blocks each refresh), so a
   long-lived gateway costs one small call per poll, not a re-scan of the history.
-- **Starts at the deploy block.** Each contract's scan starts at its own deploy block from the
-  committed network record (`network/sepolia/contracts.json` `deployBlocks`), whether the box runs
-  `SHADE_TREE_NETWORK=sepolia` or pins `SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_PAID_ACCESS_CONTRACT` by hand. Only a
-  contract no record knows starts at 0 (still correct, just slower). Override per box with
+- **Starts at the deploy block.** Each contract's scan starts at its own deploy block from a
+  committed network record's `deployBlocks`, including when the box pins
+  `SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_PAID_ACCESS_CONTRACT` by hand. Historical records
+  can still supply this provenance without becoming runtime presets. Only a contract no record
+  knows starts at 0 (still correct, just slower). Override per box with
   `SHADE_TREE_FROM_BLOCK=<block>` (all sets) or `SHADE_TREE_FROM_BLOCKS=0xSet=<block>,0xPaid=<block>`
   (`bootstrap.sh` passes both into the gateway unit when given).
 - **Fails soft at startup.** If every chain source is unreadable at boot but `members.json` gives
@@ -550,15 +551,23 @@ Every gateway PROVIDER decides two things; the defaults are the maximum-anonymit
 | `paid` | the `PaidAccessSet` in `SHADE_TREE_PAID_ACCESS_CONTRACT` | the buyer address → your address transfer (amount = tier price) + the `Inserted(commitment, limit)` |
 
 ```bash
-# the default: invited ONLY -- even when SHADE_TREE_NETWORK / env supply contract addresses (opt in explicitly)
-SHADE_TREE_ADMIT=invited                 shade-tree gateway --network sepolia
+# the default: invited ONLY -- even when env supplies contract addresses (opt in explicitly)
+SHADE_TREE_ADMIT=invited shade-tree gateway
 # admit staked members too
-SHADE_TREE_ADMIT=invited,staked          shade-tree gateway --network sepolia
+SHADE_TREE_ADMIT=invited,staked shade-tree gateway \
+  --group-contract <v4-staked-set-address> --rpc-url <operator-rpc-url>
 # admit everyone you can (what the pre-T-FEAT-9 union heuristic silently did)
-SHADE_TREE_ADMIT=invited,staked,paid     shade-tree gateway --network sepolia
+SHADE_TREE_ADMIT=invited,staked,paid shade-tree gateway \
+  --group-contract <v4-staked-set-address> --paid-access-contract <v4-paid-set-address> \
+  --rpc-url <operator-rpc-url>
 # on-chain only, no members.json at all
-SHADE_TREE_ADMIT=staked                  shade-tree gateway --network sepolia
+SHADE_TREE_ADMIT=staked shade-tree gateway \
+  --group-contract <v4-staked-set-address> --rpc-url <operator-rpc-url>
 ```
+
+Use a named network only when you maintain a current v4 record for it. The
+checked-in `sepolia` record is retired pre-v4 history and is intentionally not
+a gateway configuration preset.
 
 - The named paths are the ONLY root sources and the ONLY slash routing targets; a configured but
   un-admitted contract is never read. Startup prints the policy, then the sources: `admits:
@@ -677,7 +686,6 @@ What the gateway does with it — three knobs, all documented in `docs/CONFIG.md
 # trust the paid set NEXT TO the staked set and members.json (union; nothing is replaced)
 export SHADE_TREE_GROUP_CONTRACT=0xStaked          # may be a comma list of sets
 export SHADE_TREE_PAID_ACCESS_CONTRACT=0xPaid      # appends the paid set as one more root source
-# (or: shade-tree gateway --network sepolia, once the record carries contracts.paidAccessSet)
 export SHADE_TREE_PAID_MIN_LEAVES=8               # anonymity-set floor K: WARN below it, never refuse
 export SHADE_TREE_TIERS=8,32                       # the tiers you sell, so a paid over-spender's leaf resolves
 ```

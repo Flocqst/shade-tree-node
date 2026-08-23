@@ -10,6 +10,8 @@ name: uptime-probe
 #   SHADE_TREE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
 #   SHADE_TREE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
 #                         the two values above from network/<name>/bootnode.json (lib/network-record.mjs)
+#   SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS  optional, observation-only compatibility for an explicitly
+#                         identified pre-v4 research fleet; it does not affect clients or nodes
 #   SHADE_TREE_GROVE_SIGNING_KEY  dedicated Ed25519 private key, stored only as an Actions secret
 # The onion and signer are not secret, so plain variables are the right home; the same names are
 # also read from SECRETS as a fallback. The Grove signing key is secret. The hosted probe never
@@ -48,6 +50,7 @@ jobs:
       SHADE_TREE_BOOTNODE_ONION: ${{ vars.SHADE_TREE_BOOTNODE_ONION || secrets.SHADE_TREE_BOOTNODE_ONION }}
       SHADE_TREE_DIR_SIGNER: ${{ vars.SHADE_TREE_DIR_SIGNER || secrets.SHADE_TREE_DIR_SIGNER }}
       SHADE_TREE_NETWORK: ${{ vars.SHADE_TREE_NETWORK || secrets.SHADE_TREE_NETWORK }}
+      SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS: ${{ vars.SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS }}
       SHADE_TREE_TOR_HOST: 127.0.0.1
       SHADE_TREE_TOR_PORT: 9050
     steps:
@@ -86,8 +89,12 @@ jobs:
           # A pending record (onion null) means there is nothing to probe yet: say so and stop green.
           out="$(node -e '
             import("./lib/network-record.mjs").then((m) => {
+              if (process.env.SHADE_TREE_BOOTNODE_ONION && process.env.SHADE_TREE_DIR_SIGNER) {
+                console.log("resolved");
+                return;
+              }
               const d = m.networkEnvDefaults(process.env.SHADE_TREE_NETWORK);
-              const has = Boolean(process.env.SHADE_TREE_BOOTNODE_ONION || d.SHADE_TREE_BOOTNODE_ONION) && Boolean(process.env.SHADE_TREE_DIR_SIGNER || d.SHADE_TREE_DIR_SIGNER);
+              const has = Boolean(d.SHADE_TREE_BOOTNODE_ONION) && Boolean(d.SHADE_TREE_DIR_SIGNER);
               console.log(has ? "resolved" : "pending");
             }).catch((e) => { console.error(e.message); process.exit(1); });
           ')"
