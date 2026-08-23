@@ -47,18 +47,18 @@ async function main() {
     return signDirectory(base, signer.priv);
   }
 
-  const dir = mkdtempSync(join(tmpdir(), "rgoe-rollback-"));
+  const dir = mkdtempSync(join(tmpdir(), "shade-tree-rollback-"));
   const dirPath = join(dir, "directory.json");
   const writeDir = (issued) => { const d = signedDir(issued); writeFileSync(dirPath, JSON.stringify(d) + "\n"); return d; };
 
   // Config is read at import — set it first. File source (no bootnode), reload on every call, and
   // an isolated health cache so this test never touches the real one.
-  process.env.RGOE_DIRECTORY = dirPath;
-  process.env.RGOE_DIR_SIGNER = signer.pub;
-  process.env.RGOE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
-  process.env.RGOE_HEALTH_CACHE = join(dir, "health.json");
-  delete process.env.RGOE_BOOTNODE_ONION;
-  delete process.env.RGOE_VERIFY_STAKE;
+  process.env.SHADE_TREE_DIRECTORY = dirPath;
+  process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+  process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
+  process.env.SHADE_TREE_HEALTH_CACHE = join(dir, "health.json");
+  delete process.env.SHADE_TREE_BOOTNODE_ONION;
+  delete process.env.SHADE_TREE_VERIFY_STAKE;
 
   writeDir(1000);
   const sel = await import("../client/selection.mjs");

@@ -1,17 +1,17 @@
-// Offline proof of per-request SOCKS circuit isolation (T-FEAT-17) — no Tor, no network.
+// Offline proof of per-tunnel SOCKS circuit isolation (T-FEAT-17) — no Tor, no network.
 //
 // Tor with `IsolateSOCKSAuth` (bootnode/deploy/torrc.hardened, T-HARD-7) forks a SEPARATE
-// circuit per distinct SOCKS username/password. The client used to send NO auth, so requests
-// through one SocksPort could share a circuit — undoing the per-request rotation's
-// unlinkability. RgoeClient now gives each REQUEST a unique SOCKS credential derived from its
-// nonce, so each request rides its own circuit. This test drives that logic directly:
+// circuit per distinct SOCKS username/password. The client used to send NO auth, so tunnels
+// through one SocksPort could share a circuit — undoing the per-tunnel rotation's
+// unlinkability. ShadeTreeClient now gives each TUNNEL a unique SOCKS credential derived from its
+// nonce, so each tunnel rides its own circuit. This test drives that logic directly:
 //
-//   - socksAuthForRequest(nonce): DIFFERENT requests (nonces) => DIFFERENT, well-formed creds.
+//   - socksAuthForTunnel(nonce): DIFFERENT tunnels (nonces) => DIFFERENT, well-formed creds.
 //   - deterministic-retry choice: the SAME nonce => the SAME cred (a retry / failover of one
-//     logical request reuses the SAME circuit identity — the documented decision).
+//     logical tunnel reuses the SAME circuit identity — the documented decision).
 //   - no seed => a fresh random cred per call.
-//   - _dial forwards the per-request cred into the SOCKS proxy config (distinct requests pass
-//     distinct auth; the same request reuses one cred across attempts + gateway failover), and
+//   - _dial forwards the per-tunnel cred into the SOCKS proxy config (distinct tunnels pass
+//     distinct auth; the same tunnel reuses one cred across attempts + gateway failover), and
 //     legacy null-auth omits the credentials entirely.
 //
 //   node client/socks-isolation.selftest.mjs
@@ -19,7 +19,7 @@
 // Exit 0 = all invariants held; nonzero = a check failed (prints which).
 
 import assert from "node:assert/strict";
-import { socksAuthForRequest, RgoeClient } from "./rgoe-client.mjs";
+import { socksAuthForTunnel, ShadeTreeClient } from "./shade-tree-client.mjs";
 
 let failures = 0;
 function ok(name) { console.log("  PASS  " + name); }
@@ -40,31 +40,31 @@ function fakeSocks() {
   };
 }
 
-console.log("socksAuthForRequest (pure):");
+console.log("socksAuthForTunnel (pure):");
 
-await test("distinct requests (nonces) => distinct userId AND password", () => {
-  const a = socksAuthForRequest("nonce-A");
-  const b = socksAuthForRequest("nonce-B");
-  assert.notEqual(a.userId, b.userId, "distinct userId across requests");
-  assert.notEqual(a.password, b.password, "distinct password across requests");
+await test("distinct tunnels (nonces) => distinct userId AND password", () => {
+  const a = socksAuthForTunnel("nonce-A");
+  const b = socksAuthForTunnel("nonce-B");
+  assert.notEqual(a.userId, b.userId, "distinct userId across tunnels");
+  assert.notEqual(a.password, b.password, "distinct password across tunnels");
 });
 
 await test("credentials are well-formed opaque tags (32 hex chars, uid !== pwd)", () => {
-  const a = socksAuthForRequest("nonce-A");
+  const a = socksAuthForTunnel("nonce-A");
   assert.ok(HEX32.test(a.userId), "userId is 32 hex chars");
   assert.ok(HEX32.test(a.password), "password is 32 hex chars");
   assert.notEqual(a.userId, a.password, "userId and password differ within one credential");
 });
 
 await test("deterministic retry: SAME nonce => SAME credential (same circuit identity)", () => {
-  const a1 = socksAuthForRequest("nonce-A");
-  const a2 = socksAuthForRequest("nonce-A");
-  assert.deepEqual(a1, a2, "a retry / failover of one request reuses the same SOCKS credential");
+  const a1 = socksAuthForTunnel("nonce-A");
+  const a2 = socksAuthForTunnel("nonce-A");
+  assert.deepEqual(a1, a2, "a retry / failover of one tunnel reuses the same SOCKS credential");
 });
 
 await test("no seed => a fresh random credential per call", () => {
-  const a = socksAuthForRequest();
-  const b = socksAuthForRequest();
+  const a = socksAuthForTunnel();
+  const b = socksAuthForTunnel();
   assert.ok(HEX32.test(a.userId) && HEX32.test(a.password), "random creds are well-formed");
   assert.notEqual(a.userId, b.userId, "unseeded calls yield distinct userId");
   assert.notEqual(a.password, b.password, "unseeded calls yield distinct password");
@@ -72,35 +72,35 @@ await test("no seed => a fresh random credential per call", () => {
 
 console.log("_dial (injected fake SocksClient):");
 
-await test("distinct requests pass distinct SOCKS auth into the proxy config", async () => {
+await test("distinct tunnels pass distinct SOCKS auth into the proxy config", async () => {
   const fake = fakeSocks();
-  const client = new RgoeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
-  await client._dial("gatewayonion", 1, socksAuthForRequest("req-1"));
-  await client._dial("gatewayonion", 1, socksAuthForRequest("req-2"));
+  const client = new ShadeTreeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
+  await client._dial("gatewayonion", 1, socksAuthForTunnel("req-1"));
+  await client._dial("gatewayonion", 1, socksAuthForTunnel("req-2"));
   assert.equal(fake.calls.length, 2);
   const [p1, p2] = fake.calls.map((c) => c.proxy);
   assert.ok(HEX32.test(p1.userId) && HEX32.test(p1.password), "auth threaded into proxy.userId/password");
-  assert.notEqual(p1.userId, p2.userId, "distinct requests => distinct proxy.userId");
-  assert.notEqual(p1.password, p2.password, "distinct requests => distinct proxy.password");
+  assert.notEqual(p1.userId, p2.userId, "distinct tunnels => distinct proxy.userId");
+  assert.notEqual(p1.password, p2.password, "distinct tunnels => distinct proxy.password");
 });
 
-await test("same request reuses ONE credential across attempts + gateway failover", async () => {
+await test("same tunnel reuses ONE credential across attempts + gateway failover", async () => {
   const fake = fakeSocks();
-  const client = new RgoeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
-  const auth = socksAuthForRequest("one-logical-request");
+  const client = new ShadeTreeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
+  const auth = socksAuthForTunnel("one-logical-tunnel");
   // three dials standing in for cold-start retries + a failover to another gateway onion
   await client._dial("onionA", 1, auth);
   await client._dial("onionA", 1, auth);
   await client._dial("onionB", 1, auth);
   const uids = fake.calls.map((c) => c.proxy.userId);
   const pwds = fake.calls.map((c) => c.proxy.password);
-  assert.ok(uids.every((u) => u === auth.userId), "same request keeps one userId across all dials");
-  assert.ok(pwds.every((p) => p === auth.password), "same request keeps one password across all dials");
+  assert.ok(uids.every((u) => u === auth.userId), "same tunnel keeps one userId across all dials");
+  assert.ok(pwds.every((p) => p === auth.password), "same tunnel keeps one password across all dials");
 });
 
 await test("legacy null auth: no userId/password on the proxy (harmless no-auth dial)", async () => {
   const fake = fakeSocks();
-  const client = new RgoeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
+  const client = new ShadeTreeClient({ secret: "test-secret", onion: "gatewayonion", socksClient: fake });
   await client._dial("gatewayonion", 1, null);
   const p = fake.calls[0].proxy;
   assert.ok(!("userId" in p), "no userId when isolation auth is null");
@@ -109,9 +109,9 @@ await test("legacy null auth: no userId/password on the proxy (harmless no-auth 
 });
 
 await test("socksIsolation:false disables auth derivation (toggle off)", async () => {
-  const off = new RgoeClient({ secret: "test-secret", onion: "g", socksClient: fakeSocks(), socksIsolation: false });
+  const off = new ShadeTreeClient({ secret: "test-secret", onion: "g", socksClient: fakeSocks(), socksIsolation: false });
   assert.equal(off.socksIsolation, false, "toggle honored");
-  const on = new RgoeClient({ secret: "test-secret", onion: "g", socksClient: fakeSocks() });
+  const on = new ShadeTreeClient({ secret: "test-secret", onion: "g", socksClient: fakeSocks() });
   assert.equal(on.socksIsolation, true, "default-ON");
 });
 

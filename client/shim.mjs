@@ -1,45 +1,51 @@
-// The client shim: a local HTTP CONNECT proxy that adds a reputation proof and routes to
-// a gateway onion over Tor. It is now a THIN front-end over client/rgoe-client.mjs — the
-// proving, slot/gateway rotation, deterministic-retry, Tor dial and tunnel all live in
-// RgoeClient. Run the shim when you want unmodified tools to use the fleet:
+// The Shade Tree client proxy: a local HTTP CONNECT proxy that adds a reputation proof and routes to
+// a gateway onion over Tor. It is a thin front-end over client/shade-tree-client.mjs — proving,
+// slot/gateway rotation, deterministic retry, Tor dialing, and tunneling all live in
+// ShadeTreeClient. Run the proxy when you want unmodified tools to use the Grove:
 //
-//   http_proxy=http://127.0.0.1:8888  https_proxy=... curl https://example.com
+//   HTTPS_PROXY=http://127.0.0.1:8888 curl https://example.com
 //   curl -x http://127.0.0.1:8888 https://api.ipify.org
 //
-// If the client is your OWN code (e.g. an agent doing many queries), skip the shim and use
-// RgoeClient directly:  const rgoe = new RgoeClient({ secret, directory, dirSigner });
-//   await rgoe.fetch("https://…")   /   await rgoe.connect("host:443")
+// Application code may also use ShadeTreeClient directly, but CONNECT is the stable integration
+// surface for agents and existing HTTP clients.
 //
-// Two anti-correlation rotations run together (docs/NEXT-VERSION.md B), inside RgoeClient:
-// a different gateway onion per request AND a different per-request slot nullifier, so even
-// colluding operators cannot rejoin a member's requests across a shared per-epoch key. The
+// Two anti-correlation rotations run together (docs/NEXT-VERSION.md B), inside ShadeTreeClient:
+// a different gateway onion per CONNECT tunnel and a different per-tunnel slot nullifier. The
 // deterministic-retry invariant (same signal reused across failover) also lives there.
 
 import http from "node:http";
-import { RgoeClient, makeSlotPool, buildEnvelope } from "./rgoe-client.mjs";
+import { ShadeTreeClient, makeSlotPool, buildEnvelope } from "./shade-tree-client.mjs";
 
 // Re-exported for the selftest + any caller that historically imported them from the shim.
 export { makeSlotPool, buildEnvelope };
 
-const LISTEN_PORT = Number(process.env.RGOE_SHIM_PORT || 8888);
+const LISTEN_PORT = Number(process.env.SHADE_TREE_SHIM_PORT || 8888);
 
-function startShim() {
-  if (!process.env.RGOE_SECRET) {
-    console.error("set RGOE_SECRET (from `node group/enroll.mjs`) before starting the shim");
+function startClientProxy() {
+  if (!process.env.SHADE_TREE_SECRET) {
+    console.error("set SHADE_TREE_SECRET (from `shade-tree enroll`) before starting the client proxy");
     process.exit(1);
   }
 
-  // One client (one slot pool) for the whole shim; it reads the same RGOE_* env as before
-  // (RGOE_SECRET, RGOE_ONION | RGOE_DIRECTORY+RGOE_DIR_SIGNER, RGOE_TOR_HOST/PORT).
-  const client = new RgoeClient();
+  // One client (one slot pool) for the whole proxy; it reads the SHADE_TREE_* client environment
+  // (SHADE_TREE_SECRET, SHADE_TREE_ONION | SHADE_TREE_DIRECTORY+SHADE_TREE_DIR_SIGNER, SHADE_TREE_TOR_HOST/PORT).
+  const client = new ShadeTreeClient();
 
   const server = http.createServer();
+
+  // Plain HTTP has no end-to-end TLS and is deliberately unsupported. `shade-tree run` sets
+  // HTTP_PROXY to this listener as well as HTTPS_PROXY so accidental plaintext requests fail here
+  // instead of silently taking a direct route.
+  server.on("request", (_req, res) => {
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8", connection: "close" });
+    res.end("Shade Tree accepts HTTPS CONNECT tunnels only.\n");
+  });
 
   server.on("connect", async (req, clientSocket, head) => {
     const target = req.url; // "host:port"
     console.log(`REQ     ${target}`); // start marker: a hang after this points at the dial/gateway
     try {
-      // RgoeClient.connect builds ONE proof, picks a gateway (rotation + failover), dials it
+      // ShadeTreeClient.connect builds one proof, picks a gateway (rotation + failover), dials it
       // over Tor, sends the envelope, checks the ack, and returns a raw tunnel to the target.
       // TLS stays end-to-end client<->target.
       const tunnel = await client.connect(target, {
@@ -54,8 +60,8 @@ function startShim() {
       tunnel.pipe(clientSocket);
       clientSocket.on("error", () => tunnel.destroy());
       tunnel.on("error", () => clientSocket.destroy());
-      const via = tunnel.rgoe?.onion ? `${String(tunnel.rgoe.onion).slice(0, 16)}..onion` : "gateway";
-      console.log(`TUNNEL  ${target}  slot=${tunnel.rgoe?.slot} via ${via}`);
+      const via = tunnel.shadeTree?.onion ? `${String(tunnel.shadeTree.onion).slice(0, 16)}..onion` : "gateway";
+      console.log(`TUNNEL  ${target}  slot=${tunnel.shadeTree?.slot} via ${via}`);
     } catch (e) {
       const msg = String(e.message || e);
       const label = msg.startsWith("gate refused") ? "REFUSED" : "ERROR  ";
@@ -66,12 +72,12 @@ function startShim() {
   });
 
   server.listen(LISTEN_PORT, "127.0.0.1", () => {
-    console.log(`shim up: http://127.0.0.1:${LISTEN_PORT}  ->  Tor SOCKS ${client.torHost}:${client.torPort}  ->  gateway.onion`);
-    console.log(`mode: ${client.onion ? "pinned onion" : "directory fleet rotation"}; per-request slot + gateway rotation`);
-    console.log(`admission: leaf source=${client.leafSourcePin} (RGOE_LEAF_SOURCE; auto = whichever set holds the leaf), max-anon=${client.maxAnon ? "ON (invited-only gateways)" : "off"} (RGOE_MAX_ANON / --max-anon)`);
+    console.log(`Shade Tree client: http://127.0.0.1:${LISTEN_PORT}  ->  Tor SOCKS ${client.torHost}:${client.torPort}  ->  gateway.onion`);
+    console.log(`mode: ${client.onion ? "pinned onion" : "directory fleet rotation"}; per-tunnel slot + gateway rotation`);
+    console.log(`admission: leaf source=${client.leafSourcePin} (SHADE_TREE_LEAF_SOURCE; auto = whichever set holds the leaf), max-anon=${client.maxAnon ? "ON (invited-only gateways)" : "off"} (SHADE_TREE_MAX_ANON / --max-anon)`);
     console.log(`use:  curl -x http://127.0.0.1:${LISTEN_PORT} https://api.ipify.org?format=json`);
   });
 }
 
 // Only stand up the server when run directly; importing pulls the re-exported helpers.
-if (import.meta.url === `file://${process.argv[1]}`) startShim();
+if (import.meta.url === `file://${process.argv[1]}`) startClientProxy();

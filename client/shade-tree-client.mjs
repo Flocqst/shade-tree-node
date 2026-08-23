@@ -1,21 +1,20 @@
-// RgoeClient: the reputation-gated onion egress client as a LIBRARY (no proxy process).
+// ShadeTreeClient: the Shade Tree client as a LIBRARY (no proxy process).
 //
-// This is the shim's hardened core, callable directly. Use it when the client is your
-// own code (e.g. a searxng-style agent doing many queries) and you'd rather call a
-// function than run a local HTTP proxy:
+// This is the local proxy's hardened core, callable directly when an integration needs a raw
+// tunnel. Most agents should use `shade-tree run -- <command>` and the CONNECT proxy instead:
 //
-//   import { RgoeClient } from "./client/rgoe-client.mjs";
-//   const rgoe = new RgoeClient({ secret, directory: "…/directory.json", dirSigner, torPort: 9260 });
-//   const res  = await rgoe.fetch("https://api.ipify.org");     // -> { status, headers, body }
+//   import { ShadeTreeClient } from "./client/shade-tree-client.mjs";
+//   const shadeTree = new ShadeTreeClient({ secret, directory: "…/directory.json", dirSigner, torPort: 9260 });
+//   const res  = await shadeTree.fetch("https://api.ipify.org");     // -> { status, headers, body }
 //   // or lower level, for your own TLS/protocol:
-//   const sock = await rgoe.connect("api.ipify.org:443");       // raw duplex, tunneled via a gateway
+//   const sock = await shadeTree.connect("api.ipify.org:443");       // raw duplex, tunneled via a gateway
 //
-// The per-request RLN proof is irreducible (it is what makes the nullifier / rate cap /
-// slashing work), so this library mints a fresh proof per connect and preserves the same
-// invariants the shim does: one proof per logical request, deterministic across gateway
-// failover (same signal => same share), plus slot + gateway rotation.
+// The per-tunnel RLN proof is irreducible (it is what makes the nullifier / rate cap /
+// slashing work), so this library mints a fresh proof per connect and preserves the proxy's
+// invariants: one proof per CONNECT tunnel, deterministic across gateway failover (same signal
+// means the same share), plus slot and gateway rotation.
 //
-// The shim (client/shim.mjs) is now a thin HTTP-CONNECT front-end over this same class.
+// The client proxy (client/shim.mjs) is a thin HTTP-CONNECT front-end over this same class.
 
 import { readFile } from "node:fs/promises";
 import { randomBytes, createHash } from "node:crypto";
@@ -37,10 +36,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 // ---- leaf-source discovery (T-FEAT-7, docs/PAYMENTS.md) ----------------------------
 // A member's leaf lives in exactly one of the sets the gateway trusts (gateway/gateway.mjs
-// initRoots): the static members.json (friends), a StakedReputationSet (`rgoe register-member`),
+// initRoots): the static members.json (friends), a StakedReputationSet (`shade-tree register-member`),
 // or the PaidAccessSet (paid access, docs/PAYMENTS.md). The proof must be built against THAT tree, so the client
 // looks for its own leaf: members.json first (no chain needed), then each configured contract in
-// order (the RGOE_GROUP_CONTRACT list, then RGOE_PAID_ACCESS_CONTRACT), rebuilding the tree from
+// order (the SHADE_TREE_GROUP_CONTRACT list, then SHADE_TREE_PAID_ACCESS_CONTRACT), rebuilding the tree from
 // the event log (lib/root-provider.mjs loadGroupFromContract). Returns a loadGroupFn for
 // makeSlotPool: async () => { group, root, source }. Every failure names every source tried.
 //   - With NO contract configured this is byte-compatible with the pre-T-FEAT-7 client: the
@@ -48,15 +47,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 //     "not in group", as before), and a missing members.json is that read error.
 //   - `limit` MUST be the tier the leaf was enrolled / staked / paid at (a different limit is a
 //     different leaf) — the discovery error says so.
-//   - `only` (T-FEAT-9, RGOE_LEAF_SOURCE=invited|staked|paid; default "auto"): PIN which set to
-//     look in — `invited` = members.json alone, `staked` = the RGOE_GROUP_CONTRACT sets alone,
+//   - `only` (T-FEAT-9, SHADE_TREE_LEAF_SOURCE=invited|staked|paid; default "auto"): PIN which set to
+//     look in — `invited` = members.json alone, `staked` = the SHADE_TREE_GROUP_CONTRACT sets alone,
 //     `paid` = the PaidAccessSet alone. A member with a leaf in more than one set uses it to
 //     choose which one to prove from (and therefore which gateways admit it).
 export function makeLeafSourceLoader({
   secret, limit = K_SLOTS, env = process.env,
   loadStatic = loadGroup, loadContract = loadGroupFromContract,
-  contracts = null, rpcUrl = env.RGOE_RPC_URL || "http://127.0.0.1:8545",
-  only = parseLeafSource(env.RGOE_LEAF_SOURCE),
+  contracts = null, rpcUrl = env.SHADE_TREE_RPC_URL || "http://127.0.0.1:8545",
+  only = parseLeafSource(env.SHADE_TREE_LEAF_SOURCE, { name: "SHADE_TREE_LEAF_SOURCE" }),
 } = {}) {
   const all = contracts || configuredContracts(env);
   const sources = only === "auto" ? all : all.filter((c) => (c.kind || "staked") === only);
@@ -64,7 +63,7 @@ export function makeLeafSourceLoader({
   const holds = (g, leaf) => !!g && typeof g.indexOf === "function" && g.indexOf(BigInt(leaf)) !== -1;
   return async function discoverGroup() {
     if (only !== "auto" && only !== "invited" && sources.length === 0) {
-      throw new Error(`RgoeClient: RGOE_LEAF_SOURCE=${only} but no ${only} set is configured (set ${only === "paid" ? "RGOE_PAID_ACCESS_CONTRACT" : "RGOE_GROUP_CONTRACT"}, or RGOE_NETWORK with a contracts.json that has one)`);
+      throw new Error(`ShadeTreeClient: SHADE_TREE_LEAF_SOURCE=${only} but no ${only} set is configured (set ${only === "paid" ? "SHADE_TREE_PAID_ACCESS_CONTRACT" : "SHADE_TREE_GROUP_CONTRACT"}, or SHADE_TREE_NETWORK with a contracts.json that has one)`);
     }
     // Legacy path first (no contract configured / invited pinned): the static group, exactly as
     // before, even when the leaf is not in it or the secret is not derivable here (fakes in tests).
@@ -91,15 +90,15 @@ export function makeLeafSourceLoader({
       }
     }
     throw new Error(
-      `RgoeClient: your leaf ${leaf.slice(0, 12)}.. (limit ${limit}) is in none of: ${tried.join(", ")}${only !== "auto" ? ` (RGOE_LEAF_SOURCE=${only} pins the search to that set)` : ""} — ` +
-      "check --limit / RGOE_LIMIT (it must equal the tier you enrolled, staked or paid at), " +
-      "or buy access (docs/PAYMENTS.md), stake (`rgoe register-member`), or ask the operator to add you to members.json",
+      `ShadeTreeClient: your leaf ${leaf.slice(0, 12)}.. (limit ${limit}) is in none of: ${tried.join(", ")}${only !== "auto" ? ` (SHADE_TREE_LEAF_SOURCE=${only} pins the search to that set)` : ""} — ` +
+      "check --limit / SHADE_TREE_LIMIT (it must equal the tier you enrolled, staked or paid at), " +
+      "or buy access (docs/PAYMENTS.md), stake (`shade-tree register-member`), or ask the operator to add you to members.json",
     );
   };
 }
 
-// ---- slot pool: per-epoch group warm + one slot/request rotation ----------------
-// (moved verbatim from the shim; the deterministic-retry + rotation invariants live here.)
+// ---- slot pool: per-epoch group warm + one slot/tunnel rotation ----------------
+// (moved from the client proxy; the deterministic-retry + rotation invariants live here.)
 // `K` is THIS member's tier limit (T-FEAT-8): the userMessageLimit its leaf was enrolled with.
 // The pool wraps slots at K and every proof is made with `limit: K`, so a tier-2 member
 // (K=32) gets 32 distinct nullifiers per epoch from the same tree, and a member configured
@@ -126,7 +125,7 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     cursor = 0;
     group = null;
     groupPromise = null;
-    // Background warm: cache the group + prime the prover so request-time proving is as
+    // Background warm: cache the group + prime the prover so tunnel-time proving is as
     // fast as it can be (the signal-bound proof itself cannot be precomputed).
     Promise.resolve()
       .then(async () => {
@@ -142,7 +141,7 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     return ep;
   }
 
-  // One slot per request; wraps at K. A wrapped slot reused with a DISTINCT signal is an
+  // One slot per tunnel; wraps at K. A wrapped slot reused with a DISTINCT signal is an
   // over-spend by construction (rate cap = K/epoch) — exactly what the gateway slashes.
   function nextSlot() {
     const ep = ensureEpoch();
@@ -156,11 +155,10 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
 
 // ---- protocol version negotiation (T-FEAT-11) -------------------------------
 // The range of wire-envelope versions THIS client can emit/parse. Single source of truth on the
-// client side (the gateway keeps its own PROTO_MIN/PROTO_MAX). Today both sides are exactly {3}.
-// Bump CLIENT_PROTO_MAX (and teach buildEnvelope the new shape) to speak a v4; raise
-// CLIENT_PROTO_MIN only to drop an old one.
-export const CLIENT_PROTO_MIN = 3;
-export const CLIENT_PROTO_MAX = 3;
+// client side (the gateway keeps its own PROTO_MIN/PROTO_MAX). Shade Tree starts at v4; legacy
+// unversioned/v3 frames are rejected rather than silently reinterpreted.
+export const CLIENT_PROTO_MIN = 4;
+export const CLIENT_PROTO_MAX = 4;
 export const CLIENT_PROTO_RANGE = { min: CLIENT_PROTO_MIN, max: CLIENT_PROTO_MAX };
 
 // Pick the HIGHEST version both sides support. `gatewayRange` is {min,max} the client has learned
@@ -185,7 +183,7 @@ export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANG
 
 // ---- ZK artifact-version negotiation (T-HARD-8) -----------------------------
 // The client proves with one of its prover artifact sets (lib/zk-artifacts.mjs
-// loadProverSets, RGOE_ZK_PROVER_ARTIFACTS, newest first; default = the shipped set) and STAMPS
+// loadProverSets, SHADE_TREE_ZK_PROVER_ARTIFACTS, newest first; default = the shipped set) and STAMPS
 // the set's content-derived id into the envelope's `artifact` field so a gateway running a
 // dual-VK window verifies under the matching vkey. Which id: the newest of ours that the
 // gateway advertises in its signed caps (`caps.artifacts`); with no ad, optimistically our
@@ -193,11 +191,10 @@ export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANG
 // carries the gateway's accepted list (`ack.artifacts`), recorded on `this.gatewayArtifacts`
 // for the next attempt exactly like `gatewayRange`.
 
-// Build the envelope for one logical request. `signal` is deterministic per request
+// Build the envelope for one logical tunnel. `signal` is deterministic per tunnel
 // (H(target, nonce)); the caller reuses the SAME envelope across failover so a retry
 // reproduces the SAME share (deterministic-retry invariant). `version` is the negotiated
-// wire version (default = our max, 3 today, so the emitted envelope is byte-for-byte the v3 wire
-// plus the `artifact` id — a field older gateways ignore). `artifact` is the negotiated artifact
+// wire version (v4). `artifact` is the negotiated artifact
 // id (default = the prover's newest set; `null` = prove with the default set but omit the field,
 // i.e. the exact pre-T-HARD-8 wire).
 export async function buildEnvelope({ secret, target, pool, prove = proveForSlot, version = CLIENT_PROTO_MAX, artifact }) {
@@ -209,7 +206,7 @@ export async function buildEnvelope({ secret, target, pool, prove = proveForSlot
   const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined, limit: pool.K ?? K_SLOTS });
   const { proof, nullifier, externalNullifier, share } = proved;
   // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
-  // this target (verifyEnvelope check 2b). It reveals nothing (it is random per request) and it is
+  // this target (verifyEnvelope check 2b). It reveals nothing (it is random per tunnel) and it is
   // what stops a captured proof from being redirected to a different target. `v` is FIRST so the
   // gateway's version gate reads it without parsing the rest. `artifact` names the ZK artifact set
   // the proof was made with (T-HARD-8): the id the prover actually used (echoed back by
@@ -263,29 +260,26 @@ function tunnelStream(socket, rest) {
   return dup;
 }
 
-// ---- per-request SOCKS circuit isolation (T-FEAT-17) ----------------------------
+// ---- per-tunnel SOCKS circuit isolation (T-FEAT-17) ----------------------------
 // Tor with `IsolateSOCKSAuth` (bootnode/deploy/torrc.hardened, T-HARD-7) forks a SEPARATE
 // circuit per distinct SOCKS username/password pair. The client sends NO auth today, so
-// every request through a given SocksPort may share ONE circuit — collapsing the
-// per-request gateway + slot rotation's unlinkability back onto a shared Tor path. Fix:
-// give each REQUEST a unique SOCKS credential, so each request rides its own circuit.
+// every tunnel through a given SocksPort may share one circuit — collapsing per-tunnel gateway
+// and slot rotation back onto a shared Tor path. Give each tunnel a unique SOCKS credential.
 //
-// socksAuthForRequest(seed) -> { userId, password }, two opaque 16-byte hex tags Tor only
+// socksAuthForTunnel(seed) -> { userId, password }, two opaque 16-byte hex tags Tor only
 // compares for equality:
-//   - seed given (the request nonce): the credential is DERIVED deterministically from it,
-//     so it is DISTINCT across different requests (different nonces) yet STABLE across every
-//     dial attempt / gateway failover of ONE logical request.
+//   - seed given (the tunnel nonce): the credential is derived deterministically from it,
+//     so it is distinct across tunnels yet stable across failover for one tunnel.
 //   - seed omitted: a fresh random credential (each call = a new circuit).
 //
-// RETRY / CIRCUIT DECISION: we seed from the request nonce (connect() passes envelope.nonce)
-// so a RETRY of the same logical request — an onion cold-start retry inside _dial, or a
+// RETRY / CIRCUIT DECISION: we seed from the tunnel nonce (connect() passes envelope.nonce)
+// so a retry of the same tunnel — an onion cold-start retry inside _dial, or a
 // failover to another gateway — REUSES THE SAME circuit identity, mirroring the
 // deterministic-retry invariant (same signal => same share across failover). We deliberately
-// prefer this over a fresh circuit per dial ATTEMPT: cross-request unlinkability is the
-// property that matters, and it is fully bought by distinct requests getting distinct
-// credentials; pinning one request to one circuit identity avoids fanning a single request
-// across multiple guards/circuits (extra correlation vantage points) for no unlinkability
-// gain. (A fresh-per-attempt credential is also safe — just call with no seed — but that is
+// prefer this over a fresh circuit per dial attempt: cross-tunnel unlinkability is the
+// property that matters, and distinct tunnels get distinct credentials; pinning one tunnel
+// to one circuit identity avoids fanning it across multiple guards/circuits (extra correlation
+// vantage points) for no unlinkability gain. (A fresh-per-attempt credential is also safe — just call with no seed — but that is
 // not the safer default.)
 //
 // CAVEAT — a Tor daemon WITHOUT IsolateSOCKSAuth, or any plain no-auth SOCKS5 proxy: the
@@ -294,58 +288,58 @@ function tunnelStream(socket, rest) {
 // credential (an ordinary SOCKS5 connect). So these credentials are harmless — Tor without
 // the flag just ignores them, and a no-auth proxy never negotiates them. Tor WITH the flag
 // selects username/password (to enable isolation) and forks a circuit per credential.
-export function socksAuthForRequest(seed) {
+export function socksAuthForTunnel(seed) {
   if (seed == null) {
     return { userId: randomBytes(16).toString("hex"), password: randomBytes(16).toString("hex") };
   }
   const tag = (label) =>
-    createHash("sha256").update("rgoe-socks-isolation:" + label + ":").update(String(seed)).digest("hex").slice(0, 32);
+    createHash("sha256").update("shade-tree-socks-isolation:" + label + ":").update(String(seed)).digest("hex").slice(0, 32);
   return { userId: tag("uid"), password: tag("pwd") };
 }
 
-export class RgoeClient {
+export class ShadeTreeClient {
   constructor(opts = {}) {
-    this.secret = opts.secret || process.env.RGOE_SECRET;
-    if (!this.secret) throw new Error("RgoeClient: `secret` (or RGOE_SECRET) is required");
-    this.torHost = opts.torHost || process.env.RGOE_TOR_HOST || "127.0.0.1";
-    this.torPort = Number(opts.torPort || process.env.RGOE_TOR_PORT || 9250);
+    this.secret = opts.secret || process.env.SHADE_TREE_SECRET;
+    if (!this.secret) throw new Error("ShadeTreeClient: `secret` (or SHADE_TREE_SECRET) is required");
+    this.torHost = opts.torHost || process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
+    this.torPort = Number(opts.torPort || process.env.SHADE_TREE_TOR_PORT || 9250);
     this.dialAttempts = Number(opts.dialAttempts || 4);
-    // Per-request SOCKS circuit isolation (T-FEAT-17): default ON, harmless without
-    // IsolateSOCKSAuth. Disable with { socksIsolation: false } or RGOE_SOCKS_ISOLATION=0.
-    this.socksIsolation = opts.socksIsolation !== false && process.env.RGOE_SOCKS_ISOLATION !== "0";
+    // Per-tunnel SOCKS circuit isolation (T-FEAT-17): default ON, harmless without
+    // IsolateSOCKSAuth. Disable with { socksIsolation: false } or SHADE_TREE_SOCKS_ISOLATION=0.
+    this.socksIsolation = opts.socksIsolation !== false && process.env.SHADE_TREE_SOCKS_ISOLATION !== "0";
     // Injectable SOCKS client (tests pass a fake); defaults to the real `socks` lib.
     this._socks = opts.socksClient || SocksClient;
     // Gateway selection: a pinned onion, or a signed directory (fleet rotation).
-    this.onion = (opts.onion || process.env.RGOE_ONION || "").replace(/\.onion$/, "") || null;
-    const dir = opts.directory || process.env.RGOE_DIRECTORY || null;
-    const signer = opts.dirSigner || process.env.RGOE_DIR_SIGNER || null;
+    this.onion = (opts.onion || process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "") || null;
+    const dir = opts.directory || process.env.SHADE_TREE_DIRECTORY || null;
+    const signer = opts.dirSigner || process.env.SHADE_TREE_DIR_SIGNER || null;
     // selection.mjs captures these at import; set them BEFORE its (lazy) import.
-    if (dir) process.env.RGOE_DIRECTORY = dir;
-    if (signer) process.env.RGOE_DIR_SIGNER = signer;
+    if (dir) process.env.SHADE_TREE_DIRECTORY = dir;
+    if (signer) process.env.SHADE_TREE_DIR_SIGNER = signer;
     this._selection = null;
     // Known gateway protocol range (T-FEAT-11), if the caller learned one out-of-band. null =>
     // unknown; the client optimistically sends its max and reacts to any version-reject. A future
     // directory that carries the range (follow-up) would populate this per candidate.
     this.gatewayRange = opts.gatewayRange || null;
     // ZK artifact ids (T-HARD-8): `artifacts` = the ORDERED (newest first) ids this client can
-    // prove with (default: the configured prover sets, RGOE_ZK_PROVER_ARTIFACTS or the shipped
+    // prove with (default: the configured prover sets, SHADE_TREE_ZK_PROVER_ARTIFACTS or the shipped
     // set); `gatewayArtifacts` = a gateway's accepted list learned out-of-band or from a reject.
     this.artifacts = opts.artifacts || null; // null => clientArtifactIds() lazily (loads no circuit)
     this.gatewayArtifacts = opts.gatewayArtifacts || null;
     // Injectable prover (tests pass a fake); defaults to the real lib proveForSlot.
     this._prove = opts.prove || proveForSlot;
-    // This member's tier limit (T-FEAT-8): { limit } or RGOE_LIMIT; default K_SLOTS (RGOE_SLOTS, 8).
-    // Must equal the limit the member's leaf was enrolled with (`rgoe enroll --limit`).
-    this.limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS));
+    // This member's tier limit (T-FEAT-8): { limit } or SHADE_TREE_LIMIT; default K_SLOTS (SHADE_TREE_SLOTS, 8).
+    // Must equal the limit the member's leaf was enrolled with (`shade-tree enroll --limit`).
+    this.limit = Number(normLimit(opts.limit ?? process.env.SHADE_TREE_LIMIT ?? K_SLOTS));
     // Which tree holds this member's leaf (T-FEAT-7): members.json, a staked set, or the paid
     // set — discovered lazily on first use (makeLeafSourceLoader); { loadGroupFn } overrides.
-    // T-FEAT-9: { leafSource } / RGOE_LEAF_SOURCE pins the set (auto = whichever holds the leaf);
-    // { maxAnon } / RGOE_MAX_ANON=1 routes ONLY to invited-only gateways (and refuses to run with
+    // T-FEAT-9: { leafSource } / SHADE_TREE_LEAF_SOURCE pins the set (auto = whichever holds the leaf);
+    // { maxAnon } / SHADE_TREE_MAX_ANON=1 routes ONLY to invited-only gateways (and refuses to run with
     // a staked/paid leaf, which an invited-only gateway would reject with wrong-group-root).
-    this.leafSourcePin = parseLeafSource(opts.leafSource ?? process.env.RGOE_LEAF_SOURCE);
-    this.maxAnon = opts.maxAnon != null ? Boolean(opts.maxAnon) : envFlag(process.env.RGOE_MAX_ANON);
+    this.leafSourcePin = parseLeafSource(opts.leafSource ?? process.env.SHADE_TREE_LEAF_SOURCE, { name: "SHADE_TREE_LEAF_SOURCE" });
+    this.maxAnon = opts.maxAnon != null ? Boolean(opts.maxAnon) : envFlag(process.env.SHADE_TREE_MAX_ANON);
     if (this.maxAnon && this.leafSourcePin !== "auto" && this.leafSourcePin !== "invited") {
-      throw new Error(`RgoeClient: --max-anon requires an invited (members.json) leaf, but RGOE_LEAF_SOURCE=${this.leafSourcePin} pins a ${this.leafSourcePin} leaf; an invited-only gateway would reject it (wrong-group-root). Drop --max-anon or use an invited leaf.`);
+      throw new Error(`ShadeTreeClient: --max-anon requires an invited (members.json) leaf, but SHADE_TREE_LEAF_SOURCE=${this.leafSourcePin} pins a ${this.leafSourcePin} leaf; an invited-only gateway would reject it (wrong-group-root). Drop --max-anon or use an invited leaf.`);
     }
     this.pool = makeSlotPool({ secret: this.secret, K: this.limit, loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit, only: this.leafSourcePin }) });
     this.pool.ensureEpoch(); // warm the current epoch in the background
@@ -376,7 +370,7 @@ export class RgoeClient {
     return this._selection;
   }
 
-  // Ordered candidates to try this request: pin, else the directory selection (weighted pick
+  // Ordered candidates to try this tunnel: pin, else the directory selection (weighted pick
   // first, then failovers), else a local tor/hs/hostname (dev). Each is { onion, artifacts? }
   // where `artifacts` is the gateway's SIGNED accepted-artifact ad from the directory (T-HARD-8),
   // when it advertises one.
@@ -399,11 +393,11 @@ export class RgoeClient {
       const host = (await readFile(join(HERE, "..", "tor", "hs", "hostname"), "utf8")).trim();
       return [{ onion: host.replace(/\.onion$/, ""), artifacts: null }];
     } catch {
-      throw new Error("RgoeClient: no gateway — set { onion } or { directory, dirSigner }");
+      throw new Error("ShadeTreeClient: no gateway — set { onion } or { directory, dirSigner }");
     }
   }
 
-  // The artifact id to prove with for this request (T-HARD-8): the newest of OUR sets that the
+  // The artifact id to prove with for this tunnel (T-HARD-8): the newest of OUR sets that the
   // first candidate advertising an accepted set will verify (else, with no ad anywhere, our newest
   // — falling back to a reject-learned `gatewayArtifacts`). ONE envelope is reused across failover,
   // so the pick is made once, against the first advertising candidate; a later candidate that
@@ -415,9 +409,9 @@ export class RgoeClient {
   }
 
   // Dial one gateway onion over Tor SOCKS, retrying through onion cold-start.
-  // `socksAuth` (T-FEAT-17) is the per-request SOCKS credential; it is reused for EVERY
+  // `socksAuth` (T-FEAT-17) is the per-tunnel SOCKS credential; it is reused for every
   // attempt here (and by connect() across gateway failover) so a retry rides the SAME Tor
-  // circuit identity. null => legacy no-auth dial. See socksAuthForRequest above.
+  // circuit identity. null => legacy no-auth dial. See socksAuthForTunnel above.
   async _dial(onion, attempts = this.dialAttempts, socksAuth = null) {
     let lastErr;
     for (let i = 0; i < attempts; i++) {
@@ -446,7 +440,7 @@ export class RgoeClient {
   // onEvent(e) is an optional progress hook: e.phase ∈ {prove,dial,gate}, e.status.
   async connect(target, { onEvent, onion } = {}) {
     const emit = (e) => { try { onEvent?.(e); } catch { /* progress is best-effort */ } };
-    // opts.onion pins a specific gateway for this request (else directory/pin/local order).
+    // opts.onion pins a specific gateway for this tunnel (else directory/pin/local order).
     let cands;
     try {
       cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates();
@@ -458,7 +452,7 @@ export class RgoeClient {
     emit({ phase: "select", status: "done", leafSource: await this.leafSource().catch(() => null), maxAnon: this.maxAnon, candidates: cands.map((c) => ({ onion: c.onion, admits: c.admits || null })) });
 
     // Negotiate the wire version (T-FEAT-11): pick the highest version this client and the gateway
-    // both support. With no known gateway range this is just our max (v3 today); if the ranges are
+    // both support. With no known gateway range this is v4; if the ranges are
     // disjoint we fail closed HERE with a precise reason, before proving or dialing.
     const pv = selectProtoVersion(this.gatewayRange);
     if (!pv.ok) {
@@ -488,10 +482,10 @@ export class RgoeClient {
     const wire = JSON.stringify(envelope) + "\n";
     const sel = this.onion ? null : await this._sel();
 
-    // One SOCKS credential for the whole logical request (derived from its nonce), reused
+    // One SOCKS credential for the whole tunnel (derived from its nonce), reused
     // across every gateway failover below so a retry keeps the SAME Tor circuit identity
-    // while DIFFERENT requests get DIFFERENT circuits (T-FEAT-17).
-    const socksAuth = this.socksIsolation ? socksAuthForRequest(envelope.nonce) : null;
+    // while different tunnels get different circuits (T-FEAT-17).
+    const socksAuth = this.socksIsolation ? socksAuthForTunnel(envelope.nonce) : null;
 
     let sock = null, usedOnion = null, lastErr = null;
     for (const cand of onions) {
@@ -541,11 +535,11 @@ export class RgoeClient {
     emit({ phase: "gate", status: "done", onion: usedOnion });
 
     // Optional signed egress success receipt (T-FEAT-13). Purely ADDITIVE: a receipt is present
-    // only when the gateway runs with RGOE_RECEIPTS=1, and its absence never affects the tunnel
+    // only when the gateway runs with SHADE_TREE_RECEIPTS=1, and its absence never affects the tunnel
     // (today's gateways send `{ ok: true }` with no `receipt` — nothing here fires). When present,
     // verify it against the ONION WE DIALED (self-authenticating pubkey) and the CURRENT epoch, so
     // it counts only as fresh liveness/quality evidence for THIS gateway. A bad receipt is NOT
-    // fatal (the egress already succeeded) — it is surfaced as evidence via onEvent + tunnel.rgoe
+    // fatal (the egress already succeeded) — it is surfaced as evidence via onEvent + tunnel.shadeTree
     // for a quality-aware selection layer (T-FEAT-4) to weigh.
     const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);
 
@@ -553,7 +547,7 @@ export class RgoeClient {
     // (T-FEAT-22's accumulation engine; wired here by T-FEAT-23). Gate on receipt.present so a
     // legacy gateway running with receipts OFF sends none, is never reported, and is never
     // entered into (or penalized in) the tally — keeping this fully ADDITIVE. reportReceipt is
-    // itself a no-op unless RGOE_RECEIPT_SCORING is armed, so this stays byte-identical to today
+    // itself a no-op unless SHADE_TREE_RECEIPT_SCORING is armed, so this stays byte-identical to today
     // when the flag is off (no tally file is ever written). It is pulled from the SAME lazily
     // imported selection.mjs the client already uses (config captured at import; see _sel + the
     // constructor) rather than a static top-level import that would evaluate selection.mjs before
@@ -564,7 +558,7 @@ export class RgoeClient {
     }
 
     const tunnel = tunnelStream(sock, rest);
-    tunnel.rgoe = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt, artifact: envelope.artifact, leafSource: await this.leafSource().catch(() => null) };
+    tunnel.shadeTree = { onion: usedOnion, slot, nullifier: envelope.nullifier, receipt, artifact: envelope.artifact, leafSource: await this.leafSource().catch(() => null) };
     return tunnel;
   }
 
@@ -594,7 +588,7 @@ export class RgoeClient {
   async fetch(url, opts = {}) {
     const emit = (e) => { try { opts.onEvent?.(e); } catch { /* best-effort */ } };
     const u = new URL(url);
-    if (u.protocol !== "https:") throw new Error("RgoeClient.fetch: https:// only (the gateway egresses :443)");
+    if (u.protocol !== "https:") throw new Error("ShadeTreeClient.fetch: https:// only (the gateway egresses :443)");
     const port = u.port || 443;
     const socket = await this.connect(`${u.hostname}:${port}`, { onEvent: opts.onEvent, onion: opts.onion });
     emit({ phase: "egress", status: "start", target: u.hostname });
@@ -613,7 +607,7 @@ export class RgoeClient {
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             emit({ phase: "egress", status: "done", httpStatus: res.statusCode });
-            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString("utf8"), gateway: socket.rgoe });
+            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString("utf8"), gateway: socket.shadeTree });
           });
         }
       );

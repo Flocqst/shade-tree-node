@@ -3,7 +3,7 @@
 // The monotonic issued FLOOR (directory-rollback.selftest.mjs) only stops rollback WITHIN a session.
 // On a COLD start a fresh client with no prior state accepts whatever `issued` the bootnode first
 // serves, so a bootnode that is far behind — or replaying a months-old but validly signed directory
-// to a new client — is undetectable. RGOE_DIRECTORY_MAX_AGE_MS adds an absolute bound: a FRESH
+// to a new client — is undetectable. SHADE_TREE_DIRECTORY_MAX_AGE_MS adds an absolute bound: a FRESH
 // directory whose `issued` is older than now - max-age (plus a clock-skew grace) is rejected,
 // failing closed to the last-good in-memory fleet exactly like the rollback guard.
 //
@@ -56,20 +56,20 @@ async function main() {
     return signDirectory(base, signer.priv);
   }
 
-  const dir = mkdtempSync(join(tmpdir(), "rgoe-maxage-"));
+  const dir = mkdtempSync(join(tmpdir(), "shade-tree-maxage-"));
   const dirPath = join(dir, "directory.json");
   const writeDir = (issued) => { const d = signedDir(issued); writeFileSync(dirPath, JSON.stringify(d) + "\n"); return d; };
 
   // Common file-source config: no bootnode, reload every call, isolated health cache. Each scenario
-  // additionally sets/clears RGOE_DIRECTORY_MAX_AGE_MS before its fresh import.
+  // additionally sets/clears SHADE_TREE_DIRECTORY_MAX_AGE_MS before its fresh import.
   function baseEnv() {
-    process.env.RGOE_DIRECTORY = dirPath;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    process.env.RGOE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
-    process.env.RGOE_DIRECTORY_CACHE = join(dir, "nonexistent.lkg"); // no pre-seeded cache
-    process.env.RGOE_HEALTH_CACHE = join(dir, "health.json");
-    delete process.env.RGOE_BOOTNODE_ONION;
-    delete process.env.RGOE_VERIFY_STAKE;
+    process.env.SHADE_TREE_DIRECTORY = dirPath;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
+    process.env.SHADE_TREE_DIRECTORY_CACHE = join(dir, "nonexistent.lkg"); // no pre-seeded cache
+    process.env.SHADE_TREE_HEALTH_CACHE = join(dir, "health.json");
+    delete process.env.SHADE_TREE_BOOTNODE_ONION;
+    delete process.env.SHADE_TREE_VERIFY_STAKE;
   }
 
   const ONE_HOUR_S = 3600;
@@ -77,11 +77,11 @@ async function main() {
 
   // --- Scenario A: OFF by default (env unset) — an ANCIENT directory still loads unchanged. ------
   // Proves the default path is byte-identical to today: no max-age check whatsoever.
-  console.log("A. default (RGOE_DIRECTORY_MAX_AGE_MS unset): an ancient directory loads unaffected:");
+  console.log("A. default (SHADE_TREE_DIRECTORY_MAX_AGE_MS unset): an ancient directory loads unaffected:");
   {
     baseEnv();
-    delete process.env.RGOE_DIRECTORY_MAX_AGE_MS;
-    delete process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS;
+    delete process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS;
+    delete process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS;
     const ancient = writeDir(nowSec() - 400 * 24 * ONE_HOUR_S); // ~400 days old
     const sel = await import("../client/selection.mjs?scenario=off");
     sel._resetIssuedFloor();
@@ -94,8 +94,8 @@ async function main() {
   console.log("\nB. armed (max-age 1h): a within-bound directory loads:");
   {
     baseEnv();
-    process.env.RGOE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
-    process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS = "0"; // no grace, sharpen the bound for the test
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS = "0"; // no grace, sharpen the bound for the test
     const fresh = writeDir(nowSec() - 60); // 1 minute old, well within 1h
     const sel = await import("../client/selection.mjs?scenario=within");
     sel._resetIssuedFloor();
@@ -110,8 +110,8 @@ async function main() {
   console.log("\nC. armed (max-age 1h): a beyond-bound directory is REJECTED on first (cold) load:");
   {
     baseEnv();
-    process.env.RGOE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
-    process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS = "0";
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS = "0";
     writeDir(nowSec() - 3 * ONE_HOUR_S); // 3 hours old, beyond the 1h bound
     const sel = await import("../client/selection.mjs?scenario=cold-stale");
     sel._resetIssuedFloor();
@@ -124,8 +124,8 @@ async function main() {
   console.log("\nD. armed (max-age 1h): a good load then a stale refresh keeps the last-good fleet:");
   {
     baseEnv();
-    process.env.RGOE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
-    process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS = "0";
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS = "0";
     const good = writeDir(nowSec() - 60); // fresh
     const sel = await import("../client/selection.mjs?scenario=refresh");
     sel._resetIssuedFloor();
@@ -150,8 +150,8 @@ async function main() {
   console.log("\nE. armed (max-age 1h, skew 1h): a directory past the raw bound but within grace loads:");
   {
     baseEnv();
-    process.env.RGOE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
-    process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS = String(ONE_HOUR_MS); // 1h grace => 2h effective window
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS = String(ONE_HOUR_MS);
+    process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS = String(ONE_HOUR_MS); // 1h grace => 2h effective window
     const edge = writeDir(nowSec() - 90 * 60); // 90 min old: > 1h bound, < 2h bound+skew
     const sel = await import("../client/selection.mjs?scenario=skew");
     sel._resetIssuedFloor();

@@ -6,9 +6,9 @@
 //   - selectCandidates(null, adm) over a real signed directory file: filters, carries `admits` on
 //     each candidate, and FAILS CLOSED with a precise error naming every gateway's policy when
 //     nothing admits the leaf source / nothing is invited-only;
-//   - RgoeClient: leafSource() from the discovered source label (members.json -> invited,
-//     staked(0x..) -> staked, paid(0x..) -> paid), RGOE_LEAF_SOURCE / { leafSource } pins it,
-//     --max-anon / RGOE_MAX_ANON refuses a staked/paid leaf BEFORE any dial with the reason, and
+//   - ShadeTreeClient: leafSource() from the discovered source label (members.json -> invited,
+//     staked(0x..) -> staked, paid(0x..) -> paid), SHADE_TREE_LEAF_SOURCE / { leafSource } pins it,
+//     --max-anon / SHADE_TREE_MAX_ANON refuses a staked/paid leaf BEFORE any dial with the reason, and
 //     `{ maxAnon, leafSource: "paid" }` is refused at construction; makeLeafSourceLoader `only`.
 //
 //   node client/admission-filter.selftest.mjs
@@ -19,7 +19,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import { signDirectory, pubkeyToOnion, canonicalCaps, signCaps } from "../lib/directory.mjs";
-import { makeSlotPool, makeLeafSourceLoader, RgoeClient } from "./rgoe-client.mjs";
+import { makeSlotPool, makeLeafSourceLoader, ShadeTreeClient } from "./shade-tree-client.mjs";
 
 let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
@@ -42,7 +42,7 @@ function mintGateway(admits) {
 const short = (o) => o.replace(/\.onion$/, "");
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-admission-filter-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-admission-filter-"));
   try {
     // --- a signed 4-gateway directory: invited-only, invited+staked, all three, legacy (no policy) ---
     const signer = newEd25519();
@@ -50,10 +50,10 @@ async function main() {
     const signed = signDirectory({ version: 1, issued: Math.floor(Date.now() / 1000), gateways: [gInv, gInvStk, gAll, gLegacy], signer: signer.pub }, signer.priv);
     const dirFile = join(work, "directory.signed.json");
     await writeFile(dirFile, JSON.stringify(signed, null, 2) + "\n");
-    process.env.RGOE_DIRECTORY = dirFile;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    delete process.env.RGOE_BOOTNODE_ONION;
-    delete process.env.RGOE_HEALTH_CACHE; process.env.RGOE_HEALTH_CACHE = "off";
+    process.env.SHADE_TREE_DIRECTORY = dirFile;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    delete process.env.SHADE_TREE_BOOTNODE_ONION;
+    delete process.env.SHADE_TREE_HEALTH_CACHE; process.env.SHADE_TREE_HEALTH_CACHE = "off";
     const sel = await import(pathToFileURL(join(HERE, "selection.mjs")).href);
     const G = signed.gateways;
 
@@ -102,7 +102,7 @@ try { out.staked = (await sel.selectCandidates(null, { leafSource: "staked" })).
 process.stdout.write(JSON.stringify(out));
 `;
       const { execFileSync } = await import("node:child_process");
-      const raw = execFileSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, RGOE_DIRECTORY: dir2, RGOE_DIR_SIGNER: signer.pub, RGOE_BOOTNODE_ONION: "", RGOE_HEALTH_CACHE: "off" }, encoding: "utf8" });
+      const raw = execFileSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, SHADE_TREE_DIRECTORY: dir2, SHADE_TREE_DIR_SIGNER: signer.pub, SHADE_TREE_BOOTNODE_ONION: "", SHADE_TREE_HEALTH_CACHE: "off" }, encoding: "utf8" });
       const out = JSON.parse(raw.trim().split("\n").pop());
       ok(/^no gateway admits a paid leaf \(your leaf source\); fleet: /.test(out.paid) && /=\[invited\]/.test(out.paid) && /=\[invited,staked\]/.test(out.paid) && /docs\/CLIENTS\.md/.test(out.paid), `paid leaf vs an invited/staked-only fleet -> selectCandidates FAILS CLOSED naming every gateway's policy: ${out.paid.slice(0, 100)}...`);
       ok(Array.isArray(out.staked) && out.staked.length === 1 && out.staked[0] === "invited,staked", "staked leaf on the same fleet -> exactly the invited,staked gateway");
@@ -114,17 +114,17 @@ try { await sel.selectCandidates(null, { leafSource: "invited", maxAnon: true })
       const onlyStk = signDirectory({ version: 1, issued: Math.floor(Date.now() / 1000) + 2, gateways: [gInvStk, gAll, gLegacy], signer: signer.pub }, signer.priv);
       const dir3 = join(work, "directory3.signed.json");
       await writeFile(dir3, JSON.stringify(onlyStk, null, 2) + "\n");
-      const raw2 = execFileSync(process.execPath, ["--input-type=module", "-e", script2], { env: { ...process.env, RGOE_DIRECTORY: dir3, RGOE_DIR_SIGNER: signer.pub, RGOE_BOOTNODE_ONION: "", RGOE_HEALTH_CACHE: "off" }, encoding: "utf8" });
+      const raw2 = execFileSync(process.execPath, ["--input-type=module", "-e", script2], { env: { ...process.env, SHADE_TREE_DIRECTORY: dir3, SHADE_TREE_DIR_SIGNER: signer.pub, SHADE_TREE_BOOTNODE_ONION: "", SHADE_TREE_HEALTH_CACHE: "off" }, encoding: "utf8" });
       ok(/^--max-anon: no invited-only gateway in the directory/.test(raw2.trim().split("\n").pop()) && /\(no policy advertised\)/.test(raw2), `--max-anon over a fleet with no invited-only gateway -> FAILS CLOSED with the fleet summary: ${raw2.trim().split("\n").pop().slice(0, 100)}...`);
     }
 
-    console.log("\nRgoeClient: leaf source discovery, RGOE_LEAF_SOURCE, --max-anon refusal:");
+    console.log("\nShadeTreeClient: leaf source discovery, SHADE_TREE_LEAF_SOURCE, --max-anon refusal:");
     {
       const fake = { group: { indexOf: () => 0 }, root: "1" };
       const mkPool = (source) => makeSlotPool({ secret: "0x1234", K: 8, loadGroupFn: async () => ({ ...fake, source }), epochOf: () => 1n, prove: async () => {} });
       ok(await mkPool("members.json").leafSource() === "invited" && await mkPool("staked(0xA)").leafSource() === "staked" && await mkPool("paid(0xP)").leafSource() === "paid" && await mkPool(undefined).leafSource() === null, "makeSlotPool.leafSource(): members.json->invited, staked(..)->staked, paid(..)->paid, unlabeled->null");
-      const clientFor = (source, opts = {}) => new RgoeClient({ secret: "0x1234", loadGroupFn: async () => ({ ...fake, source }), directory: dirFile, dirSigner: signer.pub, ...opts });
-      ok(await clientFor("paid(0xP)").leafSource() === "paid" && await clientFor("members.json").leafSource() === "invited" && await clientFor(undefined).leafSource() === "invited", "RgoeClient.leafSource(): discovered source; an unlabeled loader (legacy PoC) counts as invited");
+      const clientFor = (source, opts = {}) => new ShadeTreeClient({ secret: "0x1234", loadGroupFn: async () => ({ ...fake, source }), directory: dirFile, dirSigner: signer.pub, ...opts });
+      ok(await clientFor("paid(0xP)").leafSource() === "paid" && await clientFor("members.json").leafSource() === "invited" && await clientFor(undefined).leafSource() === "invited", "ShadeTreeClient.leafSource(): discovered source; an unlabeled loader (legacy PoC) counts as invited");
       ok(await clientFor("paid(0xP)", { leafSource: "staked" }).leafSource() === "staked", "{ leafSource } pins the leaf source over discovery");
       const admPaid = await clientFor("paid(0xP)")._admission();
       ok(admPaid.leafSource === "paid" && admPaid.maxAnon === false, "_admission(): { leafSource: paid, maxAnon: false }");
@@ -146,39 +146,39 @@ try { await sel.selectCandidates(null, { leafSource: "invited", maxAnon: true })
       const cp = await clientFor("paid(0xP)")._candidates();
       ok(cp.length === 2 && cp.every((x) => [short(gAll.onion), short(gLegacy.onion)].includes(x.onion)), "paid leaf -> candidates = [all-three, legacy]");
       // env spellings
-      process.env.RGOE_MAX_ANON = "1"; process.env.RGOE_LEAF_SOURCE = "invited";
-      const ce = new RgoeClient({ secret: "0x1234", loadGroupFn: async () => ({ ...fake, source: "paid(0xP)" }), directory: dirFile, dirSigner: signer.pub });
-      ok(ce.maxAnon === true && ce.leafSourcePin === "invited" && await ce.leafSource() === "invited", "RGOE_MAX_ANON=1 + RGOE_LEAF_SOURCE=invited are read (the pin wins over discovery)");
-      process.env.RGOE_MAX_ANON = "true"; delete process.env.RGOE_LEAF_SOURCE;
-      ok(new RgoeClient({ secret: "0x1234", loadGroupFn: async () => fake, directory: dirFile, dirSigner: signer.pub }).maxAnon === true, "RGOE_MAX_ANON=true (the bare --max-anon flag) is on");
-      delete process.env.RGOE_MAX_ANON;
-      process.env.RGOE_LEAF_SOURCE = "onchain";
-      err = null; try { new RgoeClient({ secret: "0x1234", loadGroupFn: async () => fake }); } catch (e) { err = e.message; }
-      ok(/RGOE_LEAF_SOURCE: expected auto, invited, staked, paid/.test(err || ""), "a bad RGOE_LEAF_SOURCE is a precise construction error");
-      delete process.env.RGOE_LEAF_SOURCE;
+      process.env.SHADE_TREE_MAX_ANON = "1"; process.env.SHADE_TREE_LEAF_SOURCE = "invited";
+      const ce = new ShadeTreeClient({ secret: "0x1234", loadGroupFn: async () => ({ ...fake, source: "paid(0xP)" }), directory: dirFile, dirSigner: signer.pub });
+      ok(ce.maxAnon === true && ce.leafSourcePin === "invited" && await ce.leafSource() === "invited", "SHADE_TREE_MAX_ANON=1 + SHADE_TREE_LEAF_SOURCE=invited are read (the pin wins over discovery)");
+      process.env.SHADE_TREE_MAX_ANON = "true"; delete process.env.SHADE_TREE_LEAF_SOURCE;
+      ok(new ShadeTreeClient({ secret: "0x1234", loadGroupFn: async () => fake, directory: dirFile, dirSigner: signer.pub }).maxAnon === true, "SHADE_TREE_MAX_ANON=true (the bare --max-anon flag) is on");
+      delete process.env.SHADE_TREE_MAX_ANON;
+      process.env.SHADE_TREE_LEAF_SOURCE = "onchain";
+      err = null; try { new ShadeTreeClient({ secret: "0x1234", loadGroupFn: async () => fake }); } catch (e) { err = e.message; }
+      ok(/SHADE_TREE_LEAF_SOURCE: expected auto, invited, staked, paid/.test(err || ""), "a bad SHADE_TREE_LEAF_SOURCE is a precise construction error");
+      delete process.env.SHADE_TREE_LEAF_SOURCE;
       // a pinned onion: no filtering possible, but max-anon still refuses a paid leaf
       err = null; try { await clientFor("paid(0xP)", { maxAnon: true, onion: short(gAll.onion) })._candidates(); } catch (e) { err = e.message; }
       ok(err && /--max-anon: your leaf is in the paid set/.test(err), "a pinned onion + max-anon + paid leaf is still refused");
       ok((await clientFor("paid(0xP)", { onion: short(gInv.onion) })._candidates())[0].onion === short(gInv.onion), "a pinned onion is honoured as-is without max-anon (a policy mismatch surfaces as the gateway's wrong-group-root)");
     }
 
-    console.log("\nmakeLeafSourceLoader `only` (RGOE_LEAF_SOURCE pins the set searched):");
+    console.log("\nmakeLeafSourceLoader `only` (SHADE_TREE_LEAF_SOURCE pins the set searched):");
     {
       const leafOf = () => 0n; // holds() uses group.indexOf(BigInt(leaf)) !== -1
       const contracts = [{ address: "0xA", kind: "staked" }, { address: "0xP", kind: "paid" }];
       const loadStatic = async () => ({ group: { indexOf: () => -1 }, root: "s", count: 1 });
       const loadContract = async ({ contract }) => ({ group: { indexOf: () => (contract === "0xP" ? 0 : -1) }, root: contract, count: 1 });
-      const env = { RGOE_RPC_URL: "http://127.0.0.1:1" };
+      const env = { SHADE_TREE_RPC_URL: "http://127.0.0.1:1" };
       const auto = await makeLeafSourceLoader({ secret: "0x1234", limit: 8, env, contracts, loadStatic, loadContract })();
       ok(auto.source === "paid(0xP)", "auto: found in the paid set after members.json + staked missed");
       const paidOnly = await makeLeafSourceLoader({ secret: "0x1234", limit: 8, env, contracts, loadStatic, loadContract, only: "paid" })();
       ok(paidOnly.source === "paid(0xP)", "only=paid: found (members.json + staked not consulted)");
       let err = null;
       try { await makeLeafSourceLoader({ secret: "0x1234", limit: 8, env, contracts, loadStatic, loadContract, only: "staked" })(); } catch (e) { err = e.message; }
-      ok(err && /is in none of: staked\(0xA\) \(1 leaves\)/.test(err) && !/paid\(/.test(err) && /RGOE_LEAF_SOURCE=staked pins the search/.test(err), `only=staked: not found there -> precise error naming ONLY the staked set: ${err.slice(0, 80)}...`);
+      ok(err && /is in none of: staked\(0xA\) \(1 leaves\)/.test(err) && !/paid\(/.test(err) && /SHADE_TREE_LEAF_SOURCE=staked pins the search/.test(err), `only=staked: not found there -> precise error naming ONLY the staked set: ${err.slice(0, 80)}...`);
       err = null;
       try { await makeLeafSourceLoader({ secret: "0x1234", limit: 8, env, contracts: [contracts[0]], loadStatic, loadContract, only: "paid" })(); } catch (e) { err = e.message; }
-      ok(err && /RGOE_LEAF_SOURCE=paid but no paid set is configured/.test(err), "only=paid with no paid contract configured -> precise error");
+      ok(err && /SHADE_TREE_LEAF_SOURCE=paid but no paid set is configured/.test(err), "only=paid with no paid contract configured -> precise error");
       const inv = await makeLeafSourceLoader({ secret: "0x1234", limit: 8, env, contracts, loadStatic: async () => ({ group: { indexOf: () => 0 }, root: "s", count: 1 }), loadContract, only: "invited" })();
       ok(inv.source === "members.json", "only=invited: members.json alone (contracts never read)");
       void leafOf;

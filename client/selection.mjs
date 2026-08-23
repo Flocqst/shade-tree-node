@@ -1,16 +1,16 @@
-// Shim-as-router: per-request gateway selection over the signed fleet directory.
+// Client-proxy router: per-CONNECT-tunnel gateway selection over the signed Grove directory.
 //
-// The shim stays the router; curl stays dumb. When RGOE_DIRECTORY points at a
-// signed directory JSON, the shim asks here for a candidate ORDER per CONNECT:
+// The client proxy stays the router; curl stays dumb. When SHADE_TREE_DIRECTORY points at a
+// signed directory JSON, the proxy asks here for a candidate ORDER per CONNECT:
 // a weighted-random pick first, then the rest of the fleet as failover targets.
 // The membership proof is gateway-independent (same root + same epoch verifies at
 // any gateway loading the same members.json), so rotation reuses the cached proof
 // and just dials a different onion. No new proof per rotation.
 //
-// The single-onion path (RGOE_ONION / tor/hs/hostname) is untouched: if
-// RGOE_DIRECTORY is unset, directoryEnabled() is false and the shim keeps pinning.
+// The single-onion path (SHADE_TREE_ONION / tor/hs/hostname) is untouched: if
+// SHADE_TREE_DIRECTORY is unset, directoryEnabled() is false and the client keeps pinning.
 //
-// Integration is one line in the shim's connect handler (see docs/FLEET.md):
+// Integration is one line in the client proxy's CONNECT handler (see docs/FLEET.md):
 //   const candidates = await selectCandidates();   // [{ onion }, ...] in try order
 // then dial candidates in order, and on success/failure call:
 //   reportResult(onion, { ok, latencyMs });
@@ -27,25 +27,25 @@ import { applyNetworkEnv } from "../lib/network-record.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// RGOE_NETWORK=<name>: fill discovery inputs (RGOE_BOOTNODE_ONION / RGOE_DIR_SIGNER, or the static
-// RGOE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
+// SHADE_TREE_NETWORK=<name>: fill discovery inputs (SHADE_TREE_BOOTNODE_ONION / SHADE_TREE_DIR_SIGNER, or the static
+// SHADE_TREE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
 // snapshot the env. Explicit env always wins (applyNetworkEnv only fills unset keys). Done here, not
-// only in bin/rgoe.mjs, so `node client/shim.mjs` and the SDK (client/rgoe-client.mjs) honour it too.
+// only in bin/shade-tree.mjs, so `node client/shim.mjs` and the SDK (client/shade-tree-client.mjs) honour it too.
 applyNetworkEnv(process.env);
 
 // Two directory SOURCES, same signed shape and same pinned-signer verification:
-//   - RGOE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor
-//                           (bootnode/server.mjs). The pinned signer (RGOE_DIR_SIGNER) is the
+//   - SHADE_TREE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor
+//                           (bootnode/server.mjs). The pinned signer (SHADE_TREE_DIR_SIGNER) is the
 //                           bootnode's signer key. This is the dynamic fleet.
-//   - RGOE_DIRECTORY      : static signed JSON file (group/sign-directory.mjs). The offline path.
+//   - SHADE_TREE_DIRECTORY      : static signed JSON file (group/sign-directory.mjs). The offline path.
 // Bootnode wins if both are set. Either way, verifyDirectory + last-known-good caching apply.
-const BOOTNODE_ONION = process.env.RGOE_BOOTNODE_ONION || null;
-const DIRECTORY_PATH = process.env.RGOE_DIRECTORY || null;
+const BOOTNODE_ONION = process.env.SHADE_TREE_BOOTNODE_ONION || null;
+const DIRECTORY_PATH = process.env.SHADE_TREE_DIRECTORY || null;
 const CACHE_PATH =
-  process.env.RGOE_DIRECTORY_CACHE ||
+  process.env.SHADE_TREE_DIRECTORY_CACHE ||
   (BOOTNODE_ONION ? join(HERE, "..", "cache", "bootnode-directory.lkg") : DIRECTORY_PATH ? DIRECTORY_PATH + ".lkg" : null);
-const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
-const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
+const TOR_HOST = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9250);
 
 // ---- client-side gateway reputation persistence (T-FEAT-19) ---------------------
 // reportHealth() (lib/directory.mjs) mutates in-memory dir entries (_fails/health/_latencyMs),
@@ -61,20 +61,20 @@ const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
 // Fully OPTIONAL and non-breaking: if the path is empty or the dir isn't writable, load returns {}
 // and save no-ops (fail soft) — selection behaves exactly as the in-memory-only path does today.
 //
-// RGOE_HEALTH_CACHE   : path to the JSON file (default cache/gateway-health.json, which is gitignored).
+// SHADE_TREE_HEALTH_CACHE   : path to the JSON file (default cache/gateway-health.json, which is gitignored).
 //                       Set to "" (or "off"/"0") to disable persistence entirely.
-// RGOE_HEALTH_MAX     : max distinct gateways retained (oldest-lastSeen evicted first).
-// RGOE_HEALTH_DECAY_MS: an entry not SEEN for this long is treated as recovered (not seeded, pruned).
+// SHADE_TREE_HEALTH_MAX     : max distinct gateways retained (oldest-lastSeen evicted first).
+// SHADE_TREE_HEALTH_DECAY_MS: an entry not SEEN for this long is treated as recovered (not seeded, pruned).
 function resolveHealthCachePath() {
-  const raw = process.env.RGOE_HEALTH_CACHE;
+  const raw = process.env.SHADE_TREE_HEALTH_CACHE;
   if (raw === undefined) return join(HERE, "..", "cache", "gateway-health.json");
   const v = raw.trim();
   if (v === "" || v === "0" || v.toLowerCase() === "off") return null; // explicit OFF
   return v;
 }
 const HEALTH_CACHE_PATH = resolveHealthCachePath();
-const HEALTH_MAX_ENTRIES = Math.max(1, Number(process.env.RGOE_HEALTH_MAX || 512));
-const HEALTH_DECAY_MS = Number(process.env.RGOE_HEALTH_DECAY_MS || 14 * 24 * 60 * 60 * 1000); // 14 days
+const HEALTH_MAX_ENTRIES = Math.max(1, Number(process.env.SHADE_TREE_HEALTH_MAX || 512));
+const HEALTH_DECAY_MS = Number(process.env.SHADE_TREE_HEALTH_DECAY_MS || 14 * 24 * 60 * 60 * 1000); // 14 days
 const HEALTH_FAIL_THRESHOLD = 2; // mirror reportHealth(): >= 2 consecutive fails => "down"
 
 // Read the persisted cache. Best-effort and TOTAL: any error (missing/unwritable/corrupt) yields an
@@ -169,7 +169,7 @@ let _healthCache = loadHealthCache(HEALTH_CACHE_PATH);
 // VALID receipts earns a MODEST selection bonus, and one that sends BAD receipts (present but bogus —
 // the gate-then-drop signal a receipt can attest) is deprioritized.
 //
-// OFF BY DEFAULT / FULLY ADDITIVE. This whole feature is gated behind RGOE_RECEIPT_SCORING. With it
+// OFF BY DEFAULT / FULLY ADDITIVE. This whole feature is gated behind SHADE_TREE_RECEIPT_SCORING. With it
 // disabled (the default): reportReceipt is a no-op, NO tally file is ever written, and selectCandidates
 // takes the byte-identical weight-only path — selection is exactly today's behavior. Even with the flag
 // ARMED, a fleet with no receipt evidence yet produces an identity adjustment (same gateway objects,
@@ -184,35 +184,35 @@ let _healthCache = loadHealthCache(HEALTH_CACHE_PATH);
 //
 //   onion -> { score, samples, lastSeen }   // score: EWMA of (valid?1:0); samples: capped confidence
 //
-// RGOE_RECEIPT_SCORING   : "1"/"on"/"true" to arm. Unset/anything else => OFF (default).
-// RGOE_RECEIPT_CACHE     : tally file path (default cache/gateway-receipts.json, gitignored). ""/"off"/"0" => no persistence.
-// RGOE_RECEIPT_MAX       : max distinct gateways retained (oldest-lastSeen evicted first). Default 512.
-// RGOE_RECEIPT_DECAY_MS  : a tally not updated for this long is treated as decayed → neutral (no bonus, no penalty). Default 14d.
-// RGOE_RECEIPT_ALPHA     : EWMA weight on the newest outcome (0..1). Default 0.3 (mirrors the health latency EWMA).
-// RGOE_RECEIPT_BONUS     : max fractional weight swing at full confidence + extreme score. Default 0.5 (±50%).
-// RGOE_RECEIPT_CONFIDENCE_N: samples needed for full confidence (one good receipt is not decisive). Default 4.
+// SHADE_TREE_RECEIPT_SCORING   : "1"/"on"/"true" to arm. Unset/anything else => OFF (default).
+// SHADE_TREE_RECEIPT_CACHE     : tally file path (default cache/gateway-receipts.json, gitignored). ""/"off"/"0" => no persistence.
+// SHADE_TREE_RECEIPT_MAX       : max distinct gateways retained (oldest-lastSeen evicted first). Default 512.
+// SHADE_TREE_RECEIPT_DECAY_MS  : a tally not updated for this long is treated as decayed → neutral (no bonus, no penalty). Default 14d.
+// SHADE_TREE_RECEIPT_ALPHA     : EWMA weight on the newest outcome (0..1). Default 0.3 (mirrors the health latency EWMA).
+// SHADE_TREE_RECEIPT_BONUS     : max fractional weight swing at full confidence + extreme score. Default 0.5 (±50%).
+// SHADE_TREE_RECEIPT_CONFIDENCE_N: samples needed for full confidence (one good receipt is not decisive). Default 4.
 const clamp01 = (x) => (Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0);
 function parseReceiptScoring(raw) {
   if (raw === undefined) return false;
   const v = String(raw).trim().toLowerCase();
   return v === "1" || v === "on" || v === "true" || v === "yes";
 }
-const RECEIPT_SCORING = parseReceiptScoring(process.env.RGOE_RECEIPT_SCORING);
+const RECEIPT_SCORING = parseReceiptScoring(process.env.SHADE_TREE_RECEIPT_SCORING);
 export function receiptScoringEnabled() { return RECEIPT_SCORING; }
 
 function resolveReceiptCachePath() {
-  const raw = process.env.RGOE_RECEIPT_CACHE;
+  const raw = process.env.SHADE_TREE_RECEIPT_CACHE;
   if (raw === undefined) return join(HERE, "..", "cache", "gateway-receipts.json");
   const v = raw.trim();
   if (v === "" || v === "0" || v.toLowerCase() === "off") return null; // explicit OFF
   return v;
 }
 const RECEIPT_CACHE_PATH = resolveReceiptCachePath();
-const RECEIPT_MAX_ENTRIES = Math.max(1, Number(process.env.RGOE_RECEIPT_MAX || 512));
-const RECEIPT_DECAY_MS = Number(process.env.RGOE_RECEIPT_DECAY_MS || 14 * 24 * 60 * 60 * 1000);
-const RECEIPT_ALPHA = clamp01(Number(process.env.RGOE_RECEIPT_ALPHA ?? 0.3));
-const RECEIPT_BONUS = Math.max(0, Number(process.env.RGOE_RECEIPT_BONUS ?? 0.5));
-const RECEIPT_CONFIDENCE_N = Math.max(1, Number(process.env.RGOE_RECEIPT_CONFIDENCE_N || 4));
+const RECEIPT_MAX_ENTRIES = Math.max(1, Number(process.env.SHADE_TREE_RECEIPT_MAX || 512));
+const RECEIPT_DECAY_MS = Number(process.env.SHADE_TREE_RECEIPT_DECAY_MS || 14 * 24 * 60 * 60 * 1000);
+const RECEIPT_ALPHA = clamp01(Number(process.env.SHADE_TREE_RECEIPT_ALPHA ?? 0.3));
+const RECEIPT_BONUS = Math.max(0, Number(process.env.SHADE_TREE_RECEIPT_BONUS ?? 0.5));
+const RECEIPT_CONFIDENCE_N = Math.max(1, Number(process.env.SHADE_TREE_RECEIPT_CONFIDENCE_N || 4));
 
 // Read the persisted tally. Best-effort and total, exactly like loadHealthCache: any error yields {}
 // so a broken tally can never break selection. Tolerates the versioned envelope and a bare map.
@@ -303,14 +303,14 @@ export function reportReceipt(onion, { valid } = {}) {
 }
 
 // ---- quality-aware rotation / load spread (T-FEAT-4) ----------------------------
-// Today slot-0 (the gateway the shim actually dials) is a fresh independent weighted-random draw
+// Today slot-0 (the gateway the client proxy actually dials) is a fresh independent weighted-random draw
 // each CONNECT. Over the long run that honors weight, but request-to-request it is memoryless: the
 // single top-weight gateway keeps winning the draw and gets hammered back-to-back, and equal-weight
 // peers see bursty, clumped load instead of an even spread — the opposite of what a rotation policy
 // wants for load balancing (and traffic concentration is a deanonymization lever this system already
 // clamps weight to fight).
 //
-// With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by a SMOOTH weighted round-robin (SWRR, the
+// With SHADE_TREE_ROTATION_SPREAD armed, slot-0 is chosen by a SMOOTH weighted round-robin (SWRR, the
 // nginx/`ngx_http_upstream` scheduler) over the SAME healthy, weight-clamped, receipt-adjusted pool
 // selectionOrder already selects from. SWRR keeps a per-gateway "current deficit" that advances every
 // CONNECT: each step adds the gateway's effective weight to its deficit, picks the max, then subtracts
@@ -332,17 +332,17 @@ export function reportReceipt(onion, { valid } = {}) {
 // and behaves exactly as today. Reuses the health ("down") + receipt-adjusted weight signals already in
 // this module; adds no persistence store (the SWRR deficits are in-memory session state, like health).
 //
-// RGOE_ROTATION_SPREAD : "1"/"on"/"true"/"yes" to arm smooth spread. Unset/anything else => OFF (default).
+// SHADE_TREE_ROTATION_SPREAD : "1"/"on"/"true"/"yes" to arm smooth spread. Unset/anything else => OFF (default).
 function parseRotationSpread(raw) {
   if (raw === undefined) return false;
   const v = String(raw).trim().toLowerCase();
   return v === "1" || v === "on" || v === "true" || v === "yes";
 }
-const ROTATION_SPREAD = parseRotationSpread(process.env.RGOE_ROTATION_SPREAD);
+const ROTATION_SPREAD = parseRotationSpread(process.env.SHADE_TREE_ROTATION_SPREAD);
 export function rotationSpreadEnabled() { return ROTATION_SPREAD; }
 
 // Injectable rng for the spread path (jitter seed + failover-tail weighting), so distribution tests
-// are deterministic and don't flake. Only the RGOE_ROTATION_SPREAD path reads it; the default
+// are deterministic and don't flake. Only the SHADE_TREE_ROTATION_SPREAD path reads it; the default
 // weight-only path stays on selectionOrder's own Math.random, untouched. Test seam, additive.
 let _rng = Math.random;
 export function _setRng(fn) { _rng = typeof fn === "function" ? fn : Math.random; }
@@ -381,7 +381,7 @@ function swrrPick(pool) {
   return best;
 }
 
-// The RGOE_ROTATION_SPREAD ordering: SWRR chooses slot-0 over the healthy, positive-weight pool
+// The SHADE_TREE_ROTATION_SPREAD ordering: SWRR chooses slot-0 over the healthy, positive-weight pool
 // (same "healthy unless all down" / "positive unless all zero" fallbacks as pickGateway), then the
 // existing weighted selectionOrder fills the failover tail over the remaining fleet. Falls back to
 // plain selectionOrder when there is nothing to spread across (< 2 candidates).
@@ -402,11 +402,11 @@ function spreadSelectionOrder(view) {
 }
 
 // The pinned directory signer(s). In a real bundle this is a hardcoded constant set
-// at build time; RGOE_DIR_SIGNER overrides for dev/testing. There is intentionally
+// at build time; SHADE_TREE_DIR_SIGNER overrides for dev/testing. There is intentionally
 // NO default: an unpinned directory is trust-on-first-use, which is exactly the
 // poisoning surface the signature exists to close. Set it, or directory mode is off.
 //
-// RGOE_DIR_SIGNER accepts a COMMA-SEPARATED list of pubkeys — the signer-rotation
+// SHADE_TREE_DIR_SIGNER accepts a COMMA-SEPARATED list of pubkeys — the signer-rotation
 // OVERLAP SET. This is an allowlist (verifyDirectory accepts a directory signed by ANY
 // listed signer, and requires the declared `dir.signer` to be one of them), NOT
 // "trust any signer": an unpinned/wrong key is still rejected. A single value behaves
@@ -424,14 +424,14 @@ function parsePinnedSigners(raw) {
   const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
   return list.length ? list : null;
 }
-const PINNED_SIGNER = parsePinnedSigners(process.env.RGOE_DIR_SIGNER);
+const PINNED_SIGNER = parsePinnedSigners(process.env.SHADE_TREE_DIR_SIGNER);
 
 export function directoryEnabled() {
   return Boolean((BOOTNODE_ONION || DIRECTORY_PATH) && PINNED_SIGNER);
 }
 
 // ---- client zero-trust operator re-verification (T-DEV-5) -----------------------
-// OFF by default (RGOE_VERIFY_STAKE=1 to arm) so existing behavior + tests are unchanged.
+// OFF by default (SHADE_TREE_VERIFY_STAKE=1 to arm) so existing behavior + tests are unchanged.
 //
 // The signed directory carries the bootnode's `operator`/`staked` LABEL, but that label is the
 // one claim in the directory the client cannot check from the entry alone: the onion<->operator
@@ -445,7 +445,7 @@ export function directoryEnabled() {
 //   2. GatewayRegistry.isStaked(operator) live (gateway-registry.mjs makeStakeVerifier) —
 // dropping any gateway that fails, regardless of the label. Onion-only entries (no operator)
 // are not claiming stake, so there is nothing to re-verify and they pass through untouched.
-const VERIFY_STAKE = process.env.RGOE_VERIFY_STAKE === "1";
+const VERIFY_STAKE = process.env.SHADE_TREE_VERIFY_STAKE === "1";
 export function verifyStakeEnabled() {
   return VERIFY_STAKE;
 }
@@ -462,10 +462,10 @@ export function setVerifyDeps({ fetchAnnounce, stake } = {}) {
 }
 
 // Default announce fetch: the bootnode's stored, signed announce for one onion, over Tor.
-// Only meaningful in live-discovery mode (RGOE_BOOTNODE_ONION); a static-file directory has no
+// Only meaningful in live-discovery mode (SHADE_TREE_BOOTNODE_ONION); a static-file directory has no
 // bootnode to ask, so re-verification is a live-discovery feature.
 function defaultFetchAnnounce(onion) {
-  if (!BOOTNODE_ONION) throw new Error("stake re-verification needs RGOE_BOOTNODE_ONION (no bootnode to fetch the signed announce from)");
+  if (!BOOTNODE_ONION) throw new Error("stake re-verification needs SHADE_TREE_BOOTNODE_ONION (no bootnode to fetch the signed announce from)");
   const full = onion.endsWith(".onion") ? onion : onion + ".onion";
   return fetchOverTor(BOOTNODE_ONION, `/gateway/${encodeURIComponent(full)}`, { torHost: TOR_HOST, torPort: TOR_PORT });
 }
@@ -551,7 +551,7 @@ let loadedAt = 0;
 // directory whose timestamp moves BACKWARD (audit loop-15 F2). Exported reset for tests.
 let lastAcceptedIssued = 0;
 export function _resetIssuedFloor() { lastAcceptedIssued = 0; }
-const REFRESH_MS = Number(process.env.RGOE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000);
+const REFRESH_MS = Number(process.env.SHADE_TREE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000);
 
 // ---- optional absolute directory freshness bound (T-FEAT-21) --------------------
 // The monotonic issued FLOOR above only stops rollback WITHIN a session: it refuses a directory
@@ -559,7 +559,7 @@ const REFRESH_MS = Number(process.env.RGOE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000
 // client with no prior state accepts whatever `issued` the bootnode first serves, so a bootnode that
 // is simply far behind (or is replaying a months-old but validly signed directory to a new client)
 // is undetectable. This OPTIONAL bound closes that gap: it rejects a FRESH directory (source !==
-// "cache") whose `issued` is older than now - RGOE_DIRECTORY_MAX_AGE_MS, failing closed to the
+// "cache") whose `issued` is older than now - SHADE_TREE_DIRECTORY_MAX_AGE_MS, failing closed to the
 // last-good in-memory fleet / cache via the same catch path as the rollback guard.
 //
 // OFF by default: unset => no max-age check at all, so legitimate long-lived static-file directories
@@ -575,10 +575,10 @@ function parseMaxAgeMs(raw) {
   const v = Number(raw);
   return Number.isFinite(v) && v > 0 ? v : null; // non-positive / non-numeric => disabled (fail open to off)
 }
-const DIRECTORY_MAX_AGE_MS = parseMaxAgeMs(process.env.RGOE_DIRECTORY_MAX_AGE_MS);
+const DIRECTORY_MAX_AGE_MS = parseMaxAgeMs(process.env.SHADE_TREE_DIRECTORY_MAX_AGE_MS);
 // Clock-skew grace added on top of the bound so a client whose clock lags the signer's doesn't
 // spuriously reject a just-issued directory. Only consulted when the bound is armed.
-const DIRECTORY_MAX_AGE_SKEW_MS = Math.max(0, Number(process.env.RGOE_DIRECTORY_MAX_AGE_SKEW_MS || 5 * 60 * 1000));
+const DIRECTORY_MAX_AGE_SKEW_MS = Math.max(0, Number(process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS || 5 * 60 * 1000));
 
 async function ensureLoaded() {
   const now = Date.now();
@@ -602,7 +602,7 @@ async function ensureLoaded() {
     }
     // Absolute freshness bound (T-FEAT-21): reject a FRESH directory whose issued is beyond the
     // configured max age + skew grace. `issued` is in SECONDS, the bound in MS, so scale × 1000.
-    // OFF unless RGOE_DIRECTORY_MAX_AGE_MS is set; cache source is exempt. Thrown => caught below =>
+    // OFF unless SHADE_TREE_DIRECTORY_MAX_AGE_MS is set; cache source is exempt. Thrown => caught below =>
     // keep the last-good in-memory fleet (fail-closed), same as the rollback guard.
     if (DIRECTORY_MAX_AGE_MS != null && next.source !== "cache") {
       const ageMs = now - nextIssued * 1000;
@@ -705,10 +705,10 @@ export function filterByCapability(gateways, req) {
 // leaf SOURCE: members.json => invited, a StakedReputationSet => staked, the PaidAccessSet =>
 // paid) and routes only to gateways that admit it -- a gateway that does not would reject the
 // proof with `wrong-group-root` after a wasted dial.
-//   - `admits` ABSENT (a legacy gateway, or a heartbeat without RGOE_ADMIT) is treated as
+//   - `admits` ABSENT (a legacy gateway, or a heartbeat without SHADE_TREE_ADMIT) is treated as
 //     "may admit any path" during the rollout window (kept, and logged once) -- the worst case is
 //     the same wrong-group-root reject + failover a pre-T-FEAT-9 client got. docs/CLIENTS.md.
-//   - `maxAnon` (--max-anon / RGOE_MAX_ANON=1): keep ONLY gateways whose admits is EXACTLY
+//   - `maxAnon` (--max-anon / SHADE_TREE_MAX_ANON=1): keep ONLY gateways whose admits is EXACTLY
 //     ["invited"] -- the maximum-anonymity fleet: no staked/paid leaves are hidden among the
 //     invited set there, so nothing about a member's on-chain footprint leaks by association.
 //     An absent `admits` cannot prove invited-only and is EXCLUDED under max-anon.
@@ -734,7 +734,7 @@ export function filterByAdmission(gateways, adm, { log = console.error } = {}) {
   });
   if (legacy && !_legacyAdmitsWarned) {
     _legacyAdmitsWarned = true;
-    log(`selection: ${legacy} gateway(s) advertise no admission policy (legacy / RGOE_ADMIT unset on their heartbeat); assuming they may admit a ${src} leaf -- a wrong guess costs one wrong-group-root reject + failover`);
+    log(`selection: ${legacy} gateway(s) advertise no admission policy (legacy / SHADE_TREE_ADMIT unset on their heartbeat); assuming they may admit a ${src} leaf -- a wrong guess costs one wrong-group-root reject + failover`);
   }
   return kept;
 }
@@ -788,7 +788,7 @@ export async function selectCandidates(req = null, adm = null) {
   // reportHealth's in-place mutation (keyed by onion on dir.gateways) still lands on them.
   const view = gateways === dir.gateways ? dir : { ...dir, gateways };
   // Rotation/spread policy (T-FEAT-4). OFF by default: selectionOrder(view) is the byte-identical
-  // weight-only path from before. With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by smooth
+  // weight-only path from before. With SHADE_TREE_ROTATION_SPREAD armed, slot-0 is chosen by smooth
   // weighted round-robin so load spreads evenly across the healthy fleet (no back-to-back hammering
   // of the top gateway) while the long-run weighted share is preserved exactly.
   const order = ROTATION_SPREAD ? spreadSelectionOrder(view) : selectionOrder(view);
@@ -805,7 +805,7 @@ export async function selectCandidates(req = null, adm = null) {
   });
 }
 
-// Health/latency feedback from the shim after a dial attempt.
+// Health/latency feedback from the client proxy after a dial attempt.
 export function reportResult(onion, { ok, latencyMs } = {}) {
   if (!loaded) return;
   const full = onion.endsWith(".onion") ? onion : onion + ".onion";
@@ -814,15 +814,15 @@ export function reportResult(onion, { ok, latencyMs } = {}) {
   updateHealthCache(loaded.dir, full, { ok, latencyMs });
 }
 
-// INTEGRATION SEAM (T-FEAT-22). The client (client/rgoe-client.mjs) already verifies the optional
+// INTEGRATION SEAM (T-FEAT-22). The client (client/shade-tree-client.mjs) already verifies the optional
 // egress receipt in `_verifyReceipt`, yielding an evidence record `{ present, valid, ... }`, and then
 // discards it. To feed quality-aware selection, add exactly ONE line right after that call
-// (rgoe-client.mjs, immediately after `const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);`):
+// (shade-tree-client.mjs, immediately after `const receipt = this._verifyReceipt(ack.receipt, usedOnion, emit);`):
 //
 //     if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });
 //
 // Gating on `receipt.present` keeps this fully additive: a legacy gateway running with receipts OFF
 // sends no receipt (present:false) and is never entered into the tally or penalized. A gateway that
 // opts into receipts and returns a VALID one earns the bonus; one that returns a bogus receipt
-// (present but invalid) is deprioritized. rgoe-client.mjs is intentionally NOT edited here — this is
+// (present but invalid) is deprioritized. shade-tree-client.mjs is intentionally NOT edited here — this is
 // the seam it would call.

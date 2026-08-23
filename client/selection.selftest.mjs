@@ -1,11 +1,11 @@
-// Offline proof of the shim's per-request gateway selection (client/selection.mjs) over the
+// Offline proof of the client proxy's per-tunnel gateway selection (client/selection.mjs) over the
 // STATIC signed-directory source — no Tor, no live bootnode. This is the same verify +
 // last-known-good + weighted-selection code the live bootnode path shares; only the fetch
 // differs. We mint three real, internally-consistent v3 onions, sign a directory with a fresh
 // ed25519 signer, pin that signer, and drive selectCandidates / reportResult.
 //
-// selection.mjs captures its config from the environment AT IMPORT TIME (RGOE_DIRECTORY,
-// RGOE_DIR_SIGNER, ...), so the positive case sets the env BEFORE the dynamic import, and the
+// selection.mjs captures its config from the environment AT IMPORT TIME (SHADE_TREE_DIRECTORY,
+// SHADE_TREE_DIR_SIGNER, ...), so the positive case sets the env BEFORE the dynamic import, and the
 // negative case (wrong pinned signer) runs in a SEPARATE spawned node process with a different
 // env — you cannot re-pin inside a process that has already imported the module.
 //
@@ -47,7 +47,7 @@ function mintGateway(weight, health) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-selection-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-selection-"));
   try {
     // --- mint a signer + a 3-gateway signed directory -------------------------
     const signer = newEd25519();
@@ -65,9 +65,9 @@ async function main() {
     const wantOnions = new Set(gateways.map((g) => g.onion.replace(/\.onion$/, "")));
 
     // --- import selection.mjs with the env it reads AT IMPORT TIME ------------
-    process.env.RGOE_DIRECTORY = dirFile;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    delete process.env.RGOE_BOOTNODE_ONION; // force the static-file source, not live discovery
+    process.env.SHADE_TREE_DIRECTORY = dirFile;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    delete process.env.SHADE_TREE_BOOTNODE_ONION; // force the static-file source, not live discovery
     const sel = await import(pathToFileURL(SELECTION_PATH).href);
 
     console.log("\ndirectoryEnabled + selectCandidates:");
@@ -116,7 +116,7 @@ try {
     try {
       execFileSync(process.execPath, ["--input-type=module", "-e", script], {
         encoding: "utf8",
-        env: { ...process.env, RGOE_DIRECTORY: dirFile, RGOE_DIR_SIGNER: wrong.pub, RGOE_BOOTNODE_ONION: "" },
+        env: { ...process.env, SHADE_TREE_DIRECTORY: dirFile, SHADE_TREE_DIR_SIGNER: wrong.pub, SHADE_TREE_BOOTNODE_ONION: "" },
       });
       negCode = 0; // execFileSync only returns on exit 0
     } catch (e) {
