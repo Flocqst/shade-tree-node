@@ -1,6 +1,6 @@
 {
   "name": "shade-tree-node",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shade Tree: proof-gated onion egress for HTTPS clients and local agents.",
   "type": "module",
   "private": true,
@@ -36,14 +36,11 @@
     "test:node": "node scripts/test-all.mjs --no-contracts",
     "test:contracts": "forge test",
     "lint": "eslint .",
-    "audit:ci": "npm audit --audit-level=critical",
+    "audit:ci": "npm audit --omit=dev --audit-level=high",
     "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts",
     "mutation:test": "stryker run"
   },
   "dependencies": {
-    "@semaphore-protocol/group": "^4.14.3",
-    "@semaphore-protocol/identity": "^4.14.3",
-    "@semaphore-protocol/proof": "^4.14.3",
     "ethers": "^6.17.0",
     "js-sha3": "^0.13.0",
     "poseidon-lite": "^0.3.0",
@@ -51,9 +48,15 @@
     "socks": "^2.8.3"
   },
   "devDependencies": {
+    "@semaphore-protocol/group": "^4.14.3",
+    "@semaphore-protocol/identity": "^4.14.3",
+    "@semaphore-protocol/proof": "^4.14.3",
     "@stryker-mutator/core": "^10.0.0",
     "c8": "^12.0.0",
     "eslint": "^10.8.1",
     "globals": "^17.11.0"
+  },
+  "overrides": {
+    "underscore": "1.13.8"
   }
 }

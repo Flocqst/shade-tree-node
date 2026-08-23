@@ -61,7 +61,7 @@ async function main() {
     ok(threw, "identityFileFor('') throws");
 
     // ---- stdout mode: JSON alone on stdout, secret sourced from SHADE_TREE_SECRET -----------------
-    console.log("\nrgoe identity (SHADE_TREE_SECRET, stdout):");
+    console.log("\nshade-tree identity (SHADE_TREE_SECRET, stdout):");
     const so = run([], { env: { SHADE_TREE_SECRET: SECRET } });
     ok(so.code === 0, "exits 0");
     let parsed = null; try { parsed = JSON.parse(so.stdout); } catch { /* not json */ }
@@ -71,12 +71,12 @@ async function main() {
     ok(!so.stderr.includes(SECRET) && !so.stderr.includes(SECRET.slice(2)) && !so.stderr.includes(refIdSecret), "stderr never contains the secret or the identitySecret (no-leak)");
 
     // ---- router flag: --secret sets SHADE_TREE_SECRET ---------------------------------------------
-    console.log("\nrgoe identity --secret (router flag -> SHADE_TREE_SECRET):");
+    console.log("\nshade-tree identity --secret (router flag -> SHADE_TREE_SECRET):");
     const sf = run(["--secret", SECRET]);
     ok(sf.code === 0 && sf.stdout === so.stdout, "--secret yields the same file as SHADE_TREE_SECRET");
 
     // ---- --out: file mode 0600, stdout empty, byte-equal to the harness helper ---------------
-    console.log("\nrgoe identity --out (file, 0600, byte-equal to egress-derive.mjs):");
+    console.log("\nshade-tree identity --out (file, 0600, byte-equal to egress-derive.mjs):");
     const outPath = join(work, "identity.json");
     const wo = run(["--out", outPath], { env: { SHADE_TREE_SECRET: SECRET } });
     ok(wo.code === 0, "--out exits 0");

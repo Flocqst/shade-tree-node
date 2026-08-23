@@ -111,7 +111,7 @@ egress is unaffected — it never fails closed on a missing key.
 **Client** — automatic and additive. `ShadeTreeClient.connect()` verifies any `receipt` on the ack
 against the dialed onion + current epoch and exposes the result:
 
-- `tunnel.shade-tree.receipt` → `{ present, valid, epoch?, onion?, reason? }`
+- `tunnel.shadeTree.receipt` → `{ present, valid, epoch?, onion?, reason? }`
 - an `onEvent({ phase: "receipt", status: "verified" | "invalid" | "absent", ... })` progress event.
 
 `present:false` is the normal legacy case (a gateway with receipts off) and is **not** a failure.

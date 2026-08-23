@@ -1,9 +1,9 @@
 // On-chain reputation tiers (T-FEAT-8b) + on-chain root (T-DEV-9c) end to end on a throwaway
 // anvil, with the REAL contracts (deployed by contracts/script/DeployRegistry.s.sol with a
-// two-tier table via RGOE_TIER_LIMITS/RGOE_TIER_BONDS_WEI), the REAL `rgoe register-member
+// two-tier table via SHADE_TREE_TIER_LIMITS/SHADE_TREE_TIER_BONDS_WEI), the REAL `shade-tree register-member
 // --limit`, the REAL gateway process in ON-CHAIN ROOT MODE, REAL RLN Groth16 proofs, and the
 // REAL tiered on-chain slasher. Slow suite (real proving + a forge broadcast; in
-// scripts/test-all.mjs SLOW_SUITES, skipped by RGOE_FAST=1). Requires anvil + forge on PATH
+// scripts/test-all.mjs SLOW_SUITES, skipped by SHADE_TREE_FAST=1). Requires anvil + forge on PATH
 // and TCP :8443 free (the gateway's fixed listen port); otherwise SKIPs honestly.
 //
 // Proves (scripts/integration-tiers.mjs runTierIntegration):
@@ -68,7 +68,7 @@ async function main() {
   const port = 18545 + Math.floor(Math.random() * 1000);
   const url = `http://127.0.0.1:${port}`;
   const anvil = spawn(anvilBin, ["--port", String(port), "--silent"], { stdio: "ignore" });
-  const work = mkdtempSync(join(tmpdir(), "rgoe-tiers-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-tiers-"));
   const targets = [await localTarget(), await localTarget()];
   try {
     let up = false;
@@ -81,11 +81,11 @@ async function main() {
     const dep = spawnSync(forgeBin, ["script", "contracts/script/DeployRegistry.s.sol:DeployRegistry", "--rpc-url", url, "--broadcast", "--private-key", ANVIL_KEY_0, "-vv"], {
       cwd: ROOT, encoding: "utf8", timeout: 300000,
       env: {
-        ...process.env, RGOE_BOND_WEI: "1000000000000000", RGOE_TIER_LIMITS: "32", RGOE_TIER_BONDS_WEI: "4000000000000000",
-        RGOE_DEPLOY_REAL_VERIFIER: "1", RGOE_DEPLOY_OUT: outJson, RGOE_RPC_URL: url,
+        ...process.env, SHADE_TREE_BOND_WEI: "1000000000000000", SHADE_TREE_TIER_LIMITS: "32", SHADE_TREE_TIER_BONDS_WEI: "4000000000000000",
+        SHADE_TREE_DEPLOY_REAL_VERIFIER: "1", SHADE_TREE_DEPLOY_OUT: outJson, SHADE_TREE_RPC_URL: url,
       },
     });
-    ok(dep.status === 0 && existsSync(outJson), "DeployRegistry.s.sol broadcast on anvil with RGOE_TIER_LIMITS=32 RGOE_TIER_BONDS_WEI=4e15 RGOE_DEPLOY_REAL_VERIFIER=1");
+    ok(dep.status === 0 && existsSync(outJson), "DeployRegistry.s.sol broadcast on anvil with SHADE_TREE_TIER_LIMITS=32 SHADE_TREE_TIER_BONDS_WEI=4e15 SHADE_TREE_DEPLOY_REAL_VERIFIER=1");
     if (dep.status !== 0) { console.log((dep.stdout || "").split("\n").slice(-15).join("\n"), dep.stderr); return; }
     ok(/tier\s+32/.test(dep.stdout) && /REAL Groth16 exit-auth/.test(dep.stdout), "deploy log names tier 32 + the real exit-auth verifier");
     const deployed = JSON.parse(readFileSync(outJson, "utf8"));
@@ -99,7 +99,7 @@ async function main() {
       rpcUrl: url, set, slashKey: ANVIL_KEY_1, registerKey: ANVIL_KEY_0, receiver: ANVIL_ADDR_2,
       confirmations: 1,
       targets: targets.map((t) => `127.0.0.1:${t.port}`),
-      gatewayEnv: { RGOE_EGRESS_ALLOW: targets.map((t) => `127.0.0.1:${t.port}`).join(","), RGOE_EPOCH_SECONDS: "120" },
+      gatewayEnv: { SHADE_TREE_EGRESS_ALLOW: targets.map((t) => `127.0.0.1:${t.port}`).join(","), SHADE_TREE_EPOCH_SECONDS: "120" },
       settle: () => rpc(url, "evm_mine", []), // anvil: one block so head-1 covers the stakes
       sink: (line) => { if (!/^\[.*\] gateway/.test(line) || /SLASH|root source|slash: on-chain|tiers:/.test(line)) console.log("    " + line); },
     });
@@ -107,7 +107,7 @@ async function main() {
     ok(r.pass, "integration PASS (tier-8 member intact, tier-32 over-spender slashed at its tier)");
 
     // 3. T-DEV-9c locally: the light provider proves the tiered contract's root from slot 3.
-    process.env.RGOE_CONFIRMATIONS = "1";
+    process.env.SHADE_TREE_CONFIRMATIONS = "1";
     const { LightClientRootProvider, NodeRootProvider } = await import("../lib/root-provider.mjs");
     await rpc(url, "evm_mine", []);
     const light = LightClientRootProvider({ contract: set, rpcUrl: url });

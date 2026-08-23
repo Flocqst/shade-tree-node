@@ -38,7 +38,9 @@ by rendezvous, so there is no exit node and the gateway never learns the client 
   `circuits/rln/`). One share per slot egresses; a second distinct signal on the same
   nullifier is a provable over-spend, so the gateway reconstructs the identity secret and
   slashes on whichever contract holds the leaf (`gateway/gateway.mjs:makeRoutingSlasher`).
-  Requests are mutually unlinkable, even to the gateway. A member's per-epoch budget is a tier
+  Proof transcripts carry no stable member identifier across slots. A gateway can still
+  correlate tunnels through destination, timing, volume, or application metadata. A member's
+  per-epoch budget is a tier
   baked into its leaf (`Poseidon2(Poseidon1(secret), limit)`, 8 or 32), proven in the same
   circuit and invisible on the wire ([ADR 0006](adr/0006-reputation-tiers.md)).
 - **The root is a union of on-chain sets.** Members self-enroll (only a commitment leaves the
@@ -91,7 +93,7 @@ One box, each line its own terminal, a local tor daemon ([`QUICKSTART.md`](QUICK
 ```bash
 shade-tree keygen tor/hs-bootnode           # mint an onion identity
 shade-tree bootnode --admission open        # discovery bootnode (its own onion service)
-shade-tree gateway                          # a reputation-gated gateway (SHADE_TREE_ADMIT=invited)
+shade-tree gateway                          # an access-gated node (SHADE_TREE_ADMIT=invited)
 shade-tree heartbeat --bootnode <onion>     # keep the gateway announced
 shade-tree enroll                           # a member identity (prints SHADE_TREE_SECRET)
 shade-tree client --secret <hex> --bootnode <onion> --dir-signer <signer-pubkey>

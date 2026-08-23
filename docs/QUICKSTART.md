@@ -1,6 +1,6 @@
 # Quickstart
 
-Join the fleet that is running, or stand up your own (a discovery bootnode, a reputation-gated
+Join the fleet that is running, or stand up your own (a discovery bootnode, an access-gated
 gateway, and a client). Three paths: **Path A, join the live fleet** (invited with a secret, buy a
 leaf over HTTP 402, or stake one), **Path B, a local loop** to understand the pieces, and
 **Path C, a live droplet** to run your own gateway or fleet (you choose what you admit, default

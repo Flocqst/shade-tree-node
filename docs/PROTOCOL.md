@@ -97,8 +97,10 @@ Each membership leaf commits to a private per-epoch limit. The client spends one
 private RLN message slot for each new tunnel. A slot produces one nullifier for that
 member and epoch.
 
-- An exact retry reuses the same envelope, signal, share, and nullifier. A short replay
-  window treats it idempotently so failover cannot manufacture an over-spend.
+- An exact retry reuses the same envelope, signal, share, and nullifier. Within the short
+  replay window it is accepted without being treated as an over-spend, but the current
+  handler may open another upstream tunnel. Operators should account for that bounded
+  amplification when sizing replay and concurrency limits.
 - Reusing one slot in the same epoch for a different signal creates a second point on
   the RLN line. The two public shares reconstruct the circuit identity secret and may
   identify the leaf for removal or onchain slashing.

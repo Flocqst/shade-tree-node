@@ -27,7 +27,7 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
 | `bootnode/fetch.selftest.mjs` | The HTTP response parser (`parseHttp`): well-formed 200, non-200 throws, missing terminator throws, unicode/large bodies. |
 | `lib/gateway-registry.selftest.mjs` | The stake verifier: mock (open + allowlist), factory resolution, and the on-chain `eth_call` encode/decode (selector, address padding, bool decode, caching) against a stubbed fetch. |
 | `lib/rln.selftest.mjs` | RLN prove/verify, the spent-set: first share egresses, identical replay deduped (no slash), second distinct signal reconstructs + slashes exactly once, independent per-nullifier counters. |
-| `gateway/shim.selftest.mjs` | The gateway spent-set control flow and the client envelope (v3 bundle, share bound to `requestSignal(target,nonce)`, per-tunnel nonce). |
+| `gateway/shim.selftest.mjs` | The gateway spent-set control flow and the client envelope (v4 bundle, share bound to `requestSignal(target,nonce)`, per-tunnel nonce). |
 | `bin/shade-tree.selftest.mjs` | The CLI: help/version/unknown-command/doctor, flag→env mapping, positional + passthrough flags. |
 | `client/selection.selftest.mjs` | Directory-source selection: verify + rotate + last-known-good, and rejection under a wrong pinned signer. |
 | `test/*.t.sol` (Foundry) | `StakedReputationSet` (register/exit/withdraw/slash, unbonding, ZK-auth), `GatewayRegistry` (stake/exit/withdraw/governed slash/ownership), Poseidon JS↔Solidity parity. |

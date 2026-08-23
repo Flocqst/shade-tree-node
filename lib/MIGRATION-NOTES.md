@@ -6,7 +6,7 @@ Shamir share over a Semaphore membership proof and bound them only by a cheap
 `signal == share.x` check. That seam is **gone**: the share↔membership binding is now
 proven inside one circuit. This changes the envelope and several gateway assumptions.
 
-## Envelope v3 shape (the wire object)
+## Envelope v4 shape (the wire object)
 
 `proveForSlot(secret, epoch, i, signal, { group })` returns:
 
@@ -29,7 +29,7 @@ proven inside one circuit. This changes the envelope and several gateway assumpt
 }
 ```
 
-The **envelope the shim sends** should carry `{ v: 3, target, proof, nullifier,
+The **envelope the shim sends** should carry `{ v: 4, target, proof, nullifier,
 externalNullifier, share }`. Do **not** send `slot`/`scope` — the slot (messageId) is a
 private circuit witness; there is no public slot any more. `verifyEnvelope` ignores any
 `slot` field.

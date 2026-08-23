@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-// StakedReputationSet: the on-chain admission gate for the reputation-gated onion
+// StakedReputationSet: the on-chain admission gate for the access-gated onion
 // egress. See docs/ONCHAIN.md for the full design and the anonymity argument. This
 // is a REFERENCE implementation, unaudited, testnet-only. The ZK verifier and the
 // commitment hasher are abstracted behind interfaces (below); wiring the real RLN

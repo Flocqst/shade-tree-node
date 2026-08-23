@@ -12,12 +12,12 @@ Golden fixtures: [`testdata/vectors.json`](../testdata/vectors.json). See [Confo
 | --- | --- | --- | --- |
 | `ANNOUNCE_VERSION` | `1` | announce record `v` field | `bootnode/announce.mjs:34` |
 | directory `version` | `1` | signed-directory `version` field | `bootnode/server.mjs:127` |
-| envelope `v` | `3` | egress-envelope `v` field | `client/shade-tree-client.mjs:91` |
-| signal prefix | `shade-tree:v3` | request-signal line 1 | `lib/rln.mjs:125` |
+| envelope `v` | `4` | egress-envelope `v` field | `client/shade-tree-client.mjs` `buildEnvelope` |
+| signal prefix | `shade-tree:v4` | tunnel-signal line 1 | `lib/rln.mjs` `requestSignal` |
 | onion | v3 | Tor onion address version byte `0x03` | `lib/directory.mjs:104` |
 
-"v3" is the protocol generation (RLN v3). The announce/directory internal `version`/`v`
-fields are `1`; only the egress envelope carries `v:3`. Keep them distinct.
+Shade Tree protocol v4, Tor onion-service v3, and the announce/directory schema version `1`
+are independent tags. Keep them distinct.
 
 ## 1. Canonical byte encodings
 
@@ -385,20 +385,20 @@ Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
 Idempotency: an identical re-POST of a finished order returns `200` with `replayed:true` and the
 stored receipt (no second settle/insert).
 
-## 6. Egress envelope v3
+## 6. Egress envelope v4
 
 The envelope is NOT part of the bootnode HTTP API. The client sends it to a GATEWAY onion over
 a Tor SOCKS tunnel (`client/shade-tree-client.mjs:184` `_dial`, destination port `80`) as
 `JSON.stringify(envelope) + "\n"` (`:218`). The gateway replies with ONE newline-terminated
-JSON line: `{ ok:true }` on admit, else `{ ok:false, err:"gate:<reason>" }` or another
-`err` (`gateway/gateway.mjs:205`,`:240`). Documented here because the same wire format the
+JSON line: `{ ok:true }` on admit, else `{ ok:false, err:"<reason>" }` (sometimes with
+negotiation metadata). Documented here because the same wire format the
 Rust client emits must satisfy `verifyEnvelope`.
 
 ### 6.1 Wire shape — `client/shade-tree-client.mjs:82` `buildEnvelope`
 
 ```jsonc
 {
-  "v": 3,
+  "v": 4,
   "target": "<host:port>",
   "nonce":  "<16 random bytes hex, 32 chars>",
   "artifact": "rln-<16 hex>",    // OPTIONAL (T-HARD-8): id of the ZK artifact set the proof was made with
@@ -437,12 +437,12 @@ range-checking the private `messageId`; the envelope, the public-signal set, and
 reply are byte-identical for a tier-8 and a tier-32 member. There is no `limit`/`tier` field, and a
 gateway MUST NOT be sent one. Enforcement is the root (`wrong-group-root`) + the nullifier set.
 
-### 6.2 Request signal + target binding
+### 6.2 Tunnel signal + target binding
 
 `lib/rln.mjs:124` `requestSignal`:
 
 ```
-requestSignal(target, nonce) = `shade-tree:v3\n${target}\n${nonce}`
+requestSignal(target, nonce) = `shade-tree:v4\n${target}\n${nonce}`
 ```
 
 The circuit public `x` is `calculateSignalHash(message)` = `keccak256(utf8(message)) >> 8`

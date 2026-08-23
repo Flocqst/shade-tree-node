@@ -18,10 +18,10 @@ import {
 
 const SECRET = "12345678901234567890"; // fixed app seed secret (field element)
 const EPOCH = 42n;
-// Reputation tier (T-FEAT-8): RGOE_INTEROP_LIMIT / RGOE_INTEROP_SLOT let run.sh also drive a
+// Reputation tier (T-FEAT-8): SHADE_TREE_INTEROP_LIMIT / SHADE_TREE_INTEROP_SLOT let run.sh also drive a
 // tier-32 leaf at a slot >= 8 (the leaf commits to the limit; default = K_SLOTS, slot 3).
-const LIMIT = Number(process.env.RGOE_INTEROP_LIMIT || K_SLOTS);
-const MESSAGE_ID = Number(process.env.RGOE_INTEROP_SLOT || 3); // slot i, 0<=i<LIMIT
+const LIMIT = Number(process.env.SHADE_TREE_INTEROP_LIMIT || K_SLOTS);
+const MESSAGE_ID = Number(process.env.SHADE_TREE_INTEROP_SLOT || 3); // slot i, 0<=i<LIMIT
 const TARGET = "example.com:443";
 const NONCE = process.argv[2] || "0123456789abcdef0123456789abcdef";
 

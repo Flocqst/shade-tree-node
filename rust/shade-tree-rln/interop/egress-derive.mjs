@@ -1,6 +1,6 @@
 // T-RUST-2d harness helper: derive a member identity + the group member set from a fixed
 // app secret using the JS reference (lib/rln.mjs), and write the two input files the Rust
-// `rgoe egress --features live` build consumes:
+// `shade-tree egress --features live` build consumes:
 //
 //   <outdir>/identity.json  = { identitySecret, leaf }   (the member's derived secret + leaf)
 //   <outdir>/members.json   = { members: [leaf, ...] }   (the ordered group)
@@ -9,11 +9,11 @@
 // gateway's PoC root source (loadGroup) computes the identical depth-20 root the Rust
 // native tree does. The identity derivation itself (Semaphore-v3 identitySecret +
 // rateCommitment leaf) lives in lib/identity-file.mjs, shared with the member-facing
-// `rgoe identity` command (group/identity.mjs), so the harness and the CLI can never drift.
+// `shade-tree identity` command (group/identity.mjs), so the harness and the CLI can never drift.
 // The Rust side takes them as inputs and computes the root + path natively.
 //
 // This is a HARNESS helper (fixed dev secret, single-leaf members.json). Members exporting
-// their real identity for the Rust client should use `rgoe identity` instead.
+// their real identity for the Rust client should use `shade-tree identity` instead.
 //
 // Usage: node egress-derive.mjs <outdir> [secret]
 import { writeFileSync } from "node:fs";

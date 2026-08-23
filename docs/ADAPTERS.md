@@ -101,24 +101,23 @@ dependency-free beyond the repo itself:
 ```js
 import { ShadeTreeClient, cleanUp } from "./client/shade-tree-client.mjs";
 
-const shade-tree = new ShadeTreeClient();                       // reads the shared env above
-const res = await shade-tree.fetch("https://api.ipify.org?format=json");
+const shadeTree = new ShadeTreeClient();                        // reads the shared env above
+const res = await shadeTree.fetch("https://api.ipify.org?format=json");
 console.log(JSON.parse(res.body).ip, "via", res.gateway.onion);   // a gateway's IP
 cleanUp();                                           // stop snarkjs workers on exit
 ```
 
-`shade-tree.connect("host:443")` is the lower-level form: a raw duplex tunnel to the target for
-your own TLS/protocol. `shade-tree.fetch()` is HTTPS-only for the same `:443` reason as above.
+`shadeTree.connect("host:443")` is the lower-level form: a raw duplex tunnel to the target for
+your own TLS/protocol. `shadeTree.fetch()` is HTTPS-only for the same `:443` reason as above.
 
 A runnable version is [`examples/agent-egress.mjs`](../examples/agent-egress.mjs) (prints the
 egress IP). It parses without a fleet but needs a live fleet to actually fetch.
 
 ## Privacy note
 
-Whichever style: **each request rotates the gateway and carries a fresh RLN proof.** The
-proof has a per-tunnel nullifier (a re-used nullifier on a second distinct signal is a
-provable over-spend the gateway slashes), so requests are rate-limited without identifying
-you and are mutually unlinkable, even to the gateway. There is no exit node: the client
-reaches the gateway by Tor rendezvous, so the gateway never learns your IP, and TLS stays
-end-to-end so it sees only ciphertext. Running many queries (SearXNG's fan-out, an agent
-loop) does not accumulate a linkable trail.
+Whichever style: **each CONNECT tunnel runs selection and carries a fresh RLN proof.**
+Selection may choose the same gateway again. The proof has a per-tunnel nullifier (reusing
+one nullifier on a second distinct signal is a provable over-spend), so proof transcripts do
+not expose a stable member identifier. There is no exit node: the onion rendezvous hides the
+client source IP, and TLS keeps application content encrypted end to end. The serving gateway
+still sees the destination, timing, lifetime, and traffic volume, which may correlate tunnels.

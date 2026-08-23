@@ -83,7 +83,7 @@ async function main() {
   for (let i = 0; i < N_MEMBERS; i++) {
     const p = await proveForSlot(secrets[i], epoch, slot, signal, { group });
     envelopes.push({
-      v: 3,
+      v: 4,
       target,
       nonce,
       proof: p.proof,

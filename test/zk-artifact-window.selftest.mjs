@@ -1,5 +1,5 @@
 // The dual-VK rollout WINDOW, end to end with REAL Groth16 proofs (T-HARD-8). Slow suite
-// (real proving; in scripts/test-all.mjs SLOW_SUITES, skipped by RGOE_FAST=1). The fast half
+// (real proving; in scripts/test-all.mjs SLOW_SUITES, skipped by SHADE_TREE_FAST=1). The fast half
 // (ids, config, reasons, caps, client pick) is lib/zk-artifacts.selftest.mjs.
 //
 // Two genuinely DIFFERENT artifact sets are needed to prove the acceptance criterion
@@ -22,7 +22,7 @@
 //   ADVERSARIAL: id spoofing — an OLD proof CLAIMING NEW (and vice versa) => invalid-proof
 //                (verified under the claimed key; a mismatched claim buys nothing); a claimed
 //                id the gateway doesn't hold => artifact-unknown
-//   CLIENT: RGOE_ZK_PROVER_ARTIFACTS=<NEW>=..,<OLD>=.. => the prover proves with the requested
+//   CLIENT: SHADE_TREE_ZK_PROVER_ARTIFACTS=<NEW>=..,<OLD>=.. => the prover proves with the requested
 //           set and echoes its id; buildEnvelope stamps it; against a gateway ad of {OLD} the
 //           client downgrades to OLD and that proof verifies; the heartbeat ad from the SAME env
 //           the gateway loads names exactly the accepted ids
@@ -43,7 +43,7 @@ import {
 import { artifactIdOfFile, builtinArtifactId, RLN_DIR, BUILTIN_VKEY_PATH } from "../lib/zk-artifacts.mjs";
 import { buildGatewayCaps } from "../bootnode/heartbeat.mjs";
 import { canonicalCaps } from "../lib/directory.mjs";
-import { buildEnvelope, makeSlotPool } from "../client/rgoe-client.mjs";
+import { buildEnvelope, makeSlotPool } from "../client/shade-tree-client.mjs";
 
 let failures = 0;
 function ok(name) { console.log("  PASS  " + name); }
@@ -53,7 +53,7 @@ async function test(name, fn) { try { await fn(); ok(name); } catch (e) { bad(na
 console.log("dual-VK rollout window with real proofs (T-HARD-8):");
 
 // ---- mint the NEW artifact set: one phase-2 contribution on the shipped zkey ---------------
-const work = mkdtempSync(join(tmpdir(), "rgoe-zk-window-"));
+const work = mkdtempSync(join(tmpdir(), "shade-tree-zk-window-"));
 const NEW_DIR = join(work, "new");
 const { mkdirSync } = await import("node:fs");
 mkdirSync(NEW_DIR);
@@ -69,14 +69,14 @@ const UNKNOWN = "rln-ffffffffffffffff";
 assert.notEqual(OLD, NEW);
 
 // The gateway's two window configurations, from the SAME env shape an operator would set.
-const ENV_OPEN = { RGOE_ZK_ARTIFACTS: `${NEW}=${join(NEW_DIR, "verification_key.json")},${OLD}=${BUILTIN_VKEY_PATH}` };
-const ENV_CLOSED = { RGOE_ZK_ARTIFACTS: `${NEW}=${join(NEW_DIR, "verification_key.json")}`, RGOE_ZK_ARTIFACT_LEGACY: OLD };
+const ENV_OPEN = { SHADE_TREE_ZK_ARTIFACTS: `${NEW}=${join(NEW_DIR, "verification_key.json")},${OLD}=${BUILTIN_VKEY_PATH}` };
+const ENV_CLOSED = { SHADE_TREE_ZK_ARTIFACTS: `${NEW}=${join(NEW_DIR, "verification_key.json")}`, SHADE_TREE_ZK_ARTIFACT_LEGACY: OLD };
 const OPEN = loadArtifactSet({ env: ENV_OPEN });
 const CLOSED = loadArtifactSet({ env: ENV_CLOSED });
 assert.deepEqual([OPEN.legacyId, OPEN.legacyAccepted, CLOSED.legacyId, CLOSED.legacyAccepted], [OLD, true, OLD, false]);
 
 // The client's two prover sets (newest first), installed process-wide for proveForSlot.
-_setProverSets(loadProverSets({ env: { RGOE_ZK_PROVER_ARTIFACTS: `${NEW}=${NEW_DIR},${OLD}=${RLN_DIR}` } }));
+_setProverSets(loadProverSets({ env: { SHADE_TREE_ZK_PROVER_ARTIFACTS: `${NEW}=${NEW_DIR},${OLD}=${RLN_DIR}` } }));
 
 // ---- a member + group ------------------------------------------------------------------------
 const epoch = currentEpoch();
@@ -90,7 +90,7 @@ const TARGET = "example.com:443";
 async function envelopeWith(artifactToProveWith, { nonce, slot = 1, claim = artifactToProveWith, omitField = false } = {}) {
   const p = await proveForSlot(secret, epoch, slot, requestSignal(TARGET, nonce), { group, artifact: artifactToProveWith });
   assert.equal(p.artifact, artifactToProveWith, "proveForSlot echoes the set it proved with");
-  const env = { v: 3, target: TARGET, nonce, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
+  const env = { v: 4, target: TARGET, nonce, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
   if (!omitField) env.artifact = claim;
   return env;
 }
@@ -158,7 +158,7 @@ await test("ADVERSARIAL id spoofing: an OLD proof claiming NEW (and NEW claiming
   assert.equal((await verifyEnvelope(newStripped, roots, nowMs, { artifacts: CLOSED })).reason, `artifact-retired:${OLD}`);
 });
 await test("ADVERSARIAL: a claimed id the gateway does not hold is rejected by NAME before any SNARK (id spoofing to an unheld vkey)", async () => {
-  const single = loadArtifactSet({ env: { RGOE_ZK_ARTIFACTS: `${OLD}=${BUILTIN_VKEY_PATH}` } });
+  const single = loadArtifactSet({ env: { SHADE_TREE_ZK_ARTIFACTS: `${OLD}=${BUILTIN_VKEY_PATH}` } });
   const r = await verifyEnvelope({ ...newExplicit }, roots, nowMs, { artifacts: single });
   assert.equal(r.reason, `artifact-unknown:${NEW}`);
 });
@@ -188,7 +188,7 @@ await test("DEFAULT: with no artifact config on either side, prove -> verify rou
   _setArtifactSet(null);
   const p = await proveForSlot(secret, epoch, 2, requestSignal(TARGET, "dflt"), { group });
   assert.equal(p.artifact, OLD);
-  const env = { v: 3, target: TARGET, nonce: "dflt", proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
+  const env = { v: 4, target: TARGET, nonce: "dflt", proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
   const r = await verifyEnvelope(env, roots, nowMs);
   assert.equal(r.ok, true, r.reason);
   assert.equal(r.artifact, OLD);

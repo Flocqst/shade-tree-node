@@ -23,11 +23,11 @@
 //      exceeds maxEntries (a flood is refused, not resident), a self-attested huge weight is
 //      clamped to MAX_WEIGHT, and a re-announce inside minReannounceSec is rate-limited.
 //
-// The DEFAULT run is bounded to stay fast (<~2s). Set RGOE_SOAK=1 for a heavier multiplier
+// The DEFAULT run is bounded to stay fast (<~2s). Set SHADE_TREE_SOAK=1 for a heavier multiplier
 // (the default suite never sets it); heavy is still deterministic, just longer.
 //
 // Run:  node test/soak.selftest.mjs
-//       RGOE_SOAK=1 node test/soak.selftest.mjs   (heavy variant)
+//       SHADE_TREE_SOAK=1 node test/soak.selftest.mjs   (heavy variant)
 
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -52,8 +52,8 @@ function ok(name) { console.log("  PASS  " + name); }
 function bad(name, e) { failures++; console.log("  FAIL  " + name + "  ::  " + (e && e.message || e)); }
 async function test(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e); } }
 
-// Heavy multiplier: default is a bounded, fast pass; RGOE_SOAK=1 scales the volume up.
-const HEAVY = process.env.RGOE_SOAK === "1";
+// Heavy multiplier: default is a bounded, fast pass; SHADE_TREE_SOAK=1 scales the volume up.
+const HEAVY = process.env.SHADE_TREE_SOAK === "1";
 const X = HEAVY ? 10 : 1;
 
 // A controllable clock (matches gateway/replay-cache.selftest.mjs): now() reads `t`.
@@ -75,7 +75,7 @@ function mulberry32(seed) {
 }
 
 const t0 = Date.now();
-console.log(`load/soak (T-TEST-7)${HEAVY ? "  [HEAVY: RGOE_SOAK=1]" : ""}:`);
+console.log(`load/soak (T-TEST-7)${HEAVY ? "  [HEAVY: SHADE_TREE_SOAK=1]" : ""}:`);
 
 // ============================================================================
 // A. replay cache: volume dedup + slash-once + size-bounded epoch pruning
@@ -269,14 +269,14 @@ await test("selection: a floored-to-zero (negative) weight is never picked; sele
 // Mint a gateway onion identity IN-MEMORY (no disk) from a deterministic seed, matching
 // bootnode/keygen.mjs's derivation so onion == pubkeyToOnion(pub) and buildAnnounce can sign.
 function mintOnion(i) {
-  const seedHex = createHash("sha256").update("rgoe-soak-onion:" + i).digest().toString("hex"); // 32 bytes
+  const seedHex = createHash("sha256").update("shade-tree-soak-onion:" + i).digest().toString("hex"); // 32 bytes
   const pubDer = createPublicKey(ed25519PrivateKey(seedHex)).export({ format: "der", type: "spki" });
   const pub = Buffer.from(pubDer.subarray(pubDer.length - 32)).toString("hex");
   return { seed: seedHex, pub, onion: pubkeyToOnion(pub) };
 }
 
 await test("registry: announce storm cannot exceed maxEntries; huge weight clamped; re-announce rate-limited", async () => {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-soak-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-soak-"));
   try {
     const signer = await loadOrMintSigner(join(work, "signer.key"));
     const clock = 1_700_000_000; // fixed verifier clock (seconds)

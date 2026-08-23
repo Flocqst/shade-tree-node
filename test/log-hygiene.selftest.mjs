@@ -1,7 +1,7 @@
 // Log-hygiene selftest: prove that no SECRET material is ever written to a log sink.
 //
 // The property (from the threat model): the gateway, bootnode, heartbeat, and client MUST NOT
-// log secret material — a member's RGOE_SECRET / identitySecret, an onion identity SEED (the
+// log secret material — a member's SHADE_TREE_SECRET / identitySecret, an onion identity SEED (the
 // 32-byte hex in identity.local.json), or an operator private key. They MAY freely log public
 // values: onion addresses, nullifiers, commitments, operator ADDRESSES, roots, tx hashes.
 //
@@ -9,8 +9,8 @@
 //
 //   1. STATIC scan. For every source file that logs, extract each console.log/error/warn/info/
 //      debug and process.stdout/stderr.write call, and check whether it interpolates a variable
-//      whose NAME suggests a secret (seed, secret, identitySecret, priv/privKey, RGOE_SECRET,
-//      RGOE_SLASH_KEY, RGOE_GW_OPERATOR_KEY, RGOE_REGISTER_KEY) UNTRUNCATED. Every listed file
+//      whose NAME suggests a secret (seed, secret, identitySecret, priv/privKey, SHADE_TREE_SECRET,
+//      SHADE_TREE_SLASH_KEY, SHADE_TREE_GW_OPERATOR_KEY, SHADE_TREE_REGISTER_KEY) UNTRUNCATED. Every listed file
 //      except group/enroll.mjs must have ZERO such interpolations. (A `.slice(...)`-truncated
 //      reference, e.g. gateway's `secret=${String(secret).slice(0,10)}..`, is NOT a full leak
 //      and is allowed by this test's definition.)
@@ -62,8 +62,8 @@ const STDERR_SINKS = new Set(["console.error", "console.warn", "process.stderr.w
 
 // A reference whose NAME suggests secret material. \b-anchored so `secretFile`, `seenNonce`,
 // `SecretKeeper` do NOT match; `secret`, `identitySecret`, `signer.priv`, `id.seed`, and the
-// four RGOE_*_KEY env names do.
-const SECRET = /\b(identitySecret|secret|seedHex|seed|privKey|priv|RGOE_SECRET|RGOE_SLASH_KEY|RGOE_GW_OPERATOR_KEY|RGOE_REGISTER_KEY)\b/;
+// four SHADE_TREE_*_KEY env names do.
+const SECRET = /\b(identitySecret|secret|seedHex|seed|privKey|priv|SHADE_TREE_SECRET|SHADE_TREE_SLASH_KEY|SHADE_TREE_GW_OPERATOR_KEY|SHADE_TREE_REGISTER_KEY)\b/;
 // A reference is "truncated" (partial, not a full leak) if it is sliced or measured.
 const TRUNC = /\.(slice|substr|substring)\s*\(|\.length\b/;
 
@@ -128,7 +128,7 @@ function templateInterps(args) {
 }
 
 // The "code" of `args` with every string/template literal removed — so bare concatenation
-// operands like  "RGOE_SECRET=" + secret  survive as the identifier `secret`.
+// operands like  "SHADE_TREE_SECRET=" + secret  survive as the identifier `secret`.
 function codeResidue(args) {
   let out = "", inStr = null;
   for (let i = 0; i < args.length; i++) {
@@ -169,14 +169,14 @@ function scanFile(rel) {
   return leaks;
 }
 
-// Files that both LOG and touch secret material. announce.mjs and rgoe-client.mjs have no sinks
+// Files that both LOG and touch secret material. announce.mjs and shade-tree-client.mjs have no sinks
 // at all (pure libs / event-emit only) — included so the test asserts that stays true.
 const FILES = [
   "gateway/gateway.mjs",
   "bootnode/server.mjs",
   "bootnode/heartbeat.mjs",
   "bootnode/announce.mjs",
-  "client/rgoe-client.mjs",
+  "client/shade-tree-client.mjs",
   "client/shim.mjs",
   "group/register-gateway.mjs",
   "group/register-onchain.mjs",
@@ -253,17 +253,17 @@ async function main() {
   const run = spawnSync(process.execPath, [join(ROOT, "group/enroll.mjs"), "--commitment-only"], {
     cwd: ROOT, encoding: "utf8", timeout: 60_000,
   });
-  const SECRET_RE = /RGOE_SECRET=(0x[0-9a-fA-F]{64})/;
+  const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
   ok(run.status === 0, "enroll --commitment-only exits 0");
   const m = run.stderr.match(SECRET_RE);
-  ok(!!m, "the secret (export RGOE_SECRET=0x..) is emitted on STDERR");
+  ok(!!m, "the secret (export SHADE_TREE_SECRET=0x..) is emitted on STDERR");
   const secret = m ? m[1] : "__none__";
   ok(!run.stdout.includes(secret), "the secret hex does NOT appear on stdout");
   ok(!/0x[0-9a-fA-F]{16,}/.test(run.stdout), "no long 0x-hex blob on stdout at all");
 
   // === 2. DYNAMIC bootnode: a real announce never logs (or wires) the onion SEED ===
   console.log("\nbootnode in-process — onion SEED never hits a log or the wire:");
-  const work = await mkdtemp(join(tmpdir(), "rgoe-loghyg-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-loghyg-"));
   try {
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });
     const signer = await loadOrMintSigner(join(work, "signer.key"));
@@ -322,7 +322,7 @@ async function main() {
   }
 
   // === Coverage note for processes not driven in-process ===
-  console.log("\ncoverage: heartbeat, shim, client (rgoe-client), register-* are STATIC-only");
+  console.log("\ncoverage: heartbeat, shim, client (shade-tree-client), register-* are STATIC-only");
   console.log("  (they need Tor / a live chain / a listening proxy to run; their log sinks are");
   console.log("   fully covered by the static scan above — none interpolates a secret).");
 

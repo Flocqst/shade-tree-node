@@ -42,7 +42,7 @@ It creates three `Restart=always` units:
 | unit | what it runs | source |
 |---|---|---|
 | `shade-tree-bootnode` | discovery service | `bootnode/server.mjs` |
-| `shade-tree-gateway` | reputation-gated egress | `gateway/gateway.mjs` |
+| `shade-tree-gateway` | access-gated egress node | `gateway/gateway.mjs` |
 | `shade-tree-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
 Tunables are env vars on the `curl | bash` line, e.g. `SHADE_TREE_ADMISSION=stake`,

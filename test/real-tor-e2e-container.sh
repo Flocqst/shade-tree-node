@@ -7,7 +7,7 @@
 #
 # Flow:
 #   1. boot ubuntu:24.04 with real systemd as PID 1,
-#   2. run bootstrap.sh -> tor + rgoe-bootnode + rgoe-gateway with REAL v3 onions,
+#   2. run bootstrap.sh -> tor + shade-tree-bootnode + shade-tree-gateway with REAL v3 onions,
 #   3. derive a member (lib/rln.mjs), point the gateway's PoC root at that single-member set,
 #      restart the gateway so its membership root matches the proof the client will mint,
 #   4. start a local :443 sink (matches the gateway's default *:443 egress policy),
@@ -28,12 +28,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"          # repo root
 IMAGE="${E2E_IMAGE:-ubuntu:24.04}"
-CONTAINER="rgoe-tor-e2e-$$"
-BOOTNODE_PORT="${RGOE_BOOTNODE_PORT:-8877}"
-GATEWAY_PORT="${RGOE_GATEWAY_PORT:-8443}"
-SECRET="${RGOE_SECRET:-12345678901234567890}"
-SINK_PORT="${RGOE_SINK_PORT:-443}"      # :443 so the gateway's DEFAULT *:443 egress policy allows it
-RUN_ATTEMPTS="${RGOE_TOR_RUN_ATTEMPTS:-5}"
+CONTAINER="shade-tree-tor-e2e-$$"
+BOOTNODE_PORT="${SHADE_TREE_BOOTNODE_PORT:-8877}"
+GATEWAY_PORT="${SHADE_TREE_GATEWAY_PORT:-8443}"
+SECRET="${SHADE_TREE_SECRET:-12345678901234567890}"
+SINK_PORT="${SHADE_TREE_SINK_PORT:-443}"      # :443 so the gateway's DEFAULT *:443 egress policy allows it
+RUN_ATTEMPTS="${SHADE_TREE_TOR_RUN_ATTEMPTS:-5}"
 
 log()  { echo -e "\n\033[1;36m== $*\033[0m"; }
 fail() { echo -e "\033[1;31mFAIL: $*\033[0m" >&2; exit 1; }
@@ -41,10 +41,10 @@ fail() { echo -e "\033[1;31mFAIL: $*\033[0m" >&2; exit 1; }
 command -v docker >/dev/null || fail "docker not found on PATH"
 docker info >/dev/null 2>&1 || fail "docker daemon not reachable (start Docker Desktop / dockerd)"
 
-REF="${RGOE_REF:-$(git -C "$SRC" symbolic-ref --quiet --short HEAD || true)}"
+REF="${SHADE_TREE_REF:-$(git -C "$SRC" symbolic-ref --quiet --short HEAD || true)}"
 CREATED_TAG=""
 if [ -z "$REF" ]; then
-  REF="rgoe-tor-e2e-head"
+  REF="shade-tree-tor-e2e-head"
   git -C "$SRC" tag -f "$REF" HEAD >/dev/null
   CREATED_TAG="$REF"
 fi
@@ -84,23 +84,23 @@ done
 
 log "run bootstrap.sh inside the container (clone file:///mnt/src @ $REF)"
 docker exec \
-  -e RGOE_REPO="file:///mnt/src" \
-  -e RGOE_REF="$REF" \
-  -e RGOE_ADMISSION="open" \
-  -e RGOE_BOOTNODE_PORT="$BOOTNODE_PORT" \
-  -e RGOE_GATEWAY_PORT="$GATEWAY_PORT" \
+  -e SHADE_TREE_REPO="file:///mnt/src" \
+  -e SHADE_TREE_REF="$REF" \
+  -e SHADE_TREE_ADMISSION="open" \
+  -e SHADE_TREE_BOOTNODE_PORT="$BOOTNODE_PORT" \
+  -e SHADE_TREE_GATEWAY_PORT="$GATEWAY_PORT" \
   "$CONTAINER" bash /mnt/src/bootnode/deploy/bootstrap.sh
 
 log "point the gateway's PoC root at a derived member + restart it"
 docker exec -i "$CONTAINER" env SECRET="$SECRET" bash -s <<'PREP'
 set -euo pipefail
-cd /opt/rgoe
+cd /opt/shade-tree
 # Derive a single member whose rateCommitment leaf becomes the gateway's whole membership set,
 # so the client (same secret) proves against the exact root the gateway trusts.
-node rust/rgoe-rln/interop/egress-derive.mjs /tmp "$SECRET"
-cp /tmp/members.json /opt/rgoe/group/members.json
-chown -R rgoe:rgoe /opt/rgoe/group/members.json 2>/dev/null || true
-systemctl restart rgoe-gateway
+node rust/shade-tree-rln/interop/egress-derive.mjs /tmp "$SECRET"
+cp /tmp/members.json /opt/shade-tree/group/members.json
+chown -R shade-tree:shade-tree /opt/shade-tree/group/members.json 2>/dev/null || true
+systemctl restart shade-tree-gateway
 # wait for the gateway to be listening again on loopback
 for _ in $(seq 1 30); do
   if timeout 2 bash -c ":</dev/tcp/127.0.0.1/8443" 2>/dev/null; then echo "gateway back up"; break; fi
@@ -109,14 +109,14 @@ done
 PREP
 
 log "run the JS reference client egress over Tor, inside the container (best-effort/gated)"
-GW_ONION="$(docker exec "$CONTAINER" cat /var/lib/tor/rgoe-gateway/hostname | tr -d '[:space:]')"
+GW_ONION="$(docker exec "$CONTAINER" cat /var/lib/tor/shade-tree-gateway/hostname | tr -d '[:space:]')"
 echo "gateway onion: $GW_ONION"
 
 set +e
 docker exec -i "$CONTAINER" \
   env GW_ONION="$GW_ONION" SECRET="$SECRET" SINK_PORT="$SINK_PORT" RUN_ATTEMPTS="$RUN_ATTEMPTS" bash -s <<'RUN'
 set -uo pipefail
-cd /opt/rgoe
+cd /opt/shade-tree
 
 # local egress sink; :443 matches the gateway's default *:443 policy (no unit edit needed)
 node -e 'const net=require("net");let n=0;net.createServer(s=>{n++;console.error("[sink] connection #"+n);s.resume();}).listen(Number(process.env.SINK_PORT),"127.0.0.1",()=>console.error("[sink] up"));' \
@@ -127,7 +127,7 @@ for _ in $(seq 1 20); do grep -q "\[sink\] up" /tmp/sink.log 2>/dev/null && brea
 ACCEPT=0
 for attempt in $(seq 1 "$RUN_ATTEMPTS"); do
   echo "--- client run attempt $attempt/$RUN_ATTEMPTS ---"
-  RGOE_SECRET="$SECRET" RGOE_ONION="$GW_ONION" RGOE_TOR_PORT=9050 RGOE_DIAL_ATTEMPTS=3 \
+  SHADE_TREE_SECRET="$SECRET" SHADE_TREE_ONION="$GW_ONION" SHADE_TREE_TOR_PORT=9050 SHADE_TREE_DIAL_ATTEMPTS=3 \
     node test/real-tor-e2e-client.mjs "127.0.0.1:${SINK_PORT}"
   rc=$?
   [ "$rc" -eq 0 ] && { ACCEPT=1; break; }
@@ -136,10 +136,10 @@ for attempt in $(seq 1 "$RUN_ATTEMPTS"); do
 done
 
 echo "--- sink log ---"; cat /tmp/sink.log 2>/dev/null || true
-echo "--- gateway journal (egress lines) ---"; journalctl -u rgoe-gateway --no-pager 2>/dev/null | grep -E "egress|gateway up on" | tail -20 || true
+echo "--- gateway journal (egress lines) ---"; journalctl -u shade-tree-gateway --no-pager 2>/dev/null | grep -E "egress|gateway up on" | tail -20 || true
 kill "$SINK_PID" 2>/dev/null || true
 
-GW_OK=0;   journalctl -u rgoe-gateway --no-pager 2>/dev/null | grep -q "egress target=127.0.0.1:${SINK_PORT} " && GW_OK=1
+GW_OK=0;   journalctl -u shade-tree-gateway --no-pager 2>/dev/null | grep -q "egress target=127.0.0.1:${SINK_PORT} " && GW_OK=1
 SINK_OK=0; grep -q "\[sink\] connection" /tmp/sink.log 2>/dev/null && SINK_OK=1
 
 if [ "$ACCEPT" = "1" ] && [ "$GW_OK" = "1" ] && [ "$SINK_OK" = "1" ]; then

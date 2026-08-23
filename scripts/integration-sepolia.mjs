@@ -12,7 +12,7 @@
 // NOT RUN in the P2 phase (no testnet funds here). Kept on the current v4 envelope +
 // single-leaf + identitySecret-reveal path so it is ready for the live phase.
 //
-// Run:  node scripts/integration-sepolia.mjs   (needs the scratchpad wallet files)
+// Run:  SHADE_TREE_SCRATCH=/path/to/wallet-fixtures node scripts/integration-sepolia.mjs
 
 import net from "node:net";
 import { spawn } from "node:child_process";
@@ -28,7 +28,8 @@ const idsecOf = (seed) => identitySecretOf(identityFor(seed));
 const leafOf = (seed) => deriveCommitment(idsecOf(seed)); // == on-chain hasher.commitmentOf(identitySecret)
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SC = process.env.SHADE_TREE_SCRATCH || "/private/tmp/claude-501/-Users-halcyon/6dceab6d-31b0-45a6-a4ab-dc2201ffe155/scratchpad";
+const SC = process.env.SHADE_TREE_SCRATCH;
+if (!SC) throw new Error("SHADE_TREE_SCRATCH must point to the local wallet-fixture directory");
 const dep = JSON.parse(readFileSync(join(ROOT, "contracts", "deployed.local.json"), "utf8"));
 const RPC = dep.rpcUrl;
 const SET = dep.stakedReputationSet;

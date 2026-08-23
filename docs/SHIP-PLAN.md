@@ -501,7 +501,7 @@ slash, stake lifecycle) gets negative and concurrent cases, not just a positive 
   target/member-identifying data.
 - [x] **T-FEAT-22 (P2, added loop-16) Client receipt accumulation → quality-aware rotation.** T-FEAT-13
   now emits verifiable per-epoch egress-success receipts, but the client only checks the current one and
-  discards it (`tunnel.shade-tree.receipt`). Persist a bounded, decaying per-gateway receipt tally next to the
+  discards it (`tunnel.shadeTree.receipt`). Persist a bounded, decaying per-gateway receipt tally next to the
   existing gateway-health cache (`client/selection.mjs` T-FEAT-19 store) — a gateway that keeps returning
   valid receipts earns a selection bonus; one that accepts proofs but never produces a receipt (gate-then-
   drop signal) is deprioritized. Must not add a linkability channel (store only the gateway onion + a

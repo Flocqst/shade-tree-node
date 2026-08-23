@@ -47,10 +47,10 @@ const RECIPIENT = getAddress("0x000000000000000000000000000000000000bEEF");
 // Build the two contexts EXACTLY as StakedReputationSet computes them, then reduce into
 // the field to get the circuit's public `address` input.
 function ctxExit(c) {
-  return solidityPackedKeccak256(["string", "uint256"], ["RGOE_EXIT", c]);
+  return solidityPackedKeccak256(["string", "uint256"], ["SHADE_TREE_EXIT", c]);
 }
 function ctxWithdraw(c, recipient) {
-  return solidityPackedKeccak256(["string", "uint256", "address"], ["RGOE_WITHDRAW", c, recipient]);
+  return solidityPackedKeccak256(["string", "uint256", "address"], ["SHADE_TREE_WITHDRAW", c, recipient]);
 }
 
 const coder = AbiCoder.defaultAbiCoder();

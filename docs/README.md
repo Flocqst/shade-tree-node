@@ -23,7 +23,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`SDK.md`](SDK.md) | The `ShadeTreeClient` SDK surface (`package.json` exports) |
 | [`ADAPTERS.md`](ADAPTERS.md) | Routing tools and agents (curl, SearXNG, browsers, LLM agents) through the local proxy |
 | [`RECEIPTS.md`](RECEIPTS.md) | Signed egress success receipts: proof a gateway actually served traffic, with no linkability channel |
-| [`PROTOCOL-VERSIONING.md`](PROTOCOL-VERSIONING.md) | Envelope version negotiation (v3-with-nonce today) without a flag day; garbage versions rejected with a reason |
+| [`PROTOCOL-VERSIONING.md`](PROTOCOL-VERSIONING.md) | The explicit v4 boundary, legacy-v3 rejection, artifact rotation, and coordinated fleet rollout |
 | [`../rust/INSTALL.md`](../rust/INSTALL.md) | The static Rust client: which binary for which platform, verify the checksum, `egress` with the `-live` build |
 
 ## Run it (gateway, bootnode, fleet)

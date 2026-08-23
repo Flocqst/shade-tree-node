@@ -108,7 +108,7 @@ Mechanism (v3, current tor):
 keypair allowlist: every authorized client is a fixed public key you provision
 and manage out of band, and the set is not reputation-derived. That is exactly
 right for a small **private fleet** with a fixed operator roster, and wrong for
-the open, reputation-gated model this project exists to demonstrate -- where
+the open, access-gated model this project exists to demonstrate -- where
 membership is a zk proof, not an entry on a keylist. The whole point of shade-tree is
 app-layer gating; client-auth is an optional defense-in-depth tier for private
 deployments, mutually exclusive in spirit with permissionless

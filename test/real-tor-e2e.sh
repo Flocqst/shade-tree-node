@@ -2,7 +2,7 @@
 # T-TEST-1 real-Tor local fleet integration harness (BEST-EFFORT / GATED).
 #
 # Proves the FULL member egress path end-to-end over REAL Tor: the JS REFERENCE client
-# (client/rgoe-client.mjs) mints a REAL per-request RLN membership proof, dials the
+# (client/shade-tree-client.mjs) mints a REAL per-request RLN membership proof, dials the
 # gateway's published v3 `.onion` over the system Tor SOCKS port, and the REAL JS gateway
 # (gateway/gateway.mjs) ACCEPTS it and proxies the CONNECT to a LOCAL sink. We then assert
 # three independent facts: the client got an `ok` ack (ACCEPT), the gateway logged the
@@ -11,7 +11,7 @@
 # This is the LOCAL de-risk of the container CI job (.github/workflows/real-tor-e2e.yml),
 # which runs the same client egress against the systemd-fleet onions bootstrap.sh publishes.
 #
-# WHY GATED (RGOE_TOR_E2E=1): it needs real Tor network access, and v3 HS descriptor
+# WHY GATED (SHADE_TREE_TOR_E2E=1): it needs real Tor network access, and v3 HS descriptor
 # propagation (local tor uploads to HSDirs -> the client's tor fetches) is SLOW (~30-90s)
 # and FLAKY — the same reproducibility caveat T-TEST-8's container e2e documents for its
 # over-Tor dial. So the whole client run is RETRIED a few times and a propagation timeout
@@ -21,12 +21,12 @@
 # this is a .sh + a non-selftest .mjs) and NOT part of `cargo test`.
 #
 # Prereqs: `npm install` at the repo root (rlnjs + socks), and a system `tor`
-# (RGOE_TOR_BIN to override the path). Run from anywhere:
-#   RGOE_TOR_E2E=1 bash test/real-tor-e2e.sh
+# (SHADE_TREE_TOR_BIN to override the path). Run from anywhere:
+#   SHADE_TREE_TOR_E2E=1 bash test/real-tor-e2e.sh
 set -euo pipefail
 
-if [ "${RGOE_TOR_E2E:-0}" != "1" ]; then
-  echo "SKIP T-TEST-1 real-Tor harness: set RGOE_TOR_E2E=1 to run."
+if [ "${SHADE_TREE_TOR_E2E:-0}" != "1" ]; then
+  echo "SKIP T-TEST-1 real-Tor harness: set SHADE_TREE_TOR_E2E=1 to run."
   echo "  (needs real Tor network access; HS descriptor propagation is slow + flaky."
   echo "   The always-green accept path is the non-Tor demo scripts/demo-e2e.mjs + gateway selftests.)"
   exit 0
@@ -34,19 +34,19 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-INTEROP="$REPO/rust/rgoe-rln/interop"     # reuse egress-derive.mjs + wait-log.mjs
+INTEROP="$REPO/rust/shade-tree-rln/interop"     # reuse egress-derive.mjs + wait-log.mjs
 WORK="$(mktemp -d)"
-TORBIN="${RGOE_TOR_BIN:-tor}"
+TORBIN="${SHADE_TREE_TOR_BIN:-tor}"
 
-SECRET="${RGOE_SECRET:-12345678901234567890}"
-GW_PORT="${RGOE_GATEWAY_PORT:-8443}"
-SINK_PORT="${RGOE_SINK_PORT:-9443}"
-SOCKS_PORT="${RGOE_TOR_PORT:-9250}"
+SECRET="${SHADE_TREE_SECRET:-12345678901234567890}"
+GW_PORT="${SHADE_TREE_GATEWAY_PORT:-8443}"
+SINK_PORT="${SHADE_TREE_SINK_PORT:-9443}"
+SOCKS_PORT="${SHADE_TREE_TOR_PORT:-9250}"
 TARGET="127.0.0.1:${SINK_PORT}"
 HS_DIR="$WORK/hs"
 TOR_DATA="$WORK/tordata"
-RUN_ATTEMPTS="${RGOE_TOR_RUN_ATTEMPTS:-4}"
-BOOTSTRAP_TIMEOUT_MS="${RGOE_TOR_BOOTSTRAP_TIMEOUT_MS:-180000}"
+RUN_ATTEMPTS="${SHADE_TREE_TOR_RUN_ATTEMPTS:-4}"
+BOOTSTRAP_TIMEOUT_MS="${SHADE_TREE_TOR_BOOTSTRAP_TIMEOUT_MS:-180000}"
 
 # ---- SIGPIPE-robust cleanup: kill every child we start, restore the repo -----------
 # PIDs tracked in vars AND mirrored to a pidfile so a reap works even if a var is lost. We
@@ -75,7 +75,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP PIPE
 
-command -v "$TORBIN" >/dev/null 2>&1 || { echo "no system tor ($TORBIN); set RGOE_TOR_BIN"; exit 1; }
+command -v "$TORBIN" >/dev/null 2>&1 || { echo "no system tor ($TORBIN); set SHADE_TREE_TOR_BIN"; exit 1; }
 command -v node   >/dev/null 2>&1 || { echo "no node on PATH"; exit 1; }
 
 echo "== deriving member identity + single-member group (lib/rln.mjs) =="
@@ -94,7 +94,7 @@ SINK_PID=$! ; track "$SINK_PID" ; disown "$SINK_PID" 2>/dev/null || true
 node "$INTEROP/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
 
 echo "== starting real JS gateway (127.0.0.1:${GW_PORT}) =="
-RGOE_EGRESS_ALLOW="$TARGET" \
+SHADE_TREE_EGRESS_ALLOW="$TARGET" \
   node "$REPO/gateway/gateway.mjs" > "$WORK/gw.log" 2>&1 &
 GW_PID=$! ; track "$GW_PID" ; disown "$GW_PID" 2>/dev/null || true
 node "$INTEROP/wait-log.mjs" "$WORK/gw.log" "gateway up on" 20000
@@ -128,7 +128,7 @@ ACCEPT=0
 for attempt in $(seq 1 "$RUN_ATTEMPTS"); do
   echo "--- client run attempt $attempt/$RUN_ATTEMPTS ---"
   set +e
-  RGOE_SECRET="$SECRET" RGOE_ONION="$ONION" RGOE_TOR_PORT="$SOCKS_PORT" RGOE_DIAL_ATTEMPTS=3 \
+  SHADE_TREE_SECRET="$SECRET" SHADE_TREE_ONION="$ONION" SHADE_TREE_TOR_PORT="$SOCKS_PORT" SHADE_TREE_DIAL_ATTEMPTS=3 \
     node "$HERE/real-tor-e2e-client.mjs" "$TARGET"
   rc=$?
   set -e

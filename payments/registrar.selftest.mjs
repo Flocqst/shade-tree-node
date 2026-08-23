@@ -84,7 +84,7 @@ async function http(base, method, path, { headers = {}, body = null } = {}) {
 }
 // shade-tree pay through the router (child process), returning { status, stdout, stderr }. Async (not
 // spawnSync): the registrar it talks to is served by THIS process's event loop.
-function rgoePay(args, env) {
+function shadeTreePay(args, env) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [join(ROOT, "bin/shade-tree.mjs"), "pay", ...args], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME || "/", ...env } });
     let stdout = "", stderr = "";
@@ -169,10 +169,10 @@ async function main() {
     // ---- 2. x402 purchase via shade-tree pay
     console.log("2. x402 purchase (shade-tree pay --protocol x402):");
     const keyA = join(work, "buyer-a.key"); writeFileSync(keyA, BUYER_A.privateKey + "\n", { mode: 0o600 });
-    const dry = await rgoePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--dry-run"], {});
+    const dry = await shadeTreePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--dry-run"], {});
     ok(dry.status === 0 && /dry-run: would sign/.test(dry.stderr) && /"to": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"/.test(dry.stderr) && /"value": "100000"/.test(dry.stderr) && !dry.stderr.includes(BUYER_A.privateKey.slice(4, 20)), "--dry-run prints the authorization it would sign (to/value) and never the key");
     ok((await token.balanceOf(BUYER_A.address)) === 1_000_000_000n && Number(await set.leafCount()) === 0, "dry-run moved nothing");
-    const p1 = await rgoePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--json"], {});
+    const p1 = await shadeTreePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--json"], {});
     const r1 = p1.status === 0 ? JSON.parse(p1.stdout) : null;
     ok(p1.status === 0 && r1 && r1.protocol === "x402" && /^0x[0-9a-f]{64}$/.test(r1.settleTx) && /^0x[0-9a-f]{64}$/.test(r1.insertTx) && r1.leafIndex === 0, `shade-tree pay x402 -> settleTx ${r1?.settleTx?.slice(0, 12)}… insertTx ${r1?.insertTx?.slice(0, 12)}… leafIndex 0 ${p1.status !== 0 ? p1.stderr.slice(-300) : ""}`);
     ok(r1 && r1.settlement && r1.settlement.success === true && r1.settlement.transaction === r1.settleTx && r1.settlement.network === "eip155:31337" && r1.settlement.payer === BUYER_A.address, "PAYMENT-RESPONSE: {success:true, transaction==settleTx, network, payer}");
@@ -185,7 +185,7 @@ async function main() {
 
     // ---- 3. MPP purchase via shade-tree pay (second buyer, tier 32)
     console.log("3. MPP purchase (shade-tree pay --protocol mpp):");
-    const p2 = await rgoePay(["--registrar-url", base, "--limit", "32", "--protocol", "mpp", "--commitment", COMMIT_B, "--json"], { SHADE_TREE_PAY_KEY: BUYER_B.privateKey });
+    const p2 = await shadeTreePay(["--registrar-url", base, "--limit", "32", "--protocol", "mpp", "--commitment", COMMIT_B, "--json"], { SHADE_TREE_PAY_KEY: BUYER_B.privateKey });
     const r2 = p2.status === 0 ? JSON.parse(p2.stdout) : null;
     ok(p2.status === 0 && r2 && r2.protocol === "mpp" && r2.leafIndex === 1 && /^0x[0-9a-f]{64}$/.test(r2.settleTx), `shade-tree pay mpp -> leafIndex 1, settleTx ${r2?.settleTx?.slice(0, 12)}… ${p2.status !== 0 ? p2.stderr.slice(-300) : ""}`);
     ok(r2 && r2.receipt && r2.receipt.status === "success" && r2.receipt.method === "evm" && r2.receipt.reference === r2.settleTx && r2.receipt.chainId === 31337 && typeof r2.receipt.challengeId === "string", "Payment-Receipt: {status:success, method:evm, reference==settleTx, chainId, challengeId}");

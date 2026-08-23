@@ -1,108 +1,67 @@
-# rgoe-rln — RLN interop probe (T-RUST-2b, RLN-INTEROP slice)
+# `shade-tree-rln`
 
-Proves that the Rust client can produce the RLN Groth16 **egress envelope proof**
-byte-compatibly with the JavaScript reference: a Rust-built proof, generated against
-the repository's own `circuits/rln/*` artifacts, is **accepted by `lib/rln.mjs`
-`verifyEnvelope`**, and the RLN slash primitive works across the JS/Rust boundary.
+Rust RLN proving, verification, and Merkle-tree parity for Shade Tree.
 
-This crate is a workspace **member but is excluded from `default-members`** (see
-`rust/Cargo.toml`): it has a heavy dep tree (`ark-circom` → `wasmer`), so the everyday
-`cargo build` / `cargo test` over `rgoe-proto` + `rgoe-client` never compile it. Build
-it explicitly with `cargo build -p rgoe-rln`. It is **not** wired into the
-`rgoe-client` binary (that is later T-RUST-2b work).
+This crate consumes the repository's Circom artifacts directly and produces
+proofs that the JavaScript reference accepts. It is excluded from the Rust
+workspace's `default-members` because its `ark-circom` and Wasmer dependency
+tree is heavy. It is included when the distributable client is built with the
+`live` feature:
 
-## Result (all green)
+```sh
+cd rust
+cargo build -p shade-tree-client --features live
+```
 
-`bash rust/rgoe-rln/interop/run.sh` (needs `npm install` at the repo root for `rlnjs`):
+That live client combines this crate's prover and native tree with embedded
+Arti Tor transport. The default client build keeps only deterministic
+directory, selection, and receipt functions.
 
-1. **Target binding is Rust-owned.** `x = calculate_signal_hash(request_signal(target,
-   nonce))` is recomputed with the conformance-gated `rgoe-proto` code and matches.
-2. **Public signals match the reference exactly.** The witness's
-   `[y, root, nullifier, x, externalNullifier]` equal what `rlnjs` `proveForSlot`
-   produces for the same identity/epoch/slot/signal.
-3. **The Rust proof verifies against the repo `verification_key.json`** (checked
-   in-process with `ark-groth16` + `CircomReduction`).
-4. **`verifyEnvelope` ACCEPTS the Rust envelope** (`ok: true`) — including check 2b
-   target-binding and the Groth16 verify — with authoritative fields matching.
-5. **Cross-impl over-spend.** Two Rust shares for the same (identity, epoch, slot) with
-   different `x` share a nullifier, and `lib/rln.mjs` `reconstructSecret` recovers the
-   `identitySecret` from the two Rust shares.
+## Interoperability guarantees
 
-## Which approach worked, and the fork that forced it
+The test harnesses establish that:
 
-The task's de-risking step 1 was: can **zerokit** (`rln` crate) consume THIS repo's
-`rln_final.zkey`? Static finding on `rln = "3"` (**zerokit rln 3.0.0**, ark 0.5):
+- Rust and JavaScript derive the same v4 request signal.
+- Public signals use the same `[y, root, nullifier, x, externalNullifier]`
+  order and values.
+- Rust proofs verify with the checked-in `verification_key.json` and are
+  accepted by `lib/rln.mjs:verifyEnvelope`.
+- Two Rust shares for one reused slot reconstruct the same `identitySecret`
+  in JavaScript.
+- The native depth-20 Poseidon tree produces the same roots and paths as the
+  nested Semaphore-v3 group used by `rlnjs`.
 
-- zerokit 3.0.0 ingests circuit resources **only in its own `arkzkey` format**
-  (`zkey_from_raw` → `read_arkzkey_from_bytes_uncompressed`, an ark-serialized
-  `(ProvingKey, ConstraintMatrices)`), and it **bundles its own trusted-setup**
-  resources (`resources/tree_depth_20/{graph.bin, rln_final.arkzkey}`). It has **no
-  snarkjs `.zkey` reader**. So a stock-zerokit proof verifies against zerokit's VK, not
-  ours; and our snarkjs `rln_final.zkey` cannot be handed to zerokit as-is. **This is
-  the hard fork.** (zerokit's public-signal order `[y, root, nullifier, x,
-  externalNullifier]`, `CircomReduction`, and Poseidon derivations DO match ours — only
-  the key ingestion format blocks it.)
+Run the complete cross-language suite from the repository root:
 
-Chosen resolution — the task's **option (b), `ark-circom`** — because it uses the
-repo's *own* artifacts end to end and so removes every interop risk at once:
+```sh
+bash rust/shade-tree-rln/interop/run.sh
+bash rust/shade-tree-rln/interop/tree-run.sh
+```
 
-- `ark_circom::read_zkey` loads the repo's snarkjs `rln_final.zkey` into
-  `(ProvingKey<Bn254>, ConstraintMatrices<Fr>)` (ark 0.5, same as zerokit's `Zkey`).
-- `ark_circom::WitnessCalculator` computes the witness with the repo's **`rln.wasm`**
-  — the *same circom compilation* as the zkey, so there is no witness-graph / wire-order
-  mismatch (the risk that would attend feeding our zkey to zerokit's bundled `graph.bin`).
-- `ark-groth16` (`CircomReduction`) proves; the proof is serialized to snarkjs-shaped
-  JSON (`pi_a/pi_b/pi_c`, G2 as `[c0, c1]`) that `rlnjs`'s verifier reads directly.
+The harness requires the root npm dependencies and a Rust toolchain.
 
-Net: the interop crux is proven **without** zerokit. A future zerokit-native path is
-still open but requires converting the repo's snarkjs zkey → `arkzkey` (e.g. via
-`ark-circom` `read_zkey` + re-serialize) and validating zerokit's `graph.bin` against
-this exact circuit; not needed for the Gate-2 interop proof.
+## Why `ark-circom`
 
-## Native Rust merkle tree (T-RUST-2c — root/path parity, DONE)
+The upstream Zerokit `rln` crate consumes its own `arkzkey` resources and does
+not read this repository's snarkjs `.zkey` directly. `ark-circom` reads the
+checked-in `rln_final.zkey` and `rln.wasm`, calculates the matching witness,
+and lets `ark-groth16` emit a proof in the shape expected by the JavaScript
+verifier. This avoids mixing a proving key and witness graph from different
+artifact sets.
 
-The membership merkle **root + path** are now computed natively in Rust (`src/tree.rs`),
-matching the rlnjs Semaphore-v3 group byte-for-byte, so the client is self-contained
-(no JS fixture for the tree). The convention — **read out of the pinned deps, not
-guessed** — is: `lib/rln.mjs` `newGroup` → rlnjs's nested Semaphore **v3**
-`@semaphore-protocol/group@3.15.2` → `@zk-kit/incremental-merkle-tree@1.1.0`:
+## Layout
 
-- **hash** `poseidon2` (BN254, arity 2, circomlib / poseidon-lite; ported with
-  `light-poseidon`), **arity** 2, **fixed depth** 20 (NOT a v4 LeanIMT),
-- **zero value** `zeroes[0] = keccak256(be32(id)) >> 8` (the group's keccak-into-field
-  `hash(id)`, `id = RLN_IDENTIFIER = 1` — **not** `0`, **not** Poseidon),
-  `zeroes[l+1] = poseidon2(zeroes[l], zeroes[l])`,
-- **insertion order** members left-to-right at increasing leaf index.
+- `src/lib.rs` — public crate surface.
+- `src/prover.rs` — witness calculation and Groth16 proving.
+- `src/tree.rs` — native depth-20 Poseidon membership tree.
+- `src/artifacts.rs` — embedded artifact lock and identifiers.
+- `src/main.rs` — interoperability probe.
+- `src/bin/tree.rs` — root/path helper used by the harness.
+- `interop/` — JavaScript/Rust fixtures and end-to-end checks.
 
-`tests/tree_parity.rs` pins the Rust root/zeroes/path to golden rlnjs values (poseidon2,
-zeroes chain, empty/single/3-member roots, real-sibling path). `interop/tree-run.sh`
-proves it **live** end-to-end: Rust root == rlnjs `group.root` over several member lists,
-and a **Rust-computed** root+path (single-member *and* a member at a non-zero index with
-real leaf/internal-node siblings) drives the prover and `verifyEnvelope` **ACCEPTS** it.
+## Artifact warning
 
-## Files
-
-- `src/main.rs` — `rgoe-rln-probe <fixture.json> <out.json> <circuits-dir>`: witness →
-  prove → in-process verify → emit snarkjs-shaped envelope JSON.
-- `src/tree.rs` — native depth-20 Poseidon (BN254) incremental Merkle tree matching the
-  rlnjs Semaphore-v3 group (root + `create_proof`); exposed via `src/lib.rs`.
-- `src/bin/tree.rs` — `rgoe-rln-tree {root|proof}`: emits the Rust root / root+path JSON
-  for an ordered member list, for the harness to feed the prover instead of a JS fixture.
-- `interop/fixture-gen.mjs` — emits circuit inputs + the `rlnjs` reference public
-  signals for a fixed identity/epoch/slot/target and a CLI-overridable nonce.
-- `interop/verify-envelope.mjs` — assembles the wire envelope and asserts
-  `verifyEnvelope` accepts it.
-- `interop/overspend.mjs` — cross-impl slash: two Rust shares → `reconstructSecret`.
-- `interop/run.sh` — builds the probe and runs the whole chain (JS-fixture tree path).
-- `interop/tree-run.sh` — the T-RUST-2c counterpart: RUST-computed root+path → prover →
-  `verifyEnvelope` accepts (root parity + single- and multi-member envelopes).
-
-## Scope / honesty
-
-Testnet-only artifacts (untrusted circom-rln ceremony; see `circuits/rln/ARTIFACTS.md`).
-The `wasmer`-based witness calculator needs a Tokio reactor in context (probe wraps it
-in a runtime guard). The merkle root + path are now computed natively in Rust
-(`src/tree.rs`, T-RUST-2c) and proven to match the rlnjs Semaphore-v3 group; the JS
-fixture path (`run.sh`) is retained as the original T-RUST-2b interop proof. Still open:
-wiring the prover + tree into `rgoe-client` behind a feature (T-RUST-2d) and the `arti`
-Tor dial (T-RUST-2e).
+The bundled artifacts came from an untrusted testnet ceremony. Embedding and
+hash-locking them prevents accidental drift; it does not establish production
+provenance. Review [`../../circuits/rln/ARTIFACTS.md`](../../circuits/rln/ARTIFACTS.md)
+and [`../../SECURITY.md`](../../SECURITY.md) before operating the live client.

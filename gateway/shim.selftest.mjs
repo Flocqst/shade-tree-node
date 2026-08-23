@@ -189,17 +189,17 @@ await test("one slot per tunnel; cursor rotates and wraps at K", async () => {
   assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per tunnel and wrap at K");
 });
 
-await test("envelope is a coherent v3 bundle; share bound to requestSignal(target,nonce)", async () => {
+await test("envelope is a coherent v4 bundle; share bound to requestSignal(target,nonce)", async () => {
   const calls = [];
   const prove = mockProve(calls);
   const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
   const { envelope, signal, slot } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
 
-  assert.equal(envelope.v, 3);
+  assert.equal(envelope.v, 4);
   assert.equal(envelope.target, "example.com:443");
   assert.equal(typeof slot, "number");
   assert.ok(!("slot" in envelope), "slot is a private witness — never on the wire");
-  assert.ok(!("scope" in envelope), "scope is gone in v3");
+  assert.ok(!("scope" in envelope), "scope is gone in the v4 wire format");
   for (const k of ["proof", "nullifier", "externalNullifier", "share"]) assert.ok(k in envelope, "missing " + k);
 
   // request-bound: share is evaluated at H(target, nonce) ...

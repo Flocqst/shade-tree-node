@@ -619,19 +619,21 @@ widely deployed package. The set of allowed users is a Merkle tree whose
 leaves are identity commitments; each member holds a secret, and their
 leaf is a hash of it. To pass the gate, a client proves in zero
 knowledge that it knows the secret behind some leaf of the tree, without
-revealing which leaf. Every valid proof looks identical from the
-gateway’s side, so the anonymity set is the whole tree.</p>
-<p>The second half comes from one extra public output of the same proof.
-Alongside the membership claim, the circuit exposes a nullifier, a hash
-of (secret, scope), and we set the scope to the current epoch number.
-Two properties fall out of the hash:</p>
+revealing which leaf. Proof values are not literally identical: they
+carry a public root, nullifier, and signal commitment. Under the proof
+assumptions, those values hide which eligible leaf inside the revealed
+root was used.</p>
+<p>The second half comes from the public outputs of the RLN proof. A
+private message slot produces a nullifier scoped to the current epoch.
+Two properties follow:</p>
 <ol type="1">
-<li>Within an epoch a member can only ever produce one nullifier, so the
-gateway can count requests per nullifier and keep each member inside a
-budget without knowing who anyone is.</li>
-<li>Across epochs the nullifier changes to a fresh value that cannot be
-linked to the old one, so the pseudonym expires as the epoch rolls
-over.</li>
+<li>Within an epoch a member can create distinct nullifiers only for the
+private slots allowed by its leaf. Reusing a slot for a different signal
+reveals enough public-share information to recover the slashable identity
+secret.</li>
+<li>Across epochs the nullifier inputs change. The proof transcript does
+not expose a stable member identifier, though network and application
+metadata may still correlate tunnels.</li>
 </ol>
 <p>Together the two halves resolve the contradiction the gate opened
 with: it admits only members and meters each one, without ever learning
@@ -732,7 +734,9 @@ client</a> that starts its own Tor and a local proxy, then sends
 ordinary traffic through it. Through that proxy we hit a whatismyip
 service, <a href="https://api.ipify.org">api.ipify.org</a>, and it
 reported back the gateway’s DigitalOcean address, not the client’s. The
-world sees the clean egress IP, never the member behind it. A
+destination sees the gateway IP rather than the client source IP. It may
+still identify or link a member through accounts, cookies, application
+identifiers, or traffic correlation. A
 thousand-request load test to Google then returned 1000 of 1000 with
 none blocked, which makes sense: this is a presumably fresh IP with no
 bad history, though DigitalOcean could have recycled it from a prior
@@ -776,14 +780,14 @@ ideally even zero outside of standard rate limits. Made precise, that
 vibe comes down to four properties, each stated against the adversary it
 actually holds against.</p>
 <ul>
-<li><strong>Requester unlinkability.</strong> No party, the gateway
-included, can tell which member sent a request or link two requests to
-the same member.</li>
-<li><strong>Relationship anonymity.</strong> No one learns which
-destinations a member reaches, holding against any single gateway or
-colluding subset and a partial network observer but, like the Tor
-circuit beneath us, not against a global passive adversary correlating
-both ends.</li>
+<li><strong>Proof unlinkability.</strong> The proof does not reveal which
+eligible leaf sent a tunnel or expose a stable identifier across slots.
+Gateways may still correlate traffic through timing, volume, or
+application metadata.</li>
+<li><strong>Distributed observation.</strong> Each serving gateway learns
+the destination for the tunnels it handles. Rotation can spread that
+view across independent operators; it does not make the destination
+invisible to the serving gateway or defeat a colluding/global observer.</li>
 <li><strong>Priced burn.</strong> Egress is priced to at least cover the
 reputation damage it is expected to cause, so a member who burns an
 address has already paid to replace it and the egress finances its own
@@ -792,38 +796,40 @@ rotation.</li>
 ordinary IPs and reputation blocks fall toward zero, which takes both
 priced burn and a residential supply that was never pre-scored.</li>
 </ul>
-<p>You could name others, operator privacy, a fail-closed admission
+<p>These are design goals for the system, not guarantees established by
+the research preview. You could name others, operator privacy, a fail-closed admission
 gate, data-minimization at the gateway, latency within a constant of
 Tor, but these four are the essentials this protocol stands or falls on.
 The first two are the anonymity Tor already gives; the last two are the
 reputation story it does not.</p>
 <h3 id="the-design-space">The design space</h3>
-<p>Ultimately the privacy in terms of requester unlinkability of a
-Tor-based protocol is proportional to the anonymity set size, which is
-roughly equivalent to the number of nodes passing around traffic. If the
-set is size 1 and the adversary controls it, they can correlate requests
-trivially. If the size is thousands, well then an adversary needs to
-control a much larger amount to correlate. In particular the most
-effective attack involves controlling entry and exit points to the
-network (<a
+<p>Two different sets matter. The membership anonymity set is the set of
+eligible leaves under the public root: its size and distribution govern
+how many members a valid proof could represent. Gateway diversity is a
+separate property: more independent operators spread destination and
+traffic observations, while a single or colluding operator can correlate
+the tunnels it serves. More gateways do not by themselves enlarge the
+membership set. Network-level correlation also depends on who can observe
+the Tor path and the egress. In particular, a well-known attack involves
+controlling entry and exit observations (<a
 href="https://dl.acm.org/doi/10.1145/2508859.2516651">Johnson et al.,
 <em>Users Get Routed</em>, CCS 2013</a>).</p>
-<p>Therefore, different choices in topology and payment have different
-impacts on the anonymity set. Anything which relies on a committee for
-agreeing on shared resource consumption or for payment de facto
-decreases the anonymity set by some amount for some period of time.
+<p>Therefore, topology, membership, and payment choices affect different
+parts of the privacy story. Committees and payment rails may expose new
+links or shrink the eligible membership set, while operator diversity
+changes how concentrated destination observations are.
 Ultimately the desired privacy level, as well as the shape of the
 traffic expected to go through it, should dictate the answer to these
 questions. For instance, Tor is much better for async GET requests than
 streaming Netflix over websocket. Our PoC was one node and no payment: a
 single gateway in front of a hard-coded membership, enough to prove the
 gate works and to measure the path. One gateway is one IP, one burn away
-from dead, and an anonymity set of one on the gateway side, so
+from dead, and one observer of every prototype tunnel, so
 production cannot stay that small. From here the design space branches
 two ways.</p>
 <ol type="1">
-<li><strong>Topology:</strong> what is the target anonymity set size,
-aka the target number of gateways serving requests.</li>
+<li><strong>Topology:</strong> how many independent gateways serve and
+observe requests, and how clients rotate among them.</li>
 <li><strong>Payment:</strong> what does a member pay and where is it
 counted, from a refundable stake that buys a base allowance, to a fee
 per tunnel, to both, and whether that budget is metered at each gateway

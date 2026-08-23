@@ -1,4 +1,4 @@
-# Roadmap: from reputation-gated egress PoC to a network
+# Roadmap: from the first Shade Tree prototype to a network
 
 **Status: active design, updated 2026-08-10.** The original roadmap was written
 against the first Semaphore PoC. Several of its headline items have since moved into

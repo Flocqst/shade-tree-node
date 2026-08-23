@@ -21,7 +21,7 @@ proxy; just call a function. `client/shade-tree-client.mjs`:
 ```js
 import { ShadeTreeClient, cleanUp } from "./client/shade-tree-client.mjs";
 
-const shade-tree = new ShadeTreeClient({
+const shadeTree = new ShadeTreeClient({
   secret,                                   // enrolled member secret (or SHADE_TREE_SECRET)
   directory: "…/network/sepolia/directory-bootnode.json",   // a signed directory (the live fleet's cold-path export)
   dirSigner: "d79f78c3…3a73",               // pins the directory signer (network/sepolia/bootnode.json)
@@ -29,10 +29,10 @@ const shade-tree = new ShadeTreeClient({
   // or: onion: "…"  to pin a single gateway instead of fleet rotation
 });
 
-const res = await shade-tree.fetch("https://api.ipify.org");   // { status, headers, body }
+const res = await shadeTree.fetch("https://api.ipify.org");    // { status, headers, body }
 // lower level — bring your own TLS/protocol over the raw tunnel:
-const sock = await shade-tree.connect("api.ipify.org:443");    // duplex, tunneled via a gateway
-// sock.shade-tree = { onion, slot, nullifier }
+const sock = await shadeTree.connect("api.ipify.org:443");     // duplex, tunneled via a gateway
+// sock.shadeTree = { onion, slot, nullifier, receipt, artifact, leafSource }
 
 cleanUp();  // terminate snarkjs workers so the process can exit
 ```
@@ -74,7 +74,7 @@ the `PaidAccessSet` (**paid**) — and each gateway advertises WHICH of those it
 - A pinned `onion` is honoured as-is (its policy is unknown to the client; a mismatch surfaces as
   the gateway's `wrong-group-root`), except that `--max-anon` still refuses a staked/paid leaf.
 - Events: `onEvent({ phase:"select", status:"done", leafSource, maxAnon, candidates:[{onion, admits}] })`
-  once selection settles (the shim logs it as `SELECT <target> leaf=paid candidates=…`); `tunnel.shade-tree.leafSource`.
+  once selection settles (the shim logs it as `SELECT <target> leaf=paid candidates=…`); `tunnel.shadeTree.leafSource`.
 
 ```bash
 SHADE_TREE_NETWORK=sepolia shade-tree client --secret <hex> --max-anon            # invited-only gateways, or a precise refusal

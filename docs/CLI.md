@@ -19,9 +19,12 @@ shade-tree run -- curl https://api.ipify.org
 shade-tree run --proxy http://127.0.0.1:8888 -- command arg
 ```
 
-The command checks the proxy before spawning the child and fails closed when it cannot connect.
+The command performs an initial TCP preflight before spawning the child and fails closed when it cannot connect.
 It sets `HTTP_PROXY`, `HTTPS_PROXY`, and `WSS_PROXY` in upper- and lowercase, removes inherited
-`ALL_PROXY`, and preserves loopback in `NO_PROXY`. The current shell is unchanged. `run` accepts
+`ALL_PROXY`, and replaces ambient `NO_PROXY` with
+`127.0.0.1,localhost,::1,host.docker.internal` plus values supplied through `--no-proxy` or
+`SHADE_TREE_NO_PROXY`. A wildcard bypass is rejected. The wrapper does not continuously enforce
+proxy use after the child starts. The current shell is unchanged. `run` accepts
 only `--proxy`, `--no-proxy`, and `--check-timeout-ms` before the required `--`; everything after
 that separator is the child command and its arguments. Software that ignores standard proxy
 environment variables must be configured explicitly for the local HTTP CONNECT proxy.
@@ -45,7 +48,7 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 | `withdraw-gateway` | `group/exit-gateway.mjs withdraw` | After `UNBONDING`, call `withdraw(recipient)` to reclaim the bond (`--recipient`, default the operator address). Refuses `NotStaked` / `NotExiting` / `StillBonded` (prints the withdrawable time). Same `--dry-run` and signer options as `exit-gateway`. | `shade-tree withdraw-gateway --recipient 0xCold --gateway-registry 0xReg --rpc-url https://rpc.example --account shade-tree-operator` |
 | `gateway-status` | `group/exit-gateway.mjs status` | Read-only: an operator's stake state (`staked (active)` / `exiting` / `not staked`), `BOND`, `UNBONDING`, `withdrawableAt` and chain time. Needs no key: `--operator 0x…`. | `shade-tree gateway-status --operator 0xOp --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `sign-directory` | `group/sign-directory.mjs` | Sign a static fleet directory for offline discovery; with no args mints example keys + file. | `shade-tree sign-directory unsigned.json` |
-| `gateway` | `gateway/gateway.mjs` | Run the reputation-gated egress gateway (Tor onion, `:443` metadata-only tunnel). Long-running. Admits the paths YOU choose (T-FEAT-9, `docs/adr/0008`): `--admit invited[,staked][,paid]` — default `invited` alone (members.json; the max-anon mode) even when `--network` supplies contracts; `staked` reads every `--group-contract` (comma list), `paid` the `--paid-access-contract`; a named path without its contract refuses to start. Startup: `admits: invited+staked+paid` then `roots: members.json + staked(0x…) + paid(0x…)`. `--roots static,onchain` is the deprecated alias. | `shade-tree gateway --admit invited,staked,paid --group-contract 0xSet --paid-access-contract 0xPaid --rpc-url https://rpc.example` |
+| `gateway` | `gateway/gateway.mjs` | Run an access-gated egress node (Tor onion, `:443` metadata-only tunnel). Long-running. Admits the paths YOU choose (T-FEAT-9, `docs/adr/0008`): `--admit invited[,staked][,paid]` — default `invited` alone (members.json; the max-anon mode) even when `--network` supplies contracts; `staked` reads every `--group-contract` (comma list), `paid` the `--paid-access-contract`; a named path without its contract refuses to start. Startup: `admits: invited+staked+paid` then `roots: members.json + staked(0x…) + paid(0x…)`. `--roots static,onchain` is the deprecated alias. | `shade-tree gateway --admit invited,staked,paid --group-contract 0xSet --paid-access-contract 0xPaid --rpc-url https://rpc.example` |
 | `client` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy (fleet client). Long-running. Finds which set holds your leaf (`members.json`, then each `--group-contract`, then `--paid-access-contract`; `--leaf-source` pins one) and proves against it; `--limit` must be your tier. Routes only to gateways whose signed policy admits that leaf source; `--max-anon` = invited-only gateways only (refuses a staked/paid leaf with the reason). | `shade-tree client --secret <hex> --bootnode <onion> --dir-signer <hex>` (or `--network sepolia`; a paid member: `--network sepolia --limit 32`; max anonymity: `--network sepolia --max-anon`) |
 | `shim` | `client/shim.mjs` | Alias for `client`. | `shade-tree shim --secret <hex> --onion <onion>` |
 | `doctor` | `scripts/doctor.mjs` | Check the local setup (node, tor, keys, deps). | `shade-tree doctor` |

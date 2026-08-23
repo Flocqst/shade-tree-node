@@ -21,13 +21,13 @@ Ground rules for this document:
 
 | Asset | What it is | Where it lives | Compromise impact |
 |---|---|---|---|
-| Member identity secret | The app field-element secret behind a Semaphore v3 / RLN identity | Client only, never on the wire | Full impersonation of that member; recovering it is exactly what a slash does to punish over-spend |
-| `identitySecret` | `Poseidon2(nullifier, trapdoor)` of the identity; the value a slash reveals | Derived client-side (`lib/rln.mjs:identitySecretOf`) | Reconstructable by anyone who sees two shares under one nullifier — that is the slashing mechanism, not a leak |
-| Member unlinkability | The property that a gateway cannot tie two of a member's requests together | Enforced by RLN nullifier structure + fleet rotation | Loss = a member becomes a coherent profile to an operator |
+| Member identity secret | The app field-element secret behind a Semaphore v3 / RLN identity | Client only, never on the wire | Full impersonation of that member |
+| `identitySecret` | `Poseidon2(nullifier, trapdoor)` of the identity; the value a slash reveals | Derived client-side (`lib/rln.mjs:identitySecretOf`) | Two different shares under one nullifier reconstruct it, deliberately revealing the slashable leaf |
+| RLN transcript unlinkability | Distinct slots do not expose a shared leaf or stable cryptographic identifier | Enforced by the RLN nullifier structure | Loss creates a cryptographic link across a member's uses; timing and traffic metadata are separate correlation channels |
 | Gateway onion identity key | The ed25519 seed behind a v3 `.onion` (a `.onion` **is** this pubkey) | Operator host (`tor/hs/`, `bootnode/keygen.mjs`) | Lets an attacker impersonate that gateway in the directory/announce |
 | Directory signer key | The pinned ed25519 key that signs the fleet directory | Bootnode / offline signer | Lets an attacker sign a poisoned fleet list — but see the layered onion↔key check below |
 | On-chain bonds | Member bonds (`StakedReputationSet`) and operator bonds (`GatewayRegistry`) | Ethereum (Sepolia) | Fund-custody / slash-authorization bugs |
-| Target metadata | The `host:port` a member egresses to (never plaintext) | Seen only by the gateway serving that request | The residual exposure the fleet-rotation design is built to spread to ~1/N |
+| Target metadata | The `host:port` a member egresses to | Encrypted in transit through Tor; plaintext to the serving gateway | A gateway can correlate destinations, timing, tunnel lifetime, and volume for the tunnels it serves |
 
 ---
 
@@ -36,8 +36,8 @@ Ground rules for this document:
 **Honest actors**
 
 - **Member (client).** Holds a membership secret, proves membership per tunnel, selects a gateway
-  per tunnel, egresses over a Tor rendezvous with no exit node. Anonymous to the gateway (the
-  gateway sees `127.0.0.1`).
+  per tunnel, and egresses over a Tor rendezvous with no exit node. The onion transport hides the
+  member's source IP from the gateway; it does not prevent traffic or application-layer correlation.
 - **Gateway / operator.** Runs an onion service that proxies member egress to a public IP. Optionally
   stakes an operator address on chain. Pays the gas to slash a member over-spender.
 - **Bootnode.** Publishes its own v3 onion, collects gateway announces, and serves a *signed*
@@ -72,19 +72,19 @@ exit from the member (it never does; path selection is client-side by design), n
 gateways (blinded HSDir descriptors deliberately prevent that — hence the app-layer directory).
 
 **The bootnode.**
-Trusted for: *availability* of a fresh fleet view and for the operator↔onion *pairing label* in
-stake mode unless the client re-verifies. NOT trusted for: injecting an onion it does not control
-(each entry's `pubkey` must equal the key derived from its own `.onion`, `lib/directory.mjs:verifyDirectory`),
-nor for authenticity of the list beyond what the pinned signer covers, nor as a trust root. A
-hostile bootnode can at worst **omit** a gateway or briefly list one whose stake lapsed — it cannot
-**inject** one. "The bootnode is a cache, not a trust root" is the load-bearing sentence here.
+Trusted for: *availability* of a fresh fleet view and, unless the client independently re-verifies,
+the operator↔onion and `staked` labels. A serving bootnode without the directory signing key can
+omit entries or replay a previously signed view, but cannot change signed bytes. A bootnode or
+attacker with the signing key can sign arbitrary entries for onion keys it controls and can attach
+false labels. Onion↔pubkey verification prevents grafting a key the attacker does not control; it
+does not constrain an attacker that generated both values. Optional stake re-verification narrows
+the label trust. The bootnode is not a substitute for a protected signing key.
 
 **The pinned directory signer (`SHADE_TREE_DIR_SIGNER`).**
-Trusted for: authenticating *which list* is the fleet. NOT trusted with a default — there is
-intentionally **no default signer** (`client/selection.mjs:parsePinnedSigners`); an unpinned
-directory is trust-on-first-use, exactly the poisoning surface the signature closes. Even a
-compromised signer cannot graft in a hostile onion under a pubkey it does not control, because the
-onion↔pubkey binding is checked independently per entry (see §5).
+Trusted for: authenticating *which list* is the fleet. There is intentionally **no default signer**
+(`client/selection.mjs:parsePinnedSigners`); without a pin, directory mode is disabled rather than
+falling back to trust on first use. A compromised signer can admit attacker-controlled onion/key
+pairs. The independent onion↔pubkey check only prevents mismatched or grafted pairs (see §5).
 
 **The on-chain registry / RPC.**
 Trusted like any node read. Stake/root reads default to `latest` (dev-chain friendly) and can be
@@ -111,10 +111,11 @@ does not *create* reputation. NOT trusted to provide anonymity of enrollment bey
 admission policy inherently leaks (enrollment is publicly timestamped; `docs/ROADMAP.md` #2).
 
 **The gateway operator.**
-Trusted for: nothing cryptographic about the member. It sees a member's `host:port` targets
-(metadata only, never plaintext) for requests routed to it. NOT trusted to be non-colluding — the
-defense against a colluding operator set is RLN's per-slot nullifiers (a colluding set still cannot
-rejoin a member's requests) combined with per-tunnel rotation.
+Trusted for: nothing cryptographic about the member. It sees each routed `host:port` in plaintext,
+plus tunnel timing, lifetime, and traffic volume. RLN prevents the proof transcript from exposing a
+stable member identifier across slots; it does not prevent a gateway or colluding fleet from using
+network or application metadata to correlate tunnels. Rotation spreads observation rather than
+removing it.
 
 ---
 
@@ -123,10 +124,11 @@ rejoin a member's requests) combined with per-tunnel rotation.
 Each row cites the enforcing function. "Enforced" means verified present in the shipped source;
 "claimed, unverified" flags a designed-but-not-fully-wired path.
 
-### 4.1 Client anonymity to the gateway
-The gateway terminates a Tor rendezvous and sees `127.0.0.1` for every request; there is no exit
-node and no client IP on the wire. **Enforced** by the transport (onion service dial in the shim /
-`client/shade-tree-client.mjs`), not by app crypto. Adversary A1/A4.
+### 4.1 Source-IP hiding from the gateway
+The gateway terminates a Tor rendezvous; there is no Tor exit node and the client source IP is not
+present on the application connection. **Enforced** by the onion transport (the shim /
+`client/shade-tree-client.mjs`), not by app crypto. This property does not hide targets or defeat
+traffic analysis. Adversary A1/A4.
 
 ### 4.2 Membership soundness
 A request carries a real RLN Groth16 proof of membership in a `rateCommitment` leaf of the depth-20
@@ -134,22 +136,23 @@ tree, checked against the currently-accepted root set. **Enforced** by
 `lib/rln.mjs:verifyEnvelope` (check 3 root membership + check 4 Groth16 verify) over
 `recentRoots`. A forged set fails the root check; a bad proof fails verification. Adversary A5.
 
-### 4.3 Per-tunnel unlinkability + rate cap (RLN)
+### 4.3 Per-tunnel proof unlinkability + rate cap (RLN)
 The RLN nullifier is a function of the identity, the per-epoch `externalNullifier`, and a **private
 `messageId` (slot)**; a member rotates the slot per tunnel, yielding distinct, mutually-unlinkable
 nullifiers, capped at `K` per epoch (`K_SLOTS`, default 8). **Enforced** by
 `lib/rln.mjs:proveForSlot` (`messageId = i`, range-checked in the circuit) and the top-of-file RLN
 semantics comment; the gateway keys its spent-set on the proof's *public-signal* nullifier
 (`lib/rln.mjs:verifyEnvelope` returns `nullifier` from `publicSignals`, never the envelope's copy),
-so a lying envelope cannot desync accounting. What the gateway learns is a fresh nullifier per slot
-and nothing tying two slots to one member. Adversary A1 (incl. colluding set).
+so a lying envelope cannot desync accounting. At the proof layer the gateway learns a fresh
+nullifier per slot and no stable leaf identifier. Target, timing, volume, account, and cookie data
+may still correlate uses. Adversary A1 (including a colluding set).
 
 **Reputation tiers (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** `K` is per LEAF, not
 global: the leaf is `Poseidon2(Poseidon1(identitySecret), userMessageLimit)` and the circuit
 range-checks `messageId < userMessageLimit` with both PRIVATE, so a tier-32 member gets 32
 unlinkable nullifiers per epoch from the same tree, and the tier itself never reaches the wire
-(the public signals, envelope, and `verifyEnvelope` result are byte-identical across tiers —
-`test/reputation-tiers.selftest.mjs` UNLINKABLE). **Tier forgery (A5) is leaf forgery:** a
+  (the public signals, envelope, and `verifyEnvelope` result use the same schema and carry no
+  explicit tier field — `test/reputation-tiers.selftest.mjs` UNLINKABLE). **Tier forgery (A5) is leaf forgery:** a
 member proving with a limit its leaf does not carry has no Merkle path (`proveForSlot` "not in
 group"), and a real proof over a self-made tree with the wished-for leaf is rejected
 `wrong-group-root` before any SNARK work (`lib/rln.mjs:verifyEnvelope` check 3); a tier-8
@@ -171,16 +174,20 @@ make the newline-delimited `requestSignal` non-injective) and failing closed (`u
 
 ### 4.5 Over-spend detection and slashing
 Two distinct public `x` values under the *same* nullifier are two points on the degree-1 line, so
-the `identitySecret` is Shamir-reconstructed and the leaf is slashed exactly once. **Enforced** by
+the `identitySecret` is Shamir-reconstructed and the gateway attempts to slash the leaf at most once
+per in-memory nullifier. **Enforced** by
 `gateway/gateway.mjs:makeSpentSet` (`admit` → the "distinct public x under the same nullifier"
 branch → `reconstruct`/`derive`/`slash`), `lib/rln.mjs:reconstructSecret` +
 `lib/rln.mjs:deriveCommitment`, and on chain `contracts/StakedReputationSet.sol:slash`
 (**permissionless** — the secret is a cryptographic proof of over-spend; `slash` re-derives
-`commitmentOf(secret)` and reverts `BadSecret` on mismatch). Adversary A5.
+`commitmentOf(secret)` and reverts `BadSecret` on mismatch). The spent set marks the attempt before
+calling the slasher; a failed call is logged but is not automatically retried, so successful
+on-chain slashing is not guaranteed. Adversary A5.
 
-### 4.6 Per-gateway replay defense
-An exact-envelope resend to the *same* gateway is idempotent within a short window (honest
-dropped-connection retry) and rejected after it. **Enforced** by `gateway/gateway.mjs:makeSpentSet`:
+### 4.6 Per-gateway replay handling
+An exact-envelope resend to the *same* gateway is accepted within a short window without counting
+as an over-spend, and rejected after it. The current handler can open another upstream tunnel for
+that accepted replay, so this is not side-effect idempotence. **Enforced** by `gateway/gateway.mjs:makeSpentSet`:
 the `seenEnv` fingerprint `nullifier|share.x|nonce` plus `replayWindowMs` (default 5s) →
 `replay` (accept) vs `replayed-envelope` (drop). **Scope limit:** this is per-process, per-gateway
 only; there is no shared spent-set across non-colluding gateways (residual T-FEAT-20, §5). Adversary
@@ -264,11 +271,12 @@ receipts is local-only, off by default, never transmitted
 (`client/selection.mjs:reportReceipt`, `SHADE_TREE_RECEIPT_SCORING`). Adversary A1.
 
 ### 4.14 On-chain stake / root reorg-safety
-Stake and root reads can be pinned to a confirmation depth so a reorg cannot flip an admission
-decision under the gateway. **Enforced** by `lib/gateway-registry.mjs:blockTag` (reads at
+Stake and root reads can be pinned to a confirmation depth to reduce the chance that a reorg flips
+an admission decision under the gateway. **Enforced** by `lib/gateway-registry.mjs:blockTag` (reads at
 `head - SHADE_TREE_CONFIRMATIONS`, or `finalized`) and `lib/root-provider.mjs` (confirmation-depth
 `eth_getLogs` up to `head - N` / `finalized`). **Default is `latest`** (dev-chain friendly), so
-reorg safety is opt-in via `SHADE_TREE_CONFIRMATIONS` — an honest default-config caveat, not a guarantee.
+reorg risk reduction is opt-in via `SHADE_TREE_CONFIRMATIONS`. Reorgs deeper than the configured
+depth, or failures in finalized-header assumptions, remain possible.
 Adversary A2.
 
 ### 4.14b Multi-root admission: static + staked + paid sets (T-FEAT-7)
@@ -375,10 +383,11 @@ A1 (as a client of peers), A5, and any unauthenticated network peer.
 
 ### 4.17 Paid admission over HTTP 402 (T-FEAT-7): the registrar as a trust surface
 
-**Property.** A buyer obtains exactly the leaf they paid for, once, at the tier they paid for; a
-captured or replayed payment never moves funds twice or mints a second leaf; the operator can
-neither be tricked into inserting an unpaid leaf nor into paying gas for a transfer that will
-revert; the payer↔leaf link never reaches the gateway.
+**Property.** The payment authorization is bound to one commitment and tier, and replay checks
+prevent the same authorization from settling twice or minting a second leaf. The registrar checks
+the transfer before insertion and simulates transactions before spending gas. Settlement and leaf
+insertion are not atomic: after payment, the buyer trusts the operator to complete insertion. The
+payer↔leaf link does not reach the gateway through the proof protocol.
 
 **Where enforced.** `payments/registrar.mjs` `makeEngine.verifyAndSettle` (order: wire shape via
 `payments/wire.mjs` `parseX402Payment` / `parseMppCredential`; body `limit` == paid tier;
@@ -417,8 +426,9 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
   buyer-seller trust any prepaid service carries, and NOT a facilitator: no third party is added.
   Linkability lives at the payment, not at use: the 402 payment (its rail, its payer address /
   account, its timing) and the on-chain `insert` tx are visible to the rail and to the chain
-  respectively; the TIER BUCKET (which `limit` was bought) is public in the insert event; use is
-  unlinkable to both (the proof hides the leaf). Mitigations are the buyer's Layer-0 hop (a fresh
+  respectively; the TIER BUCKET (which `limit` was bought) is public in the insert event; a use does
+  not reveal the leaf or payer through the proof, although timing and application metadata can still
+  correlate it. Mitigations are the buyer's Layer-0 hop (a fresh
   address / account funded through a pool of their choice), the operator batching inserts (dwell
   time between payment and insert), and a healthy paid crowd (`SHADE_TREE_PAID_MIN_LEAVES`). Which
   root a proof opens (static / staked / paid) is public to the gateway (§4.14b).
@@ -464,12 +474,13 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 - **Knowing your own exit.** A member knowing which gateway it egresses through is not the threat
   (`docs/ROADMAP.md` #3); multi-hop gateways are deliberately not the plan.
 - **Payments, sourcing clean egress IPs, rendezvous/onion DoS.** Operator responsibilities / out of
-  scope per the README "What it does not protect against", `docs/OVERVIEW.md` and `SECURITY.md`.
+  scope per the README `Boundaries` section, `docs/OVERVIEW.md` and `SECURITY.md`.
 - **Sybil operators inflating rotation odds (A6).** Rotation spreads a member across the live fleet;
   a Sybil that runs many gateways raises its share of any one member's traffic. Staking
-  (`admission=stake`) raises the cost but does not eliminate it; the anonymity argument rests on
-  RLN's per-slot unlinkability (§4.3) holding even against a *colluding* set, not on any single
-  operator being honest.
+  (`admission=stake`) raises the cost but does not eliminate it; the proof-level argument rests on
+  RLN's per-slot transcript unlinkability (§4.3) holding even against a *colluding* set, not on any single
+  operator being honest. RLN transcript unlinkability does not defeat traffic analysis by that
+  colluding set.
 
 ---
 

@@ -17,9 +17,10 @@ proxy-aware process—under it without changing the rest of the machine.
 [Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
 
 > [!WARNING]
-> **Research preview.** The public configuration uses Sepolia, the code has not
-> been audited, and the included ZK artifacts are development artifacts. Do not
-> rely on this preview for real funds or security-sensitive anonymity.
+> **Research preview.** The code has not been audited and the included ZK
+> artifacts are development artifacts. The checked-in Sepolia records describe
+> the pre-v4 deployment and are not a live-availability promise. Do not rely on
+> this preview for real funds or security-sensitive anonymity.
 
 ## The shape
 
@@ -41,8 +42,8 @@ precise guarantees.
 
 ## Put an agent under the tree
 
-You need Node.js, a local Tor SOCKS port, and a member secret for the selected
-network.
+You need Node.js, a local Tor SOCKS port, a member secret, and either a gateway
+onion or a signed directory from an operator.
 
 ```bash
 git clone https://github.com/dmarzzz/shade-tree-node.git
@@ -56,7 +57,7 @@ Start Tor and the local proxy:
 
 ```bash
 bash scripts/start-tor-client.sh
-SHADE_TREE_SECRET=<hex> SHADE_TREE_NETWORK=sepolia \
+SHADE_TREE_SECRET=<hex> SHADE_TREE_ONION=<gateway.onion> \
   shade-tree client --tor-port 9260
 ```
 
@@ -74,8 +75,8 @@ makes it a small integration surface for Hermes and other proxy-aware agents
 while local model servers such as Ollama or vLLM can remain on loopback.
 
 Software that ignores standard proxy environment variables needs an explicit
-HTTP proxy setting pointed at `http://127.0.0.1:8888`. Every flag also has an
-`SHADE_TREE_*` environment-variable form. See [CLI](docs/CLI.md),
+HTTP proxy setting pointed at `http://127.0.0.1:8888`. Every mapped
+configuration flag also has a `SHADE_TREE_*` environment-variable form. See [CLI](docs/CLI.md),
 [configuration](docs/CONFIG.md), and the [JavaScript SDK](docs/SDK.md).
 
 ## Run a node
@@ -135,6 +136,8 @@ npm test
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for the test layout and change policy.
+Breaking changes from the earlier prototype are recorded in
+[the migration guide](docs/MIGRATING-TO-SHADE-TREE.md) and [changelog](CHANGELOG.md).
 Security reports belong in the private channel described in
 [SECURITY.md](SECURITY.md).
 

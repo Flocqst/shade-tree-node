@@ -68,11 +68,12 @@ only. Every target must be reachable over HTTPS. Plain `http://` is not tunneled
 - SearXNG, curl, most HTTP libraries: proxy style. Point the tool at
   `http://127.0.0.1:8888`. No code change; the shim proves and rotates per connection.
 - Your own code doing many requests: library style. `import { ShadeTreeClient } from
-  "./client/shade-tree-client.mjs"` and call `shade-tree.fetch(url)` directly. One proof per tunnel,
+  "./client/shade-tree-client.mjs"` and call `shadeTree.fetch(url)` directly. One proof per tunnel,
   no extra process, direct access to the egress IP and gateway used.
 
-Both mint a fresh per-tunnel nullifier and rotate the gateway, so requests are
-rate-limited without identifying you and are mutually unlinkable, even to the gateway.
+Both mint a fresh per-tunnel nullifier and select a gateway for each tunnel. The proof
+does not reveal a stable member identifier across slots, but a gateway may still correlate
+tunnels through destination, timing, volume, or application metadata.
 Full SearXNG `settings.yml` wiring, the agent example, and the Docker loopback caveat are
 in [`../ADAPTERS.md`](../ADAPTERS.md).
 
