@@ -60,6 +60,10 @@ async function main() {
     }).then((r) => r.json());
     ok(a1.ok === true, "honest announce (g1) accepted");
 
+    const health = await fetch(base + "/health");
+    ok(health.headers.get("x-shade-tree-role") === "elder-tree", "health identifies the Elder Tree role");
+    ok(health.headers.get("x-shade-tree-view") === null, "health does not claim to be a Canopy payload");
+
     // (a) GET /directory returns a (strong) ETag, and the plain path still verifies.
     console.log("\nETag + conditional GET:");
     const r1 = await fetch(base + "/directory");
@@ -67,6 +71,8 @@ async function main() {
     const dir1 = await r1.json();
     ok(r1.status === 200, "GET /directory -> 200");
     ok(typeof etag1 === "string" && /^"[0-9a-f]{64}"$/.test(etag1), "response carries a strong sha256 ETag");
+    ok(r1.headers.get("x-shade-tree-role") === "elder-tree" && r1.headers.get("x-shade-tree-view") === "canopy",
+      "directory carries informational Elder Tree and Canopy headers");
     ok(verifyDirectory(dir1, signer.pub).ok, "plain GET body still verifies against the pinned signer");
 
     // (b) a second GET with If-None-Match: <that etag> -> 304 and empty body.
@@ -75,6 +81,7 @@ async function main() {
     ok(r2.status === 304, "conditional GET with matching ETag -> 304 Not Modified");
     ok(body2.length === 0, "304 response has an empty body");
     ok(r2.headers.get("etag") === etag1, "304 still echoes the ETag");
+    ok(r2.headers.get("x-shade-tree-view") === "canopy", "304 keeps the Canopy presentation header");
 
     // (c) after a NEW announce the ETag changes; a conditional GET with the OLD etag -> 200 + new body.
     console.log("\nETag changes on directory change:");

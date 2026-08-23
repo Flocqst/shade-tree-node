@@ -3,147 +3,89 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Run the proxy beside your agent. Run a Shade Tree node to provide destination-facing egress for agents.">
-  <meta name="theme-color" content="#101712">
+  <meta name="description" content="Run the proxy beside an agent. Run a Shade Tree node to provide cover.">
+  <meta name="theme-color" content="#070c09">
   <meta property="og:title" content="Shade Tree">
-  <meta property="og:description" content="Run the proxy for your agent. Run a node to provide cover for agents.">
+  <meta property="og:description" content="Cover for local agents.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
-  <meta property="og:image:alt" content="A sparse grove casting a patch of shade">
+  <meta property="og:image:alt" content="A dark grove casting a patch of shade">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/fig/shade-tree-banner.webp" as="image" type="image/webp" fetchpriority="high">
   <link rel="stylesheet" href="/site.css">
   <script type="module" src="/site.js"></script>
-  <title>Shade Tree · A small grove for local AI</title>
+  <title>Shade Tree</title>
 </head>
-<body>
-  <a class="skip-link" href="#main">Skip to the path</a>
+<body class="home-page">
+  <a class="skip-link" href="#roles">Skip to the roles</a>
 
-  <header class="hero" aria-labelledby="hero-title">
+  <header class="home-hero" aria-labelledby="home-title">
     <nav class="site-nav" aria-label="Primary navigation">
       <a class="wordmark" href="/" aria-label="Shade Tree home">
         <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>Shade Tree</span>
       </a>
-      <span class="preview-label">Research preview</span>
       <div class="nav-links">
-        <a href="/research/">Research</a>
         <a href="/grove/">Grove</a>
+        <a href="/research/">Research</a>
         <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
       </div>
     </nav>
 
     <div class="grove-stage" id="grove-stage">
-      <canvas id="grove-canvas" aria-hidden="true"></canvas>
-      <p class="scene-note" aria-hidden="true"><span></span> move the light</p>
-    </div>
-
-    <div class="hero-copy">
-      <p class="eyebrow">Use the proxy · provide a node</p>
-      <h1 id="hero-title">A small grove for <em>local AI.</em></h1>
-      <p class="hero-lede">Run the proxy beside your agent. Run a Shade Tree node to provide cover for agents. Each admitted HTTPS tunnel reaches the node through Tor; the destination sees the node’s public IP.</p>
-      <div class="hero-actions">
-        <a class="primary-action" href="#run">Use the proxy <span aria-hidden="true">↓</span></a>
-        <a class="text-action" href="#provide">Provide a node <span aria-hidden="true">↓</span></a>
+      <div class="forest-fallback" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
       </div>
+      <canvas id="grove-canvas" aria-hidden="true"></canvas>
     </div>
 
-    <div class="hero-foot" aria-label="Project properties">
-      <span>Process-scoped</span>
-      <span>Proof-gated</span>
-      <span>Open source</span>
+    <div class="home-copy">
+      <h1 id="home-title">Cover for local agents.</h1>
+      <p>Run the proxy beside an agent. Run a node to provide cover.</p>
+      <div class="hero-actions">
+        <a class="solid-action" href="#proxy">Run the proxy</a>
+        <a class="line-action" href="#node">Run a node</a>
+      </div>
     </div>
   </header>
 
-  <main id="main">
-    <section class="route-section page-grid" id="run" aria-labelledby="route-title">
-      <div class="section-intro">
-        <p class="eyebrow dark">Running an agent</p>
-        <h2 id="route-title">Run the proxy.</h2>
-        <p>Launch Hermes—or another proxy-aware process—through the local proxy. It passes proxy settings only to that child; loopback model servers and the rest of the machine stay outside the route.</p>
-        <div class="command" aria-label="Example command">
-          <code><span>$</span> shade-tree run -- hermes</code>
-          <button class="copy-command" type="button" data-copy="shade-tree run -- hermes" aria-label="Copy example command">copy</button>
+  <main id="roles" class="role-shell">
+    <section class="role-grid" aria-label="Ways to use Shade Tree">
+      <article id="proxy" class="role">
+        <h2>Proxy</h2>
+        <p>Local route for proxy-aware agent traffic.</p>
+        <div class="command" aria-label="Example proxy command">
+          <code>shade-tree proxy</code>
+          <button class="copy-command" type="button" data-copy="shade-tree proxy" aria-label="Copy proxy command">copy</button>
         </div>
-        <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node#run-the-proxy-for-an-agent">Install and run <span aria-hidden="true">↗</span></a>
-      </div>
+        <a class="role-link" href="https://github.com/dmarzzz/shade-tree-node#run-the-proxy">Proxy guide ↗</a>
+      </article>
 
-      <ol class="route" aria-label="Path of one Shade Tree tunnel">
-        <li>
-          <span class="route-number">01</span>
-          <strong>Your process</strong>
-          <small>Hermes, curl, or anything proxy-aware</small>
-        </li>
-        <li>
-          <span class="route-number">02</span>
-          <strong>Local proxy</strong>
-          <small>The client sends a proof before each CONNECT tunnel</small>
-        </li>
-        <li>
-          <span class="route-number">03</span>
-          <strong>Onion node</strong>
-          <small>Tor carries the encrypted onion leg to the node</small>
-        </li>
-        <li>
-          <span class="route-number">04</span>
-          <strong>Destination</strong>
-          <small>With HTTPS, TLS stays end to end to the destination</small>
-        </li>
-      </ol>
+      <article id="node" class="role">
+        <h2>Node</h2>
+        <p>Accepts proof-gated tunnels and makes the final connection.</p>
+        <a class="solid-action compact" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Node guide ↗</a>
+      </article>
     </section>
 
-    <section class="boundary-section" aria-labelledby="boundary-title">
-      <div class="boundary-heading">
-        <p class="eyebrow">The edge of the shade</p>
-        <h2 id="boundary-title">Small claims, clearly drawn.</h2>
-      </div>
-      <div class="boundary-list">
-        <p><span>Node</span> sees the destination host, port, timing, and byte counts.</p>
-        <p><span>Destination</span> sees the node’s public IP and can still block it.</p>
-        <p><span>Network</span> Shade Tree does not prevent end-to-end timing correlation or force a node to forward honestly.</p>
-      </div>
-      <a class="underlined-link light" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">Full threat model <span aria-hidden="true">↗</span></a>
-    </section>
-
-    <section class="research-section page-grid" aria-labelledby="research-title">
-      <figure class="research-figure">
-        <img src="/fig/shade-tree-protocol.png" width="1920" height="1080" loading="lazy" alt="Prototype handshake diagram: the client requests a challenge, submits a membership proof and CONNECT target, the node verifies it, then opens the tunnel.">
-        <figcaption>Prototype handshake · current wire behavior is protocol v4</figcaption>
-      </figure>
-      <div class="research-copy">
-        <p class="eyebrow dark">Research note · August 2026</p>
-        <h2 id="research-title">The detail lives over here.</h2>
-        <p>The motivation, proof gate, measurements, design space, and unresolved tradeoffs are in the full note—not repeated across a landing page.</p>
-        <a class="primary-action ink" href="/research/">Read the note <span aria-hidden="true">→</span></a>
-      </div>
-    </section>
-
-    <section class="operator-section page-grid" id="provide" aria-labelledby="operator-title">
-      <div>
-        <p class="eyebrow dark">Providing cover</p>
-        <h2 id="operator-title">Run a Shade Tree node.</h2>
-      </div>
-      <div class="operator-copy">
-        <p>A node is a Tor onion service with a proof-gated CONNECT gateway. It provides destination-facing egress for admitted agents: destinations see the node’s public IP. It can run near GPU workers, model servers, or an Ethereum validator; give egress a dedicated public IP when you can.</p>
-        <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node <span aria-hidden="true">↗</span></a>
-        <a class="underlined-link" href="/grove/">See the grove <span aria-hidden="true">→</span></a>
-      </div>
+    <section class="path-panel" aria-label="Shade Tree path and boundary">
+      <picture>
+        <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
+        <img src="/fig/shade-tree-path.svg" width="1600" height="760" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends agent traffic through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
+      </picture>
+      <p>Tor exit addresses are public, and shared traffic often trips abuse controls. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
     </section>
   </main>
 
   <footer class="site-footer">
-    <a class="wordmark footer-mark" href="/">
-      <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>Shade Tree</span>
-    </a>
-    <p>Research preview. Unaudited. Built in the open.</p>
+    <span>Research preview</span>
     <nav aria-label="Project links">
-      <a href="https://github.com/dmarzzz/shade-tree-node">GitHub</a>
-      <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/SECURITY.md">Security</a>
-      <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/LICENSE">MIT</a>
+      <a href="/research/">Research</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">Threat model</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
     </nav>
   </footer>
 </body>

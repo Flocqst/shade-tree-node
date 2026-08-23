@@ -374,7 +374,7 @@ export class ShadeTreeClient {
   // first, then failovers), else a local tor/hs/hostname (dev). Each is { onion, artifacts? }
   // where `artifacts` is the gateway's SIGNED accepted-artifact ad from the directory (T-HARD-8),
   // when it advertises one.
-  async _candidates() {
+  async _candidates(onEvent) {
     if (this.onion) {
       // A pinned onion is the caller's explicit choice: no admission filtering is possible (its
       // policy is unknown here); a mismatch surfaces as the gateway's wrong-group-root reject.
@@ -386,7 +386,7 @@ export class ShadeTreeClient {
       // T-FEAT-9: route only to gateways whose signed policy admits OUR leaf source (fail closed
       // with a precise fleet summary when none does); --max-anon = invited-only gateways only.
       const adm = await this._admission();
-      const cands = await sel.selectCandidates(null, adm);
+      const cands = await sel.selectCandidates(null, adm, { onEvent });
       if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null, admits: c.admits || null }));
     }
     try {
@@ -437,13 +437,14 @@ export class ShadeTreeClient {
   // gateway. Builds ONE proof and reuses the SAME envelope across gateway failover
   // (deterministic retry). Throws if the gate refuses or no gateway is reachable. TLS stays
   // end-to-end: do your own tls.connect({ socket }) — the gateway sees only ciphertext.
-  // onEvent(e) is an optional progress hook: e.phase ∈ {prove,dial,gate}, e.status.
+  // onEvent(e) is an optional progress hook. A live discovery refresh adds the local canopy
+  // phase before select; refresh-window and static-directory selections emit no canopy event.
   async connect(target, { onEvent, onion } = {}) {
     const emit = (e) => { try { onEvent?.(e); } catch { /* progress is best-effort */ } };
     // opts.onion pins a specific gateway for this tunnel (else directory/pin/local order).
     let cands;
     try {
-      cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates();
+      cands = onion ? [{ onion: String(onion).replace(/\.onion$/, ""), artifacts: this.gatewayArtifacts }] : await this._candidates(emit);
     } catch (e) {
       emit({ phase: "select", status: "error", error: e.message });
       throw e;

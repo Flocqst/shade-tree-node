@@ -47,13 +47,14 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
 
 **What is trusted, and how far:**
 
-- *The bootnode* is a convenience cache, not a trust root. It can omit a gateway or (briefly) list
-  one whose stake lapsed. It cannot inject an onion it does not control, because clients re-derive
-  each onion's key and can re-check stake on chain (`GET /gateway/<onion>` returns the raw signed
-  announce for full re-verification).
-- *The pinned directory signer* (`SHADE_TREE_DIR_SIGNER`) authenticates the *list*. There is
-  intentionally no default: an unpinned directory is trust-on-first-use, which is the poisoning
-  surface the signature closes.
+- *The bootnode and pinned directory signer* form a discovery trust boundary. A compromised signer
+  can omit, reorder, or add an internally consistent entry, including a malicious onion it controls.
+  Onion/key binding prevents redirection of an existing onion to another key. Signed capabilities
+  remain verifiable when present. `GET /gateway/<onion>` exposes the raw announcement, and optional
+  stake re-verification narrows risk for entries that claim stake.
+- *The pinned directory signer* (`SHADE_TREE_DIR_SIGNER`) is distributed out of band. There is
+  intentionally no default. The pin prevents trust-on-first-use, but its holder still controls
+  the candidate list.
 - *The RPC endpoint* for on-chain reads is trusted like any node read; run your own for the
   solo-staker path. Stake reads default to `latest`; set `SHADE_TREE_CONFIRMATIONS` for reorg safety.
 - *The admission ceremony* (whatever adds a leaf) is the sybil-resistance root. The proof gates

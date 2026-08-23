@@ -12,6 +12,7 @@ let mounted = false;
 let sceneController = null;
 let sceneSeed = null;
 let publicKeyPromise = null;
+let lastLiveObservedAt = null;
 
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
@@ -174,67 +175,41 @@ function drawFallback(snapshot) {
   }
 }
 
-function renderRings(snapshot) {
-  const group = document.getElementById("history-rings");
-  group.replaceChildren();
-  const samples = snapshot.history.slice(-18);
-  const max = Math.max(1, ...samples.map((sample) => sample.announced));
-  samples.forEach((sample, index) => {
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const radius = 18 + index * (154 / Math.max(1, samples.length));
-    circle.setAttribute("class", "history-ring");
-    circle.setAttribute("cx", "210");
-    circle.setAttribute("cy", "210");
-    circle.setAttribute("r", radius.toFixed(1));
-    circle.setAttribute("stroke-width", (0.7 + (sample.announced / max) * 2.6).toFixed(2));
-    circle.setAttribute("stroke-opacity", (0.18 + (index / Math.max(1, samples.length - 1)) * 0.54).toFixed(2));
-    circle.setAttribute("stroke-dasharray", `${(12 + sample.announced * 2).toFixed(1)} ${(5 + index * 0.35).toFixed(1)}`);
-    group.append(circle);
-  });
-  const counts = samples.map((sample) => sample.announced);
-  const min = Math.min(...counts);
-  const latest = counts.at(-1);
-  const maxCount = Math.max(...counts);
-  const span = min === maxCount
-    ? `${latest} ${latest === 1 ? "tree" : "trees"} throughout`
-    : `${min}–${maxCount} trees`;
-  const sampleLabel = snapshot.history.length > samples.length
-    ? `Latest ${samples.length} of ${snapshot.history.length}`
-    : `${samples.length} recent`;
-  setText("[data-ring-summary]", `${sampleLabel} count-only ${samples.length === 1 ? "observation" : "observations"} · ${span} · public history retains no identities`);
-}
-
 function setText(selector, value) {
   document.querySelectorAll(selector).forEach((element) => { element.textContent = value; });
 }
 
-function renderSnapshot(snapshot, { bundled = false } = {}) {
+async function renderSnapshot(snapshot, { bundled = false } = {}) {
   const count = snapshot.nodes.announced;
   const age = ageParts(snapshot.observedAt);
   const cadence = Number(snapshot.source.cadenceMinutes) || 15;
+  const researchFleet = snapshot.network === "sepolia";
   const stale = bundled || age.minutes > cadence * 3;
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.remove("is-unavailable");
   setText("[data-node-count]", String(count));
   setText("[data-hero-count]", String(count));
   setText("[data-hero-tree-word]", count === 1 ? "tree" : "trees");
-  setText("[data-hero-tail]", stale ? "in the last signed view." : "in the signed grove.");
+  setText("[data-hero-tail]", researchFleet ? "in the research Grove." : "in the Grove.");
   setText("[data-canopy-label]", stale ? "Last verified canopy" : "Current canopy");
-  setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "growing" : String(snapshot.growth.announcedNodeHours));
+  setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "waiting" : String(snapshot.growth.announcedNodeHours));
   setText("[data-view-age]", age.long);
   setText("[data-snapshot-cadence]", `${cadence}-minute snapshots`);
   const state = bundled
-    ? `Signed bundled reference · last verified ${age.long}`
+    ? `Signed pre-v4 reference · ${age.long}`
     : stale
-      ? `Signed snapshot is stale · ${age.long}`
-      : `Snapshot signature valid · observer verified directory over Tor · ${age.long}`;
+      ? `${researchFleet ? "Pre-v4 research census" : "Signed census"} · ${age.long} · stale`
+      : `${researchFleet ? "Research census" : "Census"} verified · ${age.long}`;
   setText("[data-view-state]", state);
   drawFallback(snapshot);
-  renderRings(snapshot);
 
   if (!mounted) {
     mounted = true;
-    mountScene(snapshot).catch(() => { stage.classList.remove("is-live"); });
+    try {
+      await mountScene(snapshot);
+    } catch {
+      stage.classList.remove("is-live");
+    }
   } else if (sceneController && sceneSeed !== `${snapshot.observedAt}:${count}`) {
     sceneController.updateSnapshot(snapshot);
     sceneSeed = `${snapshot.observedAt}:${count}`;
@@ -242,28 +217,49 @@ function renderSnapshot(snapshot, { bundled = false } = {}) {
 }
 
 async function mountScene(snapshot) {
-  const compactOrCoarse = window.matchMedia("(max-width: 700px), (pointer: coarse)").matches;
-  if (compactOrCoarse || navigator.connection?.saveData) return;
+  if (navigator.connection?.saveData) return;
+  const lowQuality = window.matchMedia("(max-width: 700px), (pointer: coarse)").matches;
   const probe = document.createElement("canvas");
-  const context = probe.getContext("webgl2", { failIfMajorPerformanceCaveat: true });
+  const context = probe.getContext("webgl2", { failIfMajorPerformanceCaveat: true })
+    || probe.getContext("webgl", { failIfMajorPerformanceCaveat: true });
   if (!context) return;
   context.getExtension("WEBGL_lose_context")?.loseContext();
   const { mountNetworkGrove } = await import("./scene.js");
-  sceneController = mountNetworkGrove({ stage, canvas, snapshot, reducedMotion });
+  sceneController = mountNetworkGrove({
+    stage,
+    canvas,
+    snapshot,
+    reducedMotion,
+    quality: lowQuality ? "low" : "high",
+  });
   sceneSeed = `${snapshot.observedAt}:${snapshot.nodes.announced}`;
 }
 
 async function load() {
+  // This pulse represents the browser checking the same-origin signed aggregate. The browser
+  // never contacts the onion bootnode. A separate pulse is used when observedAt proves that the
+  // upstream observer published a new census.
+  document.body.classList.add("is-checking");
+  stage.classList.add("is-querying");
+  sceneController?.beginQuery();
   try {
-    renderSnapshot(await fetchSnapshot(LIVE_URL));
+    const snapshot = await fetchSnapshot(LIVE_URL);
+    const freshCensus = lastLiveObservedAt !== snapshot.observedAt;
+    await renderSnapshot(snapshot);
+    sceneController?.finishQuery(snapshot, { freshCensus });
+    lastLiveObservedAt = snapshot.observedAt;
   } catch {
+    sceneController?.failQuery();
     try {
-      renderSnapshot(await fetchSnapshot(FALLBACK_URL), { bundled: true });
+      await renderSnapshot(await fetchSnapshot(FALLBACK_URL), { bundled: true });
     } catch {
       document.body.classList.add("is-unavailable");
       setText("[data-view-state]", "Public view unavailable");
-      setText("[data-view-age]", "—");
+      setText("[data-view-age]", "Unavailable");
     }
+  } finally {
+    document.body.classList.remove("is-checking");
+    stage.classList.remove("is-querying");
   }
 }
 

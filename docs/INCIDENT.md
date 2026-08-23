@@ -5,11 +5,11 @@ containment, root-cause investigation, recovery, prevention. Read `docs/AUDIT.md
 trust model these procedures rely on. Where a step is still manual it says so and points at the
 `docs/SHIP-PLAN.md` task (the "Honest gaps" list at the end is the current one).
 
-The single fact that shapes every response: **the bootnode and its signer authenticate a list, they
-are not a trust root.** Clients re-derive each onion's ed25519 key from its own `.onion` address
-(`lib/directory.mjs` `onionToPubkey`) and, in stake mode, can re-check the operator on chain. So the
-worst a compromised bootnode or signer can do is OMIT or reorder gateways, never INJECT an onion it
-does not control. Keep that boundary in mind before escalating.
+The single fact that shapes every response: **the pinned directory signer is a discovery trust
+boundary.** Clients trust it to choose the candidate list. A compromised signer can omit, reorder,
+or add entries, including a malicious onion it controls. Onion/key binding prevents it from making
+an existing onion terminate at another key. Optional stake checks and onion-signed capabilities
+narrow the risk but do not remove signer trust. Keep that boundary in mind before escalating.
 
 ---
 

@@ -2,10 +2,10 @@
 
 import * as THREE from "./vendor/three-0.185.1/three.module.min.js";
 
-const NIGHT = 0x101712;
-const GROUND = 0x172219;
-const BARK = 0x4b4235;
-const LEAF_COLORS = [0x4f6247, 0x617354, 0x768462, 0x8a9470, 0x3f5340];
+const NIGHT = 0x070c09;
+const GROUND = 0x111913;
+const BARK = 0x4a3d2f;
+const LEAF_COLORS = [0x40543a, 0x506244, 0x637452, 0x788564, 0x344634];
 const UP = new THREE.Vector3(0, 1, 0);
 
 function seededRandom(seed) {
@@ -139,7 +139,7 @@ function createGrove(scene, mobile) {
 
   const rootGeometry = new THREE.BufferGeometry().setFromPoints(rootPoints);
   const rootMaterial = new THREE.LineBasicMaterial({
-    color: 0x8a8d6d,
+    color: 0xd1b66e,
     transparent: true,
     opacity: 0.28,
   });
@@ -179,10 +179,10 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const sky = new THREE.HemisphereLight(0xc7d0b4, 0x080c09, 2.05);
+  const sky = new THREE.HemisphereLight(0xdde5d5, 0x040805, 2.05);
   scene.add(sky);
 
-  const sun = new THREE.DirectionalLight(0xe7d39a, 4.2);
+  const sun = new THREE.DirectionalLight(0xd1b66e, 4.2);
   const sunBase = new THREE.Vector3(-5.5, 11, 7.5);
   sun.position.copy(sunBase);
   sun.castShadow = true;

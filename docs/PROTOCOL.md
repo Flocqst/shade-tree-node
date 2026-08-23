@@ -9,16 +9,37 @@ announce, and error formats.
 
 ## Roles
 
-- The **application** speaks HTTP CONNECT to a loopback-only client proxy.
-- The **client** discovers a node, creates an RLN membership proof, and reaches that
-  node's `.onion` address through Tor SOCKS.
-- The **node** verifies the proof and opens a TCP connection to the requested target.
-- A **bootnode** caches signed node announcements and serves a signed directory. It
-  may omit entries, but it cannot mint a node's onion identity or alter signed node
-  capabilities.
+| Public name | Protocol name | Role |
+| --- | --- | --- |
+| Proxy | client | Loopback CONNECT proxy that discovers nodes and creates membership proofs |
+| Shade Tree node | gateway | Onion service that verifies a proof and opens the destination connection |
+| Elder Tree | bootnode | Cache of signed node announcements |
+| Canopy | directory | Signed, current view of announced nodes |
+| Grove | fleet | The set of Shade Tree nodes visible through a Canopy |
 
-The public name is *node*. Source code and low-level documents may call the egress
-process a *gateway*.
+The public names do not change the wire format. Source code and low-level documents
+keep `client`, `gateway`, `bootnode`, and `directory` where compatibility matters.
+The Elder Tree is outside the traffic path, but its pinned signer is a discovery
+authority. Clients trust that signer to choose the candidate list. A compromised
+signer can omit, reorder, or add entries. Onion-to-key binding prevents it from
+making an existing onion terminate at another key. Onion-signed capabilities are
+verifiable when present.
+
+## Two planes
+
+```text
+discovery
+
+node -- signed heartbeat --> Elder Tree -- signed Canopy --> Proxy
+
+traffic
+
+agent --> Proxy --> Tor --> Shade Tree node --> destination
+```
+
+The Elder Tree never carries agent traffic. A destination sees the node's public IP,
+not the Proxy's source IP. A node announcement is not evidence that the node forwarded
+traffic or served a client.
 
 ## Tunnel flow
 
@@ -121,6 +142,17 @@ The bootnode returns a signed directory. Clients pin its directory signer, verif
 entry's onion-key signatures, and re-derive the public key from the `.onion` address.
 The bootnode is still a selection and availability dependency: it can omit, delay, or
 reorder valid nodes. Static signed directories are supported as a fallback.
+
+The Proxy may expose local `canopy` progress events when it queries and verifies a live
+directory. These events stay inside the calling process. They contain only the phase,
+result, directory issue time, and aggregate node count. They do not contain a target,
+member secret, raw response, or stable client identifier.
+
+There is no pulse endpoint and no public client-query feed. The Grove visualization
+uses the cadence-rounded `observedAt` value in a separately signed aggregate. A full
+visual pulse means the observer fetched and verified a fresh Canopy over Tor. A quiet
+halo means the browser checked the same-origin signed aggregate. Neither pulse means a
+client connected, a tunnel opened, or a node forwarded traffic.
 
 ## Admission sets
 

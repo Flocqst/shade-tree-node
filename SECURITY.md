@@ -27,8 +27,8 @@ Reports that show a real defect in the shipped code, for example:
   binding, or the slash-on-over-spend control flow.
 - A signature or parser that accepts input it must reject (directory, announce,
   envelope, onion derivation, on-chain reads).
-- A way to poison the fleet view a client acts on, past what the bootnode is
-  already trusted for (it is a cache, not a trust root; see below).
+- A way to poison the fleet view beyond the pinned signer's documented discovery
+  authority (see below).
 - A contract bug in `StakedReputationSet`, `PaidAccessSet` or `GatewayRegistry`
   (stake lifecycle, slash authorization, insert authorization, fund custody).
 - A 402 registrar defect (`payments/`): settling without inserting, inserting
@@ -55,6 +55,10 @@ instead.
   bootnode's `staked` label for the operator-to-onion pairing unless
   `SHADE_TREE_VERIFY_STAKE=1`, which makes it re-fetch `GET /gateway/<onion>` and
   re-verify the operator signature and live stake itself (T-DEV-5).
+- **The pinned directory signer controls selection.** A compromised signer can
+  omit, reorder, or add an internally consistent entry, including an onion it
+  controls. Onion/key binding and signed capabilities narrow this authority but
+  do not remove it. Protect and rotate the signer as a fleet-selection key.
 - **Directory signer rotation is out of band.** `SHADE_TREE_DIR_SIGNER` accepts an
   allowlist so rotation has an overlap window (T-HARD-5), but distributing the new
   pubkey to clients is a manual step; there is no in-band rotation message.

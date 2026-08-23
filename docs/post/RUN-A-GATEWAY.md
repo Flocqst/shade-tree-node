@@ -95,6 +95,6 @@ SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key> shade-tree heartbeat \
   retiring a gateway.
 - [`../CONFIG.md`](../CONFIG.md): every `SHADE_TREE_*` variable and its default.
 - [`../BOOTNODE.md`](../BOOTNODE.md): the live-discovery design, admission modes, and the
-  trust boundary (the bootnode is a cache, not a trust root).
+  pinned signer's discovery trust boundary.
 - [`../INCIDENT.md`](../INCIDENT.md): the incident-response playbook.
 - [JOIN.md](JOIN.md): the other side, joining the set as a member and routing traffic.

@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+  <title id="title">Shade Tree discovery and traffic paths</title>
+  <desc id="desc">Two-plane technical diagram. In the discovery plane, a Shade Tree node sends a signed heartbeat to the Elder Tree bootnode, which returns a signed Canopy to the Proxy. In the traffic path, an Agent connects to the Proxy, crosses Tor, reaches a Shade Tree node, and then reaches the Destination. The Elder Tree is outside the traffic path, and the Destination sees the Shade Tree node IP.</desc>
+
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070c09"/>
+      <stop offset="0.58" stop-color="#111913"/>
+      <stop offset="1" stop-color="#070c09"/>
+    </linearGradient>
+    <radialGradient id="root-halo">
+      <stop offset="0" stop-color="#d1b66e" stop-opacity="0.2"/>
+      <stop offset="0.55" stop-color="#d1b66e" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#d1b66e" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow-moss" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M1 1l10 5-10 5z" fill="#a3b293"/>
+    </marker>
+    <marker id="arrow-root" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M1 1l10 5-10 5z" fill="#d1b66e"/>
+    </marker>
+    <style>
+      .label { fill: #dde5d5; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 23px; font-weight: 620; letter-spacing: -0.01em; }
+      .plane { fill: #a3b293; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 21px; font-weight: 600; }
+      .note { fill: #a3b293; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 18px; font-weight: 480; }
+      .route { fill: #dde5d5; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 17px; font-weight: 560; }
+      .tiny { fill: #65765d; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 15px; font-weight: 560; }
+    </style>
+
+    <g id="tree-small">
+      <path d="M-5 29h10v35H-5z" fill="#65765d"/>
+      <path d="M0 12l-17 31h34z" fill="#65765d"/>
+      <path d="M0-8l-25 39h50z" fill="#a3b293"/>
+      <path d="M0-29l-29 45h58z" fill="#65765d"/>
+      <path d="M-16 64c7-5 11-10 16-16 4 6 9 11 16 16" fill="none" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
+    </g>
+
+    <g id="tree-shade">
+      <path d="M-8 22h16v66H-8z" fill="#65765d"/>
+      <path d="M-7 45l-21-22M7 48l25-26M0 36L1 5" fill="none" stroke="#65765d" stroke-width="8" stroke-linecap="round"/>
+      <path d="M-47 11c0-23 18-39 41-37 9-21 42-20 50 4 19 1 33 15 33 33 0 23-19 39-43 37-12 16-41 17-55 1-16 2-34-13-34-31 0-3 1-5 1-7z" fill="#65765d"/>
+      <path d="M-39 4c5-16 18-25 34-24 9-12 30-11 38 4 15 0 27 11 27 24-14-8-27-8-39-1-14-8-34-9-60-3z" fill="#a3b293" opacity="0.82"/>
+      <path d="M-25 88c10-7 18-17 25-29 6 12 14 22 25 29M-2 71c-12 8-26 12-41 12M2 71c14 9 28 13 43 12" fill="none" stroke="#65765d" stroke-width="4" stroke-linecap="round"/>
+    </g>
+
+    <g id="tree-elder">
+      <path d="M-12 9c2 33 0 66-5 98h34c-5-34-7-67-5-98z" fill="#65765d"/>
+      <path d="M-7 44l-42-37M7 45L55-2M0 28L-2-21M-36 12l-26-15M40 10L67-8" fill="none" stroke="#65765d" stroke-width="11" stroke-linecap="round"/>
+      <path d="M-78-22c2-27 24-46 53-43 13-27 55-30 72-7 27-4 52 16 53 43 22 6 34 23 30 43-5 26-34 40-60 30-18 21-54 25-77 8-27 15-65 1-72-28-5-19 3-35 21-43-13-17-2-39 20-43 11-2 20 0 28 6-16 7-30 17-39 34-10-4-19-4-29 0z" fill="#65765d"/>
+      <path d="M-65-29c10-20 31-30 54-26 15-20 49-21 66-2 24-2 43 12 48 33-23-9-42-8-58 3-26-11-49-9-67 4-15-10-29-14-43-12z" fill="#a3b293" opacity="0.78"/>
+      <path d="M-17 107c6-17 12-29 17-40 6 12 11 25 17 40M-6 85c-20 18-42 25-65 24M7 85c19 17 42 25 68 24" fill="none" stroke="#65765d" stroke-width="5" stroke-linecap="round"/>
+    </g>
+  </defs>
+
+  <rect width="1600" height="760" fill="url(#field)"/>
+
+  <!-- A faint forest edge keeps the whole field inside the grove. -->
+  <g fill="#65765d" opacity="0.08" aria-hidden="true">
+    <path d="M0 760V172l52-91 52 91H76l46 79H94l61 107h-37l65 113H0z"/>
+    <path d="M75 760V315l39-69 39 69h-21l35 61h-22l45 80h-27l48 84H75z"/>
+    <path d="M1600 760V132l-58-102-58 102h31l-52 91h32l-68 119h41l-71 125h203z"/>
+    <path d="M1515 760V327l-36-64-36 64h20l-33 57h21l-42 74h25l-44 78h125z"/>
+  </g>
+
+  <rect x="32" y="34" width="1536" height="296" rx="28" fill="#111913" fill-opacity="0.72" stroke="#65765d" stroke-opacity="0.32"/>
+  <rect x="32" y="366" width="1536" height="360" rx="28" fill="#070c09" fill-opacity="0.82" stroke="#65765d" stroke-opacity="0.32"/>
+
+  <!-- Discovery plane -->
+  <text class="plane" x="72" y="82">Discovery plane</text>
+
+  <path d="M340 168H649" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-root)"/>
+  <path d="M893 168h352" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-root)"/>
+  <circle cx="489" cy="168" r="7" fill="#d1b66e" filter="url(#soft-glow)"/>
+  <circle cx="1065" cy="168" r="7" fill="#d1b66e" filter="url(#soft-glow)"/>
+  <path d="M463 168c7-14 14-14 21 0s14 14 21 0 14-14 21 0" fill="none" stroke="#d1b66e" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+
+  <text class="route" x="494" y="142" text-anchor="middle">signed heartbeat</text>
+  <text class="route" x="1069" y="142" text-anchor="middle">signed Canopy</text>
+
+  <g transform="translate(253 190)">
+    <use href="#tree-shade"/>
+  </g>
+  <text class="label" x="253" y="295" text-anchor="middle">Shade Tree node</text>
+
+  <circle cx="770" cy="184" r="126" fill="url(#root-halo)"/>
+  <g transform="translate(770 184) scale(.72)">
+    <use href="#tree-elder"/>
+  </g>
+  <text class="label" x="770" y="291" text-anchor="middle">Elder Tree</text>
+  <text class="tiny" x="770" y="313" text-anchor="middle">bootnode</text>
+
+  <g transform="translate(1336 176)">
+    <path d="M-63-42h126v88H-63z" fill="#070c09" stroke="#a3b293" stroke-width="3"/>
+    <path d="M-42-20h84M-42 1h61M-42 22h45" fill="none" stroke="#65765d" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="42" cy="23" r="8" fill="#d1b66e"/>
+    <path d="M-25 47v14M25 47v14M-45 61h90" fill="none" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text class="label" x="1336" y="291" text-anchor="middle">Proxy</text>
+
+  <!-- The control plane stops before the traffic panel. -->
+  <path d="M770 320v34" fill="none" stroke="#d1b66e" stroke-width="2" stroke-dasharray="4 7" opacity="0.72"/>
+  <circle cx="770" cy="354" r="6" fill="#070c09" stroke="#d1b66e" stroke-width="2"/>
+  <text class="note" x="792" y="359">discovery only</text>
+
+  <!-- Traffic plane -->
+  <text class="plane" x="72" y="414">Traffic path</text>
+  <text class="note" x="1488" y="414" text-anchor="end">Elder Tree stays out of this path</text>
+
+  <path d="M218 535h133" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <path d="M486 535h149" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <path d="M875 535h147" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <path d="M1172 535h167" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <path d="M1186 535h153" fill="none" stroke="#d1b66e" stroke-width="10" stroke-opacity="0.08"/>
+
+  <g transform="translate(160 535)">
+    <circle r="43" fill="#111913" stroke="#65765d" stroke-width="3"/>
+    <circle r="20" fill="none" stroke="#a3b293" stroke-width="3"/>
+    <circle r="6" fill="#dde5d5"/>
+    <path d="M0-31v-10M0 31v10M-31 0h-10M31 0h10" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text class="label" x="160" y="624" text-anchor="middle">Agent</text>
+
+  <g transform="translate(421 535)">
+    <path d="M-51 42V-6c0-32 23-54 51-54S51-38 51-6v48" fill="#111913" stroke="#a3b293" stroke-width="4"/>
+    <path d="M-25 42V-1c0-16 11-28 25-28S25-17 25-1v43" fill="none" stroke="#65765d" stroke-width="4"/>
+    <circle cy="7" r="7" fill="#d1b66e"/>
+  </g>
+  <text class="label" x="421" y="624" text-anchor="middle">Proxy</text>
+
+  <g transform="translate(756 535)">
+    <path d="M0-62c42 17 68 51 68 83 0 31-25 53-68 53S-68 52-68 21c0-32 26-66 68-83z" fill="#111913" stroke="#65765d" stroke-width="3"/>
+    <path d="M0-41c28 14 45 37 45 59 0 22-17 36-45 36S-45 40-45 18c0-22 17-45 45-59z" fill="none" stroke="#a3b293" stroke-width="3"/>
+    <path d="M0-19c15 10 24 23 24 36 0 12-9 20-24 20s-24-8-24-20c0-13 9-26 24-36z" fill="none" stroke="#65765d" stroke-width="3"/>
+    <circle cy="17" r="7" fill="#a3b293"/>
+    <path d="M0-62v-15" stroke="#a3b293" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text class="label" x="756" y="624" text-anchor="middle">Tor</text>
+
+  <g transform="translate(1096 524) scale(.72)">
+    <use href="#tree-shade"/>
+  </g>
+  <text class="label" x="1096" y="624" text-anchor="middle">Shade Tree node</text>
+
+  <g transform="translate(1427 535)">
+    <rect x="-61" y="-51" width="122" height="102" rx="13" fill="#111913" stroke="#a3b293" stroke-width="3"/>
+    <path d="M-35-24h70M-35 0h70M-35 24h48" stroke="#65765d" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="36" cy="24" r="7" fill="#d1b66e"/>
+  </g>
+  <text class="label" x="1427" y="624" text-anchor="middle">Destination</text>
+
+  <path d="M1200 581c35 30 85 37 132 11" fill="none" stroke="#d1b66e" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="1200" cy="581" r="4" fill="#d1b66e"/>
+  <text class="note" x="1267" y="674" text-anchor="middle">Destination sees node IP</text>
+
+  <g aria-hidden="true" opacity="0.32">
+    <g transform="translate(66 699) scale(.35)"><use href="#tree-small"/></g>
+    <g transform="translate(111 702) scale(.27)"><use href="#tree-small"/></g>
+    <g transform="translate(1490 699) scale(.33)"><use href="#tree-small"/></g>
+    <g transform="translate(1536 701) scale(.25)"><use href="#tree-small"/></g>
+  </g>
+</svg>

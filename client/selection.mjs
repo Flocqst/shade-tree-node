@@ -521,12 +521,33 @@ async function filterReverified(gateways) {
   return kept.filter(Boolean);
 }
 
+// A canopy event is local process state, not telemetry. Keep the surface deliberately small:
+// no bootnode address, gateway onion, target, raw response, request id, or shared query count.
+// Callback failures cannot affect discovery.
+function emitCanopy(onEvent, status, fields = {}) {
+  try { onEvent?.({ phase: "canopy", status, ...fields }); } catch { /* progress is best-effort */ }
+}
+
+function canopyFields(dir) {
+  return {
+    issued: Number(dir?.issued) || 0,
+    count: Array.isArray(dir?.gateways) ? dir.gateways.length : 0,
+  };
+}
+
+// Injectable live fetch for the focused canopy-event selftest. Production keeps the Tor fetch.
+let _fetchCanopy = fetchOverTor;
+export function _setCanopyFetch(fetchFn) { _fetchCanopy = fetchFn || fetchOverTor; }
+
 // Fetch + verify the bootnode's live directory over Tor, with the same last-known-good
 // discipline loadDirectory() gives the file path: a dead or poisoned bootnode degrades to
 // the previously-cached good fleet, never to nothing and never to an unverified list.
-async function loadFromBootnode() {
+// Events fire only when this function performs a real refresh. A selection served from the
+// in-memory refresh window emits nothing.
+async function loadFromBootnode(onEvent) {
+  emitCanopy(onEvent, "query");
   try {
-    const fresh = await fetchOverTor(BOOTNODE_ONION, "/directory", { torHost: TOR_HOST, torPort: TOR_PORT });
+    const fresh = await _fetchCanopy(BOOTNODE_ONION, "/directory", { torHost: TOR_HOST, torPort: TOR_PORT });
     const v = verifyDirectory(fresh, PINNED_SIGNER);
     if (!v.ok) throw new Error(v.reason);
     if (CACHE_PATH) {
@@ -537,10 +558,16 @@ async function loadFromBootnode() {
     if (CACHE_PATH) {
       try {
         const cached = JSON.parse(await readFile(CACHE_PATH, "utf8"));
-        if (verifyDirectory(cached, PINNED_SIGNER).ok) return { dir: cached, source: "cache", freshError: freshErr.message };
+        if (verifyDirectory(cached, PINNED_SIGNER).ok) {
+          emitCanopy(onEvent, "cache", canopyFields(cached));
+          return { dir: cached, source: "cache", freshError: freshErr.message };
+        }
       } catch {}
     }
-    throw new Error(`no verifiable bootnode directory (fresh: ${freshErr.message}, no valid cache)`);
+    const error = new Error(`no verifiable bootnode directory (fresh: ${freshErr.message}, no valid cache)`);
+    emitCanopy(onEvent, "error", { reason: "unavailable-or-invalid" });
+    error.canopyEventEmitted = true;
+    throw error;
   }
 }
 
@@ -580,12 +607,12 @@ const DIRECTORY_MAX_AGE_MS = parseMaxAgeMs(process.env.SHADE_TREE_DIRECTORY_MAX_
 // spuriously reject a just-issued directory. Only consulted when the bound is armed.
 const DIRECTORY_MAX_AGE_SKEW_MS = Math.max(0, Number(process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS || 5 * 60 * 1000));
 
-async function ensureLoaded() {
+async function ensureLoaded(onEvent) {
   const now = Date.now();
   if (loaded && now - loadedAt < REFRESH_MS) return loaded;
   try {
     const next = BOOTNODE_ONION
-      ? await loadFromBootnode()
+      ? await loadFromBootnode(onEvent)
       : await loadDirectory({ path: DIRECTORY_PATH, pinnedSigner: PINNED_SIGNER, cachePath: CACHE_PATH });
     // Rollback / stale-directory replay guard (audit loop-15 F2): a directory's `issued` must
     // never move BACKWARD. The bootnode signs its own directory and an ed25519 signature is
@@ -629,10 +656,16 @@ async function ensureLoaded() {
     }
     loaded = next;
     loadedAt = now;
+    if (BOOTNODE_ONION && next.source === "bootnode") {
+      emitCanopy(onEvent, "verified", canopyFields(next.dir));
+    }
     if (next.source === "cache") {
-      console.log(`directory: using last-known-good cache (${next.freshError || "fresh unavailable"})`);
+      console.log("directory: using last-known-good cache (fresh canopy unavailable or invalid)");
     }
   } catch (e) {
+    if (BOOTNODE_ONION && !e.canopyEventEmitted) {
+      emitCanopy(onEvent, "error", { reason: "unavailable-or-invalid" });
+    }
     if (loaded) {
       console.log(`directory refresh failed (${e.message}); keeping in-memory fleet`);
     } else {
@@ -754,8 +787,11 @@ export function describeFleetAdmits(gateways) {
 // or inactive => no admission filtering (byte-identical). Active => the fleet is pre-filtered to
 // gateways that admit this leaf source (or, under maxAnon, to invited-only gateways) and, if none
 // remain, this throws (fail closed) naming every gateway's advertised policy.
-export async function selectCandidates(req = null, adm = null) {
-  const { dir } = await ensureLoaded();
+//
+// `opts.onEvent` (optional) observes a live bootnode refresh locally. The canopy phase emits
+// query, verified, cache, or error. It emits nothing for static files or an in-memory cache hit.
+export async function selectCandidates(req = null, adm = null, opts = null) {
+  const { dir } = await ensureLoaded(opts?.onEvent);
   let gateways = dir.gateways;
   if (VERIFY_STAKE) gateways = await filterReverified(gateways);
   // Admission-aware filter (T-FEAT-9). Runs FIRST so a policy mismatch is named precisely even

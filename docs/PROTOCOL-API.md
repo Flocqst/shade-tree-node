@@ -29,7 +29,7 @@ JSON numbers. Unsigned / label fields are EXCLUDED from the signed bytes.
 ed25519 (RFC 8032, `crypto.sign(null, msg, key)`) is deterministic, so a signature over these
 bytes is byte-reproducible across implementations (`lib/directory.mjs:46` `ed25519Sign`).
 
-### 1.1 `canonicalAnnounceBytes` — `bootnode/announce.mjs:38`
+### 1.1 `canonicalAnnounceBytes`: `bootnode/announce.mjs:38`
 
 ```
 payload = { v, onion, weight, ts, nonce }      // exactly this order
@@ -38,7 +38,7 @@ bytes   = utf8( JSON.stringify(payload) )
 
 Excluded from the signed bytes: `onionSig`, `operator`, `operatorSig`.
 
-### 1.2 `canonicalDirectoryBytes` — `lib/directory.mjs:129`
+### 1.2 `canonicalDirectoryBytes`: `lib/directory.mjs:129`
 
 ```
 payload = {
@@ -101,9 +101,9 @@ Built by `bootnode/announce.mjs:51` `buildAnnounce`; verified by `:80` `verifyAn
 
 | Field | Canonical form | Bound | Task |
 | --- | --- | --- | --- |
-| `ports` | deduped, ascending integers in 1..65535 | — | T-FEAT-10 |
-| `region` | one of `na sa eu af as oc aq unknown` | — | T-FEAT-10 |
-| `proto` | `{min,max}`, `min>=1`, `max>=min` | — | T-FEAT-11 |
+| `ports` | deduped, ascending integers in 1..65535 | none | T-FEAT-10 |
+| `region` | one of `na sa eu af as oc aq unknown` | none | T-FEAT-10 |
+| `proto` | `{min,max}`, `min>=1`, `max>=min` | none | T-FEAT-11 |
 | `artifacts` | deduped, sorted ids `^[a-z0-9][a-z0-9._-]{0,63}$` | ≤ 8 (`MAX_CAPS_ARTIFACTS`) | T-HARD-8 |
 | `admits` | subset of `invited, staked, paid` in THAT order (the anonymity order, `ADMIT_PATHS`), deduped, lowercased | ≤ 3 by construction | T-FEAT-9 |
 | `pay` | `{ protocols: subset of [x402, mpp] in that order (non-empty), onion?: lowercased v3 onion (only when the registrar rides ANOTHER onion than the gateway's), port: 1..65535, asset: lowercased 0x-hex-40, chain: "eip155:<1..16 digits>", tiers: { "<limit 1..65535, canonical integer key>": "<atomic price, 1..40 decimal digits>" } sorted by numeric limit }`; a `pay` missing any of protocols/port/asset/chain/tiers is dropped WHOLE | 1..8 tiers (`MAX_CAPS_PAY_TIERS`) | T-FEAT-9 |
@@ -146,7 +146,7 @@ then confirmed via `GatewayRegistry.isStaked(operator)` (`lib/gateway-registry.m
   full success. The bootnode's guard is a bounded `Map` swept on the TTL
   (`bootnode/server.mjs:59` `makeNonceGuard`).
 
-### 3.4 `verifyAnnounce` reason codes — `bootnode/announce.mjs:80`
+### 3.4 `verifyAnnounce` reason codes: `bootnode/announce.mjs:80`
 
 Checks run in this order; the FIRST failure is returned. `<...>` are interpolations.
 
@@ -162,7 +162,7 @@ Checks run in this order; the FIRST failure is returned. `<...>` are interpolati
 | 8 | `bad-operator-sig` | `operator`+`operatorSig` present but recovery != operator |
 | 9 | `stake-check-failed:<msg>` | `isStaked` threw AND `requireStake` |
 | 10 | `not-staked` | `requireStake && !staked` |
-| — | success | `{ ok:true, onion, pubkey, operator, staked }` |
+| none | success | `{ ok:true, onion, pubkey, operator, staked }` |
 
 Notes: proof 2 (rows 8-10) is only entered when `rec.operator && rec.operatorSig` are both
 present. If `isStaked` is omitted, stake is not checked and `staked` stays `false` (a valid
@@ -218,10 +218,14 @@ The client pins ONE signer pubkey (`SHADE_TREE_DIR_SIGNER`, printed at bootnode 
 3. The signature must verify against `pinnedSignerHex` over `canonicalDirectoryBytes(dir)`.
 4. For every gateway, `onionToPubkey(onion)` must equal `pubkey` (case-insensitive).
 
-A bootnode is a cache, not a trust root: it can omit entries but cannot forge one, because
-each `pubkey` is re-derived from the self-authenticating onion address.
+The pinned signer is a discovery authority. Its signature authenticates the list,
+not live onion control. A compromised signer can omit, reorder, or add an internally
+consistent onion/pubkey entry, including an onion it controls. Re-deriving `pubkey`
+prevents an existing onion from being paired with a different key. When capabilities
+are present, `capsSig` makes them independently verifiable. `verifyDirectory` does not
+verify the stored announce or prove liveness.
 
-### 4.3 `verifyDirectory` reason codes — `lib/directory.mjs:152`
+### 4.3 `verifyDirectory` reason codes: `lib/directory.mjs:152`
 
 | # | Reason | Condition |
 | --- | --- | --- |
@@ -231,20 +235,20 @@ each `pubkey` is re-derived from the self-authenticating onion address.
 | 4 | `bad-signature` | ed25519 verify over canonical bytes fails |
 | 5 | `bad-onion:<onion[:12]>..:<msg>` | `onionToPubkey(g.onion)` threw |
 | 6 | `pubkey-onion-mismatch:<onion[:12]>..` | derived key != `g.pubkey` |
-| — | success | `{ ok:true }` |
+| none | success | `{ ok:true }` |
 
 `<onion[:12]>` is the first 12 chars of the onion string.
 
-### 4.4 Threshold (M-of-N) directory — T-FEAT-9 — `lib/directory.mjs`
+### 4.4 Threshold (M-of-N) directory: T-FEAT-9, `lib/directory.mjs`
 
-The single-signer directory trusts ONE bootnode key: compromise it and a client's fleet
-*view* can be steered (entries omitted/reordered — a forged onion is still impossible, onion
-control is re-checked). A directory MAY instead be signed by an M-of-N set of INDEPENDENT
-signers (composes with T-FEAT-1 federation: each federated bootnode is one signer), so no
-single key compromise produces an accepted directory.
+The single-signer directory trusts ONE bootnode key for fleet selection. Compromise it and
+a client's view can be steered with omitted, reordered, or added entries. A directory MAY
+instead be signed by an M-of-N set of independent signers (composes with T-FEAT-1 federation:
+each federated bootnode is one signer), so one compromised key cannot produce an accepted
+directory when the threshold is greater than one.
 
 The extension is **additive**. Three OPTIONAL top-level fields carry it, and they are
-**excluded from `canonicalDirectoryBytes` exactly like `signer`/`signature`** (section 1.2) —
+**excluded from `canonicalDirectoryBytes` exactly like `signer`/`signature`** (section 1.2),
 so every signer signs the *same* canonical bytes as the single-sig directory over the same
 `{version,issued,gateways}`, and the byte encoding is unchanged:
 
@@ -277,7 +281,7 @@ per-gateway onion↔pubkey binding (section 4.3, reasons 5–6) is then checked 
 | 4 | `threshold-exceeds-signers` | `threshold` > number of provided signers (unsatisfiable) |
 | 5 | `threshold-not-met:<got>/<want>` | fewer than `threshold` distinct valid pinned sigs |
 | 6 | `bad-onion:…` / `pubkey-onion-mismatch:…` | as section 4.3 |
-| — | success | `{ ok:true, signers:[matched…], threshold }` |
+| none | success | `{ ok:true, signers:[matched…], threshold }` |
 
 Golden vector: `testdata/vectors.json` `thresholdDirectory` (2-of-3, fixed seeds; its canonical
 bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/shade-tree-proto`
@@ -289,6 +293,13 @@ bytes equal `canonicalDirectoryBytesHex`). Rust parity: `rust/shade-tree-proto`
 Server: `bootnode/server.mjs:151` `makeServer`. All responses
 `content-type: application/json`. Listens on loopback (`127.0.0.1:SHADE_TREE_BOOTNODE_PORT`, default
 `8877`) behind its own onion service.
+
+Public copy may call the bootnode the **Elder Tree** and its signed directory the
+**Canopy**. Those are presentation names only. The normative route remains
+`GET /directory`, and the signed shape remains the directory schema in section 4.
+`GET /health` carries the informational header `x-shade-tree-role: elder-tree`.
+`GET /directory` and `GET /directory/delta` carry that header plus
+`x-shade-tree-view: canopy`. Clients must not treat these unsigned headers as evidence.
 
 ### 5.1 Routes
 
@@ -307,6 +318,9 @@ Server: `bootnode/server.mjs:151` `makeServer`. All responses
   absent (`:131` `record`). Returns the exact stored announce for zero-trust re-verification.
 - `/announce`: request body is the announce record JSON (section 3). `ttl` in the reply is
   `registry.ttlSec` (default `900`).
+
+The API has no pulse route and publishes no client-query sequence. Local Proxy progress
+events and the public Grove animation are interface behavior, not additional wire state.
 
 ### 5.2 Error responses
 
@@ -348,13 +362,13 @@ The signed `/directory` response is bounded transitively by `maxEntries` (one ga
 per live entry); there is no separate byte-cap on the response. See ambiguity note in the
 report.
 
-### 5.4 Registrar HTTP API (402 rails, T-FEAT-7) — `payments/registrar.mjs` `makeServer`
+### 5.4 Registrar HTTP API (402 rails, T-FEAT-7): `payments/registrar.mjs` `makeServer`
 
 The operator's payment endpoint, published as an EXTRA virtual port of an onion the box runs:
-the bootnode onion (`http://<bootnode-onion>:8878/`) or — T-FEAT-9 — the GATEWAY onion on a
+the bootnode onion (`http://<bootnode-onion>:8878/`) or, for T-FEAT-9, the GATEWAY onion on a
 gateway-only box (`http://<gateway-onion>:8878/`; the gateway's signed `caps.pay` says where,
 §3.0.1); loopback `127.0.0.1:SHADE_TREE_REGISTRAR_PORT`. Both machine-payment dialects on one route
-set — but only the rails the provider ENABLED (`SHADE_TREE_PAY_PROTOCOLS`, default both) are served:
+set; but only the rails the provider ENABLED (`SHADE_TREE_PAY_PROTOCOLS`, default both) are served:
 a disabled rail gets NO challenge header in any 402, is absent from `pay.protocols`, and a
 `POST /pay` carrying its header is refused `400 { ok:false, err:"protocol-disabled",
 protocol:"x402"|"mpp", protocols:[<enabled>], detail }` before any parsing. Wire formats in
@@ -377,7 +391,7 @@ Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
 | 402 | x402: payload rejected (`invalid_payment_payload`, `invalid_x402_version`, `invalid_scheme`, `invalid_network`, `invalid_exact_evm_payload_*`, `insufficient_funds`, `expired`, `not-yet-valid`, `bad-signature`, `nonce-used` (chain), `settle-failed`, `limit-mismatch`) | fresh `PAYMENT-REQUIRED` + `PAYMENT-RESPONSE { success:false, errorReason }` |
 | 402 | MPP: `malformed-credential`, `invalid-challenge` (HMAC/realm/digest/offer drift), `payment-expired`, `verification-failed` (type/nonce/to/value/signature…), `payment-insufficient` | fresh `WWW-Authenticate: Payment …` + `application/problem+json { type:"https://paymentauth.org/problems/<code>", title, status:402, detail, pay }` |
 | 400 | bad JSON / bad body (`bad-body`, `bad-commitment`, `unknown-limit`); MPP `method-unsupported`; a payload for a rail this registrar does not serve (`protocol-disabled`, T-FEAT-9) | `{ ok:false, err }` / problem; `protocol-disabled` adds `protocol` + `protocols:[enabled]` |
-| 409 | `nonce-used` (same authorization, different commitment), `already-member` (commitment live in the set — refused BEFORE settlement), `in-progress` | `{ ok:false, err, detail }` |
+| 409 | `nonce-used` (same authorization, different commitment), `already-member` (commitment live in the set; refused BEFORE settlement), `in-progress` | `{ ok:false, err, detail }` |
 | 413 / 431 / 408 | body > 4 KiB / headers > `maxHeaderSize` / slow client (`HTTP_LIMITS`, T-HARD-4) | |
 | 429 | quote or pay token bucket empty | `{ err:"rate-limited" }` + `Retry-After` |
 | 502 / 503 | `rpc-error`, `insert-failed` (settled; retried on boot / on an identical re-POST) / `busy` (in-flight cap) | `Retry-After: 5` on 503 |
@@ -394,7 +408,7 @@ JSON line: `{ ok:true }` on admit, else `{ ok:false, err:"<reason>" }` (sometime
 negotiation metadata). Documented here because the same wire format the
 Rust client emits must satisfy `verifyEnvelope`.
 
-### 6.1 Wire shape — `client/shade-tree-client.mjs:82` `buildEnvelope`
+### 6.1 Wire shape: `client/shade-tree-client.mjs:82` `buildEnvelope`
 
 ```jsonc
 {
@@ -416,7 +430,7 @@ Rust client emits must satisfy `verifyEnvelope`.
 `artifact` (T-HARD-8, `lib/zk-artifacts.mjs`) names the ZK artifact set (wasm + zkey + vkey from one
 phase-2 output) the proof was generated with, so a gateway running a dual-VK rollout window
 (`docs/CEREMONY.md` §6) verifies under the matching vkey. Value = `<circuit>-<sha256(verification_
-key.json bytes) hex[0:16]>` — grammar `^[a-z0-9][a-z0-9._-]{0,63}$` — i.e. literally the vkey's
+key.json bytes) hex[0:16]>`; grammar `^[a-z0-9][a-z0-9._-]{0,63}$`; i.e. literally the vkey's
 hash prefix in `testdata/zk-artifacts.lock.json` (`circuits.rln.artifactId`), derived identically
 by the JS client (`artifactIdOf`), the Rust client (`shade_tree_proto::artifact_id_of`, from its embedded
 bytes) and the gateway (from the files `SHADE_TREE_ZK_ARTIFACTS` names). OPTIONAL and additive: an
@@ -454,7 +468,7 @@ calculateSignalHash( requestSignal(env.target, env.nonce) )  ==  ps.x
 
 so a captured proof cannot be redirected to a different target/nonce.
 
-### 6.3 `signalFieldSafe` bounds — `lib/rln.mjs:132`
+### 6.3 `signalFieldSafe` bounds: `lib/rln.mjs:132`
 
 ```
 signalFieldSafe(s, maxLen) = (typeof s === "string") && s.length > 0
@@ -465,7 +479,7 @@ In `verifyEnvelope`: `signalFieldSafe(target, 256)` and `signalFieldSafe(nonce, 
 (`:316`). Enforced BEFORE hashing so no crafted delimiter or oversized field can make two
 distinct `(target, nonce)` pairs collide to one signal.
 
-### 6.4 `verifyEnvelope` check order — `lib/rln.mjs:288`
+### 6.4 `verifyEnvelope` check order: `lib/rln.mjs:288`
 
 Fail-closed, FIRST failure returned. `ps = proof.snarkProof.publicSignals`;
 `share = env.share || { x: ps.x, y: ps.y }`.
@@ -485,14 +499,14 @@ Fail-closed, FIRST failure returned. `ps = proof.snarkProof.publicSignals`;
 | 3b | `artifact-unknown:<id>` | an id this gateway holds no vkey for (incl. id spoofing to an unheld key) |
 | 4 | `verify-threw:<msg>` | Groth16 verify threw (under the resolved artifact's vkey) |
 | 4 | `invalid-proof` | Groth16 verify returned false (incl. a proof claiming an accepted id it was not made with) |
-| — | success | `{ ok:true, reason:"ok", nullifier, externalNullifier, share:{x,y}, artifact }` from `ps` |
+| none | success | `{ ok:true, reason:"ok", nullifier, externalNullifier, share:{x,y}, artifact }` from `ps` |
 
 Step 3b (`lib/zk-artifacts.mjs` `resolveArtifact`) is a cheap map lookup on the accepted set
 `{artifactId -> vkey}` (`SHADE_TREE_ZK_ARTIFACTS`; default = the built-in vkey under its own id): absent
 field ⇒ the legacy id, then the same rules. Its three rejections additionally return `label` (the
 bounded metrics key: `bad-artifact` / `artifact-retired` / `artifact-unknown`, never the id) and
 `artifacts` (the accepted ids), which the gateway writes back as `{ ok:false, err:"gate:<reason>",
-artifacts:[...] }` — the client uses that list to re-select a mutual set (or fail closed with
+artifacts:[...] }`; the client uses that list to re-select a mutual set (or fail closed with
 `no-mutual-artifact:client=…,gateway=…`). Reason labels are pinned in `testdata/vectors.json`
 `artifacts.reasons`.
 
@@ -568,7 +582,5 @@ Rust client MUST reproduce every BYTE-PINNED value below exactly.
 
 NOT pinned (verify by equivalence, never byte-equality):
 
-- RLN Groth16 proofs (`proof.snarkProof.proof`) — non-deterministic; see 6.5.
-- `operatorSig` — not in the fixture; validated by EIP-191 recovery, not byte-match.
-</content>
-</invoke>
+- RLN Groth16 proofs (`proof.snarkProof.proof`); non-deterministic; see 6.5.
+- `operatorSig`; not in the fixture; validated by EIP-191 recovery, not byte-match.

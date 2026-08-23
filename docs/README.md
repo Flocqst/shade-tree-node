@@ -66,7 +66,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`adr/`](adr/README.md) | Decision records: context, decision, consequences, rejected alternatives |
 | [`adr/0001`](adr/0001-client-language.md) | JS stays the reference implementation; the Rust client is the distributable, kept honest by conformance vectors |
 | [`adr/0002`](adr/0002-onion-never-on-chain.md) | The onion address is never on chain; stake is keyed by operator address |
-| [`adr/0003`](adr/0003-bootnode-is-a-cache-not-a-trust-root.md) | The bootnode is a cache, not a trust root: entries are self-authenticating |
+| [`adr/0003`](adr/0003-bootnode-is-a-cache-not-a-trust-root.md) | The bootnode is a cache and a discovery trust boundary |
 | [`adr/0004`](adr/0004-rln-over-slot-scheme.md) | Real RLN over the public-slot scheme |
 | [`adr/0005`](adr/0005-governed-gateway-slash.md) | Member slashing permissionless, gateway slashing governed |
 | [`adr/0006`](adr/0006-reputation-tiers.md) | Reputation tiers are per-leaf `userMessageLimit`s in one tree |

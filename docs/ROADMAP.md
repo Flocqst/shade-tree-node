@@ -315,11 +315,13 @@ IP before use, make that a separately authenticated/member-gated feature and doc
 that it weakens non-enumerability. The normal client should learn an egress IP only as a
 consequence of using the gateway, if it needs to learn it at all.
 
-### 3.2 Boot node is a liveness layer, not a trust root
+### 3.2 Boot node is a liveness layer and discovery trust boundary
 
-A boot node can return, omit, reorder, or cache gateway records. It must not be able to
-forge a valid gateway. Records should self-authenticate through the gateway's onion
-identity and, once available, an on-chain `GatewayRegistry` stake/registration.
+A boot node can return, omit, reorder, or cache gateway records. The pinned directory
+signer controls which records a client sees. Gateway-signed records should narrow that
+trust by proving onion control and, once available, an on-chain `GatewayRegistry`
+stake or registration. The current compact directory does not include the full signed
+announcement, so signer compromise remains a selection risk.
 
 A gateway record can look roughly like:
 
@@ -371,8 +373,10 @@ to slash a gateway.
 6. Cache the last-known-good set.
 7. Feed verified candidates into the existing weighted selection/failover code.
 
-A dead boot service should therefore degrade to cached gateways; a malicious one should
-be able to censor its own answer but not insert a forged gateway.
+If step 4 is implemented for every candidate, a dead boot service should degrade to cached
+gateways and a malicious mirror should be limited to censoring its own answer. The current
+compact directory does not carry each record signature and therefore still trusts the pinned
+directory signer as described in section 3.2.
 
 ### 3.5 Deployment stages
 
@@ -734,7 +738,7 @@ include at least:
 | Member anonymity | operator enrollment path never receives the member secret |
 | Request unlinkability | honest requests across slots/gateways expose no stable member identifier |
 | Global rate accountability | conflicting slot use split across two gateways reconstructs + slashes once |
-| Bootstrap integrity | malicious boot node cannot forge a gateway record or onion identity |
+| Bootstrap integrity | pinned directory signer is a documented selection trust boundary; signed node data remains independently checkable when present |
 | Bootstrap availability | all boot nodes down -> cached last-known-good fleet still works |
 | Egress non-enumerability | public bootstrap output contains no clearnet egress IP mapping |
 | Payment privacy labeling | direct x402/MPP mode explicitly exposes payer identity semantics; delegated mode does not expose member wallet to destination |

@@ -15,6 +15,9 @@ One tree means one gateway identity in the bootnode directory at observation
 time. The observer fetches `/directory` over Tor and verifies its signature
 against the pinned directory signer before counting entries.
 
+Public copy calls the bootnode the **Elder Tree** and its signed directory the
+**Canopy**. These names do not change the observer input or the signed schema.
+
 The Sepolia bootnode currently shown here is the earlier, pre-v4 research
 fleet recorded under `network/sepolia/`. Its nodes sign capabilities with the
 pre-v4 domain tag. The hosted observer has an explicit, read-only compatibility
@@ -45,7 +48,7 @@ has been published.
 
 ```text
 node heartbeat
-    -> bootnode directory
+    -> Elder Tree directory (Canopy)
     -> signed directory fetched over Tor
     -> pinned signature + freshness verification
     -> aggregate-only snapshot signed by the observer
@@ -57,7 +60,7 @@ when its issue time is within the five-minute freshness and future-skew window.
 It then signs the canonical aggregate with a dedicated Ed25519 publication key.
 The browser pins the corresponding key from
 [`network/grove-signing-public.pem`](../network/grove-signing-public.pem) and
-refuses an unsigned, malformed, stale-forged, or incorrectly signed payload.
+refuses an unsigned, malformed, stale, future-dated, or incorrectly signed payload.
 
 The read-only observer passes the signed JSON to a separate minimal publisher;
 the publisher checks out no code and receives repository write permission only
@@ -65,6 +68,19 @@ for that step. It creates a one-file, parentless commit on the generated
 `network-state` branch, so the branch itself carries no old commit chain. Vercel
 serves that snapshot through the same-origin `/grove/network.json` path, so a
 Grove visitor never contacts the bootnode or GitHub directly from their browser.
+
+## What a pulse means
+
+The animation has two pulse strengths:
+
+- A quiet halo begins when the browser checks the same-origin signed snapshot.
+- A full ground pulse appears when a verified snapshot has a new `observedAt`
+  value. That value is cadence-rounded and signed only after the observer fetched
+  and verified the Canopy over Tor.
+
+Neither pulse is a client, heartbeat, tunnel, destination, traffic, or node
+reachability event. The Elder Tree is not in the traffic path. The animation does
+not require a pulse endpoint, query feed, client identifier, or new public field.
 
 The browser verifies the publication signature, not the raw directory. That
 signature attests that the project observer completed the pinned directory and
@@ -103,7 +119,7 @@ The collector must never publish:
 - capability documents, per-node health rows, or generated positions derived
   from a node identity;
 - client counts, destinations, request or tunnel counts, timing, byte totals,
-  logs, errors, or raw Prometheus metrics; or
+  logs, errors, query counts, pulse counts, or raw Prometheus metrics; or
 - the signed directory or any other raw bootnode response.
 
 The canopy is regenerated from only the aggregate count and rounded snapshot

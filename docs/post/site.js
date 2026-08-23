@@ -75,7 +75,6 @@ const stage = document.querySelector("#grove-stage");
 const canvas = document.querySelector("#grove-canvas");
 const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const compactOrCoarse = window.matchMedia("(max-width: 700px), (pointer: coarse)").matches;
 
 function supportsWebGL2() {
   const probe = document.createElement("canvas");
@@ -96,7 +95,7 @@ function supportsWebGL2() {
 }
 
 async function loadGrove() {
-  if (!stage || !canvas || compactOrCoarse || connection?.saveData || !supportsWebGL2()) return;
+  if (!stage || !canvas || connection?.saveData || !supportsWebGL2()) return;
 
   try {
     const { mountGrove } = await import("./grove.js");

@@ -259,12 +259,11 @@ already knows how to verify. Two things kept it honest:
   `GatewayRegistry` (`contracts/GatewayRegistry.sol`) stakes only an **operator address**, and
   the onion↔operator link lives only in the signed announce (`bootnode/announce.mjs`). One stake
   can rotate across many onions; the fleet stays un-enumerable on chain.
-- **The bootnode is a cache, not a trust root.** Every announce carries two proofs: onion
-  control (ed25519 by the onion's own key — cryptographic, re-checkable by any client from
-  `GET /gateway/<onion>`) and, optionally, an operator-stake authorization (an ECDSA signature
-  the bootnode/clients verify against `GatewayRegistry.isStaked`). Clients re-derive each onion's
-  key and can re-check the stake on chain, so a hostile bootnode can at worst omit a gateway,
-  never inject one it does not control.
+- **The bootnode is a cache and a discovery trust boundary.** Every announce carries onion-control
+  proof and may carry operator-stake authorization. The bootnode verifies those at admission.
+  Proxies pin the directory signer and trust it to choose the candidate list. A compromised signer
+  can omit, reorder, or add entries. Onion/key binding prevents it from making an existing onion
+  terminate at another key; optional stake and capability checks narrow the remaining trust.
 
 **Stake is optional.** Bootnode admission defaults to `open` (onion control is the only hard
 requirement); `admission=stake` requires a live bond. Staking is the opt-in hardening tier and a

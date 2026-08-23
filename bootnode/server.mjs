@@ -86,9 +86,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // in-memory state — it binds no port and starts no server (see lib/metrics.mjs).
 const M = {
   announces: metrics.counter("shade_tree_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
-  directoryFetches: metrics.counter("shade_tree_bootnode_directory_fetches_total", "GET /directory requests served."),
+  directoryFetches: metrics.counter("shade_tree_bootnode_directory_fetches_total", "Signed directory (Canopy) requests served by the Elder Tree."),
   deltaFetches: metrics.counter("shade_tree_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
 };
+
+// Public presentation names. These headers are informational only. They are not signed and
+// clients must continue to verify the directory body against the pinned signer.
+const ELDER_ROLE_HEADERS = Object.freeze({
+  "x-shade-tree-role": "elder-tree",
+});
+const CANOPY_HEADERS = Object.freeze({
+  ...ELDER_ROLE_HEADERS,
+  "x-shade-tree-view": "canopy",
+});
 
 // ---- signer key (mint + persist if absent) ----------------------------------
 function rawSeedHex(privKey) {
@@ -654,7 +664,7 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
       const url = new URL(req.url, "http://bootnode");
       if (req.method === "GET" && url.pathname === "/health") {
         // `pay` (T-FEAT-7): present only when the operator advertises a registrar (see payAdvertFromEnv).
-        return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub, ...(pay ? { pay } : {}) });
+        return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub, ...(pay ? { pay } : {}) }, ELDER_ROLE_HEADERS);
       }
       // Loopback Prometheus exposition. The bootnode already binds 127.0.0.1 only, so
       // /metrics inherits that loopback scope (no separate port needed).
@@ -675,7 +685,7 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
         const body = Buffer.from(JSON.stringify(d), "utf8");
         const wantsGzip = /(^|[,\s])gzip($|[,;\s])/i.test(req.headers["accept-encoding"] || "");
         const out = wantsGzip ? gzipSync(body) : body;
-        const headers = { "content-type": "application/json", "content-length": out.length };
+        const headers = { "content-type": "application/json", "content-length": out.length, ...CANOPY_HEADERS };
         if (wantsGzip) headers["content-encoding"] = "gzip";
         res.writeHead(200, headers);
         return res.end(out);
@@ -692,12 +702,12 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
         const { bytes: body, etag } = registry.directoryWithEtag();
         const inm = req.headers["if-none-match"];
         if (inm && inm.split(",").some((t) => t.trim() === etag)) {
-          res.writeHead(304, { etag });
+          res.writeHead(304, { etag, ...CANOPY_HEADERS });
           return res.end(); // 304 Not Modified: no body
         }
         const wantsGzip = /(^|[,\s])gzip($|[,;\s])/i.test(req.headers["accept-encoding"] || "");
         const out = wantsGzip ? gzipSync(body) : body;
-        const headers = { "content-type": "application/json", etag, "content-length": out.length };
+        const headers = { "content-type": "application/json", etag, "content-length": out.length, ...CANOPY_HEADERS };
         if (wantsGzip) headers["content-encoding"] = "gzip";
         res.writeHead(200, headers);
         return res.end(out);

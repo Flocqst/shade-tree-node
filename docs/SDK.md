@@ -1,13 +1,13 @@
 # JavaScript client
 
 `ShadeTreeClient` is the programmatic form of the Shade Tree client. It creates
-access proofs, chooses a gateway, and opens a raw HTTPS tunnel without starting
+access proofs, chooses a node, and opens a raw HTTPS tunnel without starting
 the local proxy. The proxy in `client/shim.mjs` uses the same class.
 
 For most existing agents, the smaller integration is still:
 
 ```sh
-shade-tree client
+shade-tree proxy
 shade-tree run -- your-agent
 ```
 
@@ -40,7 +40,7 @@ an environment fallback is listed below; test injection hooks such as
 | Option | Environment | Default | Meaning |
 | --- | --- | --- | --- |
 | `secret` | `SHADE_TREE_SECRET` | required | Locally held enrolled-member secret. |
-| `onion` | `SHADE_TREE_ONION` | none | Pin one gateway for each tunnel and skip directory selection. |
+| `onion` | `SHADE_TREE_ONION` | none | Pin one node for each tunnel and skip canopy selection. |
 | `directory` | `SHADE_TREE_DIRECTORY` | none | Static signed directory path. Requires `dirSigner`. |
 | `dirSigner` | `SHADE_TREE_DIR_SIGNER` | none | Pinned directory signer public key. Without it, directory mode is disabled. There is no trust-on-first-use fallback. |
 | `torHost` | `SHADE_TREE_TOR_HOST` | `127.0.0.1` | Tor SOCKS host. |
@@ -54,7 +54,7 @@ an environment fallback is listed below; test injection hooks such as
 `SHADE_TREE_BOOTNODE_ONION` is environment-only dynamic discovery; it requires
 the pinned directory signer and takes precedence over a static directory.
 
-Gateway resolution for each tunnel is: call-level onion pin, client-level onion
+Node resolution for each tunnel is: call-level onion pin, client-level onion
 pin, signed directory selection, then the local development onion. If none can
 be resolved, the call fails closed.
 
@@ -101,9 +101,20 @@ Separate calls receive distinct RLN transcripts and nullifiers. This does not
 prevent a gateway or destination from correlating tunnels through timing,
 volume, accounts, cookies, or other application metadata.
 
-Progress events use the phases `select`, `prove`, `dial`, `gate`, and `receipt`;
-`fetch()` also emits `egress`. Progress callbacks are best-effort and do not
-change the result.
+Progress events use the phases `canopy`, `select`, `prove`, `dial`, `gate`, and
+`receipt`; `fetch()` also emits `egress`. `canopy` appears only when dynamic
+discovery performs a live Elder Tree refresh. It emits `query`, followed by one of:
+
+```js
+{ phase: "canopy", status: "verified", issued, count }
+{ phase: "canopy", status: "cache", issued, count }
+{ phase: "canopy", status: "error", reason: "unavailable-or-invalid" }
+```
+
+An in-memory refresh-window hit and a static directory read emit no canopy
+event. Canopy events are local callbacks. They carry no onion, target, URL,
+secret, raw response, request identifier, or shared query counter. Progress
+callbacks are best-effort and do not change the result.
 
 ## Cleanup
 

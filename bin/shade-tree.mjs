@@ -76,9 +76,10 @@ const FLAG_ENV = {
 const COMMANDS = {
   run:               { help: "run an agent with process-scoped Shade Tree routing: shade-tree run [--proxy http://127.0.0.1:8888] -- <command> [args]" },
   keygen:            { script: "bootnode/keygen.mjs",       help: "mint an onion identity (Tor HS key + announce-signing seed): shade-tree keygen <hsDir> [--label name]" },
-  bootnode:          { script: "bootnode/server.mjs",       help: "run the discovery bootnode (an onion service)", long: true },
-  heartbeat:         { script: "bootnode/heartbeat.mjs",    help: "keep this gateway announced on the bootnode", long: true },
-  join:              { script: "group/join.mjs",            help: "guided front door: `shade-tree join [member]` or `shade-tree join gateway` — make an identity + print the next commands" },
+  elder:             { script: "bootnode/server.mjs",       help: "run the Elder Tree, which signs the Grove's Canopy", long: true },
+  bootnode:          { script: "bootnode/server.mjs",       help: "legacy alias for `elder`", long: true },
+  heartbeat:         { script: "bootnode/heartbeat.mjs",    help: "keep this node announced to the Elder Tree", long: true },
+  join:              { script: "group/join.mjs",            help: "guided front door: `shade-tree join [member]` or `shade-tree join gateway`; make an identity + print the next commands" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
   identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: shade-tree identity [--out <path>] [--secret-file <path>] (secret: --secret-file | SHADE_TREE_SECRET | ./.secret)" },
   "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: shade-tree register-member <commitment> [--limit N] (tier; default 8)" },
@@ -90,9 +91,11 @@ const COMMANDS = {
   "withdraw-gateway":{ script: "group/exit-gateway.mjs", prepend: ["withdraw"], help: "after UNBONDING, reclaim the gateway bond: shade-tree withdraw-gateway [--recipient 0x..] [--dry-run]" },
   "gateway-status":  { script: "group/exit-gateway.mjs", prepend: ["status"],   help: "read-only: this operator's GatewayRegistry stake state (staked / exiting / withdrawableAt): shade-tree gateway-status [--operator 0x..]" },
   "sign-directory":  { script: "group/sign-directory.mjs",  help: "sign a static fleet directory (offline discovery)" },
-  gateway:           { script: "gateway/gateway.mjs",       help: "run a proof-gated Shade Tree gateway", long: true },
-  client:            { script: "client/shim.mjs",           help: "run the local HTTP-CONNECT proxy (fleet client)", long: true },
-  shim:              { script: "client/shim.mjs",           help: "alias for `client`", long: true },
+  node:              { script: "gateway/gateway.mjs",       help: "run a proof-gated Shade Tree egress node", long: true },
+  gateway:           { script: "gateway/gateway.mjs",       help: "legacy alias for `node`", long: true },
+  proxy:             { script: "client/shim.mjs",           help: "run the local HTTP-CONNECT proxy", long: true },
+  client:            { script: "client/shim.mjs",           help: "legacy alias for `proxy`", long: true },
+  shim:              { script: "client/shim.mjs",           help: "legacy alias for `proxy`", long: true },
   doctor:            { script: "scripts/doctor.mjs",        help: "check the local setup (node, tor, keys, deps)" },
   // backup/restore share one script (scripts/backup.mjs); `prepend` selects the mode. The
   // passphrase is passed only via SHADE_TREE_BACKUP_PASSPHRASE (never on argv), inherited into the child.
@@ -111,9 +114,12 @@ const COMMANDS = {
 // config, and register-gateway has no role whose required vars map cleanly (its bond/registry/
 // register-key inputs don't match any ROLE_SPEC), so we do not guess — it spawns unvalidated.
 const COMMAND_ROLE = {
+  elder: "bootnode",
   bootnode: "bootnode",
+  node: "gateway",
   gateway: "gateway",
   heartbeat: "gateway",
+  proxy: "client",
   client: "client",
   shim: "client",
   "register-member": "member-enroll",
@@ -135,18 +141,18 @@ function parse(argv) {
 }
 
 function topHelp() {
-  console.log(`shade-tree ${pkg.version} — Shade Tree\n`);
+  console.log(`shade-tree ${pkg.version}: Shade Tree\n`);
   console.log("usage: shade-tree <command> [--flags] [args]\n");
-  const order = ["run", "join", "keygen", "bootnode", "heartbeat", "enroll", "identity", "register-member", "pay", "leaves", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "gateway", "client", "doctor", "backup", "restore", "record-deploy"];
+  const order = ["run", "proxy", "node", "elder", "join", "keygen", "heartbeat", "enroll", "identity", "register-member", "pay", "leaves", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "doctor", "backup", "restore", "record-deploy", "client", "shim", "gateway", "bootnode"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
-  console.log(`admission (T-FEAT-9): gateway --admit invited[,staked][,paid] (default invited); client --leaf-source auto|invited|staked|paid, --max-anon`);
+  console.log(`admission (T-FEAT-9): node --admit invited[,staked][,paid] (default invited); proxy --leaf-source auto|invited|staked|paid, --max-anon`);
   console.log(`every --flag maps to an SHADE_TREE_* env var (see docs/CLI.md); flags override the environment.`);
   console.log(`--network <name> (SHADE_TREE_NETWORK) fills unset discovery/contract vars from network/<name>/{bootnode,contracts}.json.`);
 }
 
 function runHelp() {
-  console.log(`shade-tree run — start one command with scoped HTTP(S) proxy settings\n`);
+  console.log(`shade-tree run: start one command with scoped HTTP(S) proxy settings\n`);
   console.log("usage: shade-tree run [--proxy URL] [--no-proxy HOSTS] [--check-timeout-ms N] -- <command> [args]");
   console.log("\nThe local proxy is checked before launch. If it is unavailable, the command is not run.");
   console.log("Only the child receives proxy variables; the current shell and unrelated services are unchanged.");
@@ -296,7 +302,7 @@ async function main() {
   if (cmd === "run") { await runScoped(rest); return; }
 
   const { flags, positionals } = parse(rest);
-  if (flags.help) { console.log(`shade-tree ${cmd} — ${entry.help}`); process.exit(0); }
+  if (flags.help) { console.log(`shade-tree ${cmd}: ${entry.help}`); process.exit(0); }
 
   // Opt-out for unusual setups: `--no-validate` (or SHADE_TREE_SKIP_VALIDATE=1) bypasses the config
   // check below. Consume the flag here so it never leaks to the child as a passthrough arg.
@@ -331,7 +337,7 @@ async function main() {
   if (role && !skipValidate) {
     const result = validateConfig(role, env);
     if (!result.ok) {
-      console.error(`shade-tree ${cmd}: config invalid for role "${role}" —`);
+      console.error(`shade-tree ${cmd}: config invalid for role "${role}":`);
       console.error(formatErrors(result));
       console.error(`\nfix the above, or pass --no-validate (or set SHADE_TREE_SKIP_VALIDATE=1) to bypass.`);
       process.exit(1);

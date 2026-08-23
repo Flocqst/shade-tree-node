@@ -74,17 +74,18 @@ gateways (blinded HSDir descriptors deliberately prevent that — hence the app-
 **The bootnode.**
 Trusted for: *availability* of a fresh fleet view and, unless the client independently re-verifies,
 the operator↔onion and `staked` labels. A serving bootnode without the directory signing key can
-omit entries or replay a previously signed view, but cannot change signed bytes. A bootnode or
-attacker with the signing key can sign arbitrary entries for onion keys it controls and can attach
-false labels. Onion↔pubkey verification prevents grafting a key the attacker does not control; it
-does not constrain an attacker that generated both values. Optional stake re-verification narrows
-the label trust. The bootnode is not a substitute for a protected signing key.
+omit entries or replay a previously signed view, but cannot change signed bytes. An attacker with
+the signing key can sign any syntactically valid onion/pubkey entry and attach false labels,
+including an attacker-controlled onion. Onion↔pubkey verification prevents a mismatched address
+and key; it does not prove control of a compact-directory entry. Optional stake re-verification
+narrows the label trust. The bootnode is not a substitute for a protected signing key.
 
 **The pinned directory signer (`SHADE_TREE_DIR_SIGNER`).**
-Trusted for: authenticating *which list* is the fleet. There is intentionally **no default signer**
+Trusted for: authenticating and choosing *which list* is the fleet. There is intentionally **no default signer**
 (`client/selection.mjs:parsePinnedSigners`); without a pin, directory mode is disabled rather than
-falling back to trust on first use. A compromised signer can admit attacker-controlled onion/key
-pairs. The independent onion↔pubkey check only prevents mismatched or grafted pairs (see §5).
+falling back to trust on first use. A compromised signer can add any internally consistent entry,
+including an attacker-controlled onion/key pair. The independent onion↔pubkey check only prevents
+a mismatched pair (see §5).
 
 **The on-chain registry / RPC.**
 Trusted like any node read. Stake/root reads default to `latest` (dev-chain friendly) and can be
@@ -204,10 +205,11 @@ flag day: `SHADE_TREE_DIR_SIGNER` accepts a comma-separated `{old,new}` overlap 
 
 ### 4.8 Onion↔key self-authentication (poisoned-directory defense)
 Each directory/announce entry's `pubkey` must equal the ed25519 key encoded in its own v3 `.onion`
-address; a v3 address *is* that key, so a grafted or swapped onion cannot claim a pubkey it does not
-control. **Enforced** by `lib/directory.mjs:onionToPubkey` (checksum-validated recovery) inside
-`verifyDirectory` (per-entry `pubkey-onion-mismatch` / `bad-onion` rejection), and at announce time
-by `bootnode/announce.mjs:verifyAnnounce` (`onionSig` verified via
+address. A v3 address *is* that key, so a mismatched or swapped pair is rejected. This is an
+internal-consistency check, not proof that the directory signer controls the onion. **Enforced** by
+`lib/directory.mjs:onionToPubkey` (checksum-validated recovery) inside `verifyDirectory`
+(per-entry `pubkey-onion-mismatch` / `bad-onion` rejection). At announce admission, control is
+separately proven by `bootnode/announce.mjs:verifyAnnounce` (`onionSig` verified via
 `lib/directory.mjs:verifyOnionControl` over `canonicalAnnounceBytes`, freshness-bounded by `ts`/skew
 and optional `seenNonce`). The onion is never on chain (`contracts/GatewayRegistry.sol`). Adversary
 A1/A2.
@@ -317,10 +319,10 @@ Consequences and what is enforced:
   paid leaf, saying which linkability that leaf carries — an invited-only gateway would reject the
   proof `wrong-group-root` anyway). Default `--max-anon` OFF: a member routes to whatever admits its
   leaf source (a leaf source it cannot hide from the gateway either way — the root is public).
-- The policy is a SIGNED cap (`caps.admits`, onion `capsSig` + announce `onionSig`), so a bootnode
-  cannot widen it to lure a paid member onto a gateway that will then log a `wrong-group-root`, nor
-  narrow it to starve one; a client that sees no admitting gateway fails CLOSED naming every
-  gateway's advertised policy rather than dialing blind. Rollout caveat: an ABSENT `admits` is
+- The policy is a SIGNED cap (`caps.admits`, onion `capsSig` + announce `onionSig`), so a directory
+  signer cannot rewrite a present policy without invalidating `capsSig`. It can omit the gateway or
+  strip the optional caps and sign a legacy-looking entry. A client that sees no admitting gateway
+  fails closed naming every advertised policy. Rollout caveat: an ABSENT `admits` is
   treated as "may admit any path" (except under `--max-anon`), so during the window a paid member may
   still meet one `wrong-group-root` + failover — exactly the pre-T-FEAT-9 worst case, never worse.
 - What the client's CHOICE leaks: nothing new to the gateway (it already sees the root); to the

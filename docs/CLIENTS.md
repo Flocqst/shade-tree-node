@@ -1,4 +1,6 @@
-# Client modes: shim vs. library (and a planned no-tooling path)
+# Proxy modes: local process or library
+
+A proxy runs beside the agent. A node accepts the proof and provides egress. The Elder Tree serves the signed Canopy. The implementation and environment variables still use `client`, `gateway`, and `bootnode` in places. Those names remain compatible.
 
 > **v4 status.** The current client speaks envelope v4 only. Obtain a v4 gateway onion or a
 > signed directory and pinned signer from the fleet operator. The committed Sepolia record is
@@ -6,20 +8,20 @@
 > connection profile. The public Grove observes that old fleet read-only; it does not advertise
 > a public v4 endpoint.
 
-The gateway needs a **fresh RLN proof per tunnel** — that is what makes the nullifier,
+The node needs a **fresh RLN proof per tunnel**. That is what makes the nullifier,
 the per-epoch rate cap, and the slashing work, so *something* client-side must mint it. What
 varies is where that "something" lives. There are two shipped shapes and one planned.
 
 ## The irreducible part
 
-Every request carries one Groth16 proof bound to a fresh `(epoch, slot)` nullifier. You
+Every CONNECT tunnel carries one Groth16 proof bound to a fresh `(epoch, slot)` nullifier. You
 cannot set it once and reuse it: reusing a nullifier with a different signal is exactly the
-over-spend the gateway slashes on. So any client — proxy, library, or CLI — regenerates the
+over-spend the gateway slashes on. So every proxy, library, or CLI client regenerates the
 proof per tunnel. Both shapes below share the same hardened core (`client/shade-tree-client.mjs`):
-one proof per logical request, deterministic across gateway failover (same signal → same
+one proof per logical tunnel, deterministic across gateway failover (same signal → same
 share), plus slot + gateway rotation.
 
-## Option A — library (`ShadeTreeClient`): no proxy process
+## Option A: library (`ShadeTreeClient`)
 
 Use this when the client is **your own code** (e.g. an agent doing many queries). No local
 proxy; just call a function. `client/shade-tree-client.mjs`:
@@ -36,7 +38,7 @@ const shadeTree = new ShadeTreeClient({
 });
 
 const res = await shadeTree.fetch("https://api.ipify.org");    // { status, headers, body }
-// lower level — bring your own TLS/protocol over the raw tunnel:
+// lower level; bring your own TLS/protocol over the raw tunnel:
 const sock = await shadeTree.connect("api.ipify.org:443");     // duplex, tunneled via a gateway
 // sock.shadeTree = { onion, slot, nullifier, receipt, artifact, leafSource }
 
@@ -58,12 +60,12 @@ v4 configuration before running it.
 
 ## Leaf source + admission filtering + `--max-anon` (T-FEAT-9, both options)
 
-Your leaf lives in ONE set — `members.json` (**invited**), a `StakedReputationSet` (**staked**), or
-the `PaidAccessSet` (**paid**) — and each gateway advertises WHICH of those it admits as signed caps
+Your leaf lives in one set: `members.json` (**invited**), a `StakedReputationSet` (**staked**), or
+the `PaidAccessSet` (**paid**). Each gateway advertises which of those it admits as signed caps
 (`admits`, in the anonymity order invited > staked > paid; `docs/adr/0008`). The client:
 
 - discovers your **leaf source** (`makeLeafSourceLoader`: members.json first, then the staked sets,
-  then the paid set — `SHADE_TREE_LEAF_SOURCE=invited|staked|paid` / `{ leafSource }` / `--leaf-source`
+  then the paid set; `SHADE_TREE_LEAF_SOURCE=invited|staked|paid` / `{ leafSource }` / `--leaf-source`
   pins the set if your leaf is in several), and
 - routes ONLY to gateways whose `admits` include it (`selectCandidates(req, { leafSource, maxAnon })`
   → `filterByAdmission`). A gateway that advertises no policy is assumed to admit any path during
@@ -72,34 +74,33 @@ the `PaidAccessSet` (**paid**) — and each gateway advertises WHICH of those it
 - `--max-anon` / `SHADE_TREE_MAX_ANON=1` / `{ maxAnon: true }`: the maximum-anonymity mode. Only gateways
   whose `admits` is EXACTLY `["invited"]` (their whole population is invited; a policy-less gateway
   cannot prove it and is excluded), and the client REFUSES to run with a staked/paid leaf before any
-  proof or dial — `--max-anon: your leaf is in the paid set (the buyer address -> operator transfer
+  proof or dial; `--max-anon: your leaf is in the paid set (the buyer address -> operator transfer
   and tier bucket are public); an invited-only gateway would reject it (wrong-group-root)…`. No
   invited-only gateway in the directory: `--max-anon: no invited-only gateway in the directory …
   fleet: …` (if no node in an operator's v4 directory is invited-only, this refusal is the
   correct outcome).
 - A pinned `onion` is honoured as-is (its policy is unknown to the client; a mismatch surfaces as
   the gateway's `wrong-group-root`), except that `--max-anon` still refuses a staked/paid leaf.
-- Events: `onEvent({ phase:"select", status:"done", leafSource, maxAnon, candidates:[{onion, admits}] })`
-  once selection settles (the shim logs it as `SELECT <target> leaf=paid candidates=…`); `tunnel.shadeTree.leafSource`.
+- Events: a live Elder refresh emits the local `canopy` phase with `query`, then `verified`, `cache`, or `error`. It contains only the signed issue time and node count when available. No event is sent to another service. Selection then emits `select` as before.
 
 ```bash
-shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> \
+shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> \
   --dir-signer <v4-directory-signer-hex> --max-anon
 
-shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> \
+shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> \
   --dir-signer <v4-directory-signer-hex> --leaf-source paid --limit 32 \
   --paid-access-contract <v4-paid-set-address>
 ```
 
-## Option B — shim (`client/shim.mjs`): a local proxy for unmodified tools
+## Option B: local proxy (`client/shim.mjs`)
 
 Use this when the client is a **stock tool** you can't change (browser, curl, any
 `http_proxy`-aware app). The shim is now a thin HTTP-CONNECT front-end over the same
 `ShadeTreeClient`:
 
 ```bash
-SHADE_TREE_SECRET=0x… SHADE_TREE_TOR_PORT=9260 shade-tree client \
-  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex>
+SHADE_TREE_SECRET=0x… SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
+  --bootnode <v4-elder.onion> --dir-signer <v4-directory-signer-hex>
 # then: curl -x http://127.0.0.1:8888 https://api.ipify.org
 ```
 
@@ -114,11 +115,11 @@ Env, if you want to set the pieces yourself: `SHADE_TREE_SECRET`, then one disco
 directory mode you must set `SHADE_TREE_DIR_SIGNER` or the shim silently falls back to a stale local
 `tor/hs/hostname`.
 
-## Planned — stock HTTP CONNECT + `Proxy-Authorization` (no custom client at all)
+## Planned: stock HTTP CONNECT + `Proxy-Authorization`
 
 Teach the gateway to also speak a standard HTTP CONNECT proxy and read the proof from a
 `Proxy-Authorization: RLN <base64>` header, so plain `curl -x http://<onion>:80` works with
-no shim and no library — you just need a one-shot `shade-tree-prove <target>` to mint the header:
+no shim and no library; you just need a one-shot `shade-tree-prove <target>` to mint the header:
 
 ```bash
 curl -x http://<onion>:80 \
@@ -128,7 +129,7 @@ curl -x http://<onion>:80 \
 
 This removes the client software **for scripted one-shot requests**. It does **not** serve
 multi-request clients (a browser/agent that sets the proxy once) safely: `Proxy-Authorization`
-is static, but the proof must be fresh per tunnel — reusing it across targets either breaks
+is static, but the proof must be fresh per tunnel; reusing it across targets either breaks
 the rate cap or self-slashes. So B is a great gateway interface + a clean one-shot path, but
 multi-request clients still need A (library) or the shim. Not built yet.
 

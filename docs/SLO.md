@@ -175,9 +175,9 @@ admits fewer members but every current member still DROPs). Diagnose the DROP-re
   control (section 2.4). A dashboard signal and capacity input, not an SLO.
 - **Slash correctness / over-spend handling.** A slash is the rate limit working (INCIDENT.md #7), not a
   failure. Slash counts are monitored, never budgeted as errors.
-- **Bootnode as a trust root.** The bootnode authenticates a *list*; it is a cache, not a trust root. Its
-  availability is an SLI (section 2.2); its *correctness* (never injecting an onion it does not control) is
-  a guaranteed property enforced client-side, not something an SLO measures.
+- **Bootnode discovery trust.** The pinned signer controls the candidate list and can omit, reorder,
+  or add entries if compromised. Availability is an SLI (section 2.2). Signer compromise is a
+  security incident, not an availability-budget event.
 - **On-chain / RPC availability.** Handled by fail-closed and last-known-good behavior
   (INCIDENT.md #5), not an egress SLO. A chain outage shrinks the fleet safely toward what was already
   admitted; it does not fail existing members' egress.
