@@ -1,6 +1,6 @@
 // T-FEAT-9 registrar payment-rail subset (fast lane: no chain, no Tor -- a fake settlement engine +
 // a fake PaidAccessSet behind the REAL HTTP transport, payments/registrar.mjs makeServer):
-//   - RGOE_PAY_PROTOCOLS parses into offer.protocols (default both; subset; unknown -> error);
+//   - SHADE_TREE_PAY_PROTOCOLS parses into offer.protocols (default both; subset; unknown -> error);
 //   - a 402 (GET /pay/quote and the bodied POST /pay challenge) carries ONLY the enabled rails'
 //     challenges: x402-only => PAYMENT-REQUIRED and NO WWW-Authenticate; mpp-only => the reverse;
 //     both => both (unchanged);
@@ -23,7 +23,7 @@ let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
 
 const ASSET = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
-const BASE_ENV = { RGOE_PAY_ASSET: ASSET, RGOE_PAY_PRICES: "8=100000,32=400000", RGOE_REGISTRAR_PORT: "0" };
+const BASE_ENV = { SHADE_TREE_PAY_ASSET: ASSET, SHADE_TREE_PAY_PRICES: "8=100000,32=400000", SHADE_TREE_REGISTRAR_PORT: "0" };
 const COMMITMENT = "12345678901234567890";
 
 function request(port, { method = "GET", path = "/", headers = {}, body = null } = {}) {
@@ -39,10 +39,10 @@ function request(port, { method = "GET", path = "/", headers = {}, body = null }
   });
 }
 
-// One registrar over fakes for a given RGOE_PAY_PROTOCOLS. The fake engine records every call.
+// One registrar over fakes for a given SHADE_TREE_PAY_PROTOCOLS. The fake engine records every call.
 async function startRegistrar(work, protocolsSpec) {
   const env = { ...BASE_ENV };
-  if (protocolsSpec !== undefined) env.RGOE_PAY_PROTOCOLS = protocolsSpec;
+  if (protocolsSpec !== undefined) env.SHADE_TREE_PAY_PROTOCOLS = protocolsSpec;
   const offer = makeOffer(env);
   Object.assign(offer, { chainId: 11155111, assetName: "Test USD", assetVersion: "1", decimals: 6, payTo: "0x000000000000000000000000000000000000dEaD" });
   const store = makeStore(join(work, `store-${String(protocolsSpec).replace(/[^a-z0-9]/gi, "_")}.json`));
@@ -55,17 +55,17 @@ async function startRegistrar(work, protocolsSpec) {
 }
 
 async function main() {
-  console.log("RGOE_PAY_PROTOCOLS -> offer.protocols:");
+  console.log("SHADE_TREE_PAY_PROTOCOLS -> offer.protocols:");
   {
     ok(JSON.stringify(makeOffer(BASE_ENV).protocols) === '["x402","mpp"]', "unset -> both (default when the registrar is enabled)");
-    ok(JSON.stringify(makeOffer({ ...BASE_ENV, RGOE_PAY_PROTOCOLS: "mpp" }).protocols) === '["mpp"]' && JSON.stringify(makeOffer({ ...BASE_ENV, RGOE_PAY_PROTOCOLS: " X402 " }).protocols) === '["x402"]' && JSON.stringify(makeOffer({ ...BASE_ENV, RGOE_PAY_PROTOCOLS: "mpp,x402" }).protocols) === '["x402","mpp"]', "subsets, case/space tolerant, canonical order x402,mpp");
-    let threw = null; try { makeOffer({ ...BASE_ENV, RGOE_PAY_PROTOCOLS: "x402,lightning" }); } catch (e) { threw = e.message; }
-    ok(/RGOE_PAY_PROTOCOLS: unknown payment protocol "lightning"/.test(threw || ""), "an unknown rail is a startup error (fail fast)");
+    ok(JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: "mpp" }).protocols) === '["mpp"]' && JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: " X402 " }).protocols) === '["x402"]' && JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: "mpp,x402" }).protocols) === '["x402","mpp"]', "subsets, case/space tolerant, canonical order x402,mpp");
+    let threw = null; try { makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: "x402,lightning" }); } catch (e) { threw = e.message; }
+    ok(/SHADE_TREE_PAY_PROTOCOLS: unknown payment protocol "lightning"/.test(threw || ""), "an unknown rail is a startup error (fail fast)");
     ok(JSON.stringify(offerProtocols({})) === '["x402","mpp"]' && JSON.stringify(offerSummary({ protocols: ["mpp"], tiers: {} }).protocols) === '["mpp"]', "offerProtocols/offerSummary: an offer without the field means both; with it, exactly the enabled rails");
     ok(JSON.stringify(parsePayProtocols(undefined)) === '["x402","mpp"]', "parsePayProtocols(undefined) = both");
   }
 
-  const work = await mkdtemp(join(tmpdir(), "rgoe-registrar-protocols-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-registrar-protocols-"));
   const regs = [];
   try {
     const both = await startRegistrar(work, undefined), x402Only = await startRegistrar(work, "x402"), mppOnly = await startRegistrar(work, "mpp");
@@ -93,7 +93,7 @@ async function main() {
     {
       const r1 = await request(mppOnly.port, { method: "POST", path: "/pay", headers: { "content-type": "application/json", "payment-signature": "eyJmYWtlIjoxfQ" }, body: bodyLimit8 });
       const j1 = JSON.parse(r1.body);
-      ok(r1.status === 400 && j1.err === "protocol-disabled" && j1.protocol === "x402" && JSON.stringify(j1.protocols) === '["mpp"]' && /does not serve x402/.test(j1.detail) && /RGOE_PAY_PROTOCOLS=mpp/.test(j1.detail), `mpp-only registrar refuses a PAYMENT-SIGNATURE (x402) payload: ${r1.status} ${j1.err} protocol=${j1.protocol} enabled=${JSON.stringify(j1.protocols)}`);
+      ok(r1.status === 400 && j1.err === "protocol-disabled" && j1.protocol === "x402" && JSON.stringify(j1.protocols) === '["mpp"]' && /does not serve x402/.test(j1.detail) && /SHADE_TREE_PAY_PROTOCOLS=mpp/.test(j1.detail), `mpp-only registrar refuses a PAYMENT-SIGNATURE (x402) payload: ${r1.status} ${j1.err} protocol=${j1.protocol} enabled=${JSON.stringify(j1.protocols)}`);
       ok(mppOnly.calls.length === 0, "…without touching the settlement engine");
       const r2 = await request(x402Only.port, { method: "POST", path: "/pay", headers: { "content-type": "application/json", authorization: "Payment fake" }, body: bodyLimit8 });
       const j2 = JSON.parse(r2.body);

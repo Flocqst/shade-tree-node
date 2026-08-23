@@ -1,6 +1,6 @@
 # SLOs and error budget
 
-Service level objectives for the fleet: a set of reputation-gated onion egress gateways plus a
+Service level objectives for the fleet: a set of Shade Tree gateways plus a
 discovery bootnode. This is milestone T-MON-5 in [SHIP-PLAN.md](SHIP-PLAN.md).
 
 **Status: proposals, not commitments.** This is a reference implementation. The targets below are
@@ -76,7 +76,7 @@ uptime success.
 ### 2.3 Fleet has >=2 healthy gateways: 99% of the time **[NEEDS DATA]**
 
 At least two gateways are healthy and discoverable in `/directory` 99% of the time, sampled by the
-prober. Two, not one, because the whole failover story (per-request rotation, dial-timeout failover,
+prober. Two, not one, because the whole failover story (per-tunnel rotation, dial-timeout failover,
 `down`-marking) needs somewhere to fail over *to*; a one-gateway fleet has no anonymity spread
 (target metadata is 1/1, not 1/N) and no route-around. This is the SLI that most directly protects
 egress success and anonymity at once. **[NEEDS DATA]**: depends entirely on how many gateways are
@@ -101,7 +101,7 @@ problem.
 
 ### 2.5 Discovery freshness: a down gateway leaves `/directory` within TTL + one sweep
 
-A gateway that stops heartbeating drops out of the served directory within `RGOE_BOOTNODE_TTL`
+A gateway that stops heartbeating drops out of the served directory within `SHADE_TREE_BOOTNODE_TTL`
 (default 900s) of its last accepted announce, plus at most one sweep interval (`min(ttl,60)`s, so ~60s;
 and `directory()` sweeps on every request anyway). So worst case ~960s, typically < 900s. This is a
 *bound*, not a percentile: it is set by the TTL knob, so the "target" is really "pick the TTL that
@@ -133,9 +133,9 @@ the alert condition (T-MON-3 owns the exact multi-window burn-rate alerts).
 **What the operator does when a budget is burning** (tie-ins to [INCIDENT.md](INCIDENT.md)):
 
 - **Egress-success budget burning + `root-not-recent` DROP spike** -> not an availability outage, a gate
-  correctness/config problem. Follow INCIDENT.md #6 (mass-DROP spike): align `RGOE_EPOCH_SECONDS`,
-  `RGOE_SLOTS`, `RGOE_RLN_IDENTIFIER`, and the root source across client and gateway; widen
-  `RGOE_FRESHNESS_ROOTS` if a membership change out-ran the window. **Do not slash** (these are
+  correctness/config problem. Follow INCIDENT.md #6 (mass-DROP spike): align `SHADE_TREE_EPOCH_SECONDS`,
+  `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and the root source across client and gateway; widen
+  `SHADE_TREE_FRESHNESS_ROOTS` if a membership change out-ran the window. **Do not slash** (these are
   rejections, not over-spends).
 - **Egress-success budget burning + dial/upstream failures, not gate DROPs** -> a capacity or
   gateway-health problem. **Add gateways** (section 2.3 exists for exactly this headroom) and/or pull
@@ -161,7 +161,7 @@ admits fewer members but every current member still DROPs). Diagnose the DROP-re
 ## 4. What is explicitly NOT an SLO here
 
 - **Individual gateway uptime.** The fleet routes around a dead gateway (client failover +
-  `down`-marking + per-request rotation). A single gateway can be down for hours with zero egress-success
+  `down`-marking + per-tunnel rotation). A single gateway can be down for hours with zero egress-success
   budget spent, as long as the *fleet* SLI (>=2 healthy) holds. Chasing per-gateway uptime would optimize
   the wrong thing and could even push against rotating/retiring gateways, which is a normal operation
   (OPERATOR.md #6).

@@ -11,11 +11,11 @@ line and extended by `feat/bootnode-and-productionize`:
 
 | # | milestone | status |
 |---|---|---|
-| 1 | Unlinkable rate limiting | **built** as real RLN (fresh per-request share, over-spend reconstructs + slashes) — `lib/rln.mjs`, `contracts/rln/`. Supersedes the slot scheme sketched below. |
+| 1 | Unlinkable rate limiting | **built** as real RLN (fresh per-tunnel share, over-spend reconstructs + slashes) — `lib/rln.mjs`, `contracts/rln/`. Supersedes the slot scheme sketched below. |
 | 2 | On-chain reputation set | **built** — `contracts/StakedReputationSet.sol` (live on Sepolia), `lib/root-provider.mjs`. |
 | 3 | Egress discovery + fleet rotation | **built (static)** — signed directory + client rotation (`lib/directory.mjs`). Made **live** by milestone 4. |
 | 4 | Live discovery: the bootnode | **built** — `bootnode/`, `contracts/GatewayRegistry.sol`, `docs/BOOTNODE.md`. |
-| 5 | Productionization + deploy | **in progress** — `rgoe` CLI, Docker, `docs/QUICKSTART.md`; live droplet deploy prepped in `bootnode/deploy/`. |
+| 5 | Productionization + deploy | **in progress** — `shade-tree` CLI, Docker, `docs/QUICKSTART.md`; live droplet deploy prepped in `bootnode/deploy/`. |
 
 Sections 1-3 below are the original design notes (kept for the reasoning, including the
 tiers not taken); 4-5 are the newer milestones.
@@ -59,11 +59,11 @@ breaks the tension:
 
 The cost is that the client now generates up to `K` proofs per epoch instead of one.
 At ~0.7s per proof (see [proof overhead](#proof-overhead)) that is the difference
-between a per-request stall and a non-issue: **precompute the epoch's `K` proofs in
-the background at epoch rollover and rotate through them per request**, so the hot
+between a per-tunnel stall and a non-issue: **precompute the epoch's `K` proofs in
+the background at epoch rollover and rotate through them per tunnel**, so the hot
 path is just "pick the next unused proof," near zero latency. `K = 30` is ~21s of
 background work per hour, fully parallel across cores. This is the bulk-generate-and-
-rotate strategy, and it is what makes per-request unlinkability usable. The only
+rotate strategy, and it is what makes per-tunnel unlinkability usable. The only
 residual leak is that the gateway learns *which slot index* a request used (not who
 used it), so it sees the slot-usage histogram but never a member.
 
@@ -142,7 +142,7 @@ clients both read the same root from the same place with no file to sync.
 **What changes.**
 
 - `lib/semaphore.mjs`: `loadGroup()` gains an on-chain mode behind
-  `RGOE_GROUP_CONTRACT` / `RGOE_RPC_URL` / `RGOE_GROUP_ID`, with the JSON path kept
+  `SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_RPC_URL` / `SHADE_TREE_GROUP_ID`, with the JSON path kept
   as the offline default.
 - `gateway/gateway.mjs`: `TRUSTED_ROOT` becomes a refreshed set of recent roots.
 - `group/enroll.mjs`: grows a sibling that submits `addMember` on-chain.
@@ -163,10 +163,10 @@ clients both read the same root from the same place with no file to sync.
   inherent. If you need enroller privacy, relay the `addMember` call through a
   meta-transaction or a privacy pool. Out of scope here.
 
-### 3. Egress discovery and per-request gateway selection (the fleet)
+### 3. Egress discovery and per-tunnel gateway selection (the fleet)
 
 **Problem.** The PoC has exactly one gateway, and the client pins it ahead of time:
-the shim dials whatever single onion `RGOE_ONION` (or the local `hostname` file)
+the shim dials whatever single onion `SHADE_TREE_ONION` (or the local `hostname` file)
 names (`client/shim.mjs`). That carries two costs.
 
 - **No discovery.** Onion addresses are handed out of band (the bundle ships one
@@ -187,7 +187,7 @@ blind to its path. The problem is the inverse — one operator knowing the whole
 one anonymous member. The fix is therefore not to hide the exit from the client but
 to stop any one exit from seeing all of a member.
 
-**Goal.** A directory of live gateways plus **per-request, client-side selection**,
+**Goal.** A directory of live gateways plus **per-tunnel, client-side selection**,
 so the client never commits to a single operator and a member's traffic spreads
 across the fleet. This is the app-layer analog of Tor rotating circuits, except our
 "exits" are destinations (onion services), so the selection lives in the shim, not
@@ -205,7 +205,7 @@ in Tor's relay path selection.
 - **Selection in the shim.** Per-connection weighted-random pick from the live set,
   with health/latency feedback and failover to the next gateway on dial timeout.
   `curl` stays dumb — the shim is the router (shim-as-router). Optionally expose a
-  pin (`RGOE_ONION` still forces one gateway) for debugging or when a caller really
+  pin (`SHADE_TREE_ONION` still forces one gateway) for debugging or when a caller really
   wants a fixed egress IP.
 - **Rotation is free, cryptographically.** The membership proof is
   gateway-independent: same trusted root + same epoch verifies at *any* gateway that
@@ -214,11 +214,11 @@ in Tor's relay path selection.
 
 **Why this is the privacy win, and how it composes with #1.** With one gateway, that
 operator sees 100% of a member's (metadata-only) targets under one nullifier. Spread
-per-request across `N` non-colluding gateways and each sees only ~`1/N`. Rotation
+per-tunnel across `N` non-colluding gateways and each sees only ~`1/N`. Rotation
 alone does **not** defeat *colluding* gateways: they can still reassemble the profile
 by matching the member's constant per-epoch nullifier across their logs. Ship #1
-(a distinct nullifier per request) and even colluding gateways cannot tie the
-requests together. **Rotation + per-request unlinkable nullifiers** is the
+(a distinct nullifier per tunnel) and even colluding gateways cannot tie the
+requests together. **Rotation + per-tunnel unlinkable nullifiers** is the
 combination that actually delivers "no operator, even a colluding set, can profile a
 member." Neither piece is sufficient alone.
 
@@ -230,7 +230,7 @@ member." Neither piece is sufficient alone.
   choice: either accept a fleet budget of `N`× per member, or share nullifier
   accounting across gateways (a shared spent-set store, or gateways publishing
   per-epoch nullifier counts to a common tally). Shared accounting reintroduces a
-  cross-gateway linkage point — unless it is paired with #1, whose per-request
+  cross-gateway linkage point — unless it is paired with #1, whose per-tunnel
   nullifiers keep the shared tally from also being a profile.
 - **The directory is a new trust and availability surface.** Who signs it, how it is
   distributed, and what stops a stale or poisoned directory from steering a member to
@@ -273,7 +273,7 @@ slash member over-spenders). Gateway slashing is governed, not permissionless �
 asymmetry vs the member slash, because gateway misbehavior is a subjective off-chain judgment
 where a member over-spend is a cryptographic proof.
 
-**How it composes with #1.** Rotation across the fleet plus RLN's per-request unlinkable
+**How it composes with #1.** Rotation across the fleet plus RLN's per-tunnel unlinkable
 nullifiers is still the combination that stops even a colluding set of operators from profiling a
 member. The bootnode changes *how the fleet is discovered*, not that argument.
 
@@ -284,14 +284,14 @@ one command, no image, no quickstart. Hard for a new operator or a new gateway t
 
 **Design (in progress).**
 
-- **One CLI.** `rgoe <command> [--flags]` (`bin/rgoe.mjs`) fronts every role — `keygen`,
+- **One CLI.** `shade-tree <command> [--flags]` (`bin/shade-tree.mjs`) fronts every role — `keygen`,
   `bootnode`, `heartbeat`, `gateway`, `client`, `enroll`, `register-member`, `register-gateway`,
-  `doctor`. Each `--flag` maps one-to-one onto the existing `RGOE_*` env var, so flags and env
-  stay in sync and either works. `rgoe doctor` checks the local setup before you run anything.
+  `doctor`. Each `--flag` maps one-to-one onto the existing `SHADE_TREE_*` env var, so flags and env
+  stay in sync and either works. `shade-tree doctor` checks the local setup before you run anything.
 - **Containers.** A single image with the CLI entrypoint (`docker run … bootnode --port …`) plus
   a compose that wires Tor + bootnode + gateway + client for a local fleet.
 - **Docs.** `docs/QUICKSTART.md` (stand up a bootnode + a gateway + a client from scratch),
-  `docs/CLI.md`, `docs/CONFIG.md` (every `RGOE_*` var), `docs/BOOTNODE.md` (the discovery design).
+  `docs/CLI.md`, `docs/CONFIG.md` (every `SHADE_TREE_*` var), `docs/BOOTNODE.md` (the discovery design).
 - **Live fleet.** `bootnode/deploy/` prepares a fresh droplet: install Tor (from the official
   repo for `pow: yes`), mint the onion identity, run the bootnode + a gateway as systemd units,
   and print the bootnode onion + pinned signer for clients. One command on a rented box.

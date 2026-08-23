@@ -7,7 +7,7 @@ behind one bootnode on Sepolia; invited, staked and paid admission; HTTP 402
 payments in x402 and MPP). It is **unaudited**, and its ZK artifacts
 (`circuits/rln/`) came from an **untrusted testnet phase-2 ceremony**
 (`circuits/rln/ARTIFACTS.md`; the ceremony has not been run,
-[issue #6](https://github.com/dmarzzz/reputation-gated-onion-egress/issues/6),
+[issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6),
 `docs/CEREMONY.md`). Everything on chain is Sepolia; the fleet is one operator on
 one provider. Do not put real funds or real anonymity needs on it yet. Treat
 everything here as testnet-only until an audit and a real trusted setup land
@@ -49,13 +49,13 @@ instead.
   being redirected, and a single gateway rejects an exact-envelope replay outside
   the 5s honest-retry window (`replayed-envelope`, T-FEAT-12). Non-colluding
   gateways share a spent-nullifier tally only when the operator enables it
-  (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b; fail-open), so without it one captured
+  (`SHADE_TREE_FLEET_TALLY_PEERS`, T-FEAT-20/20b; fail-open), so without it one captured
   envelope can still be fanned once per peer gateway.
 - **Stale `staked` label by default.** In stake mode the client trusts the
   bootnode's `staked` label for the operator-to-onion pairing unless
-  `RGOE_VERIFY_STAKE=1`, which makes it re-fetch `GET /gateway/<onion>` and
+  `SHADE_TREE_VERIFY_STAKE=1`, which makes it re-fetch `GET /gateway/<onion>` and
   re-verify the operator signature and live stake itself (T-DEV-5).
-- **Directory signer rotation is out of band.** `RGOE_DIR_SIGNER` accepts an
+- **Directory signer rotation is out of band.** `SHADE_TREE_DIR_SIGNER` accepts an
   allowlist so rotation has an overlap window (T-HARD-5), but distributing the new
   pubkey to clients is a manual step; there is no in-band rotation message.
 - **Deploy bootstrap runs as root.** `bootnode/deploy/bootstrap.sh` is exercised
@@ -77,7 +77,7 @@ See `docs/SHIP-PLAN.md` for the full residual list and its priorities.
 Report privately. Do not open a public issue for a suspected vulnerability.
 
 - Open a private security advisory on GitHub for
-  `dmarzzz/reputation-gated-onion-egress`
+  `dmarzzz/shade-tree-node`
   (repository → Security → Advisories → "Report a vulnerability").
 
 That is the intended private channel. There is no dedicated security email.

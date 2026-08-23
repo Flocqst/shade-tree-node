@@ -12,8 +12,8 @@ real: real Groth16 proof, real Tor transport, real fleet gateway, real Sepolia r
 
 ```bash
 # needs a local keys.local.json (the demo member) + the signed directory in the repo
-RGOE_DEMO_WALLET=0x2ec9838Ea920Dc33D2771F4d29CBF6e7784929F9 \
-RGOE_TOR_PORT=9260 \
+SHADE_TREE_DEMO_WALLET=0x2ec9838Ea920Dc33D2771F4d29CBF6e7784929F9 \
+SHADE_TREE_TOR_PORT=9260 \
 npm run demo
 # open the printed http://127.0.0.1:<port>
 ```
@@ -23,11 +23,11 @@ Env (all optional, sane local defaults):
 
 | var | default |
 |---|---|
-| `RGOE_SECRET` | `keys.local.json[RGOE_DEMO_INDEX \|\| 0]` |
-| `RGOE_DEMO_WALLET` | none (falls back to showing the membership commitment) |
-| `RGOE_DIRECTORY` / `RGOE_DIR_SIGNER` | `network/sepolia/directory.json` + its signer |
-| `RGOE_TOR_PORT` | `9260` |
-| `RGOE_DEMO_PORT` | `8790` |
+| `SHADE_TREE_SECRET` | `keys.local.json[SHADE_TREE_DEMO_INDEX \|\| 0]` |
+| `SHADE_TREE_DEMO_WALLET` | none (falls back to showing the membership commitment) |
+| `SHADE_TREE_DIRECTORY` / `SHADE_TREE_DIR_SIGNER` | `network/sepolia/directory.json` + its signer |
+| `SHADE_TREE_TOR_PORT` | `9260` |
+| `SHADE_TREE_DEMO_PORT` | `8790` |
 
 ## Two things worth knowing before you demo
 

@@ -9,7 +9,7 @@ pragma solidity ^0.8.24;
 /// (TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,
 /// uint256 validBefore,bytes32 nonce)), same `authorizationState(from, nonce)` replay check,
 /// same `DOMAIN_SEPARATOR()`/`name()`/`version()` boot probe. Swapping in real USDC is a
-/// one-env change (RGOE_PAY_ASSET). Not for value: `mint` is owner-only and unbounded.
+/// one-env change (SHADE_TREE_PAY_ASSET). Not for value: `mint` is owner-only and unbounded.
 contract Eip3009Token {
     string public name;
     string public symbol;

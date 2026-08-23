@@ -1,6 +1,6 @@
 # Rolling update (zero downtime)
 
-Update a deployed rgoe box to a new git ref with minimal disruption. One box is
+Update a deployed shade-tree box to a new git ref with minimal disruption. One box is
 handled by [`rolling-update.sh`](rolling-update.sh); a multi-box fleet is
 sequenced one gateway at a time (below) so healthy gateways keep serving
 throughout.
@@ -15,28 +15,28 @@ The gateway and bootnode sit behind Tor v3 onions. Clients do **weighted
 rotation + failover** and cache a **last-known-good directory**, so a gateway
 that blips for a few seconds is routed around (see
 [BOOTNODE.md → Liveness](../../docs/BOOTNODE.md#liveness)). The bootnode reloads
-its **persisted live-set** on boot (`RGOE_BOOTNODE_STORE`, T-DEV-4), so its
+its **persisted live-set** on boot (`SHADE_TREE_BOOTNODE_STORE`, T-DEV-4), so its
 directory survives a restart instead of blanking. A single box bouncing is
 absorbed by client cache + failover.
 
 ## One box
 
 ```bash
-# on the box (repo at /opt/rgoe):
-sudo bash /opt/rgoe/bootnode/deploy/rolling-update.sh <branch|tag|sha>
+# on the box (repo at /opt/shade-tree):
+sudo bash /opt/shade-tree/bootnode/deploy/rolling-update.sh <branch|tag|sha>
 
 # or over ssh:
-ssh root@<droplet> 'sudo bash /opt/rgoe/bootnode/deploy/rolling-update.sh <ref>'
+ssh root@<droplet> 'sudo bash /opt/shade-tree/bootnode/deploy/rolling-update.sh <ref>'
 ```
 
 What it does, in order:
 
 1. **Capture + pin the current ref** (`git rev-parse HEAD`, pinned as a
-   `rgoe-rollback-*` tag) *before* any change, so rollback is a one-liner and the
+   `shade-tree-rollback-*` tag) *before* any change, so rollback is a one-liner and the
    old commit can't be pruned from a shallow clone.
 2. **Update**: `git fetch` + checkout the new ref, `npm install --omit=dev`.
 3. **Staged restart, health-gated between each** — safe order:
-   `rgoe-bootnode` → `rgoe-gateway` → `rgoe-heartbeat`.
+   `shade-tree-bootnode` → `shade-tree-gateway` → `shade-tree-heartbeat`.
    - bootnode first (reloads persisted fleet state; a broken build is caught on
      its `/health` before anything else is touched),
    - gateway second (confirmed active + accepting on its loopback port),
@@ -48,10 +48,10 @@ What it does, in order:
 5. **On any failure**, print the exact rollback command:
    `git checkout <previous-sha> && npm install --omit=dev && systemctl restart …`.
 
-Tunables (env, defaults match `bootstrap.sh`): `RGOE_DIR` (`/opt/rgoe`),
-`RGOE_BOOTNODE_PORT` (8877), `RGOE_GATEWAY_PORT` (8443), `RGOE_TOR_PORT` (9050),
-`RGOE_HEALTH_TIMEOUT` (60s), `RGOE_ONION_TIMEOUT` (120s). The ref may be passed
-as `$1` or `RGOE_REF`.
+Tunables (env, defaults match `bootstrap.sh`): `SHADE_TREE_DIR` (`/opt/shade-tree`),
+`SHADE_TREE_BOOTNODE_PORT` (8877), `SHADE_TREE_GATEWAY_PORT` (8443), `SHADE_TREE_TOR_PORT` (9050),
+`SHADE_TREE_HEALTH_TIMEOUT` (60s), `SHADE_TREE_ONION_TIMEOUT` (120s). The ref may be passed
+as `$1` or `SHADE_TREE_REF`.
 
 ## Rolling a multi-box fleet — one gateway at a time
 
@@ -59,21 +59,21 @@ The invariant: **at least one healthy gateway stays in the signed directory at
 all times**, so clients always have a live route. Never restart two gateways at
 once, and never let the whole fleet drop out of `/directory` together.
 
-Given gateways `gw-1 … gw-N` (each a box running `rgoe-gateway` +
-`rgoe-heartbeat`, announcing to the bootnode), update them **serially**:
+Given gateways `gw-1 … gw-N` (each a box running `shade-tree-gateway` +
+`shade-tree-heartbeat`, announcing to the bootnode), update them **serially**:
 
 For each `gw-i`:
 
 1. **Drain** — stop the heartbeat so the gateway stops re-announcing:
 
    ```bash
-   ssh root@gw-i 'systemctl stop rgoe-heartbeat'
+   ssh root@gw-i 'systemctl stop shade-tree-heartbeat'
    ```
 
-   Leave `rgoe-gateway` running for now so in-flight circuits finish.
+   Leave `shade-tree-gateway` running for now so in-flight circuits finish.
 
 2. **Wait for the TTL to drop it from the directory.** The bootnode holds each
-   gateway as soft state for `RGOE_BOOTNODE_TTL` (default **900s**). Once the
+   gateway as soft state for `SHADE_TREE_BOOTNODE_TTL` (default **900s**). Once the
    heartbeat stops, the entry ages out and clients stop selecting `gw-i` while
    still selecting the others. Confirm it's gone:
 
@@ -82,16 +82,16 @@ For each `gw-i`:
      | grep -c '<gw-i-onion>'      # expect 0 before proceeding
    ```
 
-   (To drain faster than 900s, run the fleet with a shorter `RGOE_BOOTNODE_TTL` /
-   `RGOE_BOOTNODE_HEARTBEAT` so aged-out is quick — a deliberate rollout knob.)
+   (To drain faster than 900s, run the fleet with a shorter `SHADE_TREE_BOOTNODE_TTL` /
+   `SHADE_TREE_BOOTNODE_HEARTBEAT` so aged-out is quick — a deliberate rollout knob.)
 
-3. **Update the box.** `rgoe-heartbeat` is already stopped, so
-   `rolling-update.sh` will bounce `rgoe-gateway` (drop any lingering circuits;
+3. **Update the box.** `shade-tree-heartbeat` is already stopped, so
+   `rolling-update.sh` will bounce `shade-tree-gateway` (drop any lingering circuits;
    clients fail over to the still-announced peers) and then restart the
    heartbeat, which **re-announces** `gw-i` back into the directory:
 
    ```bash
-   ssh root@gw-i 'sudo bash /opt/rgoe/bootnode/deploy/rolling-update.sh <ref>'
+   ssh root@gw-i 'sudo bash /opt/shade-tree/bootnode/deploy/rolling-update.sh <ref>'
    ```
 
 4. **Confirm `gw-i` rejoined and is healthy** before moving to `gw-(i+1)`:
@@ -99,7 +99,7 @@ For each `gw-i`:
    ```bash
    curl --socks5-hostname 127.0.0.1:9050 http://<bootnode-onion>/directory \
      | grep -c '<gw-i-onion>'      # expect 1 (re-announced)
-   ssh root@gw-i 'systemctl is-active rgoe-gateway rgoe-heartbeat'
+   ssh root@gw-i 'systemctl is-active shade-tree-gateway shade-tree-heartbeat'
    ```
 
 Only then drain the next gateway. Because at every step `N-1` gateways remain

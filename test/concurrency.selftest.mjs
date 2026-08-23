@@ -83,7 +83,7 @@ async function main() {
 
   // === subject 2: bootnode registry loses/duplicates NOTHING under concurrent announces =====
   console.log("\nregistry (concurrent announces, no lost/duplicate entries):");
-  const work = await mkdtemp(join(tmpdir(), "rgoe-concurrency-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-concurrency-"));
   try {
     const signer = await loadOrMintSigner(join(work, "signer.key"));
     const fixedClock = 2_000_000;

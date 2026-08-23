@@ -2,11 +2,11 @@
 // docs/PAYMENTS.md as shipped). Two rails, one signature: the buyer signs an EIP-3009
 // TransferWithAuthorization for the stablecoin (needs the coin, NO gas); the operator submits it,
 // then inserts the buyer's commitment into the on-chain PaidAccessSet. Egress afterwards is the
-// ordinary `rgoe client` with the same secret (the gateway trusts the paid root).
+// ordinary `shade-tree client` with the same secret (the gateway trusts the paid root).
 //
-//   rgoe pay --bootnode <onion> --limit 8 [--protocol x402|mpp] [--key-file <path>] [--dry-run]
-//   rgoe pay --network sepolia --limit 32 --protocol mpp
-//   rgoe pay --registrar-url http://127.0.0.1:8878 ...      (no Tor: tests / a local registrar)
+//   shade-tree pay --bootnode <onion> --limit 8 [--protocol x402|mpp] [--key-file <path>] [--dry-run]
+//   shade-tree pay --network sepolia --limit 32 --protocol mpp
+//   shade-tree pay --registrar-url http://127.0.0.1:8878 ...      (no Tor: tests / a local registrar)
 //
 // Flow (x402):  GET  /pay/quote?limit=N          -> 402 + PAYMENT-REQUIRED (accepts[])
 //               POST /pay {commitment,limit}     + PAYMENT-SIGNATURE (signed authorization)
@@ -17,11 +17,11 @@
 //
 // Inputs, first match wins:
 //   registrar:  --registrar-url <http://host:port> | --bootnode <onion> [--registrar-port 8878]
-//               | RGOE_BOOTNODE_ONION (RGOE_NETWORK fills it from network/<name>/bootnode.json)
-//   buyer key:  --key-file <path> (0x hex) | --account <keystore.json> (RGOE_PAY_PASSPHRASE) | RGOE_PAY_KEY
-//   member:     --commitment <dec>  |  the member secret exactly like `rgoe identity`
-//               (--secret-file <path> | RGOE_SECRET/--secret | ./.secret) -> leaf at --limit
-//   Tor SOCKS:  RGOE_TOR_HOST / RGOE_TOR_PORT (default 127.0.0.1:9250)
+//               | SHADE_TREE_BOOTNODE_ONION (SHADE_TREE_NETWORK fills it from network/<name>/bootnode.json)
+//   buyer key:  --key-file <path> (0x hex) | --account <keystore.json> (SHADE_TREE_PAY_PASSPHRASE) | SHADE_TREE_PAY_KEY
+//   member:     --commitment <dec>  |  the member secret exactly like `shade-tree identity`
+//               (--secret-file <path> | SHADE_TREE_SECRET/--secret | ./.secret) -> leaf at --limit
+//   Tor SOCKS:  SHADE_TREE_TOR_HOST / SHADE_TREE_TOR_PORT (default 127.0.0.1:9250)
 //
 // --dry-run prints the 402 challenge(s) and the exact authorization it WOULD sign, signs nothing,
 // sends nothing further. Nothing secret is ever printed: not the buyer key, not the member secret,
@@ -44,11 +44,11 @@ import { resolveSecret } from "./identity.mjs";
 import { identityFileFor } from "../lib/identity-file.mjs";
 import { K_SLOTS, normLimit } from "../lib/rln.mjs";
 
-const USAGE = `usage: rgoe pay (--bootnode <onion> | --registrar-url <url>) --limit <tier> [--protocol x402|mpp] [--key-file <path> | --account <keystore.json>] [--commitment <dec> | --secret-file <path>] [--dry-run]`;
+const USAGE = `usage: shade-tree pay (--bootnode <onion> | --registrar-url <url>) --limit <tier> [--protocol x402|mpp] [--key-file <path> | --account <keystore.json>] [--commitment <dec> | --secret-file <path>] [--dry-run]`;
 
 export function parseArgs(argv, env = process.env) {
-  const o = { bootnode: env.RGOE_BOOTNODE_ONION || null, registrarUrl: env.RGOE_REGISTRAR_URL || null, registrarPort: Number(env.RGOE_REGISTRAR_PORT || 8878),
-    limit: env.RGOE_LIMIT || null, protocol: (env.RGOE_PAY_PROTOCOL || "x402").toLowerCase(), keyFile: null, account: null, commitment: null, secretFile: null, dryRun: false, json: false };
+  const o = { bootnode: env.SHADE_TREE_BOOTNODE_ONION || null, registrarUrl: env.SHADE_TREE_REGISTRAR_URL || null, registrarPort: Number(env.SHADE_TREE_REGISTRAR_PORT || 8878),
+    limit: env.SHADE_TREE_LIMIT || null, protocol: (env.SHADE_TREE_PAY_PROTOCOL || "x402").toLowerCase(), keyFile: null, account: null, commitment: null, secretFile: null, dryRun: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") { console.log(USAGE); process.exit(0); }
@@ -86,26 +86,26 @@ export async function resolveBuyerWallet(o, env = process.env) {
   }
   if (o.account) {
     if (!existsSync(o.account)) throw new Error(`keystore not found: ${o.account}`);
-    const pw = env.RGOE_PAY_PASSPHRASE;
-    if (!pw) throw new Error("--account <keystore.json> needs RGOE_PAY_PASSPHRASE");
+    const pw = env.SHADE_TREE_PAY_PASSPHRASE;
+    if (!pw) throw new Error("--account <keystore.json> needs SHADE_TREE_PAY_PASSPHRASE");
     return { wallet: await ethers.Wallet.fromEncryptedJson(readFileSync(o.account, "utf8"), pw), source: `--account ${o.account}` };
   }
-  if (env.RGOE_PAY_KEY && env.RGOE_PAY_KEY.trim()) return { wallet: new ethers.Wallet(env.RGOE_PAY_KEY.trim()), source: "RGOE_PAY_KEY" };
-  throw new Error("no buyer key: pass --key-file <path>, --account <keystore.json>, or set RGOE_PAY_KEY (a wallet holding the stablecoin; it needs no ETH)");
+  if (env.SHADE_TREE_PAY_KEY && env.SHADE_TREE_PAY_KEY.trim()) return { wallet: new ethers.Wallet(env.SHADE_TREE_PAY_KEY.trim()), source: "SHADE_TREE_PAY_KEY" };
+  throw new Error("no buyer key: pass --key-file <path>, --account <keystore.json>, or set SHADE_TREE_PAY_KEY (a wallet holding the stablecoin; it needs no ETH)");
 }
 
 // The commitment to insert: --commitment, else the member secret's leaf at --limit (same
-// derivation as `rgoe identity` / `rgoe enroll --limit`).
+// derivation as `shade-tree identity` / `shade-tree enroll --limit`).
 export function resolveCommitment(o, env = process.env) {
   if (o.commitment) {
-    if (!/^(0|[1-9][0-9]*)$/.test(o.commitment)) throw new Error("--commitment must be a decimal field element (the leaf `rgoe enroll` printed)");
+    if (!/^(0|[1-9][0-9]*)$/.test(o.commitment)) throw new Error("--commitment must be a decimal field element (the leaf `shade-tree enroll` printed)");
     return { commitment: o.commitment, source: "--commitment" };
   }
   const { secret, source } = resolveSecret({ secretFile: o.secretFile, env });
   return { commitment: identityFileFor(secret, o.limit).leaf, source: `leaf of ${source} at limit ${o.limit}` };
 }
 
-// T-FEAT-9: a registrar serves only the rails its provider enabled (RGOE_PAY_PROTOCOLS); the 402
+// T-FEAT-9: a registrar serves only the rails its provider enabled (SHADE_TREE_PAY_PROTOCOLS); the 402
 // body's `pay.protocols` says which. Turn "no header" into a precise "this rail is not sold here".
 function railHint(q, rail) {
   try {
@@ -116,7 +116,7 @@ function railHint(q, rail) {
 }
 const target = (o) => (o.registrarUrl ? { url: o.registrarUrl } : { onion: o.bootnode, port: o.registrarPort });
 // The paying POST waits for settle + insert to be mined (2 confirmations on a 12 s chain) over Tor.
-const PAY_TIMEOUT_MS = Number(process.env.RGOE_PAY_HTTP_TIMEOUT_MS || 240000);
+const PAY_TIMEOUT_MS = Number(process.env.SHADE_TREE_PAY_HTTP_TIMEOUT_MS || 240000);
 
 // ---- x402 ---------------------------------------------------------------------------------
 export async function payX402({ o, wallet, commitment, out, nowMs = Date.now() }) {
@@ -213,7 +213,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   console.log(`  leafIndex: ${r.leafIndex}`);
   console.log(`  root:      ${r.root}`);
   console.log(`  status:    /pay/status/${res.nonce}`);
-  console.log(`now:  ${o.limit !== K_SLOTS ? `RGOE_LIMIT=${o.limit} ` : ""}rgoe client --secret <your secret> --bootnode ${o.bootnode || "<onion>"}   (proves membership in the paid set; the gateway trusts its root)`);
+  console.log(`now:  ${o.limit !== K_SLOTS ? `SHADE_TREE_LIMIT=${o.limit} ` : ""}shade-tree client --secret <your secret> --bootnode ${o.bootnode || "<onion>"}   (proves membership in the paid set; the gateway trusts its root)`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

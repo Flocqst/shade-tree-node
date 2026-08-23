@@ -1,0 +1,61 @@
+# shade-tree external uptime probe — one-shot unit fired by shade-tree-uptime-probe.timer (monitoring/UPTIME.md).
+#
+# Install on any tor-capable box that is NOT part of the fleet (the point is an OUTSIDE vantage):
+#   sudo install -m 0644 monitoring/uptime/shade-tree-uptime-probe.{service,timer} /etc/systemd/system/
+#   sudo install -m 0600 monitoring/uptime/uptime-probe.env.example /etc/shade-tree/uptime-probe.env  # then edit
+#   sudo systemctl daemon-reload && sudo systemctl enable --now shade-tree-uptime-probe.timer
+#
+# The probe reads SHADE_TREE_BOOTNODE_ONION + SHADE_TREE_DIR_SIGNER (or SHADE_TREE_NETWORK=<name>, resolved from
+# network/<name>/bootnode.json) from the EnvironmentFile; nothing secret lives in it (onion +
+# public signer key). Exit code lands in the journal: 0 healthy, 1 (json) / 2 (nagios) unhealthy.
+[Unit]
+Description=shade-tree fleet uptime probe (over Tor, signer-pinned)
+Documentation=file:///opt/shade-tree/monitoring/UPTIME.md
+After=network-online.target tor.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shade-tree
+WorkingDirectory=/opt/shade-tree
+EnvironmentFile=/etc/shade-tree/uptime-probe.env
+Environment=SHADE_TREE_TOR_HOST=127.0.0.1
+Environment=SHADE_TREE_TOR_PORT=9050
+ExecStart=/usr/bin/node /opt/shade-tree/scripts/uptime-probe.mjs --format nagios
+# A CRITICAL probe is a signal, not a unit failure storm: keep the exit code in the journal
+# (`journalctl -u shade-tree-uptime-probe`) but do not mark the unit failed for the timer's sake.
+SuccessExitStatus=1 2
+TimeoutStartSec=90
+# --- sandbox (same posture as bootnode/deploy/bootstrap.sh units) ---
+NoNewPrivileges=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+Nice=5
+CPUAccounting=true
+CPUQuota=10%
+CPUWeight=25
+MemoryAccounting=true
+MemoryMax=256M
+MemorySwapMax=0
+TasksAccounting=true
+TasksMax=64

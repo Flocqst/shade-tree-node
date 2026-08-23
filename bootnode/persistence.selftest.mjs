@@ -27,7 +27,7 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 const onionsOf = (registry) => new Set(registry.directory().gateways.map((g) => g.onion));
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-bootnode-persist-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-bootnode-persist-"));
   try {
     // --- mint three real onion identities + a pinned signer --------------------
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });

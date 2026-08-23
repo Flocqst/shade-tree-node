@@ -43,9 +43,9 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
    payment itself is an off-chain 402 exchange between buyer and registrar; the registrar
    inserts the buyer's rateCommitment. Live on Sepolia (PR #50); the anvil selftest deploys it
    from its forge artifact.
-2. **The gateway trusts a UNION of root sources, not one.** `RGOE_GROUP_CONTRACT` became a comma
-   list (single value byte-equivalent), `RGOE_PAID_ACCESS_CONTRACT` appends the paid set, and
-   `RGOE_ROOTS` (default: `static` while `members.json` exists + `onchain` for every contract)
+2. **The gateway trusts a UNION of root sources, not one.** `SHADE_TREE_GROUP_CONTRACT` became a comma
+   list (single value byte-equivalent), `SHADE_TREE_PAID_ACCESS_CONTRACT` appends the paid set, and
+   `SHADE_TREE_ROOTS` (default: `static` while `members.json` exists + `onchain` for every contract)
    selects sources — the fleet keeps admitting members.json friends WHILE admitting staked and
    paid leaves. One `RootProvider` (node or light) per contract, unioned by
    `lib/root-provider.mjs:CompositeRootProvider`; a failing child is dropped from that refresh,
@@ -56,24 +56,24 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
    (open item 2 of PAYMENTS.md: subscription, not pay-as-you-go; expiry is a follow-up).
 4. **Slashing routes to the contract that holds the leaf.** After an over-spend the gateway
    resolves the tier (`resolveSlashLeaf`) and asks each configured contract — the primary
-   `RGOE_SLASH_CONTRACT` first, then the group list, then the paid set — whether it holds a
+   `SHADE_TREE_SLASH_CONTRACT` first, then the group list, then the paid set — whether it holds a
    live leaf of the reconstructed secret (`limitOf != 0`; `isActive` on rln-v3), and submits
    ONE slash to that contract (`gateway/gateway.mjs:makeRoutingSlasher`). A paid over-spender
    loses its paid leaf; a staked one its bond; held by none → the primary gets the default
    claim as before.
-5. **The anonymity-set floor is logged, not enforced.** `RGOE_PAID_MIN_LEAVES` (default 8):
+5. **The anonymity-set floor is logged, not enforced.** `SHADE_TREE_PAID_MIN_LEAVES` (default 8):
    `paid-access anonymity set: N leaves (floor K=8)`, WARN below it, never refuse (open item 3:
    a deployment parameter, not a proven bound; hide nothing, gate nothing).
 6. **Live root, not a pinned snapshot** (open item 1). The gateway reads the current confirmed
-   root (`finalized`, or `head - RGOE_CONFIRMATIONS`) plus the freshness ring
-   (`RGOE_FRESHNESS_ROOTS`), exactly as for the staked set — reorg safety comes from the
+   root (`finalized`, or `head - SHADE_TREE_CONFIRMATIONS`) plus the freshness ring
+   (`SHADE_TREE_FRESHNESS_ROOTS`), exactly as for the staked set — reorg safety comes from the
    confirmation depth, and a proof built against a just-superseded root still verifies inside
    the ring. No separate per-epoch pin was needed.
 7. **Clients discover which set holds their leaf.** The JS client tries `members.json`, then each
    configured contract in order, rebuilding that tree from its event log
-   (`lib/root-provider.mjs:loadGroupFromContract`; `client/rgoe-client.mjs:makeLeafSourceLoader`)
+   (`lib/root-provider.mjs:loadGroupFromContract`; `client/shade-tree-client.mjs:makeLeafSourceLoader`)
    and proving against it; a leaf found nowhere is a precise error naming every source. The
-   Rust client keeps its static `--members` file: `rgoe leaves --contract <addr>` exports any
+   Rust client keeps its static `--members` file: `shade-tree leaves --contract <addr>` exports any
    on-chain set in that shape (`group/leaves.mjs`, zeros preserved).
 
 ## Consequences
@@ -107,7 +107,7 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
   source it trusts.
 - **Replacing members.json when a contract is configured** (the pre-T-FEAT-7 behavior). Rejected:
   the fleet's friends must keep egressing while paid/staked leaves are admitted; the union is
-  the least surprising default, and `RGOE_ROOTS=onchain` restores the old behavior explicitly.
+  the least surprising default, and `SHADE_TREE_ROOTS=onchain` restores the old behavior explicitly.
 - **Pinning a per-epoch root snapshot** (open item 1). Not needed: confirmation depth + the
   freshness ring already bound reorgs and just-superseded roots.
 - **Refusing proofs below the anonymity floor.** Rejected (PAYMENTS.md open item 3): the floor
@@ -120,7 +120,7 @@ Its Layer 1 was a payable contract: `deposit(commitment) payable` at one fixed d
   `reconstructGroup`, `loadGroupFromContract`, paid event topics)
 - `gateway/gateway.mjs` (`resolveRootSources`, `describeRootSources`, `initRoots`,
   `PAID_MIN_LEAVES`, `makeRoutingSlasher`, `makeOnchainSlasher.holds`)
-- `client/rgoe-client.mjs` (`makeLeafSourceLoader`), `group/leaves.mjs`, `contracts/PaidAccessSet.sol`
+- `client/shade-tree-client.mjs` (`makeLeafSourceLoader`), `group/leaves.mjs`, `contracts/PaidAccessSet.sol`
 - Tests: `test/paid-access.selftest.mjs` (anvil, real proofs), `gateway/root-sources.selftest.mjs`,
   `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`
 - zk-creds "insertion equals issuance": Rosenberg, White, Garman, Miers, IEEE S&P 2023

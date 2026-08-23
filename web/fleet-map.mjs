@@ -32,7 +32,7 @@
 //   node web/fleet-map.mjs                          # sample dataset -> ./fleet-map.html
 //   node web/fleet-map.mjs path/to/directory.json   # a directory JSON -> ./fleet-map.html
 //   node web/fleet-map.mjs directory.json out.html   # explicit output path
-//   RGOE_FLEET_MAP_K=3 node web/fleet-map.mjs        # stronger fold threshold
+//   SHADE_TREE_FLEET_MAP_K=3 node web/fleet-map.mjs        # stronger fold threshold
 //
 // Exported for tests: coarseLabel, bucketBy, bucketFleet, renderFleetMapHTML.
 
@@ -183,7 +183,7 @@ function renderBars(bucket, title, subtitle) {
 
 // Build the full self-contained HTML page. No external URLs of any kind: inline CSS + inline SVG,
 // no <script>, no <img>, no <link>, no fonts. Renders from file:// offline.
-export function renderFleetMapHTML(dir, { k = DEFAULT_K, now = new Date(), title = "RGOE Fleet Map" } = {}) {
+export function renderFleetMapHTML(dir, { k = DEFAULT_K, now = new Date(), title = "Shade Tree Fleet Map" } = {}) {
   const agg = bucketFleet(dir, { k, now });
   const regionSection = renderBars(
     agg.regions,
@@ -247,7 +247,7 @@ export function renderFleetMapHTML(dir, { k = DEFAULT_K, now = new Date(), title
 <body>
 <div class="wrap">
   <header>
-    <h1>RGOE &middot; FLEET MAP</h1>
+    <h1>SHADE TREE &middot; FLEET MAP</h1>
     <div class="sub">generated ${esc(agg.generatedAt)}</div>
   </header>
 
@@ -289,7 +289,7 @@ function loadDir(path) {
 }
 
 function main() {
-  const k = Math.max(2, Number(process.env.RGOE_FLEET_MAP_K) || DEFAULT_K);
+  const k = Math.max(2, Number(process.env.SHADE_TREE_FLEET_MAP_K) || DEFAULT_K);
   const inPath = process.argv[2] ? resolve(process.argv[2]) : join(HERE, "fleet-map.sample.json");
   const outPath = process.argv[3] ? resolve(process.argv[3]) : resolve(process.cwd(), "fleet-map.html");
   let dir;

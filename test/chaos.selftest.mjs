@@ -31,7 +31,7 @@
 //
 // Skipped for lack of a seam (noted below, no source edit per task constraints):
 //   - Injecting a THROW into the live bootnode `/directory` fetch at the selection.mjs layer:
-//     fetchOverTor is a hard import in selection.mjs (RGOE_BOOTNODE_ONION mode), not an injectable
+//     fetchOverTor is a hard import in selection.mjs (SHADE_TREE_BOOTNODE_ONION mode), not an injectable
 //     dependency. The equivalent last-known-good fallback discipline IS exercised here through the
 //     file-source path (loadDirectory + CACHE_PATH), which is the same fail-closed code.
 
@@ -170,20 +170,20 @@ async function main() {
   // and asserts the client degrades to the last-known-good CACHE and never surfaces the bad entries.
   // =====================================================================================
   console.log("\nFAULTS 3-5 — client directory load under injected corruption (fall back, fail closed):");
-  const work = mkdtempSync(join(tmpdir(), "rgoe-chaos-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-chaos-"));
   try {
     const signer = newKey();
     const dirPath = join(work, "directory.json");
     const cachePath = join(work, "directory.lkg");
     const healthPath = join(work, "gateway-health.json");
 
-    process.env.RGOE_DIRECTORY = dirPath;
-    process.env.RGOE_DIRECTORY_CACHE = cachePath;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    process.env.RGOE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
-    process.env.RGOE_HEALTH_CACHE = healthPath;  // isolated: never touch the real health cache
-    delete process.env.RGOE_BOOTNODE_ONION;      // file source, not the un-injectable bootnode fetch
-    delete process.env.RGOE_VERIFY_STAKE;
+    process.env.SHADE_TREE_DIRECTORY = dirPath;
+    process.env.SHADE_TREE_DIRECTORY_CACHE = cachePath;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = "0"; // every selectCandidates() re-reads the file
+    process.env.SHADE_TREE_HEALTH_CACHE = healthPath;  // isolated: never touch the real health cache
+    delete process.env.SHADE_TREE_BOOTNODE_ONION;      // file source, not the un-injectable bootnode fetch
+    delete process.env.SHADE_TREE_VERIFY_STAKE;
 
     const sel = await import("../client/selection.mjs");
     sel._resetIssuedFloor();

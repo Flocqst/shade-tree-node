@@ -17,8 +17,8 @@ byte-for-byte the pre-existing `{ ok: true }`.
 
 > "I, *this onion*, served a request at epoch *E*."
 
-That is deliberately a **per-gateway liveness attestation**, not a **per-request** proof. A
-per-request binding is exactly the linkability channel we refuse to add (see below).
+That is deliberately a **per-gateway liveness attestation**, not a **per-tunnel** proof. A
+per-tunnel binding is exactly the linkability channel we refuse to add (see below).
 
 ## Schema
 
@@ -41,7 +41,7 @@ The signed bytes are a fixed **domain prefix** followed by a fixed-field-order J
 `lib/directory.mjs`):
 
 ```
-RGOE egress success receipt v1\n{"v":1,"onion":"...","epoch":"12345","ok":true}
+Shade Tree egress success receipt v1\n{"v":1,"onion":"...","epoch":"12345","ok":true}
 ```
 
 The onion-control key **also** signs the gateway's *announce* (`bootnode/announce.mjs`), which is
@@ -79,12 +79,12 @@ malformed input returns `{ ok:false, reason }`, never throws.
 
 **Deliberately absent** (and must stay absent): member identity/commitment, the **nullifier**
 (not even a prefix), the RLN share, the **target** host/port, the request **nonce**, a **fine
-timestamp**, and any **per-request counter**. Any one of them would tie a receipt to a specific
+timestamp**, and any **per-tunnel counter**. Any one of them would tie a receipt to a specific
 member or request and hand a colluding relay/gateway a correlation handle — and a gateway keeping
 receipts would then hold a log of *which members it served*.
 
 We specifically use the **coarse epoch** instead of a wall-clock `ts` or a monotonic counter: a
-fine timestamp or counter is itself a distinguishing per-request tag (a covert linkability /
+fine timestamp or counter is itself a distinguishing per-tunnel tag (a covert linkability /
 logging channel), which a coarse bucket is not.
 
 ### Deliberate divergence from the backlog sketch
@@ -94,24 +94,24 @@ the **nullifier prefix** (a partial member handle) and replace the fine **ts** w
 **epoch**, trading a small amount of verifiability for airtight unlinkability. The consequence,
 stated honestly: two receipts from the same gateway in the same epoch are byte-identical, so a
 receipt proves gateway **liveness/quality over an epoch**, not that *your specific* request
-egressed. That per-request binding is the channel we refuse to add. An honest gateway emits a
+egressed. That per-tunnel binding is the channel we refuse to add. An honest gateway emits a
 receipt only on the egress-success path, so a gateway that drops every request produces none.
 
 ## Enabling it
 
 **Gateway** (signer) — off by default:
 
-- `RGOE_RECEIPTS=1` — turn receipts on.
-- `RGOE_GW_IDENTITY` — path to the onion identity `{ onion, seed }` (default
+- `SHADE_TREE_RECEIPTS=1` — turn receipts on.
+- `SHADE_TREE_GW_IDENTITY` — path to the onion identity `{ onion, seed }` (default
   `tor/hs/identity.local.json`, the same file the heartbeat announces with).
 
 If receipts are requested but the identity can't load, receipts are **disabled** (logged) and
 egress is unaffected — it never fails closed on a missing key.
 
-**Client** — automatic and additive. `RgoeClient.connect()` verifies any `receipt` on the ack
+**Client** — automatic and additive. `ShadeTreeClient.connect()` verifies any `receipt` on the ack
 against the dialed onion + current epoch and exposes the result:
 
-- `tunnel.rgoe.receipt` → `{ present, valid, epoch?, onion?, reason? }`
+- `tunnel.shadeTree.receipt` → `{ present, valid, epoch?, onion?, reason? }`
 - an `onEvent({ phase: "receipt", status: "verified" | "invalid" | "absent", ... })` progress event.
 
 `present:false` is the normal legacy case (a gateway with receipts off) and is **not** a failure.
@@ -123,5 +123,5 @@ A malformed/invalid receipt is reported (`valid:false` + `reason`) but **never**
 - `lib/receipt.mjs` — `buildReceipt` / `verifyReceipt` / `canonicalReceiptBytes` (pure, shared).
 - `gateway/gateway.mjs` — `receiptsEnabled()`, `successAck()`, the onion-seed signer; emits the
   receipt on egress success behind the flag.
-- `client/rgoe-client.mjs` — verifies + surfaces the receipt.
+- `client/shade-tree-client.mjs` — verifies + surfaces the receipt.
 - `gateway/receipt.selftest.mjs` — round-trip, tamper, domain-separation, privacy, default-off.

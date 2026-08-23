@@ -27,8 +27,8 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
 | `bootnode/fetch.selftest.mjs` | The HTTP response parser (`parseHttp`): well-formed 200, non-200 throws, missing terminator throws, unicode/large bodies. |
 | `lib/gateway-registry.selftest.mjs` | The stake verifier: mock (open + allowlist), factory resolution, and the on-chain `eth_call` encode/decode (selector, address padding, bool decode, caching) against a stubbed fetch. |
 | `lib/rln.selftest.mjs` | RLN prove/verify, the spent-set: first share egresses, identical replay deduped (no slash), second distinct signal reconstructs + slashes exactly once, independent per-nullifier counters. |
-| `gateway/shim.selftest.mjs` | The gateway spent-set control flow and the client envelope (v3 bundle, share bound to `requestSignal(target,nonce)`, per-request nonce). |
-| `bin/rgoe.selftest.mjs` | The CLI: help/version/unknown-command/doctor, flag→env mapping, positional + passthrough flags. |
+| `gateway/shim.selftest.mjs` | The gateway spent-set control flow and the client envelope (v4 bundle, share bound to `requestSignal(target,nonce)`, per-tunnel nonce). |
+| `bin/shade-tree.selftest.mjs` | The CLI: help/version/unknown-command/doctor, flag→env mapping, positional + passthrough flags. |
 | `client/selection.selftest.mjs` | Directory-source selection: verify + rotate + last-known-good, and rejection under a wrong pinned signer. |
 | `test/*.t.sol` (Foundry) | `StakedReputationSet` (register/exit/withdraw/slash, unbonding, ZK-auth), `GatewayRegistry` (stake/exit/withdraw/governed slash/ownership), Poseidon JS↔Solidity parity. |
 
@@ -40,7 +40,7 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
   `127.0.0.1` for every request.
 - *Membership.* A valid RLN Groth16 proof against an admission root inside the freshness window.
   Forged sets fail the root check; bad proofs fail verification.
-- *Per-request unlinkability + rate limiting.* Each request carries a fresh nullifier; an
+- *Per-tunnel unlinkability + rate limiting.* Each request carries a fresh nullifier; an
   over-spend reconstructs the secret (Shamir) and slashes. No shared per-epoch key to correlate.
 - *Onion control.* A directory/announce entry's `.onion` **is** its ed25519 key; the key is
   re-derived from the address, so a grafted or swapped onion is rejected by the client's own check.
@@ -51,15 +51,15 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
   one whose stake lapsed. It cannot inject an onion it does not control, because clients re-derive
   each onion's key and can re-check stake on chain (`GET /gateway/<onion>` returns the raw signed
   announce for full re-verification).
-- *The pinned directory signer* (`RGOE_DIR_SIGNER`) authenticates the *list*. There is
+- *The pinned directory signer* (`SHADE_TREE_DIR_SIGNER`) authenticates the *list*. There is
   intentionally no default: an unpinned directory is trust-on-first-use, which is the poisoning
   surface the signature closes.
 - *The RPC endpoint* for on-chain reads is trusted like any node read; run your own for the
-  solo-staker path. Stake reads default to `latest`; set `RGOE_CONFIRMATIONS` for reorg safety.
+  solo-staker path. Stake reads default to `latest`; set `SHADE_TREE_CONFIRMATIONS` for reorg safety.
 - *The admission ceremony* (whatever adds a leaf) is the sybil-resistance root. The proof gates
   membership; it does not create reputation.
 - *The gateway operator* sees a member's `host:port` targets (metadata only, never plaintext) for
-  the requests routed to it. Per-request rotation across N non-colluding gateways spreads this to
+  the requests routed to it. Per-tunnel rotation across N non-colluding gateways spreads this to
   ~1/N; RLN's fresh nullifiers stop even colluding gateways from rejoining a member's requests.
 
 **Governed, not permissionless (by design):**
@@ -93,4 +93,4 @@ wiring. It exits nonzero and names the failing suite if anything breaks.
 3. `bootnode/announce.mjs` + `bootnode/server.mjs` + `bootnode/selftest.mjs` (the discovery loop).
 4. `contracts/StakedReputationSet.sol` + `contracts/GatewayRegistry.sol` + their `test/*.t.sol`.
 5. `lib/rln.mjs` + `gateway/gateway.mjs` (the spent-set / slash path) + `lib/rln.selftest.mjs`.
-6. `client/rgoe-client.mjs` + `client/selection.mjs` (proof-per-request, rotation, failover).
+6. `client/shade-tree-client.mjs` + `client/selection.mjs` (proof-per-tunnel, rotation, failover).

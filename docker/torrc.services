@@ -2,7 +2,7 @@
 #
 # One tor instance fronts two v3 onion services and lends its network namespace
 # to the backend containers (see docker-compose.yml `network_mode: service:tor`).
-# Because the rgoe services bind loopback only (127.0.0.1), the HiddenServicePort
+# Because the shade-tree services bind loopback only (127.0.0.1), the HiddenServicePort
 # backends below are 127.0.0.1:<port> exactly as on a real single-host deploy:
 # tor and the app share one loopback, so no source change is needed.
 

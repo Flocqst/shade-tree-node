@@ -1,4 +1,4 @@
-// T-FEAT-7 `rgoe leaves` (fast lane, no chain): the on-chain-set -> members.json exporter for the
+// T-FEAT-7 `shade-tree leaves` (fast lane, no chain): the on-chain-set -> members.json exporter for the
 // Rust client, driven against a tiny local JSON-RPC stub that serves a PaidAccessSet event log
 // (Inserted, Inserted, Slashed) — so this also exercises fetchMemberLogs/loadGroupFromContract over
 // the wire. Asserts the {version:2, members[]} shape, the in-place ZERO for the slashed slot (the
@@ -19,7 +19,7 @@ import { _internals } from "../lib/root-provider.mjs";
 let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CLI = join(HERE, "..", "bin", "rgoe.mjs");
+const CLI = join(HERE, "..", "bin", "shade-tree.mjs");
 const CONTRACT = "0x" + "ab".repeat(20);
 
 const log = (topic0, commitment, block, logIndex = 0) => ({
@@ -55,11 +55,11 @@ function rpcStub(logs) {
 }
 
 async function main() {
-  console.log("rgoe leaves — on-chain set -> members.json for the Rust client (T-FEAT-7):");
+  console.log("shade-tree leaves — on-chain set -> members.json for the Rust client (T-FEAT-7):");
   const T = _internals.TOPIC;
   const logs = [log(T.inserted, 11, 1), log(T.inserted, 22, 2), log(T.inserted, 33, 3), log(T.paidSlashed, 22, 4)];
   const stub = await rpcStub(logs);
-  const work = mkdtempSync(join(tmpdir(), "rgoe-leaves-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-leaves-"));
   try {
     // pure helpers
     const g = newGroup([11n, 22n, 33n]); g.removeMember(1);
@@ -70,20 +70,20 @@ async function main() {
     ok(opts.contract === CONTRACT && opts.out === "x.json" && opts.fromBlock === "0x10", "parseArgs: --contract --out --from-block (both forms)");
 
     // the CLI over the stub: stdout JSON
-    const env = { ...process.env, RGOE_RPC_URL: stub.url, RGOE_NETWORK: "", RGOE_PAID_ACCESS_CONTRACT: "", RGOE_GROUP_CONTRACT: "" };
+    const env = { ...process.env, SHADE_TREE_RPC_URL: stub.url, SHADE_TREE_NETWORK: "", SHADE_TREE_PAID_ACCESS_CONTRACT: "", SHADE_TREE_GROUP_CONTRACT: "" };
     let r = await run(["leaves", "--contract", CONTRACT], env);
     let parsed = null;
     try { parsed = JSON.parse(r.stdout); } catch { parsed = null; }
-    ok(r.status === 0 && parsed && parsed.version === 2 && parsed.members.join() === doc.members.join(), "`rgoe leaves --contract` prints the members.json document on stdout (root == the JS tree with the slashed slot zeroed)");
+    ok(r.status === 0 && parsed && parsed.version === 2 && parsed.members.join() === doc.members.join(), "`shade-tree leaves --contract` prints the members.json document on stdout (root == the JS tree with the slashed slot zeroed)");
     ok(/2 live leaves in 3 slots/.test(r.stderr) && new RegExp(`root ${g.root.toString()}`).test(r.stderr), "summary on stderr: live count, slot count, root");
     ok(stub.seen.some((q) => q.method === "eth_getLogs" && q.params[0].address === CONTRACT), "the stub received eth_getLogs for the contract");
     // --out writes the file, stdout stays empty
     const out = join(work, "members.json");
     r = await run(["leaves", "--contract", CONTRACT, "--out", out], env);
     ok(r.status === 0 && r.stdout === "" && existsSync(out) && JSON.parse(readFileSync(out, "utf8")).members.length === 3 && /wrote:/.test(r.stderr), "--out writes the file (stdout empty), says so on stderr");
-    // contract default from RGOE_PAID_ACCESS_CONTRACT
-    r = await run(["leaves"], { ...env, RGOE_PAID_ACCESS_CONTRACT: CONTRACT });
-    ok(r.status === 0 && JSON.parse(r.stdout).members.length === 3, "no --contract: RGOE_PAID_ACCESS_CONTRACT is the default (--paid-access-contract)");
+    // contract default from SHADE_TREE_PAID_ACCESS_CONTRACT
+    r = await run(["leaves"], { ...env, SHADE_TREE_PAID_ACCESS_CONTRACT: CONTRACT });
+    ok(r.status === 0 && JSON.parse(r.stdout).members.length === 3, "no --contract: SHADE_TREE_PAID_ACCESS_CONTRACT is the default (--paid-access-contract)");
     // errors
     r = await run(["leaves"], env);
     ok(r.status === 1 && /no contract/.test(r.stderr), "no contract anywhere -> exit 1 with the hint");
@@ -91,7 +91,7 @@ async function main() {
     ok(r.status === 1 && /not an address/.test(r.stderr), "a non-address contract -> exit 1");
     r = await run(["leaves", "--contract", CONTRACT, "--bogus", "1"], env);
     ok(r.status === 2 && /unknown flag --bogus/.test(r.stderr), "an unknown flag -> usage, exit 2");
-    r = await run(["leaves", "--contract", CONTRACT], { ...env, RGOE_RPC_URL: "http://127.0.0.1:1" });
+    r = await run(["leaves", "--contract", CONTRACT], { ...env, SHADE_TREE_RPC_URL: "http://127.0.0.1:1" });
     ok(r.status === 1 && /cannot read/.test(r.stderr), "unreachable RPC -> exit 1 naming the contract + rpc");
   } finally {
     stub.close();

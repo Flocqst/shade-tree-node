@@ -52,7 +52,7 @@
     "broadcast": "network/sepolia/gateway-registry-broadcast.json"
   },
   "paidAccessSet": {
-    "role": "T-FEAT-7 Layer 1: the paid-access membership tree (docs/PAYMENTS.md). Payment settles OFF chain over HTTP 402 rails (x402 / MPP, stablecoin straight to the operator); the operator (registrar) INSERTS the buyer leaf after settlement. No funds ever touch this contract (nothing payable, no receive). Same tree / leaf / hasher / slot-3 root as the staked set; the gateway unions both roots (RGOE_PAID_ACCESS_CONTRACT).",
+    "role": "T-FEAT-7 Layer 1: the paid-access membership tree (docs/PAYMENTS.md). Payment settles OFF chain over HTTP 402 rails (x402 / MPP, stablecoin straight to the operator); the operator (registrar) INSERTS the buyer leaf after settlement. No funds ever touch this contract (nothing payable, no receive). Same tree / leaf / hasher / slot-3 root as the staked set; the gateway unions both roots (SHADE_TREE_PAID_ACCESS_CONTRACT).",
     "operator": "0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02",
     "allowedLimits": [
       8,
@@ -87,7 +87,7 @@
     "kind": "test-eip3009",
     "deployTx": "0x9561fa319ec38468d691c46f22968a276901ee59c996a64d30746fdd3f3bb234",
     "deployBlock": 11511028,
-    "note": "T-FEAT-7 settle asset for the 402 registrar (docs/PAYMENTS.md 'Settle asset on Sepolia'): test/Eip3009Token.sol deployed by the fleet operator key on 2026-08-17 (payments/deploy-test-asset.mjs; deployGas 920680; DOMAIN_SEPARATOR 0x465cc07f28239bb35feb83fca06051491bbfdb53c66e009a931c6d21c6c2e7e1 == EIP712Domain{'Test USD','1',11155111,addr}). Same EIP-3009 surface as USDC (transferWithAuthorization / authorizationState / cancelAuthorization); owner-only mint, NOT for value. Circle's Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 was verified EIP-3009-capable but its faucet is captcha-gated; switching the registrar to it is the one-env change RGOE_PAY_ASSET."
+    "note": "T-FEAT-7 settle asset for the 402 registrar (docs/PAYMENTS.md 'Settle asset on Sepolia'): test/Eip3009Token.sol deployed by the fleet operator key on 2026-08-17 (payments/deploy-test-asset.mjs; deployGas 920680; DOMAIN_SEPARATOR 0x465cc07f28239bb35feb83fca06051491bbfdb53c66e009a931c6d21c6c2e7e1 == EIP712Domain{'Test USD','1',11155111,addr}). Same EIP-3009 surface as USDC (transferWithAuthorization / authorizationState / cancelAuthorization); owner-only mint, NOT for value. Circle's Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 was verified EIP-3009-capable but its faucet is captcha-gated; switching the registrar to it is the one-env change SHADE_TREE_PAY_ASSET."
   },
   "registrar": {
     "port": 8878,
@@ -99,7 +99,7 @@
       "8": "100000",
       "32": "400000"
     },
-    "note": "T-FEAT-7: the operator's 402 registrar (payments/registrar.mjs) rides the bootnode onion (bootnode.json onion) on virtual port 8878: GET /pay/quote?limit=8 -> 402 with PAYMENT-REQUIRED (x402 v2) + WWW-Authenticate: Payment (MPP evm/charge type=authorization); POST /pay settles the buyer's EIP-3009 authorization in payAsset from the operator key and inserts the leaf into contracts.paidAccessSet. Prices are payAsset atomic units per tier (0.10 / 0.40 tUSD). Advertised in the bootnode's /health `pay` block. Deployed by bootstrap.sh RGOE_REGISTRAR=1 (bootnode/deploy/README.md).",
+    "note": "T-FEAT-7: the operator's 402 registrar (payments/registrar.mjs) rides the bootnode onion (bootnode.json onion) on virtual port 8878: GET /pay/quote?limit=8 -> 402 with PAYMENT-REQUIRED (x402 v2) + WWW-Authenticate: Payment (MPP evm/charge type=authorization); POST /pay settles the buyer's EIP-3009 authorization in payAsset from the operator key and inserts the leaf into contracts.paidAccessSet. Prices are payAsset atomic units per tier (0.10 / 0.40 tUSD). Advertised in the bootnode's /health `pay` block. Deployed by bootstrap.sh SHADE_TREE_REGISTRAR=1 (bootnode/deploy/README.md).",
     "status": "live",
     "deployedAt": "2026-08-17",
     "liveReceipts": {
@@ -126,11 +126,11 @@
     "leaf": "rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), limit ]) — limit = the member's reputation tier (userMessageLimit; 8 or 32 on this deployment), docs/adr/0006-reputation-tiers.md",
     "artifacts": "circuits/rln/ (hash-pinned in circuits/rln/ARTIFACTS.md; testnet-only, untrusted phase-2 ceremony)"
   },
-  "note": "RLN release with ON-CHAIN TIERS (T-FEAT-8b) + the ON-CHAIN incremental tree / currentRoot at storage slot 3 (T-DEV-9, T-DEV-9c). register(commitment, limit) requires bondFor(limit) and records the tier; slash(commitment, secret, limit, receiver) recomputes the leaf at the CLAIMED limit through the tiered RateCommitmentHasher and burns that tier's bond; the one-arg register / three-arg slash overloads are the default-tier (8) path, byte-equivalent to rln-v3. Exit-auth is the REAL Groth16 WithdrawVerifier (testnet-only VK, T-HARD-1 pending) taking the recorded limit. Events MemberRegistered/MemberSlashed carry the limit (new topic0; lib/root-provider.mjs reads both generations). Deployed by the fleet operator hot key. GatewayRegistry is UNCHANGED (0x94EC…9A68, rln-v3 era, still the live registry). NOTE: the LIVE fleet gateways' slashing (RGOE_SLASH_CONTRACT in agent-devops) still points at the superseded rln-v3 set 0xdAE2…20FC — flipping the fleet units to this set is a separate operator step (docs/ONCHAIN-DEPLOY.md §8); RGOE_NETWORK=sepolia already resolves RGOE_GROUP_CONTRACT to this set. T-FEAT-7 (2026-08-17): the PaidAccessSet 0x4e8C…4111 was added NEXT TO this release (release name unchanged; see the `paidAccessSet` block): the operator-inserted paid-access membership tree whose root the gateway unions with this set’s. An earlier payable/priced variant of that contract was designed but NEVER broadcast (pivoted to off-chain 402 settlement before deploy).",
+  "note": "RLN release with ON-CHAIN TIERS (T-FEAT-8b) + the ON-CHAIN incremental tree / currentRoot at storage slot 3 (T-DEV-9, T-DEV-9c). register(commitment, limit) requires bondFor(limit) and records the tier; slash(commitment, secret, limit, receiver) recomputes the leaf at the CLAIMED limit through the tiered RateCommitmentHasher and burns that tier's bond; the one-arg register / three-arg slash overloads are the default-tier (8) path, byte-equivalent to rln-v3. Exit-auth is the REAL Groth16 WithdrawVerifier (testnet-only VK, T-HARD-1 pending) taking the recorded limit. Events MemberRegistered/MemberSlashed carry the limit (new topic0; lib/root-provider.mjs reads both generations). Deployed by the fleet operator hot key. GatewayRegistry is UNCHANGED (0x94EC…9A68, rln-v3 era, still the live registry). NOTE: the LIVE fleet gateways' slashing (SHADE_TREE_SLASH_CONTRACT in agent-devops) still points at the superseded rln-v3 set 0xdAE2…20FC — flipping the fleet units to this set is a separate operator step (docs/ONCHAIN-DEPLOY.md §8); SHADE_TREE_NETWORK=sepolia already resolves SHADE_TREE_GROUP_CONTRACT to this set. T-FEAT-7 (2026-08-17): the PaidAccessSet 0x4e8C…4111 was added NEXT TO this release (release name unchanged; see the `paidAccessSet` block): the operator-inserted paid-access membership tree whose root the gateway unions with this set’s. An earlier payable/priced variant of that contract was designed but NEVER broadcast (pivoted to off-chain 402 settlement before deploy).",
   "liveIntegration": {
     "result": "PASS",
     "date": "2026-08-17",
-    "flow": "two members stake at DIFFERENT tiers via `rgoe register-member --limit` (ALICE tier 8 / 0.001 ETH, BOB tier 32 / 0.004 ETH) -> currentRoot()==JS groupFromIdentities root -> the REAL gateway in ON-CHAIN ROOT MODE (NodeRootProvider over the rln-v4 events) -> ALICE 3 normal requests (slots 0/1/2) -> BOB slot-20 request (a tier-32-only budget) PASS -> BOB over-spends slot 0 (two distinct signals, one nullifier) -> gateway reconstructs identitySecret, resolves the tier via limitOf, slash(leaf, secret, 32, receiver) on chain burns the TIER-32 bond -> ALICE intact; wrong-limit slash reverts BadLimit (static call); root == JS tree with BOB zeroed in place",
+    "flow": "two members stake at DIFFERENT tiers via `shade-tree register-member --limit` (ALICE tier 8 / 0.001 ETH, BOB tier 32 / 0.004 ETH) -> currentRoot()==JS groupFromIdentities root -> the REAL gateway in ON-CHAIN ROOT MODE (NodeRootProvider over the rln-v4 events) -> ALICE 3 normal tunnels (slots 0/1/2) -> BOB slot-20 tunnel (a tier-32-only budget) PASS -> BOB over-spends slot 0 (two distinct signals, one nullifier) -> gateway reconstructs identitySecret, resolves the tier via limitOf, slash(leaf, secret, 32, receiver) on chain burns the TIER-32 bond -> ALICE intact; wrong-limit slash reverts BadLimit (static call); root == JS tree with BOB zeroed in place",
     "stakeTxs": {
       "aliceTier8": "0xe1f82c622c344b6c0ab4e8189ca3663fd2733198d5c9c65b0d24f7680c68c68b",
       "bobTier32": "0xbc1910c4cd6827e41fc5e4264462faed95c78507654d43437509d5fa58991a4e"
@@ -184,7 +184,7 @@
       "liveIntegration": {
         "result": "PASS",
         "date": "2026-07-15",
-        "flow": "two members stake -> Alice 3 normal requests (slots 0/1/2, distinct nullifiers) -> Bob over-spends slot 0 (two distinct signals, one nullifier) -> gateway reconstructs identitySecret + slashes on-chain",
+        "flow": "two members stake -> Alice 3 normal tunnels (slots 0/1/2, distinct nullifiers) -> Bob over-spends slot 0 (two distinct signals, one nullifier) -> gateway reconstructs identitySecret + slashes on-chain",
         "slashTx": "0xc0f99e962300794c599364f17e3e333696ae1a8fc326b9702d3c4c4e09039efb",
         "slashBlock": 11279845,
         "report": "network/sepolia/integration-report-rln.md"

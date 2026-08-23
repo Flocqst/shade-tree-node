@@ -1,6 +1,6 @@
 # Monitoring: dashboards + alerts (T-MON-3)
 
-Grafana dashboard and Prometheus alert rules for the reputation-gated onion egress fleet. Both are
+Grafana dashboard and Prometheus alert rules for the Shade Tree fleet. Both are
 built ONLY on the metrics that `lib/metrics.mjs` renders and that `bootnode/server.mjs` and
 `gateway/gateway.mjs` register (T-MON-2). No metric here is aspirational; every PromQL expression
 references a series the code actually emits.
@@ -18,16 +18,16 @@ Files:
 
 | Metric | Type | Labels | Source |
 |---|---|---|---|
-| `rgoe_bootnode_announces_total` | counter | `result` (accepted\|rejected), `reason` (on reject) | `bootnode/server.mjs` |
-| `rgoe_bootnode_directory_fetches_total` | counter | -- | `bootnode/server.mjs` |
-| `rgoe_bootnode_live_gateways` | gauge | -- | `bootnode/server.mjs` |
-| `rgoe_gateway_requests_total` | counter | `result` (pass\|drop), `reason` (on drop) | `gateway/gateway.mjs` |
-| `rgoe_gateway_slashes_total` | counter | -- | `gateway/gateway.mjs` |
-| `rgoe_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout) | `gateway/gateway.mjs` (T-HARD-4; separate from requests_total so an idled-out tunnel is not double-counted as a drop) |
-| `rgoe_gateway_active_tunnels` | gauge | -- | `gateway/gateway.mjs` |
-| `rgoe_gateway_verify_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
+| `shade_tree_bootnode_announces_total` | counter | `result` (accepted\|rejected), `reason` (on reject) | `bootnode/server.mjs` |
+| `shade_tree_bootnode_directory_fetches_total` | counter | -- | `bootnode/server.mjs` |
+| `shade_tree_bootnode_live_gateways` | gauge | -- | `bootnode/server.mjs` |
+| `shade_tree_gateway_tunnels_total` | counter | `result` (pass\|drop), `reason` (on drop) | `gateway/gateway.mjs` |
+| `shade_tree_gateway_slashes_total` | counter | -- | `gateway/gateway.mjs` |
+| `shade_tree_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout) | `gateway/gateway.mjs` (T-HARD-4; separate from `tunnels_total` so an idled-out tunnel is not double-counted as a drop) |
+| `shade_tree_gateway_active_tunnels` | gauge | -- | `gateway/gateway.mjs` |
+| `shade_tree_gateway_verify_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
 
-The histogram exposes `rgoe_gateway_verify_seconds_bucket{le=...}`, `_sum`, and `_count`, in SECONDS
+The histogram exposes `shade_tree_gateway_verify_seconds_bucket{le=...}`, `_sum`, and `_count`, in SECONDS
 (Prometheus base-unit convention; buckets are `DEFAULT_LATENCY_BUCKETS` in `lib/metrics.mjs`).
 
 ## Where the /metrics endpoints live (and why they need a tunnel)
@@ -37,14 +37,14 @@ scrape config must reach them over the local host, an SSH tunnel, or a node-expo
 the box, NOT over the onion or a public interface.
 
 - **Bootnode**: `/metrics` is served on the SAME loopback HTTP server as the bootnode transport,
-  bound to `127.0.0.1` on `RGOE_BOOTNODE_PORT` (default `8877`). Tor maps the onion to this loopback
+  bound to `127.0.0.1` on `SHADE_TREE_BOOTNODE_PORT` (default `8877`). Tor maps the onion to this loopback
   port; the `/metrics` route inherits that loopback scope. So the scrape target is
   `127.0.0.1:8877/metrics` on the bootnode host. There is no separate metrics port for the bootnode.
 
 - **Gateway**: `/metrics` is served on a SEPARATE http server that starts ONLY when
-  `RGOE_METRICS_PORT` is set (off by default). It binds `RGOE_METRICS_HOST` (default `127.0.0.1`).
+  `SHADE_TREE_METRICS_PORT` is set (off by default). It binds `SHADE_TREE_METRICS_HOST` (default `127.0.0.1`).
   The gateway's egress transport is a raw TCP server with no HTTP listener of its own, so this
-  dedicated loopback server is how it exposes metrics. Set e.g. `RGOE_METRICS_PORT=9101` on each
+  dedicated loopback server is how it exposes metrics. Set e.g. `SHADE_TREE_METRICS_PORT=9101` on each
   gateway; the scrape target is `127.0.0.1:9101/metrics` on that gateway host.
 
 Because both bind loopback, Prometheus (running elsewhere) reaches them one of two ways:
@@ -60,18 +60,18 @@ Because both bind loopback, Prometheus (running elsewhere) reaches them one of t
    ssh -N -L 19101:127.0.0.1:9101 operator@gateway-1-host &
    ```
 
-Do NOT open `RGOE_METRICS_PORT` or `RGOE_BOOTNODE_PORT` on a public interface to make scraping easier.
+Do NOT open `SHADE_TREE_METRICS_PORT` or `SHADE_TREE_BOOTNODE_PORT` on a public interface to make scraping easier.
 The metrics carry fleet-shape and traffic signal; keep them loopback and tunnel.
 
 ## Prometheus scrape config
 
-Add to `prometheus.yml`. The `job` names here (`rgoe-bootnode`, `rgoe-gateway`) are what `alerts.yml`
+Add to `prometheus.yml`. The `job` names here (`shade-tree-bootnode`, `shade-tree-gateway`) are what `alerts.yml`
 matches on -- keep them in sync if you rename. Targets shown for the SSH-tunnel case; swap for the
 real `127.0.0.1:<port>` if Prometheus runs on the box.
 
 ```yaml
 scrape_configs:
-  - job_name: rgoe-bootnode
+  - job_name: shade-tree-bootnode
     metrics_path: /metrics
     scheme: http
     scrape_interval: 15s
@@ -82,12 +82,12 @@ scrape_configs:
         labels:
           instance: bootnode-1
 
-  - job_name: rgoe-gateway
+  - job_name: shade-tree-gateway
     metrics_path: /metrics
     scheme: http
     scrape_interval: 15s
     static_configs:
-      # each gateway runs with RGOE_METRICS_PORT set; tunnel each loopback port to a distinct local one
+      # each gateway runs with SHADE_TREE_METRICS_PORT set; tunnel each loopback port to a distinct local one
       - targets: ["127.0.0.1:19101"]
         labels:
           instance: gateway-1
@@ -96,10 +96,10 @@ scrape_configs:
           instance: gateway-2
 
 rule_files:
-  - /etc/prometheus/rules/rgoe-alerts.yml   # this repo's monitoring/alerts.yml
+  - /etc/prometheus/rules/shade-tree-alerts.yml   # this repo's monitoring/alerts.yml
 ```
 
-`up{job="rgoe-bootnode"}` and `up{job="rgoe-gateway"}` are synthesized by Prometheus from the scrape
+`up{job="shade-tree-bootnode"}` and `up{job="shade-tree-gateway"}` are synthesized by Prometheus from the scrape
 outcome, which is what `BootnodeDown` / `GatewayDown` alert on -- no extra instrumentation needed.
 
 ## Import the dashboard
@@ -112,10 +112,10 @@ outcome, which is what `BootnodeDown` / `GatewayDown` alert on -- no extra instr
    `label_values(up{job=~"$job"}, instance)`. Leave both on `All` to see the whole fleet, or narrow
    to one gateway/bootnode.
 
-Panels: fleet size (`rgoe_bootnode_live_gateways`), directory fetch rate, announce accept/reject by
+Panels: fleet size (`shade_tree_bootnode_live_gateways`), directory fetch rate, announce accept/reject by
 reason + rejection fraction, active tunnels, slash events, gateway pass/drop by reason + drop
 fraction, and `verifyEnvelope` p50/p95/p99 (histogram_quantile over
-`rgoe_gateway_verify_seconds_bucket`) plus mean verify time and verifies/sec.
+`shade_tree_gateway_verify_seconds_bucket`) plus mean verify time and verifies/sec.
 
 ## Load the alert rules
 
@@ -136,12 +136,12 @@ Grounded in `docs/SLO.md` and cross-referenced to the runbooks in `docs/INCIDENT
 | Alert | Severity | Meaning | SLO / runbook |
 |---|---|---|---|
 | `BootnodeDown` | critical | Bootnode `/metrics` unscrapable (`up==0`). Discovery degraded; clients fall back to LKG cache, so rarely member-visible, but burns bootnode-availability budget. | SLO 2.2; INCIDENT.md #1 (verify-false -> #2) |
-| `FleetTooSmall` | critical | `rgoe_bootnode_live_gateways < 2`. No failover spread, target metadata 1/1 not 1/N. Add gateways before egress-success burns. | SLO 2.3; INCIDENT.md #3 |
+| `FleetTooSmall` | critical | `shade_tree_bootnode_live_gateways < 2`. No failover spread, target metadata 1/1 not 1/N. Add gateways before egress-success burns. | SLO 2.3; INCIDENT.md #3 |
 | `FleetEmpty` | critical | `< 1` live gateway. No member can egress. Never cleared by weakening admission. | SLO 2.3, section 5; INCIDENT.md #3 |
 | `AnnounceRejectionSpike` | warning | >80% of announces rejected with real volume. Rejections are the gate working; a sustained spike = forged announces / misconfig / full registry. Not an outage. | SLO section 1 |
 | `GatewayDown` | warning | One gateway unscrapable. Individual gateway uptime is explicitly NOT an SLO; the fleet routes around it. Escalates only if it drives `FleetTooSmall`. | SLO section 4; INCIDENT.md #3 |
-| `SlashSpike` | warning | Elevated `rgoe_gateway_slashes_total` rate. A slash is the RLN rate limit working (over-spend caught), never error budget; but a spike warrants a look (broken client / prober). | SLO sections 3-4; INCIDENT.md #7 |
-| `HighDropRate` | warning | >50% of requests dropped. Gate DROPs are correct rejections -> read the reason mix. `root-not-recent` spike = config mismatch (align epoch/slots/identifier/root, widen freshness); dial/upstream drops = capacity, add gateways. | SLO 2.1, section 3; INCIDENT.md #6 |
+| `SlashSpike` | warning | Elevated `shade_tree_gateway_slashes_total` rate. A slash is the RLN rate limit working (over-spend caught), never error budget; but a spike warrants a look (broken client / prober). | SLO sections 3-4; INCIDENT.md #7 |
+| `HighDropRate` | warning | >50% of tunnel attempts dropped. Gate DROPs are correct rejections -> read the reason mix. `root-not-recent` spike = config mismatch (align epoch/slots/identifier/root, widen freshness); dial/upstream drops = capacity, add gateways. | SLO 2.1, section 3; INCIDENT.md #6 |
 | `VerifyLatencyP95High` | warning | `verifyEnvelope` p95 > 50ms. Server-side verify CPU only (Tor RTT excluded by design). Near the ~30 verify/s/core ceiling: add cores/gateways, never skip a verify check. | SLO 2.4, section 5 |
 | `VerifyLatencyP99High` | warning | `verifyEnvelope` p99 > 100ms. Tail verify latency climbing; check jitter / saturation, add capacity. | SLO 2.4, section 3 |
 

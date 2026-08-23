@@ -5,9 +5,9 @@ ZK-authorized exit/withdraw via `contracts/WithdrawVerifier.sol`, permissionless
 secret reconstruction, on-chain incremental tree + `currentRoot` accessor) is live on Sepolia
 as release `rln-v3` (`network/sepolia/contracts.json`; the live deployment still points at
 `MockWithdrawVerifier`, see `docs/CONTRACTS-AUDIT.md` section 3); the gateway reads the root
-through `lib/root-provider.mjs` (`RGOE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
+through `lib/root-provider.mjs` (`SHADE_TREE_GROUP_CONTRACT`; `node` provider, plus the EIP-1186
 `light` provider, whose stateRoot is anchored to the beacon sync committee when the opt-in Helios
-sidecar is on, `RGOE_HELIOS_RPC_URL`, T-DEV-9b); `contracts/GatewayRegistry.sol`
+sidecar is on, `SHADE_TREE_HELIOS_RPC_URL`, T-DEV-9b); `contracts/GatewayRegistry.sol`
 is deployed on Sepolia at `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (block 11509783,
 `network/sepolia/contracts.json`). Read the design below for the reasoning; read
 `docs/CONTRACTS-AUDIT.md` for the invariants as implemented. This is ROADMAP-v1 item #2 ("On-chain reputation
@@ -38,7 +38,7 @@ set") sharpened on two axes the roadmap deliberately left open:
   stop holding member secrets — self-enrollment), finding #2 and #10 (admission is
   the sybil boundary *and* the unblockability boundary; abuse needs a cost). Staking
   is the "cost" those findings ask for; slashing is the eviction path.
-- **ROADMAP-v1 #1** (unlinkable per-request nullifiers) and **FLEET.md** (the gateway
+- **ROADMAP-v1 #1** (unlinkable per-tunnel nullifiers) and **FLEET.md** (the gateway
   fleet) compose with this doc. The slashing mechanism below is RLN; #1 is the same
   RLN machinery pointed at unlinkability, and the fleet is where slashing has to go
   from single-node to shared. Cross-references are called out inline.
@@ -215,7 +215,7 @@ mixed up is the way to either miss abuse or slash an honest retry:
   generated a *fresh* signal per retry those would be distinct points and a forced retry
   storm could push an honest member past `L` and get them slashed. So the shim must make
   the signal a deterministic function of the logical request (target `host:port` + a
-  stable per-request nonce) and **reuse the same signal on every retry of that request**.
+  stable per-tunnel nonce) and **reuse the same signal on every retry of that request**.
   Then an induced retry reproduces the *same* share (same evaluation point, no new
   information) and the rogue-gateway "force retries to manufacture an over-spend" attack
   does nothing. This invariant lives in the shim, and it is load-bearing: without it, a
@@ -259,7 +259,7 @@ RootProvider.onChange(cb)  -> unsubscribe   // optional: refresh promptly on mem
 ```
 
 `checkProof` consumes `currentRoots()` and nothing else, so the two providers below are
-interchangeable at config time (`RGOE_ROOT_PROVIDER=node|light`) with no change to the
+interchangeable at config time (`SHADE_TREE_ROOT_PROVIDER=node|light`) with no change to the
 gate:
 
 - **`NodeRootProvider` (trusted local node).** `eth_call` the group contract's `root()`,
@@ -268,7 +268,7 @@ gate:
   **This is the solo-staker path, and for them it is not a compromise but the optimum**:
   someone running this next to their own validator already operates a trusted local
   node, so reading its state is fully trust-minimized *for them* with zero extra
-  machinery. Just point `RGOE_RPC_URL` at `localhost:8545`.
+  machinery. Just point `SHADE_TREE_RPC_URL` at `localhost:8545`.
 - **`LightClientRootProvider` (Helios-style).** For operators who do *not* run a full
   node — e.g. someone running many gateways — validate block headers against the sync
   committee, then verify the root's storage slot with an `eth_getProof` state proof
@@ -289,13 +289,13 @@ provider can instead reconstruct the tree from `Member*` events, because there y
 trust the node's log view. Both paths now work against the same contract.
 
 *Event reconstruction against a public RPC (node provider, shipped 2026-08-17 fix).*
-`NodeRootProvider` / `loadGroupFromContract` page `eth_getLogs` in `RGOE_LOGS_CHUNK` windows
+`NodeRootProvider` / `loadGroupFromContract` page `eth_getLogs` in `SHADE_TREE_LOGS_CHUNK` windows
 (default 10000; halved on a range/size refusal — publicnode caps at 50k blocks, Infura/QuickNode
 at 10k, Alchemy free at 2k), resolve the head block once per refresh so every page is consistent,
 start each contract at its deploy block from the network record (`deployBlocks`, or
-`RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS`), and on finalized reads keep the replayed log and only fetch
+`SHADE_TREE_FROM_BLOCK` / `SHADE_TREE_FROM_BLOCKS`), and on finalized reads keep the replayed log and only fetch
 new blocks afterwards. The gateway fails SOFT at startup when the chain is unreadable but
-`members.json` gives a root (`rgoe_gateway_root_source_degraded`), and closed when nothing would be
+`members.json` gives a root (`shade_tree_gateway_root_source_degraded`), and closed when nothing would be
 trusted. `docs/OPERATOR.md` "Public RPC log-range caps"; `docs/CONFIG.md`.
 
 *Trust chain of the shipped light client.* `LightClientRootProvider` verifies the account
@@ -303,13 +303,13 @@ trusted. `docs/OPERATOR.md` "Public RPC log-range caps"; `docs/CONFIG.md`.
 hostile RPC cannot forge the root's **value**. Where that `stateRoot` comes from is the last
 link, and it is a switch (T-DEV-9b, `docs/LIGHT-CLIENT.md` "Decision, how-to and receipt"):
 
-- `RGOE_HELIOS_RPC_URL` **unset** (default): the header is fetched from the RPC at the
+- `SHADE_TREE_HELIOS_RPC_URL` **unset** (default): the header is fetched from the RPC at the
   confirmed depth and *trusted*. The gateway logs `stateRootSource: rpc header (TRUSTED, not
   verified; …)` at startup and results carry `stateRootVerified:false`. A lying RPC can pair a
   fake header with a proof consistent with it (the `THREAT-MODEL.md` "RPC lies about the
   stateRoot" lever).
-- `RGOE_HELIOS_RPC_URL` **set** to a local Helios verifying RPC (`lib/helios-root.mjs`,
-  sidecar via `bootnode/deploy/bootstrap.sh RGOE_HELIOS=1`): the header comes from Helios,
+- `SHADE_TREE_HELIOS_RPC_URL` **set** to a local Helios verifying RPC (`lib/helios-root.mjs`,
+  sidecar via `bootnode/deploy/bootstrap.sh SHADE_TREE_HELIOS=1`): the header comes from Helios,
   i.e. it chains to a beacon **sync-committee**-signed execution payload; the RPC's header for
   the same block is only cross-checked and a divergence is rejected with a precise
   `stateRoot mismatch` reason. Now the whole chain — sync committee → `stateRoot` → account
@@ -318,7 +318,7 @@ link, and it is a switch (T-DEV-9b, `docs/LIGHT-CLIENT.md` "Decision, how-to and
   Helios' weak-subjectivity checkpoint. Startup logs `stateRootSource: helios (sync-committee
   verified)`; results carry `stateRootVerified:true`.
 
-A `RGOE_LIGHT_MODE=storageat` fallback (trusts the RPC for the value, no proof) exists for RPCs
+A `SHADE_TREE_LIGHT_MODE=storageat` fallback (trusts the RPC for the value, no proof) exists for RPCs
 without `eth_getProof` and is clearly the weaker mode (the Helios anchor does not help it).
 Live receipt against the Sepolia contract with a Helios anchor: `docs/LIGHT-CLIENT.md`.
 
@@ -369,7 +369,7 @@ This ties directly to FLEET.md's "the rate limit does not compose across the fle
 section. The shared share-pool is the mechanism that makes both the fleet budget and
 fleet slashing work, and it is only safe to share because RLN shares carry no
 information until the abuse threshold is crossed. Rotation across the fleet (FLEET.md)
-plus per-request unlinkable nullifiers (ROADMAP-v1 #1) plus this shared share-pool is the
+plus per-tunnel unlinkable nullifiers (ROADMAP-v1 #1) plus this shared share-pool is the
 combination that gives "no operator, even a colluding set, can profile a member, *and*
 a spammer is still slashable no matter how they spread the abuse."
 
@@ -418,18 +418,18 @@ that reveals nothing, exactly as any staking system's account is linkable to its
 
 - **`lib/semaphore.mjs`** → gains an RLN mode: `generateProof` / `verifyProof` swap to
   an RLN prover/verifier (rlnjs / zerokit artifacts), plus nullifier + share
-  extraction. `loadGroup` gains an on-chain mode behind `RGOE_GROUP_CONTRACT` /
-  `RGOE_RPC_URL` / `RGOE_GROUP_ID`, with the JSON path kept as an offline cache whose
+  extraction. `loadGroup` gains an on-chain mode behind `SHADE_TREE_GROUP_CONTRACT` /
+  `SHADE_TREE_RPC_URL` / `SHADE_TREE_GROUP_ID`, with the JSON path kept as an offline cache whose
   root is verified against chain. The RLN message becomes request-bound (target +
   anti-replay salt), not the constant `1n`.
 - **`gateway/gateway.mjs`** → `TRUSTED_ROOT` becomes a refreshed recent-roots set fed
   by a `RootProvider` (below); `spend()` becomes a share-collecting spent-set that
   reconstructs and slashes on threshold; add an on-chain slash submitter behind
-  `RGOE_SLASH_KEY` (an operational hot key, deliberately separate from any member
+  `SHADE_TREE_SLASH_KEY` (an operational hot key, deliberately separate from any member
   anonymity — the gateway slashing is not anonymous and does not need to be). Reorder
   the cheap public checks before the SNARK verify, as adversarial-review #4 recommends.
 - **`lib/root-provider.mjs`** (new) → the pluggable root source behind
-  `RGOE_ROOT_PROVIDER=node|light`: `NodeRootProvider` (trusted local node, the
+  `SHADE_TREE_ROOT_PROVIDER=node|light`: `NodeRootProvider` (trusted local node, the
   solo-staker path) and `LightClientRootProvider` (Helios-style state proofs, the
   run-many path), both returning the same `currentRoots()` shape with a shared
   last-known-good cache. See "Reading the root" above.
@@ -456,7 +456,7 @@ redeploy (`network/sepolia/contracts.json`, release `rln-v4-tiers`,
    circuit's `LessThan(16)` soundness bound; `BadLimit` outside), and the one-argument
    `commitmentOf(secret)` stays the byte-equivalent `K = 8` leaf. `ICommitmentHasher` declares
    both overloads. Goldens: `test/StakedReputationSet.tiers.t.sol` vs `lib/tiers.selftest.mjs`
-   / `rust/rgoe-rln/tests/tree_parity.rs`.
+   / `rust/shade-tree-rln/tests/tree_parity.rs`.
 2. **Stake -> tier at admission.** `register(commitment, limit)` requires
    `msg.value == bondFor(limit)` from a **fixed, small tier table set in the constructor**
    (`extraLimits[]` / `extraBonds[]`; the default tier `8 => BOND` is always present; Sepolia:
@@ -484,10 +484,10 @@ redeploy (`network/sepolia/contracts.json`, release `rln-v4-tiers`,
    after the tree state), so the light-client / freshness-window paths are untouched.
 
 **Gateway slash path (`gateway/gateway.mjs`).** `resolveSlashTier(secret)` names the leaf
-+ tier locally (members.json leaves, `RGOE_TIERS`); in on-chain root mode (no local leaves)
++ tier locally (members.json leaves, `SHADE_TREE_TIERS`); in on-chain root mode (no local leaves)
 the on-chain slasher (`makeOnchainSlasher`) probes the contract once at startup
 (`DEFAULT_LIMIT()` => rln-v4 tiered ABI; else the rln-v3 three-argument ABI), unions
-`RGOE_TIERS` with `allowedLimits()`, and at slash time asks `limitOf(candidateLeaf)` for each
+`SHADE_TREE_TIERS` with `allowedLimits()`, and at slash time asks `limitOf(candidateLeaf)` for each
 tier's leaf of the reconstructed secret, then submits `slash(leaf, secret, limit, receiver)`.
 The startup log line `slash: on-chain … abi="rln-v4 tiered" tiers=[8,32]` says which. Live
 proof: the Sepolia rln-v4 run (`network/sepolia/integration-report-rln-v4.md`) slashed a
@@ -497,9 +497,9 @@ tier-32 leaf at limit 32 from a gateway holding only roots (tx `0xfff760a6…494
 **Honest limits.** (a) The tier is DECLARED at registration, not proven: a leaf built at X
 registered as Y != X is unslashable AND unexitable (the bond is locked forever), and the
 gateway still enforces the leaf's real budget X, so the mismatch buys nothing
-(`docs/CONTRACTS-AUDIT.md` §3). (b) The live fleet gateways' `RGOE_SLASH_CONTRACT` still
+(`docs/CONTRACTS-AUDIT.md` §3). (b) The live fleet gateways' `SHADE_TREE_SLASH_CONTRACT` still
 points at the superseded rln-v3 set until their units are flipped (`docs/ONCHAIN-DEPLOY.md`
-§8); rln-v4 is what `RGOE_NETWORK=sepolia` resolves and what new stakes should use.
+§8); rln-v4 is what `SHADE_TREE_NETWORK=sepolia` resolves and what new stakes should use.
 (c) `MAX_LIMIT` is enforced on chain and in `lib/rln.mjs normLimit`; the table on Sepolia is
 {8, 32}, other tiers need a new deployment.
 
@@ -559,11 +559,11 @@ the staked set and is read the same way:
    `liveCount()` is the leaves currently in the root.
 
 **Gateway.** Trusts the UNION of roots: static `members.json` (PoC fallback) ∪ each contract
-in `RGOE_GROUP_CONTRACT` (comma-separated) ∪ `RGOE_PAID_ACCESS_CONTRACT` (sugar that appends;
-`RGOE_NETWORK=sepolia` resolves it from `contracts.paidAccessSet`), one root provider per
+in `SHADE_TREE_GROUP_CONTRACT` (comma-separated) ∪ `SHADE_TREE_PAID_ACCESS_CONTRACT` (sugar that appends;
+`SHADE_TREE_NETWORK=sepolia` resolves it from `contracts.paidAccessSet`), one root provider per
 contract; the slasher resolves which contract holds a reconstructed leaf (`limitOf != 0`) and
 calls that contract's `slash`. Startup: `roots: members.json + staked(0x…) + paid(0x…)` and
-`paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)` — WARN, never refuse,
+`paid-access anonymity set: N leaves (floor K=SHADE_TREE_PAID_MIN_LEAVES)` — WARN, never refuse,
 below the floor. (Gateway/client wiring is T-FEAT-7 parts 2/3.)
 
 **Honest limits.** (a) The trust statement of PAYMENTS.md stands: the operator could take a

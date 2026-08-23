@@ -4,7 +4,7 @@
 // side (bootnode/heartbeat.mjs) populates them from the gateway's actual config and — crucially
 // — stays invisible when nothing is configured. Four load-bearing properties:
 //
-//   1. DERIVED FROM REAL CONFIG. advertisedPorts() coarsens an RGOE_EGRESS_ALLOW spec to its
+//   1. DERIVED FROM REAL CONFIG. advertisedPorts() coarsens an SHADE_TREE_EGRESS_ALLOW spec to its
 //      concrete allowed ports (`*:443` -> [443]; `*:443,*:8443` -> [443,8443]); a wildcard `*`
 //      port is dropped (never advertise "any port"); junk is dropped; deduped + sorted.
 //   2. SIGNED + ACCEPTED. A configured gateway (region + non-default egress policy) produces an
@@ -58,27 +58,27 @@ async function main() {
   ok(buildGatewayCaps({}) === null, "unconfigured env -> null caps");
   // proto alone must NOT trigger caps: only ports/region do. An env with neither -> null even
   // though the gateway obviously speaks a proto version.
-  ok(buildGatewayCaps({ RGOE_UNRELATED: "x" }) === null, "unrelated env -> still null (proto never triggers caps)");
+  ok(buildGatewayCaps({ SHADE_TREE_UNRELATED: "x" }) === null, "unrelated env -> still null (proto never triggers caps)");
   // Invalid region alone -> null (not in REGION_BUCKETS).
-  ok(buildGatewayCaps({ RGOE_GATEWAY_REGION: "narnia" }) === null, "invalid region bucket -> ignored -> null");
+  ok(buildGatewayCaps({ SHADE_TREE_GATEWAY_REGION: "narnia" }) === null, "invalid region bucket -> ignored -> null");
 
   // A real config: non-default egress policy + a valid region.
-  const caps = buildGatewayCaps({ RGOE_EGRESS_ALLOW: "*:443,*:8443", RGOE_GATEWAY_REGION: "eu" });
+  const caps = buildGatewayCaps({ SHADE_TREE_EGRESS_ALLOW: "*:443,*:8443", SHADE_TREE_GATEWAY_REGION: "eu" });
   ok(caps !== null, "configured env -> caps object");
-  ok(JSON.stringify(caps.ports) === "[443,8443]", "caps.ports derived from RGOE_EGRESS_ALLOW");
-  ok(caps.region === "eu", "caps.region from RGOE_GATEWAY_REGION");
+  ok(JSON.stringify(caps.ports) === "[443,8443]", "caps.ports derived from SHADE_TREE_EGRESS_ALLOW");
+  ok(caps.region === "eu", "caps.region from SHADE_TREE_GATEWAY_REGION");
   ok(caps.proto && caps.proto.min === PROTO_RANGE.min && caps.proto.max === PROTO_RANGE.max, "caps.proto == gateway PROTO_RANGE (not hardcoded)");
 
   // Explicit default-equivalent egress policy still advertises [443] (operator opted in by SETTING it).
-  const capsDefault = buildGatewayCaps({ RGOE_EGRESS_ALLOW: "*:443" });
+  const capsDefault = buildGatewayCaps({ SHADE_TREE_EGRESS_ALLOW: "*:443" });
   ok(capsDefault && JSON.stringify(capsDefault.ports) === "[443]" && capsDefault.region === undefined, "explicit `*:443` alone -> ports [443], no region");
   // Region-only config (default/unset policy) still advertises, region + proto, no ports.
-  const capsRegionOnly = buildGatewayCaps({ RGOE_GATEWAY_REGION: "na" });
+  const capsRegionOnly = buildGatewayCaps({ SHADE_TREE_GATEWAY_REGION: "na" });
   ok(capsRegionOnly && capsRegionOnly.region === "na" && capsRegionOnly.ports === undefined && capsRegionOnly.proto, "region-only -> region + proto, no ports");
 
   // --- 3. a configured gateway's announce carries signed caps verifyAnnounce accepts ---
   const g = newOnion();
-  const configuredEnv = { RGOE_EGRESS_ALLOW: "*:443,*:8443", RGOE_GATEWAY_REGION: "eu" };
+  const configuredEnv = { SHADE_TREE_EGRESS_ALLOW: "*:443,*:8443", SHADE_TREE_GATEWAY_REGION: "eu" };
   const rec = buildAnnounce({ onion: g.onion, weight: 100, onionSeedHex: g.seed, caps: buildGatewayCaps(configuredEnv) });
   ok(rec.caps !== undefined && rec.capsSig !== undefined, "configured announce carries caps + capsSig");
   ok(JSON.stringify(rec.caps) === JSON.stringify(canonicalCaps({ ports: [443, 8443], region: "eu", proto: PROTO_RANGE })), "announce caps == canonicalized real config");

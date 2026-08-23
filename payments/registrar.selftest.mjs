@@ -1,5 +1,5 @@
 // The 402 rails end to end on a throwaway anvil (T-FEAT-7): the REAL registrar (in-process HTTP
-// server + engine over ethers), the REAL `rgoe pay` client (group/pay.mjs, driven through the
+// server + engine over ethers), the REAL `shade-tree pay` client (group/pay.mjs, driven through the
 // router as a child so argv/env plumbing is exercised), an EIP-3009 token (test/Eip3009Token.sol)
 // and the REAL PaidAccessSet (contracts/PaidAccessSet.sol + RateCommitmentHasher + Poseidon libs)
 // deployed with forge create. Slow
@@ -9,12 +9,12 @@
 // Proves:
 //   1. quote: GET /pay/quote(?limit) is 402 with BOTH challenges (PAYMENT-REQUIRED decodes to an
 //      x402 v2 PaymentRequired; WWW-Authenticate parses to MPP evm/charge type=authorization
-//      challenges), one entry per tier, prices == RGOE_PAY_PRICES; POST /pay without a payment
+//      challenges), one entry per tier, prices == SHADE_TREE_PAY_PRICES; POST /pay without a payment
 //      header is the same 402 with the MPP challenge digest-bound to the body.
-//   2. x402 purchase: `rgoe pay --protocol x402` -> 200 + PAYMENT-RESPONSE {success:true,
+//   2. x402 purchase: `shade-tree pay --protocol x402` -> 200 + PAYMENT-RESPONSE {success:true,
 //      transaction} -> stablecoin moved buyer -> payTo (exact price), leaf inserted at the tier,
 //      currentRoot changed and == the JS tree over the inserted leaves, buyer spent NO gas.
-//   3. MPP purchase: `rgoe pay --protocol mpp` (second buyer, tier 32) -> 200 + Payment-Receipt
+//   3. MPP purchase: `shade-tree pay --protocol mpp` (second buyer, tier 32) -> 200 + Payment-Receipt
 //      {status:success, reference == settleTx, challengeId}; nonce == keccak256(id ‖ realm).
 //   4. idempotency: identical replay -> 200 replayed:true, SAME insertTx, leafCount unchanged;
 //      same nonce + different commitment -> 409; a used nonce presented as fresh -> 402.
@@ -82,11 +82,11 @@ async function http(base, method, path, { headers = {}, body = null } = {}) {
   let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
   return { status: res.status, headers: h, text, json };
 }
-// rgoe pay through the router (child process), returning { status, stdout, stderr }. Async (not
+// shade-tree pay through the router (child process), returning { status, stdout, stderr }. Async (not
 // spawnSync): the registrar it talks to is served by THIS process's event loop.
-function rgoePay(args, env) {
+function shadeTreePay(args, env) {
   return new Promise((resolve) => {
-    const c = spawn(process.execPath, [join(ROOT, "bin/rgoe.mjs"), "pay", ...args], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME || "/", ...env } });
+    const c = spawn(process.execPath, [join(ROOT, "bin/shade-tree.mjs"), "pay", ...args], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME || "/", ...env } });
     let stdout = "", stderr = "";
     c.stdout.on("data", (d) => { stdout += d; }); c.stderr.on("data", (d) => { stderr += d; });
     c.on("close", (status) => resolve({ status, stdout, stderr }));
@@ -94,7 +94,7 @@ function rgoePay(args, env) {
 }
 
 async function main() {
-  console.log("402 rails end to end on anvil (T-FEAT-7): registrar + rgoe pay, x402 + MPP:");
+  console.log("402 rails end to end on anvil (T-FEAT-7): registrar + shade-tree pay, x402 + MPP:");
   const anvilBin = spawnSync("which", ["anvil"], { encoding: "utf8" }).stdout.trim();
   const forgeBin = spawnSync("which", ["forge"], { encoding: "utf8" }).stdout.trim();
   if (!anvilBin || !forgeBin) { console.log("  SKIP anvil/forge not on PATH"); return; }
@@ -102,7 +102,7 @@ async function main() {
   if (!(await portFree(port))) { console.log("  SKIP anvil port busy"); return; }
   const url = `http://127.0.0.1:${port}`;
   const anvil = spawn(anvilBin, ["--port", String(port), "--silent", "--block-time", "1"], { stdio: "ignore" });
-  const work = mkdtempSync(join(tmpdir(), "rgoe-registrar-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-registrar-"));
   let server = null;
   try {
     let up = false;
@@ -129,12 +129,12 @@ async function main() {
     ok((await provider.getBalance(BUYER_A.address)) === 0n && (await provider.getBalance(BUYER_B.address)) === 0n, "buyers hold tUSD and ZERO ETH");
 
     // ---- registrar in-process
-    const env = { RGOE_PAY_ASSET: tokenAddr, RGOE_PAY_PRICES: PRICES, RGOE_REGISTRAR_PORT: "0", RGOE_PAY_TIMEOUT: "120", RGOE_PAY_SETTLE_BUFFER: "5" };
+    const env = { SHADE_TREE_PAY_ASSET: tokenAddr, SHADE_TREE_PAY_PRICES: PRICES, SHADE_TREE_REGISTRAR_PORT: "0", SHADE_TREE_PAY_TIMEOUT: "120", SHADE_TREE_PAY_SETTLE_BUFFER: "5" };
     const offer = makeOffer(env);
     offer.payTo = OPERATOR;
     await probeAsset(offer, token, provider);
     ok(offer.assetName === "Test USD" && offer.assetVersion === "1" && offer.decimals === 6 && offer.chainId === 31337, `probeAsset: domain proven against on-chain DOMAIN_SEPARATOR (${offer.assetName} v${offer.assetVersion}, chain ${offer.chainId})`);
-    process.env.RGOE_REGISTRAR_PAY_RATE = "1"; process.env.RGOE_REGISTRAR_PAY_BURST = "40"; // the adversarial section spends ~25 POSTs; section 6 drains the rest
+    process.env.SHADE_TREE_REGISTRAR_PAY_RATE = "1"; process.env.SHADE_TREE_REGISTRAR_PAY_BURST = "40"; // the adversarial section spends ~25 POSTs; section 6 drains the rest
     const storePath = join(work, "registrar-state.json");
     const store = makeStore(storePath);
     const engine = makeEngine({ offer, token, set, wallet: operator, provider, store, confirmations: 1 });
@@ -166,15 +166,15 @@ async function main() {
     const h = await http(base, "GET", "/health");
     ok(h.status === 200 && h.json.pay.asset === tokenAddr && h.json.leafCount === 0 && h.json.root === rootBefore, "/health advertises the offer + leafCount/root");
 
-    // ---- 2. x402 purchase via rgoe pay
-    console.log("2. x402 purchase (rgoe pay --protocol x402):");
+    // ---- 2. x402 purchase via shade-tree pay
+    console.log("2. x402 purchase (shade-tree pay --protocol x402):");
     const keyA = join(work, "buyer-a.key"); writeFileSync(keyA, BUYER_A.privateKey + "\n", { mode: 0o600 });
-    const dry = await rgoePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--dry-run"], {});
+    const dry = await shadeTreePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--dry-run"], {});
     ok(dry.status === 0 && /dry-run: would sign/.test(dry.stderr) && /"to": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"/.test(dry.stderr) && /"value": "100000"/.test(dry.stderr) && !dry.stderr.includes(BUYER_A.privateKey.slice(4, 20)), "--dry-run prints the authorization it would sign (to/value) and never the key");
     ok((await token.balanceOf(BUYER_A.address)) === 1_000_000_000n && Number(await set.leafCount()) === 0, "dry-run moved nothing");
-    const p1 = await rgoePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--json"], {});
+    const p1 = await shadeTreePay(["--registrar-url", base, "--limit", "8", "--protocol", "x402", "--key-file", keyA, "--commitment", COMMIT_A, "--json"], {});
     const r1 = p1.status === 0 ? JSON.parse(p1.stdout) : null;
-    ok(p1.status === 0 && r1 && r1.protocol === "x402" && /^0x[0-9a-f]{64}$/.test(r1.settleTx) && /^0x[0-9a-f]{64}$/.test(r1.insertTx) && r1.leafIndex === 0, `rgoe pay x402 -> settleTx ${r1?.settleTx?.slice(0, 12)}… insertTx ${r1?.insertTx?.slice(0, 12)}… leafIndex 0 ${p1.status !== 0 ? p1.stderr.slice(-300) : ""}`);
+    ok(p1.status === 0 && r1 && r1.protocol === "x402" && /^0x[0-9a-f]{64}$/.test(r1.settleTx) && /^0x[0-9a-f]{64}$/.test(r1.insertTx) && r1.leafIndex === 0, `shade-tree pay x402 -> settleTx ${r1?.settleTx?.slice(0, 12)}… insertTx ${r1?.insertTx?.slice(0, 12)}… leafIndex 0 ${p1.status !== 0 ? p1.stderr.slice(-300) : ""}`);
     ok(r1 && r1.settlement && r1.settlement.success === true && r1.settlement.transaction === r1.settleTx && r1.settlement.network === "eip155:31337" && r1.settlement.payer === BUYER_A.address, "PAYMENT-RESPONSE: {success:true, transaction==settleTx, network, payer}");
     ok((await token.balanceOf(BUYER_A.address)) === 1_000_000_000n - 100_000n && (await token.balanceOf(OPERATOR)) === 100_000n, "exactly the tier price moved buyer -> payTo");
     ok((await set.limitOf(COMMIT_A)) === 8n && Number(await set.leafCount()) === 1, "leaf inserted at tier 8");
@@ -183,11 +183,11 @@ async function main() {
     ok((await provider.getBalance(BUYER_A.address)) === 0n, "buyer still holds ZERO ETH (operator paid all gas)");
     ok(!p1.stderr.includes(BUYER_A.privateKey.slice(4, 20)) && !/0x[0-9a-fA-F]{130}/.test(p1.stderr + p1.stdout), "client output has no key and no signature");
 
-    // ---- 3. MPP purchase via rgoe pay (second buyer, tier 32)
-    console.log("3. MPP purchase (rgoe pay --protocol mpp):");
-    const p2 = await rgoePay(["--registrar-url", base, "--limit", "32", "--protocol", "mpp", "--commitment", COMMIT_B, "--json"], { RGOE_PAY_KEY: BUYER_B.privateKey });
+    // ---- 3. MPP purchase via shade-tree pay (second buyer, tier 32)
+    console.log("3. MPP purchase (shade-tree pay --protocol mpp):");
+    const p2 = await shadeTreePay(["--registrar-url", base, "--limit", "32", "--protocol", "mpp", "--commitment", COMMIT_B, "--json"], { SHADE_TREE_PAY_KEY: BUYER_B.privateKey });
     const r2 = p2.status === 0 ? JSON.parse(p2.stdout) : null;
-    ok(p2.status === 0 && r2 && r2.protocol === "mpp" && r2.leafIndex === 1 && /^0x[0-9a-f]{64}$/.test(r2.settleTx), `rgoe pay mpp -> leafIndex 1, settleTx ${r2?.settleTx?.slice(0, 12)}… ${p2.status !== 0 ? p2.stderr.slice(-300) : ""}`);
+    ok(p2.status === 0 && r2 && r2.protocol === "mpp" && r2.leafIndex === 1 && /^0x[0-9a-f]{64}$/.test(r2.settleTx), `shade-tree pay mpp -> leafIndex 1, settleTx ${r2?.settleTx?.slice(0, 12)}… ${p2.status !== 0 ? p2.stderr.slice(-300) : ""}`);
     ok(r2 && r2.receipt && r2.receipt.status === "success" && r2.receipt.method === "evm" && r2.receipt.reference === r2.settleTx && r2.receipt.chainId === 31337 && typeof r2.receipt.challengeId === "string", "Payment-Receipt: {status:success, method:evm, reference==settleTx, chainId, challengeId}");
     ok(r2 && r2.nonce === mppNonce(r2.receipt.challengeId, offer.realm), "EIP-3009 nonce == keccak256(challenge.id ‖ realm)");
     ok((await token.balanceOf(BUYER_B.address)) === 1_000_000_000n - 400_000n && (await set.limitOf(COMMIT_B)) === 32n, "tier-32 price moved; leaf at tier 32");

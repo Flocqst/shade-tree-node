@@ -1,0 +1,17 @@
+# Fires shade-tree-uptime-probe.service every 5 minutes (the SLI cadence in docs/SLO.md 2.2/2.3).
+# `systemctl list-timers shade-tree-uptime-probe.timer` shows the next run;
+# `journalctl -u shade-tree-uptime-probe.service -n 50` shows the last probe lines.
+[Unit]
+Description=shade-tree fleet uptime probe every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Spread a little so a fleet of probers does not hit the bootnode in lockstep.
+RandomizedDelaySec=30s
+AccuracySec=15s
+Persistent=false
+Unit=shade-tree-uptime-probe.service
+
+[Install]
+WantedBy=timers.target

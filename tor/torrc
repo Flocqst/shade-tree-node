@@ -1,4 +1,4 @@
-# Tor instance dedicated to the reputation-gated egress PoC.
+# Tor instance dedicated to the Shade Tree PoC.
 # Runs on its own ports so it never collides with any other tor on this machine
 # (e.g. the searxng-tor-bench container on 9050/9051).
 

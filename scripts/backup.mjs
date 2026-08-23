@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // scripts/backup.mjs — encrypted, dependency-free backup/restore of the secret key
-// material an RGOE operator cannot afford to lose: the onion identity seeds
+// material a Shade Tree operator cannot afford to lose: the onion identity seeds
 // (identity.local.json + Tor's hs_ed25519_secret_key) and the bootnode signer key
 // (bootnode-signer.key). This replaces the manual `tar | gpg` recipe in docs/OPERATOR.md.
 //
 // It uses ONLY node:crypto (no gpg, no shelling out), so it runs anywhere node runs.
 //
-//   node scripts/backup.mjs backup  <srcDir> <outFile>          (env RGOE_BACKUP_SRC / _OUT)
-//   node scripts/backup.mjs restore <inFile> <destDir> [--force] (env RGOE_BACKUP_IN / _DEST)
+//   node scripts/backup.mjs backup  <srcDir> <outFile>          (env SHADE_TREE_BACKUP_SRC / _OUT)
+//   node scripts/backup.mjs restore <inFile> <destDir> [--force] (env SHADE_TREE_BACKUP_IN / _DEST)
 //
-// The passphrase is REQUIRED via RGOE_BACKUP_PASSPHRASE (non-interactive, testable). It is the
+// The passphrase is REQUIRED via SHADE_TREE_BACKUP_PASSPHRASE (non-interactive, testable). It is the
 // operator's responsibility: a lost passphrase means an unrecoverable backup, by design.
 //
 // Crypto: a per-backup 16-byte scrypt salt derives a 32-byte key (N=2^15, r=8, p=1); the plaintext
@@ -98,7 +98,7 @@ export function encrypt(files, passphrase) {
 export function decrypt(envelope, passphrase) {
   if (!passphrase) throw new Error("passphrase required");
   if (!envelope || envelope.cipher !== "aes-256-gcm" || envelope.kdf !== "scrypt") {
-    throw new Error("not a recognized rgoe backup envelope");
+    throw new Error("not a recognized shade-tree backup envelope");
   }
   const kp = envelope.kdfParams || KDF;
   const salt = Buffer.from(envelope.salt, "base64");
@@ -164,7 +164,7 @@ function usage() {
     "usage:\n" +
     "  node scripts/backup.mjs backup  <srcDir> <outFile>\n" +
     "  node scripts/backup.mjs restore <inFile> <destDir> [--force]\n" +
-    "\nRGOE_BACKUP_PASSPHRASE must be set (never passed on argv; never logged)."
+    "\nSHADE_TREE_BACKUP_PASSPHRASE must be set (never passed on argv; never logged)."
   );
 }
 
@@ -172,27 +172,27 @@ function cli(argv) {
   const mode = argv[0];
   const positionals = argv.slice(1).filter((a) => !a.startsWith("--"));
   const force = argv.includes("--force");
-  const passphrase = process.env.RGOE_BACKUP_PASSPHRASE;
+  const passphrase = process.env.SHADE_TREE_BACKUP_PASSPHRASE;
 
   if (mode !== "backup" && mode !== "restore") { usage(); process.exit(1); }
   if (!passphrase) {
-    console.error("error: RGOE_BACKUP_PASSPHRASE is not set (required, non-interactive).");
+    console.error("error: SHADE_TREE_BACKUP_PASSPHRASE is not set (required, non-interactive).");
     console.error("the passphrase is your responsibility — a lost passphrase = an unrecoverable backup.");
     process.exit(1);
   }
 
   try {
     if (mode === "backup") {
-      const srcDir = positionals[0] || process.env.RGOE_BACKUP_SRC;
-      const outFile = positionals[1] || process.env.RGOE_BACKUP_OUT;
+      const srcDir = positionals[0] || process.env.SHADE_TREE_BACKUP_SRC;
+      const outFile = positionals[1] || process.env.SHADE_TREE_BACKUP_OUT;
       if (!srcDir || !outFile) { usage(); process.exit(1); }
       const r = runBackup({ srcDir, outFile, passphrase });
       console.log(`backed up ${r.count} secret file(s) -> ${resolve(outFile)} (encrypted, AES-256-GCM)`);
       for (const rp of r.relpaths) console.log(`  + ${rp}`);
       console.log("keep the passphrase safe: a lost passphrase = an unrecoverable backup.");
     } else {
-      const inFile = positionals[0] || process.env.RGOE_BACKUP_IN;
-      const destDir = positionals[1] || process.env.RGOE_BACKUP_DEST;
+      const inFile = positionals[0] || process.env.SHADE_TREE_BACKUP_IN;
+      const destDir = positionals[1] || process.env.SHADE_TREE_BACKUP_DEST;
       if (!inFile || !destDir) { usage(); process.exit(1); }
       const r = runRestore({ inFile, destDir, passphrase, force });
       console.log(`restored ${r.count} secret file(s) -> ${resolve(destDir)} (0600, dirs 0700)`);

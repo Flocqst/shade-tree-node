@@ -31,7 +31,7 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 const healthOf = (registry, onion) => registry.directory().gateways.find((g) => g.onion === onion)?.health;
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-health-probe-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-health-probe-"));
   try {
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });
     const g2 = await generateOnionIdentity(join(work, "g2"), { label: "g2" });

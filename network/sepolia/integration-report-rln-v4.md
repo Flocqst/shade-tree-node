@@ -19,7 +19,7 @@ bond) — all with real circom-rln Groth16 proofs. Date: 2026-08-17. Tasks: T-DE
   leaf at the CLAIMED limit, `MemberRegistered`/`MemberSlashed` events carrying the limit, and
   the REAL Groth16 exit-auth `WithdrawVerifier` taking the recorded limit (rln-v3 wired the
   revealed-secret mock).
-- The gateway ran in **on-chain root mode** (`RGOE_GROUP_CONTRACT`, `NodeRootProvider`
+- The gateway ran in **on-chain root mode** (`SHADE_TREE_GROUP_CONTRACT`, `NodeRootProvider`
   reconstructing from the rln-v4 events) instead of `members.json`, and its slasher detected
   the tiered ABI and resolved the tier ON CHAIN (`limitOf`) before submitting.
 
@@ -31,13 +31,13 @@ bond) — all with real circom-rln Groth16 proofs. Date: 2026-08-17. Tasks: T-DE
 | RateCommitmentHasher (tiered) | `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` |
 | WithdrawVerifier (REAL Groth16 exit-auth) | `0x522409038aA03FFF998d33C60A37486975695351` over `WithdrawGroth16Verifier` `0x6B26a9B6BEdcB711C35947f988fdFF168AFD507E` |
 | PoseidonT2 / PoseidonT3 (linked, reused from rln-v3) | `0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55` / `0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022` |
-| GatewayRegistry | UNCHANGED `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (not redeployed: `RGOE_DEPLOY_REGISTRY=0`) |
+| GatewayRegistry | UNCHANGED `0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868` (not redeployed: `SHADE_TREE_DEPLOY_REGISTRY=0`) |
 | deploy blocks | 11510538 (hasher) · 11510539 (groth16) · 11510540 (verifier) · 11510541 (set) |
 | deploy tx (set) | `0xa565fd7769ddfdd79abaff6e0a5f40159bb77604c531ec631941b52f2953ba03` |
 | deployer / slasher / slash receiver | `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key) |
 | params | tiers {8: 0.001 ETH, 32: 0.004 ETH} · unbonding 300s (min 270) · `DEFAULT_LIMIT` 8 · `MAX_LIMIT` 65535 |
 | deploy gas | 3,370,335 total (223,624 + 364,342 + 370,042 + 2,412,327) at ~1.0 gwei ≈ 0.0036 ETH |
-| receipt bundle | [`rln-v4-broadcast.json`](rln-v4-broadcast.json); recorded with `rgoe record-deploy --network sepolia --all --force --from-broadcast …` |
+| receipt bundle | [`rln-v4-broadcast.json`](rln-v4-broadcast.json); recorded with `shade-tree record-deploy --network sepolia --all --force --from-broadcast …` |
 
 Verified with `cast call` right after the broadcast: `currentRoot()` ==
 `10354334201938752428558948798274962999644820234654929486063894213598717249307` (the empty
@@ -55,7 +55,7 @@ depth-20 tree root — nonzero by construction; `test/StakedReputationSet.t.sol 
 | BOB (abuser) | 32 (0.004 ETH) | `5443169668595253035126407516438306525977849927774428418330863046649288788866` |
 
 Both staked from the operator hot key via the real CLI:
-`rgoe register-member <leaf> --limit N --rpc-url … --group-contract 0xFe48…9d25`
+`shade-tree register-member <leaf> --limit N --rpc-url … --group-contract 0xFe48…9d25`
 (`group/register-onchain.mjs`, which probes `bondFor(limit)` and calls
 `register(uint256,uint256)`).
 
@@ -64,13 +64,13 @@ Both staked from the operator hot key via the real CLI:
 ```
 [+   0.1s] setup   StakedReputationSet 0xFe48…9d25 chainId=11155111 tiers=[8,32] bond(8)=0.001 ETH bond(32)=0.004 ETH epoch 14891666 (120s)
 [+   0.1s] ok      contract admits tiers 8 and 32 (bondFor nonzero)
-[+   9.4s] ok      ALICE staked at tier 8  via `rgoe register-member --limit 8`   tx 0xe1f82c62…c68b  block 11510544  (1,283,077 gas)
-[+  22.7s] ok      BOB   staked at tier 32 via `rgoe register-member --limit 32`  tx 0xbc1910c4…1a4e  block 11510545  (  921,848 gas)
+[+   9.4s] ok      ALICE staked at tier 8  via `shade-tree register-member --limit 8`   tx 0xe1f82c62…c68b  block 11510544  (1,283,077 gas)
+[+  22.7s] ok      BOB   staked at tier 32 via `shade-tree register-member --limit 32`  tx 0xbc1910c4…1a4e  block 11510545  (  921,848 gas)
 [+  22.8s] ok      ALICE on-chain: bond == bondFor(8),  limit 8 recorded
 [+  22.8s] ok      BOB   on-chain: bond == bondFor(32), limit 32 recorded
 [+  22.9s] stake   activeCount=2 limitOf(A)=8 limitOf(B)=32
 [+  23.0s] ok      currentRoot() == JS groupFromIdentities([{A,8},{B,32}]).root  (20021925659736805426…)
-[+  56.7s] gateway root source: on-chain RootProvider provider=node recentRoots=1  (RGOE_GROUP_CONTRACT=0xFe48…9d25, RGOE_CONFIRMATIONS=1)
+[+  56.7s] gateway root source: on-chain RootProvider provider=node recentRoots=1  (SHADE_TREE_GROUP_CONTRACT=0xFe48…9d25, SHADE_TREE_CONFIRMATIONS=1)
 [+  56.8s] gateway slash: on-chain via=0xFe48…9d25 receiver=0xc860…7f02 abi="rln-v4 tiered" tiers=[8,32]
 [+  56.8s] gateway gateway up on 127.0.0.1:8443 epoch=14891666
 [+  58.0s] alice   req 1 slot 0  -> {"ok":true}  (gateway: egress target=example.com:443)
@@ -100,7 +100,7 @@ Both staked from the operator hot key via the real CLI:
   reconstruction agrees event for event (rln-v4 events carry the limit; the provider reads
   both generations).
 - **The gateway enforces the proven tier from the chain alone.** It held roots, not leaves
-  (`RGOE_GROUP_CONTRACT`), accepted BOB's slot-20 proof (a messageId a tier-8 leaf cannot
+  (`SHADE_TREE_GROUP_CONTRACT`), accepted BOB's slot-20 proof (a messageId a tier-8 leaf cannot
   prove) and ALICE's slots 0..2, and — after BOB's over-spend — reconstructed his
   `identitySecret`, asked the contract `limitOf` for the candidate leaves and slashed at
   **limit 32**, burning the **0.004 ETH tier-32 bond** to the receiver (`0xfff760a6…494c`).
@@ -115,16 +115,16 @@ Both staked from the operator hot key via the real CLI:
 Balance 0.05086 → 0.04300 ETH: deploy ≈ 0.0036 ETH, two stakes 0.005 ETH (0.004 came back
 as BOB's slashed bond, 0.001 remains staked as ALICE), stake + slash gas ≈ 0.0033 ETH.
 Net ≈ 0.0079 ETH including the 0.001 ETH still staked; well under the 0.02 ETH cap. (The same
-key was concurrently used by another agent for `rgoe register-gateway`; that spend is not
+key was concurrently used by another agent for `shade-tree register-gateway`; that spend is not
 separated here.)
 
 ## Honesty / scope
 
 - Local TCP transport to the gateway (the exact bytes Tor delivers), as in the rln-v3 run;
   the fleet-over-Tor path was proven in `integration-report-rln.md` P4 and is unchanged.
-- The **live fleet's slashing still points at rln-v3** (`RGOE_SLASH_CONTRACT` in agent-devops)
+- The **live fleet's slashing still points at rln-v3** (`SHADE_TREE_SLASH_CONTRACT` in agent-devops)
   and gates on `members.json`; the fleet units were deliberately not flipped in this change
-  (`docs/ONCHAIN-DEPLOY.md` §8). `RGOE_NETWORK=sepolia` resolves `RGOE_GROUP_CONTRACT` to the
+  (`docs/ONCHAIN-DEPLOY.md` §8). `SHADE_TREE_NETWORK=sepolia` resolves `SHADE_TREE_GROUP_CONTRACT` to the
   new set.
 - Circuit + withdraw-verifier VK are still the **untrusted dev phase-2** (T-HARD-1) —
   testnet-only.

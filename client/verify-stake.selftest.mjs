@@ -3,14 +3,14 @@
 // `operator`/`staked` LABEL, but the onion<->operator binding and the live stake are NOT in the
 // signed directory: they live in the raw announce and on chain. So a compromised bootnode (or
 // directory signer) could paste a `staked:true` label onto a gateway whose operator never
-// authorized it, or whose stake has lapsed. With RGOE_VERIFY_STAKE=1 the client refuses the
+// authorized it, or whose stake has lapsed. With SHADE_TREE_VERIFY_STAKE=1 the client refuses the
 // label: for every entry claiming stake it fetches the stored signed announce (GET /gateway/<onion>)
 // and independently re-runs the onion-control + operator signatures (announce.mjs verifyAnnounce)
 // and the live isStaked() check, dropping any gateway that fails.
 //
 // We mint real v3 onions + real ethers operator signatures and inject an in-memory announce fetch
 // + a mock stake verifier, so the whole re-verification runs with no Tor and no chain. The env
-// (RGOE_DIRECTORY / RGOE_DIR_SIGNER / RGOE_VERIFY_STAKE) is set BEFORE the dynamic import, exactly
+// (SHADE_TREE_DIRECTORY / SHADE_TREE_DIR_SIGNER / SHADE_TREE_VERIFY_STAKE) is set BEFORE the dynamic import, exactly
 // as selection.mjs captures its config at import time. The flag-OFF case runs in a SEPARATE
 // spawned process (the flag cannot be un-captured in a process that already imported the module).
 //
@@ -56,7 +56,7 @@ function mintOnion() {
 const strip = (o) => String(o).replace(/\.onion$/, "");
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-verify-stake-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-verify-stake-"));
   try {
     const signer = newEd25519();
 
@@ -118,15 +118,15 @@ async function main() {
     const injectedStake = { isStaked: async (op) => stakedSet.has(String(op).toLowerCase()) };
 
     // --- import selection.mjs with the env it reads AT IMPORT TIME -----------
-    process.env.RGOE_DIRECTORY = dirFile;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    process.env.RGOE_VERIFY_STAKE = "1";
-    delete process.env.RGOE_BOOTNODE_ONION; // static-file source, not live discovery
+    process.env.SHADE_TREE_DIRECTORY = dirFile;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    process.env.SHADE_TREE_VERIFY_STAKE = "1";
+    delete process.env.SHADE_TREE_BOOTNODE_ONION; // static-file source, not live discovery
     const sel = await import(pathToFileURL(SELECTION_PATH).href);
     sel.setVerifyDeps({ fetchAnnounce: injectedFetch, stake: injectedStake });
 
     console.log("flag + wiring:");
-    ok(sel.verifyStakeEnabled() === true, "RGOE_VERIFY_STAKE=1 arms client-side re-verification");
+    ok(sel.verifyStakeEnabled() === true, "SHADE_TREE_VERIFY_STAKE=1 arms client-side re-verification");
     ok(sel.directoryEnabled() === true, "directory mode is on (file + pinned signer)");
 
     // --- (a)/(b)/(c): reverifyGateway on each entry, deps injected -----------
@@ -192,7 +192,7 @@ try {
     try {
       offOut = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
         encoding: "utf8",
-        env: { ...process.env, RGOE_DIRECTORY: dirOffFile, RGOE_DIR_SIGNER: signer.pub, RGOE_VERIFY_STAKE: "", RGOE_BOOTNODE_ONION: "" },
+        env: { ...process.env, SHADE_TREE_DIRECTORY: dirOffFile, SHADE_TREE_DIR_SIGNER: signer.pub, SHADE_TREE_VERIFY_STAKE: "", SHADE_TREE_BOOTNODE_ONION: "" },
       });
     } catch (e) {
       offCode = e.status ?? 1;

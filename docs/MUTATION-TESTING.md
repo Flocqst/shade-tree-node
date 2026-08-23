@@ -92,8 +92,8 @@ selftest exercises against a stubbed `fetch` but does not assert exhaustively. E
 worth a follow-up test (do NOT change source to satisfy the mutant — add the assertion):
 
 - **Error-message text is not asserted.** Mutants that blank the `throw new Error("…")`
-  strings ("OnchainStakeVerifier needs RGOE_GATEWAY_REGISTRY…", the `unknown
-  RGOE_STAKE_MODE` message) survive. Follow-up: assert the thrown message, or at least
+  strings ("OnchainStakeVerifier needs SHADE_TREE_GATEWAY_REGISTRY…", the `unknown
+  SHADE_TREE_STAKE_MODE` message) survive. Follow-up: assert the thrown message, or at least
   that a throw occurs on missing `contract` / bad mode.
 - **Cache boundary `now - hit.at < cacheMs`** — the `<` vs `<=` mutant survives; no test
   pins the exact expiry edge. Follow-up: a test that a cached value is reused just under

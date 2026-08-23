@@ -11,14 +11,14 @@
 //   node scripts/uptime-probe.mjs                 -> one-line JSON, exit 0 healthy / nonzero not
 //   node scripts/uptime-probe.mjs --format nagios -> "OK|CRITICAL: ..." line, exit 0 / 2
 //
-// Config (all RGOE_*):
-//   RGOE_BOOTNODE_ONION   the bootnode v3 .onion  (production: fetched over Tor)
-//   RGOE_TOR_HOST/PORT    local Tor SOCKS proxy   (default 127.0.0.1:9250)
-//   RGOE_BOOTNODE_URL     plain http base, e.g. http://127.0.0.1:8877  (DEV ONLY; bypasses Tor)
-//   RGOE_DIR_SIGNER       pinned directory-signer pubkey (hex) -- REQUIRED
-//   RGOE_NETWORK          <name>: default BOOTNODE_ONION + DIR_SIGNER from network/<name>/bootnode.json
+// Config (all SHADE_TREE_*):
+//   SHADE_TREE_BOOTNODE_ONION   the bootnode v3 .onion  (production: fetched over Tor)
+//   SHADE_TREE_TOR_HOST/PORT    local Tor SOCKS proxy   (default 127.0.0.1:9250)
+//   SHADE_TREE_BOOTNODE_URL     plain http base, e.g. http://127.0.0.1:8877  (DEV ONLY; bypasses Tor)
+//   SHADE_TREE_DIR_SIGNER       pinned directory-signer pubkey (hex) -- REQUIRED
+//   SHADE_TREE_NETWORK          <name>: default BOOTNODE_ONION + DIR_SIGNER from network/<name>/bootnode.json
 //                         (explicit env wins; a pending record supplies nothing -> misconfig)
-//   RGOE_PROBE_TIMEOUT_MS per-request timeout     (default 20000)
+//   SHADE_TREE_PROBE_TIMEOUT_MS per-request timeout     (default 20000)
 //
 // PRIVACY: this mirrors the status page's posture. It prints a COUNT (fleetSize), never gateway
 // onions or operator addresses, and scrubs any .onion out of error text. Fail-closed: any error
@@ -29,10 +29,10 @@ import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyDirectory } from "../lib/directory.mjs";
 import { applyNetworkEnv } from "../lib/network-record.mjs";
 
-const TOR_HOST = process.env.RGOE_TOR_HOST || "127.0.0.1";
-const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9250);
-const TIMEOUT_MS = Number(process.env.RGOE_PROBE_TIMEOUT_MS || 20000);
-const MAX_RESP = Number(process.env.RGOE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
+const TOR_HOST = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9250);
+const TIMEOUT_MS = Number(process.env.SHADE_TREE_PROBE_TIMEOUT_MS || 20000);
+const MAX_RESP = Number(process.env.SHADE_TREE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
 
 // Never let an onion address leak into monitor logs via an error string.
 const scrub = (s) => String(s == null ? "" : s).replace(/[a-z2-7]{56}\.onion/gi, "<onion>");
@@ -48,7 +48,7 @@ function parseFormat(argv) {
   return "json";
 }
 
-// Bounded, timed plain-HTTP GET for DEV mode (RGOE_BOOTNODE_URL). Production goes over Tor via
+// Bounded, timed plain-HTTP GET for DEV mode (SHADE_TREE_BOOTNODE_URL). Production goes over Tor via
 // fetchOverTor, which already caps the read and times out. Both return parsed JSON or throw.
 function plainGet(base, path) {
   return new Promise((resolve, reject) => {
@@ -69,12 +69,12 @@ function plainGet(base, path) {
   });
 }
 
-// `preferUrl`: an EXPLICIT RGOE_BOOTNODE_URL (set before the RGOE_NETWORK record filled
+// `preferUrl`: an EXPLICIT SHADE_TREE_BOOTNODE_URL (set before the SHADE_TREE_NETWORK record filled
 // anything) beats a record-supplied onion — explicit env wins over the record, and since the
 // sepolia record went live (2026-08-17) it always supplies an onion.
 function makeFetcher({ preferUrl = false } = {}) {
-  const onion = process.env.RGOE_BOOTNODE_ONION;
-  const url = process.env.RGOE_BOOTNODE_URL;
+  const onion = process.env.SHADE_TREE_BOOTNODE_ONION;
+  const url = process.env.SHADE_TREE_BOOTNODE_URL;
   if (preferUrl && url) return (path) => plainGet(url, path);
   if (onion) {
     return (path) => fetchOverTor(onion, path, { torHost: TOR_HOST, torPort: TOR_PORT, timeoutMs: TIMEOUT_MS, maxBytes: MAX_RESP });
@@ -87,14 +87,14 @@ export async function probe() {
   // Fail-closed default: everything false / zero until proven otherwise.
   const result = { ok: false, bootnodeReachable: false, signerOk: false, fleetSize: 0, ts: Math.floor(Date.now() / 1000) };
 
-  // RGOE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
+  // SHADE_TREE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
   // misconfig (fail closed), never a throw out of probe().
-  const explicitUrl = !!process.env.RGOE_BOOTNODE_URL && !process.env.RGOE_BOOTNODE_ONION;
+  const explicitUrl = !!process.env.SHADE_TREE_BOOTNODE_URL && !process.env.SHADE_TREE_BOOTNODE_ONION;
   try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return result; }
-  const pinnedSigner = process.env.RGOE_DIR_SIGNER;
+  const pinnedSigner = process.env.SHADE_TREE_DIR_SIGNER;
   const fetchJson = makeFetcher({ preferUrl: explicitUrl });
-  if (!fetchJson) { result.reason = "misconfig:set RGOE_BOOTNODE_ONION or RGOE_BOOTNODE_URL"; return result; }
-  if (!pinnedSigner) { result.reason = "misconfig:set RGOE_DIR_SIGNER (pinned signer)"; return result; }
+  if (!fetchJson) { result.reason = "misconfig:set SHADE_TREE_BOOTNODE_ONION or SHADE_TREE_BOOTNODE_URL"; return result; }
+  if (!pinnedSigner) { result.reason = "misconfig:set SHADE_TREE_DIR_SIGNER (pinned signer)"; return result; }
 
   try {
     const health = await fetchJson("/health");

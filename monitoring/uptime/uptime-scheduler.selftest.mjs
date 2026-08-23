@@ -59,15 +59,15 @@ function cronFields(expr) {
 
 function main() {
   console.log("systemd service:");
-  const svcText = read(join(HERE, "rgoe-uptime-probe.service"));
+  const svcText = read(join(HERE, "shade-tree-uptime-probe.service"));
   let svc;
   try { svc = parseUnit(svcText); ok(true, "service parses as a systemd unit"); } catch (e) { ok(false, `service parses: ${e.message}`); svc = {}; }
   ok(one(svc, "Service", "Type") === "oneshot", "Type=oneshot (a timer-fired probe, not a daemon)");
   ok(/scripts\/uptime-probe\.mjs/.test(one(svc, "Service", "ExecStart") || ""), "ExecStart runs scripts/uptime-probe.mjs");
   ok(/--format nagios/.test(one(svc, "Service", "ExecStart") || ""), "ExecStart uses --format nagios (one status line per run)");
-  ok(/uptime-probe\.env$/.test(one(svc, "Service", "EnvironmentFile") || ""), "EnvironmentFile points at /etc/rgoe/uptime-probe.env");
+  ok(/uptime-probe\.env$/.test(one(svc, "Service", "EnvironmentFile") || ""), "EnvironmentFile points at /etc/shade-tree/uptime-probe.env");
   ok(one(svc, "Service", "SuccessExitStatus") === "1 2", "SuccessExitStatus=1 2 (probe's unhealthy codes do not fail the unit)");
-  ok((svc.Service?.Environment || []).some((v) => /^RGOE_TOR_PORT=\d+$/.test(v)), "sets RGOE_TOR_PORT for the distro tor daemon");
+  ok((svc.Service?.Environment || []).some((v) => /^SHADE_TREE_TOR_PORT=\d+$/.test(v)), "sets SHADE_TREE_TOR_PORT for the distro tor daemon");
   ok(one(svc, "Unit", "After")?.includes("tor.service"), "After=tor.service");
   for (const k of ["NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "RestrictAddressFamilies", "SystemCallFilter", "CapabilityBoundingSet", "MemoryMax"]) {
     ok(k in (svc.Service || {}), `sandbox key present: ${k}`);
@@ -76,12 +76,12 @@ function main() {
   ok(!/\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(svcText.replace(/127\.0\.0\.1/g, "")), "service contains no non-loopback IP");
 
   console.log("\nsystemd timer:");
-  const tmrText = read(join(HERE, "rgoe-uptime-probe.timer"));
+  const tmrText = read(join(HERE, "shade-tree-uptime-probe.timer"));
   let tmr;
   try { tmr = parseUnit(tmrText); ok(true, "timer parses as a systemd unit"); } catch (e) { ok(false, `timer parses: ${e.message}`); tmr = {}; }
   ok(one(tmr, "Timer", "OnUnitActiveSec") === "5min", "OnUnitActiveSec=5min (SLI cadence)");
   ok(Boolean(one(tmr, "Timer", "OnBootSec")), "OnBootSec set (first run after boot)");
-  ok(one(tmr, "Timer", "Unit") === "rgoe-uptime-probe.service", "Unit= names the service");
+  ok(one(tmr, "Timer", "Unit") === "shade-tree-uptime-probe.service", "Unit= names the service");
   ok(one(tmr, "Install", "WantedBy") === "timers.target", "WantedBy=timers.target");
   ok(Boolean(one(tmr, "Timer", "RandomizedDelaySec")), "RandomizedDelaySec set (no lockstep)");
 
@@ -94,15 +94,15 @@ function main() {
   ok(cf && cf.minuteStep === 5, "cron schedule is a valid 5-field */5 minute line");
   ok(/scripts\/uptime-probe\.mjs/.test(cl), "cron line runs scripts/uptime-probe.mjs");
   ok(/--format nagios/.test(cl), "cron line uses --format nagios");
-  ok(/uptime-probe\.env/.test(cl), "cron line sources /etc/rgoe/uptime-probe.env");
+  ok(/uptime-probe\.env/.test(cl), "cron line sources /etc/shade-tree/uptime-probe.env");
   ok(/2>&1/.test(cl), "cron line captures stderr into the log");
 
   console.log("\nenv template:");
   const envT = read(join(HERE, "uptime-probe.env.example"));
   const active = envT.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#"));
   ok(active.every((l) => /^[A-Z_]+=.*$/.test(l)), "every active line is KEY=value");
-  ok(active.some((l) => l.startsWith("RGOE_NETWORK=")), "template names a network record by default (RGOE_NETWORK)");
-  ok(/RGOE_BOOTNODE_ONION=/.test(envT) && /RGOE_DIR_SIGNER=/.test(envT), "template documents RGOE_BOOTNODE_ONION + RGOE_DIR_SIGNER");
+  ok(active.some((l) => l.startsWith("SHADE_TREE_NETWORK=")), "template names a network record by default (SHADE_TREE_NETWORK)");
+  ok(/SHADE_TREE_BOOTNODE_ONION=/.test(envT) && /SHADE_TREE_DIR_SIGNER=/.test(envT), "template documents SHADE_TREE_BOOTNODE_ONION + SHADE_TREE_DIR_SIGNER");
   ok(!/[a-z2-7]{56}\.onion/.test(envT), "template carries no real onion");
   ok(!/\b[0-9a-f]{64}\b/.test(envT), "template carries no real 64-hex key");
 
@@ -134,10 +134,10 @@ function main() {
     ok(job && Array.isArray(job.steps) && job.steps.length >= 5, "jobs.probe has the step list");
     ok(job && job["timeout-minutes"] && job["timeout-minutes"] <= 15, "job has a short timeout");
     const env = job?.env || {};
-    ok(/vars\.RGOE_BOOTNODE_ONION/.test(env.RGOE_BOOTNODE_ONION || "") && /secrets\.RGOE_BOOTNODE_ONION/.test(env.RGOE_BOOTNODE_ONION || ""), "RGOE_BOOTNODE_ONION from vars with secrets fallback");
-    ok(/vars\.RGOE_DIR_SIGNER/.test(env.RGOE_DIR_SIGNER || ""), "RGOE_DIR_SIGNER from vars");
-    ok(/vars\.RGOE_NETWORK/.test(env.RGOE_NETWORK || ""), "RGOE_NETWORK from vars (record alternative)");
-    ok(String(env.RGOE_TOR_PORT) === "9050", "RGOE_TOR_PORT=9050 matches the tor --SocksPort used");
+    ok(/vars\.SHADE_TREE_BOOTNODE_ONION/.test(env.SHADE_TREE_BOOTNODE_ONION || "") && /secrets\.SHADE_TREE_BOOTNODE_ONION/.test(env.SHADE_TREE_BOOTNODE_ONION || ""), "SHADE_TREE_BOOTNODE_ONION from vars with secrets fallback");
+    ok(/vars\.SHADE_TREE_DIR_SIGNER/.test(env.SHADE_TREE_DIR_SIGNER || ""), "SHADE_TREE_DIR_SIGNER from vars");
+    ok(/vars\.SHADE_TREE_NETWORK/.test(env.SHADE_TREE_NETWORK || ""), "SHADE_TREE_NETWORK from vars (record alternative)");
+    ok(String(env.SHADE_TREE_TOR_PORT) === "9050", "SHADE_TREE_TOR_PORT=9050 matches the tor --SocksPort used");
     const steps = job?.steps || [];
     const first = steps[0] || {};
     ok(first.id === "cfg" && /configured=/.test(first.run || "") && /::notice/.test(first.run || ""), "first step is the config check that emits ::notice:: when unset");
@@ -147,9 +147,9 @@ function main() {
     ok(/--SocksPort 9050/.test(runs) && /Bootstrapped 100%/.test(runs), "starts tor on 9050 and waits for bootstrap");
     ok(/scripts\/uptime-probe\.mjs --format nagios/.test(runs), "runs the probe with --format nagios");
     ok(/::error/.test(runs), "a CRITICAL probe surfaces as an ::error::");
-    ok(!/echo .*\$\{\{ ?secrets\./.test(wf) && !/echo "\$RGOE_DIR_SIGNER|echo "\$RGOE_BOOTNODE_ONION/.test(wf), "no secret / onion / signer is echoed");
+    ok(!/echo .*\$\{\{ ?secrets\./.test(wf) && !/echo "\$SHADE_TREE_DIR_SIGNER|echo "\$SHADE_TREE_BOOTNODE_ONION/.test(wf), "no secret / onion / signer is echoed");
     const probeStep = steps.find((s) => /probe \(over Tor/.test(s.name || ""));
-    ok(probeStep && /RGOE_PROBE_SKIP != '1'/.test(probeStep.if), "probe step is also skipped when the network record is pending");
+    ok(probeStep && /SHADE_TREE_PROBE_SKIP != '1'/.test(probeStep.if), "probe step is also skipped when the network record is pending");
   } else {
     // structural fallback
     ok(/^on:\n\s+schedule:\n\s+- cron: "\*\/(5|1[0-9]|[2-5][0-9]) \* \* \* \*"/m.test(wf), "on.schedule cron */N with N>=5 (structural)");

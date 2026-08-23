@@ -3,7 +3,7 @@
 // return garbage by hostile bytes", plus a few algebraic properties that must hold for ALL input.
 //
 //   node test/fuzz.selftest.mjs                 (default seed + iteration count)
-//   RGOE_FUZZ_SEED=123 RGOE_FUZZ_N=20000 node test/fuzz.selftest.mjs
+//   SHADE_TREE_FUZZ_SEED=123 SHADE_TREE_FUZZ_N=20000 node test/fuzz.selftest.mjs
 //
 // Seeded (mulberry32) so any failure is reproducible: the seed is printed and can be replayed.
 
@@ -18,8 +18,8 @@ import { verifyAnnounce } from "../bootnode/announce.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(HERE, "..", "testdata", "corpus", "regressions.json");
 
-const SEED = Number(process.env.RGOE_FUZZ_SEED || 0x9e3779b9);
-const N = Number(process.env.RGOE_FUZZ_N || 5000);
+const SEED = Number(process.env.SHADE_TREE_FUZZ_SEED || 0x9e3779b9);
+const N = Number(process.env.SHADE_TREE_FUZZ_N || 5000);
 
 let failures = 0;
 const fail = (msg) => { console.log(`  FAIL ${msg}`); failures++; };
@@ -66,7 +66,7 @@ function fuzz(label, body) {
     for (let i = 0; i < N; i++) body(i);
     ok(`${label} (${N} iters, no crash/hang/garbage)`);
   } catch (e) {
-    fail(`${label}: iteration threw uncaught -> ${e.message} (seed=${SEED}; set RGOE_FUZZ_SEED=${SEED} to replay)`);
+    fail(`${label}: iteration threw uncaught -> ${e.message} (seed=${SEED}; set SHADE_TREE_FUZZ_SEED=${SEED} to replay)`);
   }
 }
 

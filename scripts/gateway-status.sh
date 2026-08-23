@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the gated egress works, end to end, from the GATEWAY (droplet) side.
+# Prove the Shade Tree tunnel works, end to end, from the GATEWAY side.
 #
 # Digests gateway.log into a clean receipt: who was admitted, who was dropped and
 # why, how many distinct members showed up (counted by nullifier, never identity),
@@ -14,7 +14,7 @@ if [ ! -f "$LOG" ]; then
 fi
 
 echo ""
-echo "  reputation-gated egress — gateway status ($LOG)"
+echo "  Shade Tree — gateway status ($LOG)"
 echo "  ────────────────────────────────────────────"
 printf '  %-26s %s\n' "this box's egress IP" "$(curl -s --max-time 8 https://api.ipify.org 2>/dev/null || echo '?')"
 

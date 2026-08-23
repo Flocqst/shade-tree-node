@@ -1,10 +1,10 @@
 // The registrar: sell membership leaves for a stablecoin over HTTP 402 (T-FEAT-7, Layer 1 of
 // docs/PAYMENTS.md as shipped 2026-08-17). A loopback HTTP service the operator publishes as an
 // extra port of an onion this box already runs (HiddenServicePort 8878 127.0.0.1:8878, bootstrap
-// RGOE_REGISTRAR=1): the BOOTNODE onion on a bootnode+gateway box, the GATEWAY onion on a
+// SHADE_TREE_REGISTRAR=1): the BOOTNODE onion on a bootnode+gateway box, the GATEWAY onion on a
 // gateway-only box (T-FEAT-9: every provider may run its own registrar + its own PaidAccessSet
 // and sell access on its own terms; the gateway then advertises `caps.pay`). It speaks the
-// machine-payment 402 rails the provider ENABLES (RGOE_PAY_PROTOCOLS, default both) over one
+// machine-payment 402 rails the provider ENABLES (SHADE_TREE_PAY_PROTOCOLS, default both) over one
 // settlement primitive:
 //
 //   x402 v2   402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE     (payments/wire.mjs)
@@ -32,32 +32,32 @@
 // Then, serialized on the operator key: settle tx -> wait 1 confirmation -> insert tx -> wait.
 //
 // Idempotency + crash safety: every order is keyed by (asset, from, nonce) in a small JSON store
-// (RGOE_REGISTRAR_STORE, atomic tmp+rename like the bootnode's). A settle that mined but whose
+// (SHADE_TREE_REGISTRAR_STORE, atomic tmp+rename like the bootnode's). A settle that mined but whose
 // insert did not is RESUMED on boot and on the next identical POST; an identical replay of a
 // finished order returns the stored receipt (200) without a second insert; the same nonce with a
 // different commitment is refused (409). The chain is the second replay guard: the token burns
 // the nonce, so a captured authorization can never move funds twice.
 //
-// Config (all RGOE_*; docs/CONFIG.md "Registrar"):
-//   RGOE_REGISTRAR_KEY          operator hot key (settles + inserts; pays gas)             REQUIRED
-//   RGOE_PAID_ACCESS_CONTRACT   PaidAccessSet address (operator-insert-only tree)         REQUIRED
-//   RGOE_RPC_URL                execution JSON-RPC (or the RGOE_NETWORK record's)          REQUIRED
-//   RGOE_PAY_ASSET              EIP-3009 ERC-20 (Sepolia USDC 0x1c7D4B19…7238, or the test tUSD) REQUIRED
-//   RGOE_PAY_PRICES             per-tier price in the asset's atomic units: "8=100000,32=400000" REQUIRED
-//   RGOE_PAY_TO                 recipient of the stablecoin (default: the operator address)
-//   RGOE_PAY_PROTOCOLS          rails to serve: x402,mpp (default both) or either alone (T-FEAT-9); a
+// Config (all SHADE_TREE_*; docs/CONFIG.md "Registrar"):
+//   SHADE_TREE_REGISTRAR_KEY          operator hot key (settles + inserts; pays gas)             REQUIRED
+//   SHADE_TREE_PAID_ACCESS_CONTRACT   PaidAccessSet address (operator-insert-only tree)         REQUIRED
+//   SHADE_TREE_RPC_URL                execution JSON-RPC (or the SHADE_TREE_NETWORK record's)          REQUIRED
+//   SHADE_TREE_PAY_ASSET              EIP-3009 ERC-20 (Sepolia USDC 0x1c7D4B19…7238, or the test tUSD) REQUIRED
+//   SHADE_TREE_PAY_PRICES             per-tier price in the asset's atomic units: "8=100000,32=400000" REQUIRED
+//   SHADE_TREE_PAY_TO                 recipient of the stablecoin (default: the operator address)
+//   SHADE_TREE_PAY_PROTOCOLS          rails to serve: x402,mpp (default both) or either alone (T-FEAT-9); a
 //                               disabled rail gets no challenge and its payload is refused 400
-//   RGOE_REGISTRAR_PORT         loopback port (default 8878)
-//   RGOE_REGISTRAR_ONION        this service's onion (resource URL + MPP realm; default 127.0.0.1)
-//   RGOE_REGISTRAR_STORE        JSON order store path (default payments/registrar-state.local.json)
-//   RGOE_PAY_TIMEOUT            challenge/authorization validity, seconds (maxTimeoutSeconds; default 600)
-//   RGOE_PAY_SETTLE_BUFFER      seconds of validBefore headroom a payment must still have (default 20)
-//   RGOE_PAY_CONFIRMATIONS      confirmations to wait per tx (default 1)
-//   RGOE_PAY_ASSET_NAME / RGOE_PAY_ASSET_VERSION   EIP-712 domain overrides (default: token name()/version())
-//   RGOE_REGISTRAR_PAY_RATE / _PAY_BURST     token bucket in front of POST /pay (default 1/s, burst 10)
-//   RGOE_REGISTRAR_QUOTE_RATE / _QUOTE_BURST token bucket in front of quotes (default 20/s, burst 100)
-//   RGOE_REGISTRAR_MAX_INFLIGHT  concurrent settlements (default 8; over => 503 + Retry-After)
-//   RGOE_REGISTRAR_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
+//   SHADE_TREE_REGISTRAR_PORT         loopback port (default 8878)
+//   SHADE_TREE_REGISTRAR_ONION        this service's onion (resource URL + MPP realm; default 127.0.0.1)
+//   SHADE_TREE_REGISTRAR_STORE        JSON order store path (default payments/registrar-state.local.json)
+//   SHADE_TREE_PAY_TIMEOUT            challenge/authorization validity, seconds (maxTimeoutSeconds; default 600)
+//   SHADE_TREE_PAY_SETTLE_BUFFER      seconds of validBefore headroom a payment must still have (default 20)
+//   SHADE_TREE_PAY_CONFIRMATIONS      confirmations to wait per tx (default 1)
+//   SHADE_TREE_PAY_ASSET_NAME / SHADE_TREE_PAY_ASSET_VERSION   EIP-712 domain overrides (default: token name()/version())
+//   SHADE_TREE_REGISTRAR_PAY_RATE / _PAY_BURST     token bucket in front of POST /pay (default 1/s, burst 10)
+//   SHADE_TREE_REGISTRAR_QUOTE_RATE / _QUOTE_BURST token bucket in front of quotes (default 20/s, burst 100)
+//   SHADE_TREE_REGISTRAR_MAX_INFLIGHT  concurrent settlements (default 8; over => 503 + Retry-After)
+//   SHADE_TREE_REGISTRAR_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
 //   _MAX_HEADER_BYTES / _CONN_CHECK_MS   HTTP slow-client limits (same defaults as the bootnode)
 
 import http from "node:http";
@@ -98,9 +98,9 @@ export const PAID_ACCESS_SET_ABI = Object.freeze([
 
 // ---- metrics ------------------------------------------------------------------------------
 const M = {
-  quotes: metrics.counter("rgoe_registrar_quotes_total", "402 quotes served, labeled route=quote|pay."),
-  payments: metrics.counter("rgoe_registrar_payments_total", "POST /pay outcomes, labeled protocol=x402|mpp result=inserted|replayed|rejected|failed (+ reason)."),
-  settleTxs: metrics.counter("rgoe_registrar_txs_total", "Operator transactions sent, labeled kind=settle|insert result=ok|failed."),
+  quotes: metrics.counter("shade_tree_registrar_quotes_total", "402 quotes served, labeled route=quote|pay."),
+  payments: metrics.counter("shade_tree_registrar_payments_total", "POST /pay outcomes, labeled protocol=x402|mpp result=inserted|replayed|rejected|failed (+ reason)."),
+  settleTxs: metrics.counter("shade_tree_registrar_txs_total", "Operator transactions sent, labeled kind=settle|insert result=ok|failed."),
 };
 
 function envInt(name, dflt) {
@@ -161,22 +161,22 @@ export function makeStore(path) {
 // Everything a quote is rendered from. `assetName`/`assetVersion`/`decimals`/`chainId` are
 // filled by probeAsset() from the chain unless overridden by env.
 export function makeOffer(env = process.env) {
-  if (!isAddress(env.RGOE_PAY_ASSET || "")) throw new Error("RGOE_PAY_ASSET must be the EIP-3009 token address (e.g. Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238)");
-  const tiers = parsePrices(env.RGOE_PAY_PRICES);
-  const port = envInt("RGOE_REGISTRAR_PORT", 8878);
-  const onion = env.RGOE_REGISTRAR_ONION ? String(env.RGOE_REGISTRAR_ONION).replace(/\.onion$/, "") + ".onion" : null;
+  if (!isAddress(env.SHADE_TREE_PAY_ASSET || "")) throw new Error("SHADE_TREE_PAY_ASSET must be the EIP-3009 token address (e.g. Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238)");
+  const tiers = parsePrices(env.SHADE_TREE_PAY_PRICES);
+  const port = envInt("SHADE_TREE_REGISTRAR_PORT", 8878);
+  const onion = env.SHADE_TREE_REGISTRAR_ONION ? String(env.SHADE_TREE_REGISTRAR_ONION).replace(/\.onion$/, "") + ".onion" : null;
   const host = onion ? `${onion}:${port}` : `127.0.0.1:${port}`;
   return {
-    asset: ethers.getAddress(env.RGOE_PAY_ASSET),
+    asset: ethers.getAddress(env.SHADE_TREE_PAY_ASSET),
     tiers,
-    protocols: parsePayProtocols(env.RGOE_PAY_PROTOCOLS), // T-FEAT-9: throws on an unknown rail
-    payTo: env.RGOE_PAY_TO ? ethers.getAddress(env.RGOE_PAY_TO) : null, // null => operator address (set in main)
-    maxTimeoutSeconds: envInt("RGOE_PAY_TIMEOUT", 600),
-    settleBufferSec: envInt("RGOE_PAY_SETTLE_BUFFER", 20),
-    realm: env.RGOE_REGISTRAR_REALM || (onion || "rgoe-registrar"),
+    protocols: parsePayProtocols(env.SHADE_TREE_PAY_PROTOCOLS), // T-FEAT-9: throws on an unknown rail
+    payTo: env.SHADE_TREE_PAY_TO ? ethers.getAddress(env.SHADE_TREE_PAY_TO) : null, // null => operator address (set in main)
+    maxTimeoutSeconds: envInt("SHADE_TREE_PAY_TIMEOUT", 600),
+    settleBufferSec: envInt("SHADE_TREE_PAY_SETTLE_BUFFER", 20),
+    realm: env.SHADE_TREE_REGISTRAR_REALM || (onion || "shade-tree-registrar"),
     resourceUrl: `http://${host}/pay`,
-    description: "rgoe egress membership leaf (PaidAccessSet insert)",
-    chainId: null, assetName: env.RGOE_PAY_ASSET_NAME || null, assetVersion: env.RGOE_PAY_ASSET_VERSION || null, decimals: null,
+    description: "shade-tree egress membership leaf (PaidAccessSet insert)",
+    chainId: null, assetName: env.SHADE_TREE_PAY_ASSET_NAME || null, assetVersion: env.SHADE_TREE_PAY_ASSET_VERSION || null, decimals: null,
     port,
   };
 }
@@ -190,13 +190,13 @@ export async function probeAsset(offer, token, provider) {
   offer.chainId = Number(net.chainId);
   if (!offer.assetName) offer.assetName = await token.name();
   if (!offer.assetVersion) {
-    try { offer.assetVersion = await token.version(); } catch { throw new Error("token has no version(): set RGOE_PAY_ASSET_VERSION (USDC = \"2\")"); }
+    try { offer.assetVersion = await token.version(); } catch { throw new Error("token has no version(): set SHADE_TREE_PAY_ASSET_VERSION (USDC = \"2\")"); }
   }
   offer.decimals = Number(await token.decimals());
   const want = ethers.TypedDataEncoder.hashDomain(tokenDomain({ name: offer.assetName, version: offer.assetVersion, chainId: offer.chainId, asset: offer.asset }));
   const got = await token.DOMAIN_SEPARATOR();
   if (String(got).toLowerCase() !== want.toLowerCase()) {
-    throw new Error(`token DOMAIN_SEPARATOR mismatch (on-chain ${got}, computed ${want} from name=${JSON.stringify(offer.assetName)} version=${JSON.stringify(offer.assetVersion)} chainId=${offer.chainId}); set RGOE_PAY_ASSET_NAME/RGOE_PAY_ASSET_VERSION`);
+    throw new Error(`token DOMAIN_SEPARATOR mismatch (on-chain ${got}, computed ${want} from name=${JSON.stringify(offer.assetName)} version=${JSON.stringify(offer.assetVersion)} chainId=${offer.chainId}); set SHADE_TREE_PAY_ASSET_NAME/SHADE_TREE_PAY_ASSET_VERSION`);
   }
   // authorizationState must exist (EIP-3009). A non-3009 token reverts here.
   await token.authorizationState(ethers.ZeroAddress, ethers.ZeroHash);
@@ -359,11 +359,11 @@ const shortErr = (e) => String(e.shortMessage || e.reason || e.message || e).sli
 
 // ---- HTTP transport ----------------------------------------------------------------------
 export const HTTP_LIMITS = Object.freeze({
-  headersTimeout: envInt("RGOE_REGISTRAR_HEADERS_TIMEOUT_MS", 10000),
-  requestTimeout: envInt("RGOE_REGISTRAR_REQUEST_TIMEOUT_MS", 30000),
-  keepAliveTimeout: envInt("RGOE_REGISTRAR_KEEPALIVE_TIMEOUT_MS", 5000),
-  maxHeaderSize: envInt("RGOE_REGISTRAR_MAX_HEADER_BYTES", 8192),
-  connectionsCheckingInterval: envInt("RGOE_REGISTRAR_CONN_CHECK_MS", 1000),
+  headersTimeout: envInt("SHADE_TREE_REGISTRAR_HEADERS_TIMEOUT_MS", 10000),
+  requestTimeout: envInt("SHADE_TREE_REGISTRAR_REQUEST_TIMEOUT_MS", 30000),
+  keepAliveTimeout: envInt("SHADE_TREE_REGISTRAR_KEEPALIVE_TIMEOUT_MS", 5000),
+  maxHeaderSize: envInt("SHADE_TREE_REGISTRAR_MAX_HEADER_BYTES", 8192),
+  connectionsCheckingInterval: envInt("SHADE_TREE_REGISTRAR_CONN_CHECK_MS", 1000),
 });
 export const MAX_BODY = 4096;
 
@@ -406,15 +406,15 @@ export function offerSummary(offer) {
 export function makeServer(engine, { offer, store, set, limits = {}, now = () => Date.now() } = {}) {
   const lim = { ...HTTP_LIMITS, ...limits };
   if (lim.requestTimeout > 0 && lim.headersTimeout > lim.requestTimeout) lim.headersTimeout = lim.requestTimeout;
-  const payBucket = makeAnnounceBucket({ rate: envInt("RGOE_REGISTRAR_PAY_RATE", 1), burst: envInt("RGOE_REGISTRAR_PAY_BURST", 10), now: () => Math.floor(now() / 1000) });
-  const quoteBucket = makeAnnounceBucket({ rate: envInt("RGOE_REGISTRAR_QUOTE_RATE", 20), burst: envInt("RGOE_REGISTRAR_QUOTE_BURST", 100), now: () => Math.floor(now() / 1000) });
-  metrics.gauge("rgoe_registrar_orders", "Orders in the registrar store.").setCollect(() => store.size());
-  metrics.gauge("rgoe_registrar_inflight", "Settlements currently in flight.").setCollect(() => engine.inflight());
+  const payBucket = makeAnnounceBucket({ rate: envInt("SHADE_TREE_REGISTRAR_PAY_RATE", 1), burst: envInt("SHADE_TREE_REGISTRAR_PAY_BURST", 10), now: () => Math.floor(now() / 1000) });
+  const quoteBucket = makeAnnounceBucket({ rate: envInt("SHADE_TREE_REGISTRAR_QUOTE_RATE", 20), burst: envInt("SHADE_TREE_REGISTRAR_QUOTE_BURST", 100), now: () => Math.floor(now() / 1000) });
+  metrics.gauge("shade_tree_registrar_orders", "Orders in the registrar store.").setCollect(() => store.size());
+  metrics.gauge("shade_tree_registrar_inflight", "Settlements currently in flight.").setCollect(() => engine.inflight());
 
   const x402On = offerServes(offer, "x402"), mppOn = offerServes(offer, "mpp");
   const wantHeader = [x402On ? "PAYMENT-SIGNATURE" : null, mppOn ? "Authorization: Payment" : null].filter(Boolean).join(" or ");
   // Every 402 carries the challenge(s) of the ENABLED rails for the tiers in `limits`
-  // (RGOE_PAY_PROTOCOLS, T-FEAT-9: a disabled rail gets NO challenge), plus the JSON offer as body.
+  // (SHADE_TREE_PAY_PROTOCOLS, T-FEAT-9: a disabled rail gets NO challenge), plus the JSON offer as body.
   function send402(res, limitsToOffer, { digest = "", error = null, problem = null, x402Response = null, route = "quote" } = {}) {
     M.quotes.inc({ route });
     const headers = {};
@@ -477,10 +477,10 @@ export function makeServer(engine, { offer, store, set, limits = {}, now = () =>
         if (!x402Header && !authHeader) return send402(res, limits, { digest: raw.length ? contentDigest(raw) : "", route: "pay" });
         if (!payBucket.take()) return send(res, 429, { ok: false, err: "rate-limited" }, { "retry-after": String(payBucket.retryAfterSec()) });
         if (!body || !isCommitment(body.commitment) || bodyLimit == null) return send(res, 400, { ok: false, err: "bad-body", want: "{commitment: <decimal field element>, limit: <tier>}" });
-        // A payload for a rail this provider does not serve (RGOE_PAY_PROTOCOLS, T-FEAT-9) is refused
+        // A payload for a rail this provider does not serve (SHADE_TREE_PAY_PROTOCOLS, T-FEAT-9) is refused
         // up front with the enabled list -- never parsed, never a challenge for the disabled rail.
-        if (x402Header && !x402On) { M.payments.inc({ protocol: "x402", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "x402", protocols: offerProtocols(offer), detail: `this registrar does not serve x402 (RGOE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
-        if (!x402Header && authHeader && !mppOn) { M.payments.inc({ protocol: "mpp", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "mpp", protocols: offerProtocols(offer), detail: `this registrar does not serve MPP (RGOE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
+        if (x402Header && !x402On) { M.payments.inc({ protocol: "x402", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "x402", protocols: offerProtocols(offer), detail: `this registrar does not serve x402 (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
+        if (!x402Header && authHeader && !mppOn) { M.payments.inc({ protocol: "mpp", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "mpp", protocols: offerProtocols(offer), detail: `this registrar does not serve MPP (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
 
         // ---- x402 -----------------------------------------------------------------
         if (x402Header) {
@@ -536,12 +536,12 @@ function publicOrder(o) {
 
 // ---- main ---------------------------------------------------------------------------------
 async function main() {
-  const key = process.env.RGOE_REGISTRAR_KEY;
-  if (!key || !/^(0x)?[0-9a-fA-F]{64}$/.test(key)) { console.error("RGOE_REGISTRAR_KEY (operator hot key, 32-byte hex) is required"); process.exit(1); }
-  const rpcUrl = process.env.RGOE_RPC_URL || networkDefault("RGOE_RPC_URL");
-  if (!rpcUrl) { console.error("RGOE_RPC_URL is required (or RGOE_NETWORK with a contracts.json rpcUrl)"); process.exit(1); }
-  const setAddr = process.env.RGOE_PAID_ACCESS_CONTRACT || networkDefault("RGOE_PAID_ACCESS_CONTRACT");
-  if (!isAddress(setAddr || "")) { console.error("RGOE_PAID_ACCESS_CONTRACT (PaidAccessSet address) is required"); process.exit(1); }
+  const key = process.env.SHADE_TREE_REGISTRAR_KEY;
+  if (!key || !/^(0x)?[0-9a-fA-F]{64}$/.test(key)) { console.error("SHADE_TREE_REGISTRAR_KEY (operator hot key, 32-byte hex) is required"); process.exit(1); }
+  const rpcUrl = process.env.SHADE_TREE_RPC_URL || networkDefault("SHADE_TREE_RPC_URL");
+  if (!rpcUrl) { console.error("SHADE_TREE_RPC_URL is required (or SHADE_TREE_NETWORK with a contracts.json rpcUrl)"); process.exit(1); }
+  const setAddr = process.env.SHADE_TREE_PAID_ACCESS_CONTRACT || networkDefault("SHADE_TREE_PAID_ACCESS_CONTRACT");
+  if (!isAddress(setAddr || "")) { console.error("SHADE_TREE_PAID_ACCESS_CONTRACT (PaidAccessSet address) is required"); process.exit(1); }
   const offer = makeOffer(process.env);
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
@@ -554,11 +554,11 @@ async function main() {
   try {
     const allowed = (await set.allowedLimits()).map((n) => Number(n));
     const missing = tierList(offer).filter((l) => !allowed.includes(l));
-    if (missing.length) { console.error(`RGOE_PAY_PRICES sells tiers ${missing.join(",")} that PaidAccessSet ${setAddr} does not admit (allowedLimits=${allowed.join(",")})`); process.exit(1); }
+    if (missing.length) { console.error(`SHADE_TREE_PAY_PRICES sells tiers ${missing.join(",")} that PaidAccessSet ${setAddr} does not admit (allowedLimits=${allowed.join(",")})`); process.exit(1); }
   } catch (e) { console.error(`PaidAccessSet ${setAddr} unreachable or has no allowedLimits(): ${e.shortMessage || e.message}`); process.exit(1); }
-  const storePath = process.env.RGOE_REGISTRAR_STORE || join(HERE, "registrar-state.local.json");
+  const storePath = process.env.SHADE_TREE_REGISTRAR_STORE || join(HERE, "registrar-state.local.json");
   const store = makeStore(storePath);
-  const engine = makeEngine({ offer, token, set, wallet, provider, store, confirmations: envInt("RGOE_PAY_CONFIRMATIONS", 1), maxInflight: envInt("RGOE_REGISTRAR_MAX_INFLIGHT", 8) });
+  const engine = makeEngine({ offer, token, set, wallet, provider, store, confirmations: envInt("SHADE_TREE_PAY_CONFIRMATIONS", 1), maxInflight: envInt("SHADE_TREE_REGISTRAR_MAX_INFLIGHT", 8) });
   const rec = await engine.recover();
   if (rec.resumed || rec.failed) log.info("registrar: recovery", rec);
 
@@ -567,10 +567,10 @@ async function main() {
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
   server.listen(offer.port, "127.0.0.1", () => {
     log.info(`registrar up on 127.0.0.1:${offer.port}`, { operator: wallet.address, payTo: offer.payTo, asset: offer.asset, assetName: offer.assetName, chain: caip2(offer.chainId), tiers: offer.tiers, paidAccessSet: setAddr, store: storePath });
-    log.info(`endpoints: GET /pay/quote?limit=N  POST /pay  GET /pay/status/<nonce>  GET /health  GET /metrics  (protocols: ${offer.protocols.map((p) => (p === "x402" ? "x402 v2" : "MPP evm/charge type=authorization")).join(" + ")}; RGOE_PAY_PROTOCOLS=${offer.protocols.join(",")})`);
+    log.info(`endpoints: GET /pay/quote?limit=N  POST /pay  GET /pay/status/<nonce>  GET /health  GET /metrics  (protocols: ${offer.protocols.map((p) => (p === "x402" ? "x402 v2" : "MPP evm/charge type=authorization")).join(" + ")}; SHADE_TREE_PAY_PROTOCOLS=${offer.protocols.join(",")})`);
     log.info("endpoint hardening", { ...server.limits, maxBody: MAX_BODY });
   });
-  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs: Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000), label: "registrar" });
+  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs: Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000), label: "registrar" });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }

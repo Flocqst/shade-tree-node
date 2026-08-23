@@ -1,5 +1,5 @@
 /**
- * Smithers schema + bound API for shipping the reputation-gated onion egress roadmap.
+ * Smithers schema + bound API for shipping the Shade Tree roadmap.
  *
  * This is the roadmap AS CODE. Each milestone in docs/ROADMAP.md is a node here, so a
  * contributor can run the whole build durably (`bun run up`), watch it, approve the human

@@ -49,7 +49,7 @@ function reconstruct(cachedBaseDir, delta) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-dir-delta-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-dir-delta-"));
   let server;
   try {
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });

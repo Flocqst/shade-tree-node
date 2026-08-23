@@ -1,13 +1,13 @@
-// Live experiment harness for the reputation-gated egress.
+// Live experiment harness for the Shade Tree.
 //
 // Sends envelopes to the LIVE gateway onion over the client Tor SOCKS and records
 // the gateway's verdict. Runs one phase per invocation and merges its slice into
 // experiments/results.json (consumed by the dashboard).
 //
-//   RGOE_ONION=<onion> node experiments/run.mjs multi
-//   RGOE_ONION=<onion> node experiments/run.mjs bad
-//   RGOE_ONION=<onion> node experiments/run.mjs ratelimit <who> <count>
-//   RGOE_ONION=<onion> node experiments/run.mjs spam <count> <concurrency>
+//   SHADE_TREE_ONION=<onion> node experiments/run.mjs multi
+//   SHADE_TREE_ONION=<onion> node experiments/run.mjs bad
+//   SHADE_TREE_ONION=<onion> node experiments/run.mjs ratelimit <who> <count>
+//   SHADE_TREE_ONION=<onion> node experiments/run.mjs spam <count> <concurrency>
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -20,11 +20,11 @@ import { randomBytes } from "node:crypto";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
-const ONION = (process.env.RGOE_ONION || "").replace(/\.onion$/, "");
-const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9260);
+const ONION = (process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "");
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9260);
 const TARGET = "api.ipify.org:443";
 const RESULTS = join(HERE, "results.json");
-if (!ONION) { console.error("set RGOE_ONION"); process.exit(1); }
+if (!ONION) { console.error("set SHADE_TREE_ONION"); process.exit(1); }
 
 const keys = JSON.parse(await readFile(join(ROOT, "keys.local.json"), "utf8"));
 const scope = currentEpoch();

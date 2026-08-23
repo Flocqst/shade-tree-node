@@ -1,17 +1,17 @@
 # Operator runbook
 
 For running a gateway or a bootnode in production. Every command here exists in
-`bin/rgoe.mjs` or the deploy scripts. For the full config surface see
+`bin/shade-tree.mjs` or the deploy scripts. For the full config surface see
 [CONFIG.md](CONFIG.md); for the discovery design see [BOOTNODE.md](BOOTNODE.md).
 
 Two ways to invoke the CLI:
 
-- Workstation with the repo: `npm link` once, then `rgoe <cmd>`.
-- On a bootstrapped droplet (repo at `/opt/rgoe`, not linked): run it explicitly,
-  e.g. `sudo -u rgoe node /opt/rgoe/bin/rgoe.mjs <cmd>`.
+- Workstation with the repo: `npm link` once, then `shade-tree <cmd>`.
+- On a bootstrapped droplet (repo at `/opt/shade-tree`, not linked): run it explicitly,
+  e.g. `sudo -u shade-tree node /opt/shade-tree/bin/shade-tree.mjs <cmd>`.
 
-`rgoe help` lists commands; `rgoe <cmd> --help` prints one-line help. Every `--flag`
-just sets the matching `RGOE_*` env var (see [CLI.md](CLI.md)).
+`shade-tree help` lists commands; `shade-tree <cmd> --help` prints one-line help. Every `--flag`
+just sets the matching `SHADE_TREE_*` env var (see [CLI.md](CLI.md)).
 
 Note the two Tor SOCKS ports: the local-dev repo Tor runs SOCKS on **9250**; a
 droplet bootstrapped by `bootstrap.sh` uses the **system Tor on 9050**. The curl
@@ -28,7 +28,7 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
 ```
 
 Or, if the repo is already on the box:
@@ -41,15 +41,15 @@ It creates three `Restart=always` units:
 
 | unit | what it runs | source |
 |---|---|---|
-| `rgoe-bootnode` | discovery service | `bootnode/server.mjs` |
-| `rgoe-gateway` | reputation-gated egress | `gateway/gateway.mjs` |
-| `rgoe-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
+| `shade-tree-bootnode` | discovery service | `bootnode/server.mjs` |
+| `shade-tree-gateway` | access-gated egress node | `gateway/gateway.mjs` |
+| `shade-tree-heartbeat` | announces the gateway to the local bootnode | `bootnode/heartbeat.mjs` |
 
-Tunables are env vars on the `curl | bash` line, e.g. `RGOE_ADMISSION=stake`,
-`RGOE_BOOTNODE_PORT`, `RGOE_GATEWAY_PORT`, `RGOE_DIR`, `RGOE_REF=<tag|sha>` to pin the
-git ref the box clones (fetch the script from that same ref), `RGOE_ENABLE_POW=1` (onion PoW
+Tunables are env vars on the `curl | bash` line, e.g. `SHADE_TREE_ADMISSION=stake`,
+`SHADE_TREE_BOOTNODE_PORT`, `SHADE_TREE_GATEWAY_PORT`, `SHADE_TREE_DIR`, `SHADE_TREE_REF=<tag|sha>` to pin the
+git ref the box clones (fetch the script from that same ref), `SHADE_TREE_ENABLE_POW=1` (onion PoW
 DoS defense; **off by default** because a `pow: no` client tor cannot reach a PoW onion),
-`RGOE_GATEWAY_REGION=eu`. Full table: `bootnode/deploy/README.md` "Tunables". Every value
+`SHADE_TREE_GATEWAY_REGION=eu`. Full table: `bootnode/deploy/README.md` "Tunables". Every value
 is validated before anything is installed.
 
 Firewall: the gateway and bootnode are onion services and take **no inbound clearnet
@@ -64,23 +64,23 @@ Wait ~30s for descriptor propagation, then verify (see day-2 below).
 
 ### Fresh box, one command (gateway-only mode)
 
-`bootstrap.sh` with `RGOE_BOOTNODE_ONION` set installs **only** tor + `rgoe-gateway` +
-`rgoe-heartbeat` — no bootnode unit, no bootnode onion — and points the heartbeat at the
+`bootstrap.sh` with `SHADE_TREE_BOOTNODE_ONION` set installs **only** tor + `shade-tree-gateway` +
+`shade-tree-heartbeat` — no bootnode unit, no bootnode onion — and points the heartbeat at the
 existing bootnode:
 
 ```bash
 ssh root@<new-droplet-ip>
-RGOE_BOOTNODE_ONION=<bootnode-onion> RGOE_BOOTNODE_SIGNER=<pinned-signer> \
-  bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/reputation-gated-onion-egress/main/bootnode/deploy/bootstrap.sh)
-journalctl -u rgoe-heartbeat -f      # 'announced (...)' once the descriptors propagate
+SHADE_TREE_BOOTNODE_ONION=<bootnode-onion> SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> \
+  bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh)
+journalctl -u shade-tree-heartbeat -f      # 'announced (...)' once the descriptors propagate
 ```
 
-`RGOE_BOOTNODE_SIGNER` is only echoed into the printed client command (the heartbeat does
-not need it). Optional: `RGOE_GATEWAY_REGION=<na|sa|eu|af|as|oc|aq|unknown>` to advertise a
-coarse region, `RGOE_ENABLE_POW=1` to enable onion PoW. For a `stake` bootnode, stake the
-operator (b. below) and then add `Environment=RGOE_GW_OPERATOR_KEY=0x<operator-key>` to
-`/etc/systemd/system/rgoe-heartbeat.service` (`systemctl daemon-reload && systemctl restart
-rgoe-heartbeat`); the key is a secret and is not a `bootstrap.sh` tunable.
+`SHADE_TREE_BOOTNODE_SIGNER` is only echoed into the printed client command (the heartbeat does
+not need it). Optional: `SHADE_TREE_GATEWAY_REGION=<na|sa|eu|af|as|oc|aq|unknown>` to advertise a
+coarse region, `SHADE_TREE_ENABLE_POW=1` to enable onion PoW. For a `stake` bootnode, stake the
+operator (b. below) and then add `Environment=SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key>` to
+`/etc/systemd/system/shade-tree-heartbeat.service` (`systemctl daemon-reload && systemctl restart
+shade-tree-heartbeat`); the key is a secret and is not a `bootstrap.sh` tunable.
 
 ### By hand
 
@@ -89,7 +89,7 @@ If you did not use `bootstrap.sh` (bringing your own host, or a non-systemd setu
 ### a. Mint an onion identity
 
 ```bash
-rgoe keygen tor/hs-gateway --label gateway
+shade-tree keygen tor/hs-gateway --label gateway
 ```
 
 This writes Tor's HS key files (`hs_ed25519_secret_key`, `hs_ed25519_public_key`,
@@ -103,7 +103,7 @@ to slash member over-spenders. Stake binds to the operator **address**, never to
 onion (one stake can back rotating onions).
 
 ```bash
-rgoe register-gateway \
+shade-tree register-gateway \
   --gateway-registry 0x<GatewayRegistry> \
   --register-key 0x<operator-key> \
   --rpc-url https://<rpc-endpoint>
@@ -115,9 +115,9 @@ the operator is already staked.
 ### c. Run the gateway and heartbeat
 
 ```bash
-rgoe gateway                                    # the egress; verifies proofs, tunnels :443
+shade-tree gateway                                    # the egress; verifies proofs, tunnels :443
 
-rgoe heartbeat \
+shade-tree heartbeat \
   --bootnode <bootnode-onion> \
   --identity tor/hs-gateway/identity.local.json
 ```
@@ -126,7 +126,7 @@ For a staked bootnode, add the operator key so the heartbeat signs the durable
 onion<->operator authorization:
 
 ```bash
-RGOE_GW_OPERATOR_KEY=0x<operator-key> rgoe heartbeat \
+SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key> shade-tree heartbeat \
   --bootnode <bootnode-onion> \
   --identity tor/hs-gateway/identity.local.json
 ```
@@ -145,25 +145,25 @@ curl --socks5-hostname 127.0.0.1:9050 http://<bootnode-onion>/directory
 ### Health
 
 ```bash
-systemctl status rgoe-bootnode rgoe-gateway rgoe-heartbeat
+systemctl status shade-tree-bootnode shade-tree-gateway shade-tree-heartbeat
 
 # over Tor (droplet SOCKS = 9050):
 curl --socks5-hostname 127.0.0.1:9050 http://<bootnode-onion>/health      # liveness + count + admission
 curl --socks5-hostname 127.0.0.1:9050 http://<bootnode-onion>/directory   # current signed directory
 
 # local sanity (node, tor, deps, keys):
-rgoe doctor
+shade-tree doctor
 ```
 
-`rgoe doctor` is read-only; it flags a missing Tor daemon, missing deps, missing onion
+`shade-tree doctor` is read-only; it flags a missing Tor daemon, missing deps, missing onion
 identity, and whether on-chain mode is configured.
 
 ### Logs
 
 ```bash
-journalctl -u rgoe-gateway   -f
-journalctl -u rgoe-bootnode  -f
-journalctl -u rgoe-heartbeat -f
+journalctl -u shade-tree-gateway   -f
+journalctl -u shade-tree-bootnode  -f
+journalctl -u shade-tree-heartbeat -f
 ```
 
 ### Normal log lines
@@ -200,29 +200,29 @@ Three secrets. All are gitignored (`identity.local.json`, `hs_ed25519_secret_key
 
 | secret | where (droplet) | what it is |
 |---|---|---|
-| gateway onion seed | `deploy-state/gateway-hs/identity.local.json` (+ Tor's copy in `/var/lib/tor/rgoe-gateway/`) | the 32-byte seed behind the onion; signs announces. Losing it loses the onion address. |
-| bootnode onion seed | `deploy-state/bootnode-hs/identity.local.json` (+ `/var/lib/tor/rgoe-bootnode/`) | same, for the bootnode onion. |
+| gateway onion seed | `deploy-state/gateway-hs/identity.local.json` (+ Tor's copy in `/var/lib/tor/shade-tree-gateway/`) | the 32-byte seed behind the onion; signs announces. Losing it loses the onion address. |
+| bootnode onion seed | `deploy-state/bootnode-hs/identity.local.json` (+ `/var/lib/tor/shade-tree-bootnode/`) | same, for the bootnode onion. |
 | bootnode signer key | `deploy-state/bootnode-signer.key` | the `{pub,priv}` that signs the directory. The `pub` is what clients pin as `--dir-signer`. |
-| operator EOA key | operator's wallet (env `RGOE_GW_OPERATOR_KEY` / `RGOE_REGISTER_KEY`, `RGOE_SLASH_KEY`) | funds the stake and pays slash gas. Keep it off the box where possible. |
+| operator EOA key | operator's wallet (env `SHADE_TREE_GW_OPERATOR_KEY` / `SHADE_TREE_REGISTER_KEY`, `SHADE_TREE_SLASH_KEY`) | funds the stake and pays slash gas. Keep it off the box where possible. |
 
 Locally (non-bootstrapped) the same files live under `tor/hs*/identity.local.json` and
 `bootnode/bootnode-signer.key`.
 
 ### Backup
 
-`rgoe backup` / `rgoe restore` (`scripts/backup.mjs`, full guide in
+`shade-tree backup` / `shade-tree restore` (`scripts/backup.mjs`, full guide in
 [BACKUP.md](./BACKUP.md)) encrypt the onion seeds (`identity.local.json`,
 `hs_ed25519_secret_key`) and the bootnode signer key into one tamper-evident file
 (scrypt + AES-256-GCM, Node crypto only, no `gpg` needed). The passphrase is read
-**only** from `RGOE_BACKUP_PASSPHRASE`, never from argv, never logged.
+**only** from `SHADE_TREE_BACKUP_PASSPHRASE`, never from argv, never logged.
 
 ```bash
-export RGOE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
-sudo -E node /opt/rgoe/bin/rgoe.mjs backup /opt/rgoe/deploy-state rgoe-keys-$(date +%F).rgoebak
-# then move the .rgoebak file to an off-box, encrypted-at-rest location.
+export SHADE_TREE_BACKUP_PASSPHRASE='…a long, unique passphrase…'
+sudo -E node /opt/shade-tree/bin/shade-tree.mjs backup /opt/shade-tree/deploy-state shade-tree-keys-$(date +%F).shade-tree-backup
+# then move the .shade-tree-backup file to an off-box, encrypted-at-rest location.
 
 # on a fresh box, before starting the units:
-sudo -E node /opt/rgoe/bin/rgoe.mjs restore rgoe-keys-<date>.rgoebak /opt/rgoe/deploy-state   # --force to overwrite
+sudo -E node /opt/shade-tree/bin/shade-tree.mjs restore shade-tree-keys-<date>.shade-tree-backup /opt/shade-tree/deploy-state   # --force to overwrite
 ```
 
 Restore lays the files back with `0600`/`0700` perms; the onion address and pinned
@@ -253,19 +253,19 @@ Subsequent requests on that nullifier log `DROP  rate-slashed  null=...`.
 If slashing is not configured you instead see a dry-run and **no on-chain tx**:
 
 ```
-slash: DRY-RUN (set RGOE_SLASH_KEY + deployed.local.json/RGOE_GROUP_CONTRACT to submit on chain)
+slash: DRY-RUN (set SHADE_TREE_SLASH_KEY + deployed.local.json/SHADE_TREE_GROUP_CONTRACT to submit on chain)
 SLASH (dry-run) commitment=0x0123456789abcd.. secret=0x89abcdef..
 ```
 
-To slash for real, the gateway needs `RGOE_SLASH_KEY` (a hot key, separate from any
-member secret) and a slash contract (`RGOE_SLASH_CONTRACT`, or `contracts/deployed.local.json`);
-`ethers` must be installed. Optional `RGOE_SLASH_RECEIVER` sets who receives the bond
+To slash for real, the gateway needs `SHADE_TREE_SLASH_KEY` (a hot key, separate from any
+member secret) and a slash contract (`SHADE_TREE_SLASH_CONTRACT`, or `contracts/deployed.local.json`);
+`ethers` must be installed. Optional `SHADE_TREE_SLASH_RECEIVER` sets who receives the bond
 (defaults to the slasher wallet).
 
 Verify:
 
 ```bash
-journalctl -u rgoe-gateway | grep SLASH          # find the tx hash
+journalctl -u shade-tree-gateway | grep SLASH          # find the tx hash
 # then confirm on chain with your explorer or:
 cast tx 0x<hash> --rpc-url https://<rpc-endpoint>   # foundry; check it was mined and reverted=false
 ```
@@ -277,7 +277,7 @@ over-spending member can no longer egress (repeated `DROP rate-slashed`).
 
 Each gateway defends itself against an exact-envelope replay with a per-gateway
 seen-envelope cache (T-FEAT-12): a captured envelope resent to the **same** gateway
-outside the honest-retry window (`RGOE_REPLAY_WINDOW_MS`, default 5s) is dropped
+outside the honest-retry window (`SHADE_TREE_REPLAY_WINDOW_MS`, default 5s) is dropped
 `replayed-envelope`. That cache is local, so a non-colluding fleet had no shared
 spent-set — a malicious relay could fan one captured envelope to **peer** gateways and
 each would serve it once.
@@ -290,7 +290,7 @@ tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
 - **What crosses the wire, and why it is safe.** Only the pair `(nullifier, epoch)` is
   shared — never member identity/commitment, never `share.y` (the secret a slash
   reconstructs from), never the egress `target`, never `share.x` or the nonce. An RLN
-  nullifier is per-epoch, per-request, and pseudorandom (unlinkable to the member — the
+  nullifier is per-epoch, per-tunnel, and pseudorandom (unlinkable to the member — the
   same property that already lets one gateway dedup on it without learning who the member
   is), so sharing it adds no linkability beyond what the admitting gateway already had. A
   peer learns only "some request with nullifier N happened in epoch E." Because `share.y`
@@ -304,7 +304,7 @@ tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
   T-FEAT-12 defense and keeps serving — the tally is defense-in-depth, never an admission
   authority, so a partition or a broken peer cannot deny legitimate members.
 - **Off by default.** No shared transport is wired unless one is configured. With no
-  `RGOE_FLEET_TALLY_PEERS` set the gateway runs **exactly** the per-gateway behavior
+  `SHADE_TREE_FLEET_TALLY_PEERS` set the gateway runs **exactly** the per-gateway behavior
   (byte-identical to T-FEAT-12). When the tally is active the gateway logs `fleet tally: ON`
   at startup. Note: with the tally enabled a nullifier is single-use **fleet-wide**, so a
   client that fails over to another gateway must use a fresh RLN slot (a follow-up on the
@@ -320,19 +320,19 @@ gateway. It is a direct **1-hop** push to a fixed peer set — not a forwarding 
 nullifier crosses the wire at most once per peer per admit (no gossip storm, no loops: the
 inbound handler only records locally, it never re-publishes).
 
-- **Enable it** with `RGOE_FLEET_TALLY_PEERS` (comma-separated peer gateways). A peer that is
+- **Enable it** with `SHADE_TREE_FLEET_TALLY_PEERS` (comma-separated peer gateways). A peer that is
   an `.onion` is reached **over Tor** (reusing the bootnode fetch path — no exit node, the
   peer never learns this gateway's IP); a bare `host:port` peer is reached with a plain HTTP
-  POST (localhost / private management network). Set `RGOE_FLEET_TALLY_LISTEN` (`host:port` or
+  POST (localhost / private management network). Set `SHADE_TREE_FLEET_TALLY_LISTEN` (`host:port` or
   `port`, default `127.0.0.1:0`) for this gateway's inbound endpoint — behind Tor, map the
-  gateway's onion to that local port. `RGOE_FLEET_TALLY_PATH` overrides the endpoint path
+  gateway's onion to that local port. `SHADE_TREE_FLEET_TALLY_PATH` overrides the endpoint path
   (default `/fleet-tally`). For a full mesh, list the other gateways as each gateway's peers
   (federation, T-FEAT-1, already discovers them).
 - **Trust model — peers are semi-trusted.** Peers are fleet gateways the operator configured,
   not the open internet, but the transport assumes any peer can be down, slow, or malicious
   and bounds the damage:
   - **Fail-open, both directions.** Outbound POSTs are fire-and-forget with a per-peer timeout
-    (`RGOE_FLEET_TALLY_TIMEOUT_MS`, default 4s); a refused / 500 / slow / partitioned peer is
+    (`SHADE_TREE_FLEET_TALLY_TIMEOUT_MS`, default 4s); a refused / 500 / slow / partitioned peer is
     swallowed and **never** blocks admission — `publish()` returns synchronously and the
     gateway proceeds on its local defense. Inbound malformed / oversized bodies are dropped
     (400/413), never crash the endpoint.
@@ -342,7 +342,7 @@ inbound handler only records locally, it never re-publishes).
   - **Bounded blast radius.** A malicious peer flooding fake nullifiers can at worst fill this
     gateway's per-epoch bucket up to the flood cap (`maxPerEpoch`, memory stays bounded; past
     the cap recording simply stops — lose dedup, never deny). It cannot cause a fleet-wide
-    outage. A live nullifier is `H(identitySecret, externalNullifier)`, per-request
+    outage. A live nullifier is `H(identitySecret, externalNullifier)`, per-tunnel
     pseudorandom and unpredictable, so a flooder cannot pre-image a **future** honest member's
     nullifier to get it pre-rejected — its garbage collides with nothing real, and the only
     harm stays on the flooder. Response reads are byte-capped against an unbounded reply.
@@ -352,42 +352,42 @@ inbound handler only records locally, it never re-publishes).
 ## 6. Rotate or retire a gateway
 
 Retiring a **staked** gateway is a two-step on-chain exit plus stopping the units. The
-`rgoe` wrappers (`group/exit-gateway.mjs`) drive `GatewayRegistry`
+`shade-tree` wrappers (`group/exit-gateway.mjs`) drive `GatewayRegistry`
 (`contracts/GatewayRegistry.sol`); the equivalent raw `cast` calls are shown for reference.
 All three read the on-chain state first and refuse a call the contract would revert
 (`NotStaked` / `AlreadyExiting` / `NotExiting` / `StillBonded`), and every sending
 command takes `--dry-run` (prints target + calldata + an `eth_call` simulation, broadcasts
-nothing). Set `RGOE_RPC_URL` / `RGOE_GATEWAY_REGISTRY` (or `--rpc-url` / `--gateway-registry`).
+nothing). Set `SHADE_TREE_RPC_URL` / `SHADE_TREE_GATEWAY_REGISTRY` (or `--rpc-url` / `--gateway-registry`).
 The operator key is the one that called `register()`; hand it over via `--account <name>`
 (Foundry encrypted keystore, `cast wallet import <name> --interactive`; password from
-`RGOE_KEYSTORE_PASSWORD` or a no-echo prompt), `--keystore <json>`, `--key-file <0600 file>`,
-or `RGOE_REGISTER_KEY` in the environment — never on the command line.
+`SHADE_TREE_KEYSTORE_PASSWORD` or a no-echo prompt), `--keystore <json>`, `--key-file <0600 file>`,
+or `SHADE_TREE_REGISTER_KEY` in the environment — never on the command line.
 
 0. Look before you leap (read-only, no key needed):
 
    ```bash
-   rgoe gateway-status --operator 0x<operator> --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   shade-tree gateway-status --operator 0x<operator> --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
    ```
 
 1. Start the unbonding clock (operator-only). You stay slashable for the whole
    `UNBONDING` window, so you cannot exit-then-dodge a slash:
 
    ```bash
-   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
-   rgoe exit-gateway --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
-   # raw equivalent: cast send 0x<GatewayRegistry> "initiateExit()" --account rgoe-operator --rpc-url https://<rpc-endpoint>
+   shade-tree exit-gateway --account shade-tree-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   shade-tree exit-gateway --account shade-tree-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "initiateExit()" --account shade-tree-operator --rpc-url https://<rpc-endpoint>
    ```
 
-   The command prints `withdrawable at <unix> (<ISO>)`; `rgoe gateway-status` shows the same
+   The command prints `withdrawable at <unix> (<ISO>)`; `shade-tree gateway-status` shows the same
    (raw: `cast call 0x<GatewayRegistry> "withdrawableAt(address)(uint256)" 0x<operator>`).
    A stake-admission bootnode stops admitting this operator on its next refresh
-   (`RGOE_STAKE_CACHE_MS`), so do step 2 right away.
+   (`SHADE_TREE_STAKE_CACHE_MS`), so do step 2 right away.
 
 2. Stop the units so the gateway stops announcing:
 
    ```bash
-   systemctl disable --now rgoe-heartbeat rgoe-gateway
-   # keep rgoe-bootnode running if this box is also the bootnode
+   systemctl disable --now shade-tree-heartbeat shade-tree-gateway
+   # keep shade-tree-bootnode running if this box is also the bootnode
    ```
 
 3. The bootnode holds soft state with a TTL (`--ttl`, default 900s). Once the heartbeat
@@ -399,13 +399,13 @@ or `RGOE_REGISTER_KEY` in the environment — never on the command line.
    command refuses with `StillBonded until <ISO> — N s to go` and sends nothing:
 
    ```bash
-   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
-   rgoe withdraw-gateway --recipient 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
-   # raw equivalent: cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> --account rgoe-operator --rpc-url https://<rpc-endpoint>
+   shade-tree withdraw-gateway --recipient 0x<recipient> --account shade-tree-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry> --dry-run
+   shade-tree withdraw-gateway --recipient 0x<recipient> --account shade-tree-operator --rpc-url https://<rpc-endpoint> --gateway-registry 0x<GatewayRegistry>
+   # raw equivalent: cast send 0x<GatewayRegistry> "withdraw(address)" 0x<recipient> --account shade-tree-operator --rpc-url https://<rpc-endpoint>
    ```
 
 **Rotating** an onion (new address, same operator/stake): mint a new identity
-(`rgoe keygen ...`), point Tor and the heartbeat at it, and let the old entry TTL out.
+(`shade-tree keygen ...`), point Tor and the heartbeat at it, and let the old entry TTL out.
 No re-staking needed; the stake is keyed to the operator address, not the onion.
 
 An **unstaked** (`--admission open`) gateway is just steps 2-3: stop the units, let the
@@ -419,95 +419,95 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 
 | Env var | Flag | What it does |
 |---|---|---|
-| `RGOE_BOOTNODE_ADMISSION` | `--admission` | `open` (onion-control only) or `stake` (require live operator bond). |
-| `RGOE_BOOTNODE_TTL` | `--ttl` | Seconds a gateway stays live without re-announcing (default 900). |
-| `RGOE_BOOTNODE_HEARTBEAT` | `--interval` | Re-announce interval (default 300). |
-| `RGOE_GW_WEIGHT` | `--weight` | Selection weight advertised for this gateway (default 100). |
-| `RGOE_STAKE_MODE` | `--stake-mode` | `onchain` (eth_call `isStaked`) or `mock` (chainless dev). |
-| `RGOE_GATEWAY_REGISTRY` | `--gateway-registry` | `GatewayRegistry` address (required for onchain stake + `register-gateway`). |
-| `RGOE_ADMIT` | `--admit` | Admission policy (T-FEAT-9): `invited[,staked][,paid]`, default `invited` (max-anon) — the ONLY root sources + slash targets; a named path without its contract refuses to start. Set the same on the heartbeat (advertised as signed `caps.admits`). `RGOE_ROOTS` = deprecated alias. See "Choose what you admit and what you sell" below. |
-| `RGOE_GROUP_CONTRACT` | `--group-contract` | `StakedReputationSet` address (comma list allowed); read ONLY when `RGOE_ADMIT` includes `staked`. |
-| `RGOE_PAY_PROTOCOLS` | `--pay-protocols` | Registrar rails served + advertised: `x402,mpp` (default) / `x402` / `mpp` (T-FEAT-9). |
-| `RGOE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
-| `RGOE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
-| `RGOE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
-| `RGOE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `RGOE_SLOTS`. See "Reputation tiers" below. |
-| `RGOE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
-| `RGOE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `RGOE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |
-| `RGOE_ROOT_PROVIDER` | `--root-provider` | `node` (trusted node, event reconstruction; default) or `light` (EIP-1186 storage proof of the on-chain `currentRoot`). |
-| `RGOE_HELIOS_RPC_URL` | (none) | `light` only: local Helios verifying RPC (`http://127.0.0.1:8546` from `bootstrap.sh RGOE_HELIOS=1`). Set ⇒ the proof's block `stateRoot` is sync-committee verified and the RPC cannot lie about the root (only withhold); startup logs `stateRootSource: helios (sync-committee verified)`. Unset ⇒ `stateRootSource: rpc header (TRUSTED, …)`. See "Anchor the admission root to the sync committee" below and `docs/LIGHT-CLIENT.md`. |
-| `RGOE_HELIOS_CHAIN_ID` | (none) | Decimal chain id Helios must report; unset = must equal the RPC's `eth_chainId`. Mismatch ⇒ refuses to start reading roots. |
-| `RGOE_FROM_BLOCK` / `RGOE_FROM_BLOCKS` / `RGOE_LOGS_CHUNK` | (none) | `node` root provider + client leaf discovery: where the `eth_getLogs` event scan starts (one block for all sets / `<0xaddr>=<block>,…` per set; default = each set's deploy block from the network record) and how many blocks per call (default 10000, halved automatically when the RPC refuses a window). See "Public RPC log-range caps" below. |
-| `RGOE_TOR_HOST` / `RGOE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
-| `RGOE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
-| `RGOE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
-| `RGOE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
-| `RGOE_FLEET_TALLY_TIMEOUT_MS` | (none) | Per-peer push timeout (default 4000). A slow/down peer is swallowed (fail-open), never blocks admission. |
-| `RGOE_FLEET_TALLY` | (none) | Legacy flag; with no `RGOE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
-| `RGOE_EGRESS_ALLOW` / `RGOE_EGRESS_DENY` | (none) | Egress policy (see §2). When `RGOE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
-| `RGOE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
-| `RGOE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
-| `RGOE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `RGOE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
-| `RGOE_ENVELOPE_TIMEOUT_MS` / `RGOE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
-| `RGOE_MAX_CONNS` / `RGOE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
-| `RGOE_BOOTNODE_ANNOUNCE_RATE` / `RGOE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `RGOE_BOOTNODE_MAX_ENTRIES` and `RGOE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
-| `RGOE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
+| `SHADE_TREE_BOOTNODE_ADMISSION` | `--admission` | `open` (onion-control only) or `stake` (require live operator bond). |
+| `SHADE_TREE_BOOTNODE_TTL` | `--ttl` | Seconds a gateway stays live without re-announcing (default 900). |
+| `SHADE_TREE_BOOTNODE_HEARTBEAT` | `--interval` | Re-announce interval (default 300). |
+| `SHADE_TREE_GW_WEIGHT` | `--weight` | Selection weight advertised for this gateway (default 100). |
+| `SHADE_TREE_STAKE_MODE` | `--stake-mode` | `onchain` (eth_call `isStaked`) or `mock` (chainless dev). |
+| `SHADE_TREE_GATEWAY_REGISTRY` | `--gateway-registry` | `GatewayRegistry` address (required for onchain stake + `register-gateway`). |
+| `SHADE_TREE_ADMIT` | `--admit` | Admission policy (T-FEAT-9): `invited[,staked][,paid]`, default `invited` (max-anon) — the ONLY root sources + slash targets; a named path without its contract refuses to start. Set the same on the heartbeat (advertised as signed `caps.admits`). `SHADE_TREE_ROOTS` = deprecated alias. See "Choose what you admit and what you sell" below. |
+| `SHADE_TREE_GROUP_CONTRACT` | `--group-contract` | `StakedReputationSet` address (comma list allowed); read ONLY when `SHADE_TREE_ADMIT` includes `staked`. |
+| `SHADE_TREE_PAY_PROTOCOLS` | `--pay-protocols` | Registrar rails served + advertised: `x402,mpp` (default) / `x402` / `mpp` (T-FEAT-9). |
+| `SHADE_TREE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
+| `SHADE_TREE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
+| `SHADE_TREE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
+| `SHADE_TREE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `SHADE_TREE_SLOTS`. See "Reputation tiers" below. |
+| `SHADE_TREE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
+| `SHADE_TREE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `SHADE_TREE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |
+| `SHADE_TREE_ROOT_PROVIDER` | `--root-provider` | `node` (trusted node, event reconstruction; default) or `light` (EIP-1186 storage proof of the on-chain `currentRoot`). |
+| `SHADE_TREE_HELIOS_RPC_URL` | (none) | `light` only: local Helios verifying RPC (`http://127.0.0.1:8546` from `bootstrap.sh SHADE_TREE_HELIOS=1`). Set ⇒ the proof's block `stateRoot` is sync-committee verified and the RPC cannot lie about the root (only withhold); startup logs `stateRootSource: helios (sync-committee verified)`. Unset ⇒ `stateRootSource: rpc header (TRUSTED, …)`. See "Anchor the admission root to the sync committee" below and `docs/LIGHT-CLIENT.md`. |
+| `SHADE_TREE_HELIOS_CHAIN_ID` | (none) | Decimal chain id Helios must report; unset = must equal the RPC's `eth_chainId`. Mismatch ⇒ refuses to start reading roots. |
+| `SHADE_TREE_FROM_BLOCK` / `SHADE_TREE_FROM_BLOCKS` / `SHADE_TREE_LOGS_CHUNK` | (none) | `node` root provider + client leaf discovery: where the `eth_getLogs` event scan starts (one block for all sets / `<0xaddr>=<block>,…` per set; default = each set's deploy block from the network record) and how many blocks per call (default 10000, halved automatically when the RPC refuses a window). See "Public RPC log-range caps" below. |
+| `SHADE_TREE_TOR_HOST` / `SHADE_TREE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
+| `SHADE_TREE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
+| `SHADE_TREE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
+| `SHADE_TREE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
+| `SHADE_TREE_FLEET_TALLY_TIMEOUT_MS` | (none) | Per-peer push timeout (default 4000). A slow/down peer is swallowed (fail-open), never blocks admission. |
+| `SHADE_TREE_FLEET_TALLY` | (none) | Legacy flag; with no `SHADE_TREE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
+| `SHADE_TREE_EGRESS_ALLOW` / `SHADE_TREE_EGRESS_DENY` | (none) | Egress policy (see §2). When `SHADE_TREE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
+| `SHADE_TREE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
+| `SHADE_TREE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
+| `SHADE_TREE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `SHADE_TREE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
+| `SHADE_TREE_ENVELOPE_TIMEOUT_MS` / `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `SHADE_TREE_MAX_CONNS` / `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
+| `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` / `SHADE_TREE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `SHADE_TREE_BOOTNODE_MAX_ENTRIES` and `SHADE_TREE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
+| `SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
 
 ### Public RPC log-range caps (eth_getLogs)
 
-The `node` root provider (and the client's leaf discovery, `rgoe leaves`) rebuilds a set's tree
+The `node` root provider (and the client's leaf discovery, `shade-tree leaves`) rebuilds a set's tree
 from its event log with `eth_getLogs`. Every public / hosted RPC caps ONE such call — by block
 range and/or result count — and answers with an error, not a partial result: publicnode
 `exceed maximum block range: 50000`, Infura `query returned more than 10000 results` (and a
 10k-block range), QuickNode `limited to a 10,000 blocks range`, Alchemy `Log response size
 exceeded` (2k blocks on the free tier). Scanning "from block 0" against one of them fails on
 the very first call — which is how both fleet gateways crash-looped at startup on 2026-08-17
-after `RGOE_PAID_ACCESS_CONTRACT` was enabled (`docs/GO-LIVE-LOG-2026-08-17.md`,
+after `SHADE_TREE_PAID_ACCESS_CONTRACT` was enabled (`docs/GO-LIVE-LOG-2026-08-17.md`,
 `docs/INCIDENT.md` §5).
 
 Since that night the gateway does three things on its own (`lib/root-provider.mjs`):
 
-- **Pages the scan.** `[from, head]` is split into `RGOE_LOGS_CHUNK` windows (default 10000,
+- **Pages the scan.** `[from, head]` is split into `SHADE_TREE_LOGS_CHUNK` windows (default 10000,
   under every cap above; `head` is resolved to a number once so every page sees the same block); a
   window the RPC refuses is halved and retried (down to 8 blocks); pieces are concatenated in
   order. Finalized reads then continue incrementally (only the new blocks each refresh), so a
   long-lived gateway costs one small call per poll, not a re-scan of the history.
 - **Starts at the deploy block.** Each contract's scan starts at its own deploy block from the
   committed network record (`network/sepolia/contracts.json` `deployBlocks`), whether the box runs
-  `RGOE_NETWORK=sepolia` or pins `RGOE_GROUP_CONTRACT` / `RGOE_PAID_ACCESS_CONTRACT` by hand. Only a
+  `SHADE_TREE_NETWORK=sepolia` or pins `SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_PAID_ACCESS_CONTRACT` by hand. Only a
   contract no record knows starts at 0 (still correct, just slower). Override per box with
-  `RGOE_FROM_BLOCK=<block>` (all sets) or `RGOE_FROM_BLOCKS=0xSet=<block>,0xPaid=<block>`
+  `SHADE_TREE_FROM_BLOCK=<block>` (all sets) or `SHADE_TREE_FROM_BLOCKS=0xSet=<block>,0xPaid=<block>`
   (`bootstrap.sh` passes both into the gateway unit when given).
 - **Fails soft at startup.** If every chain source is unreadable at boot but `members.json` gives
   a root, the gateway STARTS with that root, logs `root source UNAVAILABLE at startup …` (with the
-  fix hint), gauges `rgoe_gateway_root_source_degraded{contract=…} 1`, and picks the chain roots up
+  fix hint), gauges `shade_tree_gateway_root_source_degraded{contract=…} 1`, and picks the chain roots up
   on the next successful poll (no restart). With no root at all it still refuses to start (an
   empty admission set is not a gateway; systemd's restart is the retry). Alert on the gauge.
 
-If you see the error anyway: check `RGOE_RPC_URL` is the RPC you think, lower `RGOE_LOGS_CHUNK`
+If you see the error anyway: check `SHADE_TREE_RPC_URL` is the RPC you think, lower `SHADE_TREE_LOGS_CHUNK`
 (some providers cap at 2k), or pin the start blocks. Your own node has no such cap.
 
 ### Anchor the admission root to the sync committee (optional, T-DEV-9b)
 
-By default an on-chain gateway (`RGOE_GROUP_CONTRACT` set) trusts its RPC for the admission
-root — fine when `RGOE_RPC_URL` is your own node. If it is a third-party RPC, run the Helios
+By default an on-chain gateway (`SHADE_TREE_GROUP_CONTRACT` set) trusts its RPC for the admission
+root — fine when `SHADE_TREE_RPC_URL` is your own node. If it is a third-party RPC, run the Helios
 light-client sidecar so the root is verified against Ethereum consensus instead:
 
 ```bash
-RGOE_HELIOS=1 \
-RGOE_HELIOS_CONSENSUS_RPC=https://lodestar-sepolia.chainsafe.io \   # a beacon API with the light-client endpoints
-RGOE_RPC_URL=<execution RPC that serves eth_getProof at finalized> \
-RGOE_GROUP_CONTRACT=0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25 \   # rln-v4-tiers (on-chain root; network/sepolia/contracts.json)
-  sudo bash bootnode/deploy/bootstrap.sh          # composes with RGOE_BOOTNODE_ONION (gateway-only)
-journalctl -u rgoe-helios -f                       # 'consensus client in sync with checkpoint', then 'finalized block number=…'
-journalctl -u rgoe-gateway | grep stateRootSource  # expect: helios (sync-committee verified)
+SHADE_TREE_HELIOS=1 \
+SHADE_TREE_HELIOS_CONSENSUS_RPC=https://lodestar-sepolia.chainsafe.io \   # a beacon API with the light-client endpoints
+SHADE_TREE_RPC_URL=<execution RPC that serves eth_getProof at finalized> \
+SHADE_TREE_GROUP_CONTRACT=0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25 \   # rln-v4-tiers (on-chain root; network/sepolia/contracts.json)
+  sudo bash bootnode/deploy/bootstrap.sh          # composes with SHADE_TREE_BOOTNODE_ONION (gateway-only)
+journalctl -u shade-tree-helios -f                       # 'consensus client in sync with checkpoint', then 'finalized block number=…'
+journalctl -u shade-tree-gateway | grep stateRootSource  # expect: helios (sync-committee verified)
 ```
 
-That installs the sha256-pinned `helios 0.11.1` release binary, a hardened `rgoe-helios`
-unit (loopback `:8546`), and sets `RGOE_ROOT_PROVIDER=light` + `RGOE_HELIOS_RPC_URL` on the
-gateway unit, ordered after the sidecar. Optional: `RGOE_HELIOS_CHECKPOINT=0x<recent finalized
+That installs the sha256-pinned `helios 0.11.1` release binary, a hardened `shade-tree-helios`
+unit (loopback `:8546`), and sets `SHADE_TREE_ROOT_PROVIDER=light` + `SHADE_TREE_HELIOS_RPC_URL` on the
+gateway unit, ordered after the sidecar. Optional: `SHADE_TREE_HELIOS_CHECKPOINT=0x<recent finalized
 beacon block root>` to pin the weak-subjectivity checkpoint yourself (else Helios fetches one
-from public checkpoint services), `RGOE_HELIOS_NETWORK` (`sepolia` default), `RGOE_HELIOS_PORT`.
+from public checkpoint services), `SHADE_TREE_HELIOS_NETWORK` (`sepolia` default), `SHADE_TREE_HELIOS_PORT`.
 Trust after this: the sync committee + that checkpoint; the RPC can withhold but not lie
 (`docs/THREAT-MODEL.md`). If Helios is down or on the wrong chain the gateway refuses to
 start reading roots (fail closed) and restarts until it is up. Full how-to, flags and the live
@@ -524,14 +524,14 @@ for slot 8, and a member cannot forge a bigger limit (a different leaf, not in y
 
 ```bash
 # member side (they run this; only the commitment reaches you):
-rgoe enroll --limit 32 --commitment-only        # -> leaf that commits to 32; they run RGOE_LIMIT=32
+shade-tree enroll --limit 32 --commitment-only        # -> leaf that commits to 32; they run SHADE_TREE_LIMIT=32
 # operator side: admit the leaf exactly like a default one (members.json / register-onchain)
 # gateway: tell the slash path which limits exist, so an over-spender's leaf resolves to its tier
-export RGOE_TIERS=8,32
+export SHADE_TREE_TIERS=8,32
 ```
 
 Limits are 1..65535 (the circuit's 16-bit range check; never admit more). With
-`RGOE_TIERS` unset a tiered over-spender is still slashed, but the log names the default-tier
+`SHADE_TREE_TIERS` unset a tiered over-spender is still slashed, but the log names the default-tier
 leaf (`slash: tier of the over-spent leaf not resolvable locally`). **On chain**, tiers are not
 admitted yet: `StakedReputationSet`'s hasher pins `K = 8`, so a tiered leaf staked on chain
 cannot be slashed there until the follow-up in `docs/ONCHAIN.md` "Tiers on chain" ships —
@@ -541,57 +541,57 @@ use tiers on `members.json` gateways, or only at the default limit on chain.
 
 Every gateway PROVIDER decides two things; the defaults are the maximum-anonymity mode.
 
-**1. What you admit — `RGOE_ADMIT`.** The three admission paths, in ANONYMITY ORDER (most → least):
+**1. What you admit — `SHADE_TREE_ADMIT`.** The three admission paths, in ANONYMITY ORDER (most → least):
 
 | path | root source | what a member's membership reveals |
 |---|---|---|
-| `invited` | `group/members.json` (`RGOE_MEMBERS_FILE`) — leaves you enrolled by hand | nothing on chain |
-| `staked` | every `StakedReputationSet` in `RGOE_GROUP_CONTRACT` (comma list) | the staking wallet ↔ commitment (+ tier bond), public and permanent |
-| `paid` | the `PaidAccessSet` in `RGOE_PAID_ACCESS_CONTRACT` | the buyer address → your address transfer (amount = tier price) + the `Inserted(commitment, limit)` |
+| `invited` | `group/members.json` (`SHADE_TREE_MEMBERS_FILE`) — leaves you enrolled by hand | nothing on chain |
+| `staked` | every `StakedReputationSet` in `SHADE_TREE_GROUP_CONTRACT` (comma list) | the staking wallet ↔ commitment (+ tier bond), public and permanent |
+| `paid` | the `PaidAccessSet` in `SHADE_TREE_PAID_ACCESS_CONTRACT` | the buyer address → your address transfer (amount = tier price) + the `Inserted(commitment, limit)` |
 
 ```bash
-# the default: invited ONLY -- even when RGOE_NETWORK / env supply contract addresses (opt in explicitly)
-RGOE_ADMIT=invited                 rgoe gateway --network sepolia
+# the default: invited ONLY -- even when SHADE_TREE_NETWORK / env supply contract addresses (opt in explicitly)
+SHADE_TREE_ADMIT=invited                 shade-tree gateway --network sepolia
 # admit staked members too
-RGOE_ADMIT=invited,staked          rgoe gateway --network sepolia
+SHADE_TREE_ADMIT=invited,staked          shade-tree gateway --network sepolia
 # admit everyone you can (what the pre-T-FEAT-9 union heuristic silently did)
-RGOE_ADMIT=invited,staked,paid     rgoe gateway --network sepolia
+SHADE_TREE_ADMIT=invited,staked,paid     shade-tree gateway --network sepolia
 # on-chain only, no members.json at all
-RGOE_ADMIT=staked                  rgoe gateway --network sepolia
+SHADE_TREE_ADMIT=staked                  shade-tree gateway --network sepolia
 ```
 
 - The named paths are the ONLY root sources and the ONLY slash routing targets; a configured but
   un-admitted contract is never read. Startup prints the policy, then the sources: `admits:
   invited+staked+paid` / `roots: members.json + staked(0x…) + paid(0x…)` — read both.
-- Fail closed: `RGOE_ADMIT=invited,staked` without a `StakedReputationSet` configured (or `paid`
-  without a `PaidAccessSet`) refuses to start — never a silently smaller set. `RGOE_ADMIT` unset
-  with contracts configured WARNs `RGOE_ADMIT is unset: admitting invited ONLY … set
-  RGOE_ADMIT=invited,staked,paid` and runs invited-only.
-- `RGOE_ROOTS=static,onchain` (T-FEAT-7) still works as a DEPRECATED alias (static→invited,
-  onchain→staked+paid over what is configured) with a warning; move to `RGOE_ADMIT`.
+- Fail closed: `SHADE_TREE_ADMIT=invited,staked` without a `StakedReputationSet` configured (or `paid`
+  without a `PaidAccessSet`) refuses to start — never a silently smaller set. `SHADE_TREE_ADMIT` unset
+  with contracts configured WARNs `SHADE_TREE_ADMIT is unset: admitting invited ONLY … set
+  SHADE_TREE_ADMIT=invited,staked,paid` and runs invited-only.
+- `SHADE_TREE_ROOTS=static,onchain` (T-FEAT-7) still works as a DEPRECATED alias (static→invited,
+  onchain→staked+paid over what is configured) with a warning; move to `SHADE_TREE_ADMIT`.
 - **Set the SAME value on the heartbeat unit.** The heartbeat advertises it as signed `caps.admits`
   so clients route only to gateways that admit their leaf source (a paid buyer never dials your
   invited-only gateway; an invited member with `--max-anon` dials ONLY invited-only gateways).
-  `bootstrap.sh RGOE_ADMIT=…` renders both units; by hand, add `Environment=RGOE_ADMIT=…` to
-  `rgoe-gateway.service.d/` AND `rgoe-heartbeat.service.d/` drop-ins and restart both. A heartbeat
-  without `RGOE_ADMIT` advertises no policy: clients then assume you may admit anything and a
+  `bootstrap.sh SHADE_TREE_ADMIT=…` renders both units; by hand, add `Environment=SHADE_TREE_ADMIT=…` to
+  `shade-tree-gateway.service.d/` AND `shade-tree-heartbeat.service.d/` drop-ins and restart both. A heartbeat
+  without `SHADE_TREE_ADMIT` advertises no policy: clients then assume you may admit anything and a
   mismatch costs them one `wrong-group-root` reject + failover (rollout compat, `docs/CLIENTS.md`).
 - The demo fleet is heterogeneous on purpose (`network/sepolia/README.md`): gateway-1
   `invited,staked,paid` + registrar, gateway-2 `invited,staked` — so a paid buyer lands on
   gateway-1 only, and `--max-anon` refuses both (neither is invited-only).
 
-**2. What you sell — `RGOE_PAY_PROTOCOLS`, your own registrar, your own `PaidAccessSet`.**
-Selling is opt-in (`RGOE_REGISTRAR=1`, next section) and requires `paid` in `RGOE_ADMIT` (admit
-what you sell; `bootstrap.sh` refuses otherwise). `RGOE_PAY_PROTOCOLS=x402,mpp` (default both) is
+**2. What you sell — `SHADE_TREE_PAY_PROTOCOLS`, your own registrar, your own `PaidAccessSet`.**
+Selling is opt-in (`SHADE_TREE_REGISTRAR=1`, next section) and requires `paid` in `SHADE_TREE_ADMIT` (admit
+what you sell; `bootstrap.sh` refuses otherwise). `SHADE_TREE_PAY_PROTOCOLS=x402,mpp` (default both) is
 the rail subset THIS registrar serves — `x402` or `mpp` alone: a disabled rail gets no challenge,
 is absent from `pay.protocols`, and its payload is refused `400 protocol-disabled` (the rails are
 equal on the anonymity axis; pick by fees/tooling). A GATEWAY-ONLY box may run its own registrar
-on its own gateway onion (`bootstrap.sh RGOE_REGISTRAR=1` with `RGOE_BOOTNODE_ONION` set:
-`HiddenServicePort 8878` in the gateway HS block, `RGOE_REGISTRAR_ONION` = the gateway onion) and
-its own `PaidAccessSet` (deploy one, `docs/ONCHAIN-DEPLOY.md`; `RGOE_PAID_ACCESS_CONTRACT` on both
+on its own gateway onion (`bootstrap.sh SHADE_TREE_REGISTRAR=1` with `SHADE_TREE_BOOTNODE_ONION` set:
+`HiddenServicePort 8878` in the gateway HS block, `SHADE_TREE_REGISTRAR_ONION` = the gateway onion) and
+its own `PaidAccessSet` (deploy one, `docs/ONCHAIN-DEPLOY.md`; `SHADE_TREE_PAID_ACCESS_CONTRACT` on both
 the registrar and the gateway unit): you sell access on your own terms, no bootnode required. The
-offer is advertised in your gateway's signed caps (`caps.pay`; heartbeat `RGOE_REGISTRAR_ADVERTISE=1`
-+ `RGOE_PAY_*`, rendered by bootstrap) — and, on a bootnode box, in the bootnode's `/health` as before.
+offer is advertised in your gateway's signed caps (`caps.pay`; heartbeat `SHADE_TREE_REGISTRAR_ADVERTISE=1`
++ `SHADE_TREE_PAY_*`, rendered by bootstrap) — and, on a bootnode box, in the bootnode's `/health` as before.
 
 ### Selling access via 402 (T-FEAT-7)
 
@@ -600,42 +600,42 @@ Members can *buy* a leaf instead of being enrolled by hand: `docs/PAYMENTS.md` "
 both HTTP-402 rails (x402 v2 and MPP), takes a stablecoin (EIP-3009: the buyer signs, *you*
 submit and pay gas), and inserts the buyer's commitment into the on-chain `PaidAccessSet`
 (`contracts/PaidAccessSet.sol`, operator-insert-only). Your gateways trust that set's root next
-to the staked set's (`RGOE_PAID_ACCESS_CONTRACT` on the gateway unit; the multi-root gateway,
+to the staked set's (`SHADE_TREE_PAID_ACCESS_CONTRACT` on the gateway unit; the multi-root gateway,
 T-FEAT-7 2/3), so a buyer egresses with the ordinary RLN proof.
 
 **You are the facilitator.** Nothing is outsourced: the registrar verifies the typed-data
 signature and submits the transfer from your key. It needs ETH for gas (one settle tx ≈ 60k gas +
-one insert ≈ 1.26M gas per sale on Sepolia), the stablecoin arrives at `RGOE_PAY_TO`
+one insert ≈ 1.26M gas per sale on Sepolia), the stablecoin arrives at `SHADE_TREE_PAY_TO`
 (default: the operator address).
 
-Deploy (bootnode box shown; a gateway-only box works the same with `RGOE_BOOTNODE_ONION` set — the
+Deploy (bootnode box shown; a gateway-only box works the same with `SHADE_TREE_BOOTNODE_ONION` set — the
 registrar then rides the GATEWAY onion; `bootstrap.sh` is idempotent, re-run it with the tunables):
 
 ```bash
-RGOE_REGISTRAR=1 \
-RGOE_ADMIT=invited,paid                \   # T-FEAT-9: admit what you sell (add staked if you trust the staked set too)
-RGOE_PAY_PROTOCOLS=x402,mpp            \   # T-FEAT-9: the rails you serve (default both; x402 or mpp alone is fine)
-RGOE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111 \   # network/sepolia/contracts.json contracts.paidAccessSet
-RGOE_PAY_ASSET=<stablecoin>            \   # Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238, or contracts.json payAsset (tUSD)
-RGOE_PAY_PRICES=8=100000,32=400000     \   # atomic units per tier (0.10 / 0.40 with 6 decimals)
-RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com \
+SHADE_TREE_REGISTRAR=1 \
+SHADE_TREE_ADMIT=invited,paid                \   # T-FEAT-9: admit what you sell (add staked if you trust the staked set too)
+SHADE_TREE_PAY_PROTOCOLS=x402,mpp            \   # T-FEAT-9: the rails you serve (default both; x402 or mpp alone is fine)
+SHADE_TREE_PAID_ACCESS_CONTRACT=0x4e8C2Bf5d3c5454A04837401095fce2646484111 \   # network/sepolia/contracts.json contracts.paidAccessSet
+SHADE_TREE_PAY_ASSET=<stablecoin>            \   # Sepolia USDC 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238, or contracts.json payAsset (tUSD)
+SHADE_TREE_PAY_PRICES=8=100000,32=400000     \   # atomic units per tier (0.10 / 0.40 with 6 decimals)
+SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com \
   sudo -E bash bootnode/deploy/bootstrap.sh
 # the operator key is a SECRET: 0600 drop-in via stdin, never argv / unit file / log
-sudo install -d -m 0755 /etc/systemd/system/rgoe-registrar.service.d
-printf '[Service]\nEnvironment=RGOE_REGISTRAR_KEY=%s\n' "$(cat /path/to/operator.key)" \
-  | sudo install -m 0600 /dev/stdin /etc/systemd/system/rgoe-registrar.service.d/operator.conf
-sudo systemctl daemon-reload && sudo systemctl restart rgoe-registrar
-journalctl -u rgoe-registrar -n 5   # "registrar up on 127.0.0.1:8878 operator=0x… asset=… tiers=…"
+sudo install -d -m 0755 /etc/systemd/system/shade-tree-registrar.service.d
+printf '[Service]\nEnvironment=SHADE_TREE_REGISTRAR_KEY=%s\n' "$(cat /path/to/operator.key)" \
+  | sudo install -m 0600 /dev/stdin /etc/systemd/system/shade-tree-registrar.service.d/operator.conf
+sudo systemctl daemon-reload && sudo systemctl restart shade-tree-registrar
+journalctl -u shade-tree-registrar -n 5   # "registrar up on 127.0.0.1:8878 operator=0x… asset=… tiers=…"
 curl -sS -D - --socks5-hostname 127.0.0.1:9050 "http://<bootnode-onion>:8878/pay/quote?limit=8" -o /dev/null | grep -i "^HTTP\|payment-required\|www-authenticate"
 ```
 
 What bootstrap did: `HiddenServicePort 8878 127.0.0.1:8878` inside the bootnode's HS block (the
 registrar rides the bootnode onion; no new identity — on a gateway-only box, inside the GATEWAY's
-HS block instead), `rgoe-registrar.service` (same sandbox as the other units; store at
-`deploy-state/registrar-state.json`; `RGOE_PAY_PROTOCOLS` in its env),
-`RGOE_REGISTRAR_ADVERTISE=1` on `rgoe-bootnode.service` so `GET /health` carries `pay:{port,
+HS block instead), `shade-tree-registrar.service` (same sandbox as the other units; store at
+`deploy-state/registrar-state.json`; `SHADE_TREE_PAY_PROTOCOLS` in its env),
+`SHADE_TREE_REGISTRAR_ADVERTISE=1` on `shade-tree-bootnode.service` so `GET /health` carries `pay:{port,
 protocols, asset, chain, tiers}` (how a client discovers "this fleet sells access, here"), and the
-same advert on `rgoe-heartbeat.service` so your gateway's SIGNED caps carry `pay` (+ `admits`) in
+same advert on `shade-tree-heartbeat.service` so your gateway's SIGNED caps carry `pay` (+ `admits`) in
 the directory (T-FEAT-9: how a client discovers "THIS gateway sells, and admits paid leaves").
 The registrar refuses to start if the token's on-chain `DOMAIN_SEPARATOR()` does not match its
 computed EIP-712 domain or if `PaidAccessSet.allowedLimits()` lacks a sold tier.
@@ -643,8 +643,8 @@ computed EIP-712 domain or if `PaidAccessSet.allowedLimits()` lacks a sold tier.
 Day 2:
 
 - `GET /health` on `:8878` = the offer + `leafCount` + `root`; `/metrics` =
-  `rgoe_registrar_payments_total{protocol,result,reason}`, `rgoe_registrar_txs_total{kind,result}`,
-  `rgoe_registrar_orders`, `rgoe_registrar_inflight`.
+  `shade_tree_registrar_payments_total{protocol,result,reason}`, `shade_tree_registrar_txs_total{kind,result}`,
+  `shade_tree_registrar_orders`, `shade_tree_registrar_inflight`.
 - Log lines: `registrar: settle tx sent payer=… value=… settleTx=…` → `registrar: leaf inserted
   commitment=… limit=… leafIndex=… insertTx=… root=…`. Never a key, never a signature.
 - A crash between settle and insert is repaired on the next boot (`registrar: recovery
@@ -653,14 +653,14 @@ Day 2:
 - Change prices / asset / payTo: edit the unit env (or re-run bootstrap) and restart; every
   outstanding MPP challenge is retired automatically (its HMAC no longer matches the offer) and
   x402 payments for the old amount are refused (`value_mismatch`).
-- Rate limits: `RGOE_REGISTRAR_PAY_RATE/_BURST` (default 1/s, 10) in front of paid POSTs,
-  `RGOE_REGISTRAR_QUOTE_RATE/_BURST` (20/s, 100) for quotes, `RGOE_REGISTRAR_MAX_INFLIGHT` (8)
+- Rate limits: `SHADE_TREE_REGISTRAR_PAY_RATE/_BURST` (default 1/s, 10) in front of paid POSTs,
+  `SHADE_TREE_REGISTRAR_QUOTE_RATE/_BURST` (20/s, 100) for quotes, `SHADE_TREE_REGISTRAR_MAX_INFLIGHT` (8)
   concurrent settlements; the same slow-client HTTP limits as the bootnode.
 - Rotate the operator: `PaidAccessSet.setOperator(new)` + `acceptOperator()` from the new key,
   then swap the drop-in and restart. Real USDC instead of the test token: change
-  `RGOE_PAY_ASSET` (one env), restart.
+  `SHADE_TREE_PAY_ASSET` (one env), restart.
 
-Buyer side: `docs/JOIN.md` "Buy access" / `rgoe pay --help`.
+Buyer side: `docs/JOIN.md` "Buy access" / `shade-tree pay --help`.
 
 ### Selling access: the paid set (T-FEAT-7)
 
@@ -675,33 +675,33 @@ What the gateway does with it — three knobs, all documented in `docs/CONFIG.md
 
 ```bash
 # trust the paid set NEXT TO the staked set and members.json (union; nothing is replaced)
-export RGOE_GROUP_CONTRACT=0xStaked          # may be a comma list of sets
-export RGOE_PAID_ACCESS_CONTRACT=0xPaid      # appends the paid set as one more root source
-# (or: rgoe gateway --network sepolia, once the record carries contracts.paidAccessSet)
-export RGOE_PAID_MIN_LEAVES=8               # anonymity-set floor K: WARN below it, never refuse
-export RGOE_TIERS=8,32                       # the tiers you sell, so a paid over-spender's leaf resolves
+export SHADE_TREE_GROUP_CONTRACT=0xStaked          # may be a comma list of sets
+export SHADE_TREE_PAID_ACCESS_CONTRACT=0xPaid      # appends the paid set as one more root source
+# (or: shade-tree gateway --network sepolia, once the record carries contracts.paidAccessSet)
+export SHADE_TREE_PAID_MIN_LEAVES=8               # anonymity-set floor K: WARN below it, never refuse
+export SHADE_TREE_TIERS=8,32                       # the tiers you sell, so a paid over-spender's leaf resolves
 ```
 
-- **Roots.** `RGOE_ADMIT` names them (T-FEAT-9, "Choose what you admit" above): the DEFAULT is
-  `invited` alone, so set `RGOE_ADMIT=invited,paid` (or `invited,staked,paid`) for the paid set to
-  become a root source at all — configuring `RGOE_PAID_ACCESS_CONTRACT` is not enough. Startup prints
-  `admits: invited+paid` then `roots: members.json + paid(0x…)` — read both. (`RGOE_ROOTS` is the
+- **Roots.** `SHADE_TREE_ADMIT` names them (T-FEAT-9, "Choose what you admit" above): the DEFAULT is
+  `invited` alone, so set `SHADE_TREE_ADMIT=invited,paid` (or `invited,staked,paid`) for the paid set to
+  become a root source at all — configuring `SHADE_TREE_PAID_ACCESS_CONTRACT` is not enough. Startup prints
+  `admits: invited+paid` then `roots: members.json + paid(0x…)` — read both. (`SHADE_TREE_ROOTS` is the
   deprecated alias.)
-- **Floor.** `paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)`: with few paid
+- **Floor.** `paid-access anonymity set: N leaves (floor K=SHADE_TREE_PAID_MIN_LEAVES)`: with few paid
   leaves a paid member is thinly hidden among the OTHER paid members (the gateway still cannot
   tell which one; but "one of 3 buyers" is a small crowd). The gateway WARNs and keeps serving;
   raise the floor for your own reporting, hold inserts to batch them (dwell time), or seed the set.
-  Metric: `rgoe_gateway_paid_access_leaves`; roots per source: `rgoe_gateway_trusted_roots`.
+  Metric: `shade_tree_gateway_paid_access_leaves`; roots per source: `shade_tree_gateway_trusted_roots`.
 - **Slashing.** A paid over-spender is slashed on the PAID contract: the gateway resolves which
   configured set holds the reconstructed secret's leaf (`limitOf`) and calls THAT contract's
   `slash(commitment, secret, limit, receiver)` (`slash: routed to paid(0x…)`). There is no bond
   to burn — the leaf is zeroed, the buyer's access ends, the root changes on the next refresh. Your
-  `RGOE_SLASH_KEY` needs gas on the same chain; `RGOE_SLASH_CONTRACT` stays the primary (a
+  `SHADE_TREE_SLASH_KEY` needs gas on the same chain; `SHADE_TREE_SLASH_CONTRACT` stays the primary (a
   superseded set you still slash on) and is tried first.
 - **Sweep / prices.** Not on this contract any more: the money moves over the 402 rails
   (registrar); the contract only records leaves. Prices and tiers are the registrar's config; the
   contract's `allowedLimits()` is the admitted tier table.
-- **Rust clients.** They read a static `--members` file: `rgoe leaves --contract 0xPaid --out
+- **Rust clients.** They read a static `--members` file: `shade-tree leaves --contract 0xPaid --out
   members.json` exports the paid tree in that shape (zeros preserved), re-run after inserts/slashes.
 
 ### Endpoint hardening (T-HARD-4)
@@ -712,15 +712,15 @@ should not need to touch them unless you run an unusually large or slow fleet.
 **Gateway** (`gateway/gateway.mjs`):
 
 - **Envelope deadline** — the newline-terminated envelope must arrive within
-  `RGOE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
+  `SHADE_TREE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
   at a time does not extend it). Cut connections show as `drop reason=envelope-timeout` in the
-  metrics (`rgoe_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
+  metrics (`shade_tree_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
 - **Relay idle timeout** — an established tunnel with no bytes in either direction for
-  `RGOE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
-  (`rgoe_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
+  `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
+  (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
   simply reconnect; raise it if members legitimately hold idle connections longer.
-- **Connection caps** — `RGOE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
-  before any read (`too-many-connections`); `RGOE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
+- **Connection caps** — `SHADE_TREE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
+  before any read (`too-many-connections`); `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
   tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry
   window cannot pin an unbounded number of idle tunnels. Both slots are released on close.
 - **Half-close crash fixed** — a client that sent a partial envelope and then FIN'd used to
@@ -728,7 +728,7 @@ should not need to touch them unless you run an unusually large or slow fleet.
   slice; `test/adversarial.selftest.mjs` scenario 6 exercises it.
 
 If a *legitimate* member trips `too-many-connections` (metric climbing under normal load), raise
-`RGOE_MAX_CONNS`; the per-nullifier cap should never be hit by an honest client (one request per
+`SHADE_TREE_MAX_CONNS`; the per-nullifier cap should never be hit by an honest client (one request per
 nullifier, one tunnel each; a retry replaces a dead tunnel).
 
 **Bootnode** (`bootnode/server.mjs`):
@@ -738,8 +738,8 @@ nullifier, one tunnel each; a retry replaces a dead tunnel).
   / 16 KiB / checked every 30 s).
 - **Global announce bucket** — in front of the per-onion throttle's blind spot: an attacker
   minting *fresh* onions could force one ed25519 verify per onion until the registry filled. Now
-  at most `RGOE_BOOTNODE_ANNOUNCE_BURST` (1000) reach verification in one instant, then
-  `RGOE_BOOTNODE_ANNOUNCE_RATE` (66.7/s). Overflow gets `429` + `Retry-After` and the heartbeat
+  at most `SHADE_TREE_BOOTNODE_ANNOUNCE_BURST` (1000) reach verification in one instant, then
+  `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` (66.7/s). Overflow gets `429` + `Retry-After` and the heartbeat
   simply retries at its next beat. Legit fleets never hit it at default cadence — the math is in
   `docs/BOOTNODE.md` "Endpoint hardening". If your bootnode logs many `global-rate-limited`
   rejects while the fleet is healthy, you are under an announce flood, not misconfigured.
@@ -748,15 +748,15 @@ nullifier, one tunnel each; a retry replaces a dead tunnel).
 
 By default a gateway advertises **no** capabilities and its announce is byte-identical to a
 legacy gateway — an unconfigured gateway is indistinguishable on the wire. When you set an
-egress policy (`RGOE_EGRESS_ALLOW`) and/or a region (`RGOE_GATEWAY_REGION`), the heartbeat
+egress policy (`SHADE_TREE_EGRESS_ALLOW`) and/or a region (`SHADE_TREE_GATEWAY_REGION`), the heartbeat
 attaches a **signed** capability set to every announce:
 
-- `ports` — the coarse allowed egress port set derived from `RGOE_EGRESS_ALLOW`
+- `ports` — the coarse allowed egress port set derived from `SHADE_TREE_EGRESS_ALLOW`
   (`*:443` → `[443]`; `*:443,*:8443` → `[443,8443]`; a wildcard `*` port is dropped).
-- `region` — your `RGOE_GATEWAY_REGION` bucket, if valid.
+- `region` — your `SHADE_TREE_GATEWAY_REGION` bucket, if valid.
 - `proto` — the envelope version range this build speaks (from the gateway's negotiated range).
 - `artifacts` — the ZK artifact ids the gateway verifies proofs under, ONLY when
-  `RGOE_ZK_ARTIFACTS` is set (the dual-VK rollout window, `docs/CEREMONY.md` §6). Loaded through
+  `SHADE_TREE_ZK_ARTIFACTS` is set (the dual-VK rollout window, `docs/CEREMONY.md` §6). Loaded through
   the same fail-closed loader the gateway verifies with, so a heartbeat can never advertise an id
   the gateway does not hold.
 
@@ -766,5 +766,5 @@ port-`X` request only to gateways advertising `X`. The heartbeat logs the exact 
 on startup (`capabilities advertised (signed): …`), or `capabilities: none` when unconfigured.
 
 On the systemd deploy, set these as `Environment=` lines in the relevant unit
-(`/etc/systemd/system/rgoe-*.service`), then `systemctl daemon-reload && systemctl
+(`/etc/systemd/system/shade-tree-*.service`), then `systemctl daemon-reload && systemctl
 restart <unit>`.

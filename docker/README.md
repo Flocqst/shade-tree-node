@@ -5,16 +5,16 @@ that stands up tor + bootnode + gateway + client locally.
 
 ## Image
 
-One image, every role. The entrypoint is the unified `rgoe` CLI; the role is the
-subcommand, and every `--flag` maps to an `RGOE_*` env var.
+One image, every role. The entrypoint is the unified `shade-tree` CLI; the role is the
+subcommand, and every `--flag` maps to an `SHADE_TREE_*` env var.
 
 ```sh
-docker build -t rgoe .
+docker build -t shade-tree-node .
 
-docker run --rm rgoe                       # prints the command list
-docker run --rm rgoe bootnode --help       # a role's flags
-docker run --rm rgoe doctor                # local setup check
-docker run --rm -p 8877:8877 rgoe \
+docker run --rm shade-tree-node                       # prints the command list
+docker run --rm shade-tree-node bootnode --help       # a role's flags
+docker run --rm shade-tree-node doctor                # local setup check
+docker run --rm -p 8877:8877 shade-tree-node \
   bootnode --port 8877 --admission open --stake-mode mock
 ```
 
@@ -33,8 +33,26 @@ and gateway) plus a SOCKS port, with `bootnode`, `gateway`, and `client` sharing
 tor's loopback via `network_mode: service:tor`.
 
 ```sh
-docker compose up --build
+docker compose -p shade-tree up --build
 ```
+
+### Running beside a validator or local AI stack
+
+Keep Shade Tree in its own Compose project; do not paste these services into the
+validator's Compose file. The shipped fleet drops capabilities, enables
+`no-new-privileges`, uses a read-only root filesystem, rotates logs, caps CPU,
+memory and processes, and publishes Tor SOCKS on host loopback only. It never
+needs the Docker socket, host networking, validator keys, fee-recipient keys,
+engine JWTs, model credentials, or GPU devices. Do not add any of those mounts.
+
+The client role is the low-risk co-location path. A public gateway also consumes
+outbound bandwidth and shares the host's public-IP reputation; sustained proof
+verification can contend with a validator or inference job. Keep the shipped
+limits for the research preview, watch host headroom, and move the gateway to a
+separate machine if validator duties or local workloads show pressure. Docker
+access can reveal container environment variables, so use this fleet only where
+Docker administration is already trusted and never reuse a validator secret as
+a Shade Tree member secret.
 
 ### Onion addresses appear on first boot
 
@@ -43,13 +61,13 @@ descriptors take **~10-30s** to publish to the network before circuits work.
 tor mirrors the hostnames to a shared volume; read them with:
 
 ```sh
-docker compose exec tor cat /shared/bootnode.onion
-docker compose exec tor cat /shared/gateway.onion
+docker compose -p shade-tree exec tor cat /shared/bootnode.onion
+docker compose -p shade-tree exec tor cat /shared/gateway.onion
 ```
 
 (or `docker volume inspect <project>_onions` for the host path). The `client`
 service already reads `bootnode.onion` from that volume automatically and exports
-it as `RGOE_BOOTNODE_ONION` before starting the shim.
+it as `SHADE_TREE_BOOTNODE_ONION` before starting the shim.
 
 ### Driving the client
 
@@ -57,7 +75,7 @@ The shim binds `127.0.0.1:8888` inside tor's namespace, so a published port
 can't reach it — drive it from inside the container:
 
 ```sh
-docker compose exec client \
+docker compose -p shade-tree exec client \
   curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
 ```
 
@@ -65,14 +83,14 @@ The shim needs a member secret and the bootnode's signer pubkey. Provide them
 before `up` (the compose passes them through):
 
 ```sh
-export RGOE_SECRET="$(docker run --rm rgoe enroll | ...)"   # a member secret
-export RGOE_DIR_SIGNER="<pinned signer pubkey printed in the bootnode log>"
-docker compose up --build
+export SHADE_TREE_SECRET="$(docker run --rm shade-tree-node enroll | ...)"   # a member secret
+export SHADE_TREE_DIR_SIGNER="<pinned signer pubkey printed in the bootnode log>"
+docker compose -p shade-tree up --build
 ```
 
-Without `RGOE_SECRET` the shim prints a helpful error and exits — set it and
+Without `SHADE_TREE_SECRET` the shim prints a helpful error and exits — set it and
 re-up. The bootnode prints its pinned signer pubkey at startup
-(`docker compose logs bootnode`); that value is `RGOE_DIR_SIGNER`.
+(`docker compose -p shade-tree logs bootnode`); that value is `SHADE_TREE_DIR_SIGNER`.
 
 ### Proof-of-work defense
 

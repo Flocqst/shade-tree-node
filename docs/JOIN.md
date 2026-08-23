@@ -12,11 +12,11 @@ legacy) is kept for people who still hold a PoC secret; read the note there befo
 
 ## the live fleet: what you need
 
-- node 18 or newer, then `npm install` in this repo (`npm link` if you want `rgoe` on PATH,
-  otherwise `node bin/rgoe.mjs` everywhere)
+- node 18 or newer, then `npm install` in this repo (`npm link` if you want `shade-tree` on PATH,
+  otherwise `node bin/shade-tree.mjs` everywhere)
 - tor installed locally (`brew install tor`, or `apt install tor`); `bash scripts/start-tor-client.sh`
-  starts one on SOCKS 9260, or use a system tor with `RGOE_TOR_PORT=9050`
-- one of: your secret (one `export RGOE_SECRET=...` line, sent to you privately), a wallet to buy
+  starts one on SOCKS 9260, or use a system tor with `SHADE_TREE_TOR_PORT=9050`
+- one of: your secret (one `export SHADE_TREE_SECRET=...` line, sent to you privately), a wallet to buy
   with, or Sepolia ETH to stake with
 
 ## the live fleet: run it
@@ -24,11 +24,11 @@ legacy) is kept for people who still hold a PoC secret; read the note there befo
 ```bash
 npm install
 bash scripts/start-tor-client.sh                                  # laptop tor, SOCKS 9260
-RGOE_SECRET=<your-secret> RGOE_NETWORK=sepolia RGOE_TOR_PORT=9260 rgoe client
+SHADE_TREE_SECRET=<your-secret> SHADE_TREE_NETWORK=sepolia SHADE_TREE_TOR_PORT=9260 shade-tree client
 curl -x http://127.0.0.1:8888 https://api.ipify.org               # a fleet gateway's clean IP
 ```
 
-`RGOE_NETWORK=sepolia` fills the bootnode onion, its pinned signer and the contract addresses
+`SHADE_TREE_NETWORK=sepolia` fills the bootnode onion, its pinned signer and the contract addresses
 from the committed record (`network/README.md`); the client fetches the live signed directory
 over Tor and rotates across every gateway it lists (two today, New York and San Francisco). The
 gate is fail-closed: without a valid membership proof every connection is dropped, and the
@@ -63,18 +63,18 @@ on the bootnode says which asset and what the tiers cost) but **no ETH, no gas**
 the operator submits and pays. Then:
 
 ```bash
-rgoe enroll                                     # your secret + your commitment, locally; keep the secret
-rgoe pay --network sepolia --limit 8 \
+shade-tree enroll                                     # your secret + your commitment, locally; keep the secret
+shade-tree pay --network sepolia --limit 8 \
   --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
-RGOE_NETWORK=sepolia rgoe client --secret <your secret> --limit 8   # egress as usual (--limit 32 if you bought tier 32:
+SHADE_TREE_NETWORK=sepolia shade-tree client --secret <your secret> --limit 8   # egress as usual (--limit 32 if you bought tier 32:
                                                                     # the client finds your leaf in the PAID set and proves against it,
                                                                     # and routes ONLY to gateways whose signed policy admits paid leaves)
 ```
 
 A gateway PROVIDER chooses what it admits (`invited`, `staked`, `paid`) and what it sells (which
 402 rails); the operator's `/health` `pay.protocols` (or the gateway's `caps.pay` in the directory)
-lists the rails you can pay with — `rgoe pay --protocol mpp` against an x402-only registrar tells
+lists the rails you can pay with — `shade-tree pay --protocol mpp` against an x402-only registrar tells
 you to retry with `--protocol x402`.
 
 `--dry-run` shows the operator's 402 challenge and the exact authorization you would sign, and
@@ -92,9 +92,9 @@ does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
 ## stake instead (Sepolia ETH, refundable bond)
 
 ```bash
-rgoe enroll --limit 8                                            # or --limit 32
-rgoe register-member <commitment> --limit 8 --network sepolia   # posts bondFor(8) into StakedReputationSet
-RGOE_NETWORK=sepolia rgoe client --secret <your secret> --limit 8
+shade-tree enroll --limit 8                                            # or --limit 32
+shade-tree register-member <commitment> --limit 8 --network sepolia   # posts bondFor(8) into StakedReputationSet
+SHADE_TREE_NETWORK=sepolia shade-tree client --secret <your secret> --limit 8
 ```
 
 Over-spend your tier's budget in one epoch and the gateway reconstructs your secret and slashes
@@ -127,19 +127,19 @@ Want to see exactly what happens to your bytes? Open `docs/walkthrough.html` in 
 > PoC secrets were never in the committed set; if yours is refused, ask the operator for a new
 > one, or buy/stake a leaf. `scripts/join.sh` and `scripts/run-client.sh` (code, unchanged)
 > still default to the PoC onion; that default is not the fleet, override with
-> `RGOE_NETWORK=sepolia rgoe client` instead. The rest of this page is kept as a record.
+> `SHADE_TREE_NETWORK=sepolia shade-tree client` instead. The rest of this page is kept as a record.
 
 ## what you need (legacy)
 
 - node 18 or newer
 - tor installed locally (`brew install tor`, or `apt install tor`)
-- the bundle you were sent (`rgoe-gateway-deploy.tgz`), unpacked
-- your secret: one `export RGOE_SECRET=...` line, sent to you privately
+- the bundle you were sent (`shade-tree-gateway-deploy.tgz`), unpacked
+- your secret: one `export SHADE_TREE_SECRET=...` line, sent to you privately
 
 ## run it (legacy)
 
 ```bash
-cd reputation-gated-onion-egress
+cd shade-tree-node
 npm install
 bash scripts/join.sh <your-secret>
 ```
@@ -156,11 +156,11 @@ ezguggje6sbldhw4pl5nudwg2mrwkb5zzyu3a26qc4eka2ur24bv3eqd.onion
 buys nothing on its own. The gate is fail-closed, so without a valid membership
 proof every connection is dropped. That command starts a local Tor and a small
 proxy, then runs a check that asserts your egress really comes out of the PoC
-gateway's clearnet IP: `join.sh` sets `RGOE_EXPECT_IP` to that IP (`204.48.28.220`)
+gateway's clearnet IP: `join.sh` sets `SHADE_TREE_EXPECT_IP` to that IP (`204.48.28.220`)
 and `verify.sh` compares it to what `api.ipify.org` saw. The IP is printed here
 for exactly that reason — it is the receipt you compare against, not something
 you connect to. When it prints `PASS` next to that IP, you are out. (Different
-gateway? Set `RGOE_EXPECT_IP` to its IP, or unset it to skip the assertion.)
+gateway? Set `SHADE_TREE_EXPECT_IP` to its IP, or unset it to skip the assertion.)
 
 ## use it (legacy)
 

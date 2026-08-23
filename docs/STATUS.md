@@ -2,11 +2,11 @@
 
 > **Historical snapshot** of the June 2026 single-gateway PoC (pinned onion, cached
 > Semaphore proof, `members.json`). Everything under "What is not built" here has since
-> shipped or been redesigned: real RLN per-request proofs, on-chain stake + slashing, the
+> shipped or been redesigned: real RLN per-tunnel proofs, on-chain stake + slashing, the
 > bootnode fleet, and encrypted key backup. For the current picture read `README.md`,
 > the status map at the top of [`ROADMAP.md`](ROADMAP.md), and [`SHIP-PLAN.md`](SHIP-PLAN.md).
 
-Where the reputation-gated onion egress stands: live and verified. This is the
+Where the Shade Tree stands: live and verified. This is the
 short version of what works, what is missing, and how to actually use it from your
 own machine. For the full writeup see the [README](../README.md) and
 [DEPLOY.md](DEPLOY.md); for the request lifecycle open
@@ -126,8 +126,8 @@ Prerequisites: Node 18+ and tor installed locally (`brew install tor`, or
 `apt install tor`).
 
 ```bash
-git clone https://github.com/dmarzzz/reputation-gated-onion-egress
-cd reputation-gated-onion-egress
+git clone https://github.com/dmarzzz/shade-tree-node
+cd shade-tree-node
 npm install
 bash scripts/join.sh <gateway-onion>.onion <your-membership-key>
 ```

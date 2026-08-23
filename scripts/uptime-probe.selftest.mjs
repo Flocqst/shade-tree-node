@@ -1,7 +1,7 @@
 // Selftest for the external uptime prober (scripts/uptime-probe.mjs).
 //
 // Spins a MOCK bootnode (local http server) serving a real signDirectory()-signed /directory and
-// a /health, points the prober at it via RGOE_BOOTNODE_URL (dev mode, no Tor), and drives it as a
+// a /health, points the prober at it via SHADE_TREE_BOOTNODE_URL (dev mode, no Tor), and drives it as a
 // SUBPROCESS so we can assert the actual process EXIT CODES a monitor consumes:
 //   healthy         -> exit 0, ok:true, signerOk:true, correct fleetSize
 //   wrong signer    -> unhealthy, signerOk:false, nonzero exit
@@ -66,10 +66,10 @@ function startMockBootnode(dirJson, healthJson) {
   return { child, port };
 }
 
-// Run the prober as a subprocess with a curated env (parent RGOE_* stripped) and capture exit code.
+// Run the prober as a subprocess with a curated env (parent SHADE_TREE_* stripped) and capture exit code.
 function runProbe(overrides, args = []) {
   const env = { ...process.env };
-  delete env.RGOE_BOOTNODE_ONION; delete env.RGOE_BOOTNODE_URL; delete env.RGOE_DIR_SIGNER; delete env.RGOE_NETWORK;
+  delete env.SHADE_TREE_BOOTNODE_ONION; delete env.SHADE_TREE_BOOTNODE_URL; delete env.SHADE_TREE_DIR_SIGNER; delete env.SHADE_TREE_NETWORK;
   Object.assign(env, overrides);
   try {
     const stdout = execFileSync(process.execPath, [PROBE, ...args], { env, encoding: "utf8" });
@@ -96,7 +96,7 @@ async function main() {
   try {
     // 1. HEALTHY -----------------------------------------------------------
     console.log("healthy:");
-    const h = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub });
+    const h = runProbe({ SHADE_TREE_BOOTNODE_URL: base, SHADE_TREE_DIR_SIGNER: signer.pub });
     ok(h.status === 0, "healthy -> exit 0");
     let hj = {};
     try { hj = JSON.parse(h.stdout.trim()); } catch {}
@@ -109,7 +109,7 @@ async function main() {
     // 2. WRONG PINNED SIGNER ----------------------------------------------
     console.log("\nwrong pinned signer:");
     const other = mintEd();
-    const w = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: other.pub });
+    const w = runProbe({ SHADE_TREE_BOOTNODE_URL: base, SHADE_TREE_DIR_SIGNER: other.pub });
     ok(w.status !== 0, "wrong signer -> nonzero exit");
     let wj = {};
     try { wj = JSON.parse(w.stdout.trim()); } catch {}
@@ -119,7 +119,7 @@ async function main() {
 
     // 3. UNREACHABLE BOOTNODE ---------------------------------------------
     console.log("\nunreachable bootnode:");
-    const u = runProbe({ RGOE_BOOTNODE_URL: deadBase, RGOE_DIR_SIGNER: signer.pub });
+    const u = runProbe({ SHADE_TREE_BOOTNODE_URL: deadBase, SHADE_TREE_DIR_SIGNER: signer.pub });
     ok(u.status !== 0, "unreachable -> nonzero exit");
     let uj = {};
     try { uj = JSON.parse(u.stdout.trim()); } catch {}
@@ -128,31 +128,31 @@ async function main() {
 
     // 4. NAGIOS FORMAT -----------------------------------------------------
     console.log("\nnagios format:");
-    const nOk = runProbe({ RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
+    const nOk = runProbe({ SHADE_TREE_BOOTNODE_URL: base, SHADE_TREE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
     ok(nOk.status === 0, "nagios healthy -> exit 0");
     ok(/^OK:/.test(nOk.stdout.trim()), "nagios healthy -> 'OK: ...' line");
     ok(nOk.stdout.includes(`fleet=${FLEET}`), "nagios healthy line reports fleet count");
 
-    const nBad = runProbe({ RGOE_BOOTNODE_URL: deadBase, RGOE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
+    const nBad = runProbe({ SHADE_TREE_BOOTNODE_URL: deadBase, SHADE_TREE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
     ok(nBad.status === 2, "nagios unhealthy -> exit 2 (CRITICAL)");
     ok(/^CRITICAL:/.test(nBad.stdout.trim()), "nagios unhealthy -> 'CRITICAL: ...' line");
     ok(!/\.onion/.test(nBad.stdout), "nagios line leaks no onion address");
 
-    // 5. RGOE_NETWORK RECORD (lib/network-record.mjs) ------------------------
+    // 5. SHADE_TREE_NETWORK RECORD (lib/network-record.mjs) ------------------------
     // Explicit env wins over the record (the mock URL + signer still drive the probe); a record
     // that resolves NO bootnode (network/sepolia/bootnode.json is pending, or an unknown network)
     // is a misconfig -> unhealthy, never a throw / hang.
-    console.log("\nRGOE_NETWORK record:");
-    const nEnv = runProbe({ RGOE_NETWORK: "sepolia", RGOE_BOOTNODE_URL: base, RGOE_DIR_SIGNER: signer.pub });
-    ok(nEnv.status === 0, "RGOE_NETWORK + explicit URL/signer -> explicit env wins, healthy");
-    const nOnly = runProbe({ RGOE_NETWORK: "sepolia" });
+    console.log("\nSHADE_TREE_NETWORK record:");
+    const nEnv = runProbe({ SHADE_TREE_NETWORK: "sepolia", SHADE_TREE_BOOTNODE_URL: base, SHADE_TREE_DIR_SIGNER: signer.pub });
+    ok(nEnv.status === 0, "SHADE_TREE_NETWORK + explicit URL/signer -> explicit env wins, healthy");
+    const nOnly = runProbe({ SHADE_TREE_NETWORK: "sepolia" });
     let nj = {};
     try { nj = JSON.parse(nOnly.stdout.trim()); } catch {}
-    ok(nOnly.status !== 0 && nj.ok === false, "RGOE_NETWORK alone (no live bootnode in the record, or a live one unreachable here) -> unhealthy, not a crash");
-    const nBadNet = runProbe({ RGOE_NETWORK: "no-such-network-zzz" });
+    ok(nOnly.status !== 0 && nj.ok === false, "SHADE_TREE_NETWORK alone (no live bootnode in the record, or a live one unreachable here) -> unhealthy, not a crash");
+    const nBadNet = runProbe({ SHADE_TREE_NETWORK: "no-such-network-zzz" });
     let bj = {};
     try { bj = JSON.parse(nBadNet.stdout.trim()); } catch {}
-    ok(nBadNet.status === 1 && bj.ok === false && /^misconfig:/.test(bj.reason || ""), "unknown RGOE_NETWORK -> misconfig reason, exit 1");
+    ok(nBadNet.status === 1 && bj.ok === false && /^misconfig:/.test(bj.reason || ""), "unknown SHADE_TREE_NETWORK -> misconfig reason, exit 1");
   } finally {
     child.kill();
   }

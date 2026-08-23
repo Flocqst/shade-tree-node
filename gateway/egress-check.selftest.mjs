@@ -16,7 +16,7 @@
 //   announceIfHealthy (bootnode/heartbeat.mjs), with a fake checkEgress + fake announce:
 //     - egress DOWN  => announce SKIPPED
 //     - egress UP    => announce PROCEEDS
-//     - RGOE_EGRESS_CHECK=0 => always announce (egress never even probed)
+//     - SHADE_TREE_EGRESS_CHECK=0 => always announce (egress never even probed)
 //
 // Run:  node gateway/egress-check.selftest.mjs
 //
@@ -142,10 +142,10 @@ await test("egress DOWN => announce SKIPPED", async () => {
   assert.equal(r.egress.healthy, false);
 });
 
-await test("RGOE_EGRESS_CHECK=0 (disabled) => always announce, egress never probed", async () => {
+await test("SHADE_TREE_EGRESS_CHECK=0 (disabled) => always announce, egress never probed", async () => {
   let announced = 0, probed = 0;
   const r = await announceIfHealthy({
-    enabled: false, // simulates RGOE_EGRESS_CHECK=0
+    enabled: false, // simulates SHADE_TREE_EGRESS_CHECK=0
     egress: async () => { probed++; return { healthy: false }; },
     announce: async () => { announced++; return { ok: true, ttl: 900 }; },
   });
@@ -165,22 +165,22 @@ await test("recovery: DOWN skips, then UP announces (announcing resumes, no stat
   assert.equal(announced, 1, "once egress recovers the next beat announces again");
 });
 
-// ---- egressCheckEnabled: the off-switch reads RGOE_EGRESS_CHECK --------------
+// ---- egressCheckEnabled: the off-switch reads SHADE_TREE_EGRESS_CHECK --------------
 
 console.log("egressCheckEnabled — off-switch semantics:");
 
 await test("default (unset) => ON; =0 => OFF; =1 => ON", async () => {
-  const saved = process.env.RGOE_EGRESS_CHECK;
+  const saved = process.env.SHADE_TREE_EGRESS_CHECK;
   try {
-    delete process.env.RGOE_EGRESS_CHECK;
+    delete process.env.SHADE_TREE_EGRESS_CHECK;
     assert.equal(egressCheckEnabled(), true, "unset defaults to ON");
-    process.env.RGOE_EGRESS_CHECK = "0";
+    process.env.SHADE_TREE_EGRESS_CHECK = "0";
     assert.equal(egressCheckEnabled(), false, "=0 disables");
-    process.env.RGOE_EGRESS_CHECK = "1";
+    process.env.SHADE_TREE_EGRESS_CHECK = "1";
     assert.equal(egressCheckEnabled(), true, "=1 enables");
   } finally {
-    if (saved === undefined) delete process.env.RGOE_EGRESS_CHECK;
-    else process.env.RGOE_EGRESS_CHECK = saved;
+    if (saved === undefined) delete process.env.SHADE_TREE_EGRESS_CHECK;
+    else process.env.SHADE_TREE_EGRESS_CHECK = saved;
   }
 });
 

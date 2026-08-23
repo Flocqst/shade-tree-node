@@ -5,7 +5,7 @@
 //
 //   node client/leaf-source.selftest.mjs
 
-import { makeLeafSourceLoader, makeSlotPool } from "./rgoe-client.mjs";
+import { makeLeafSourceLoader, makeSlotPool } from "./shade-tree-client.mjs";
 import { identityFor, rateCommitmentOf, newGroup } from "../lib/rln.mjs";
 
 let failures = 0;

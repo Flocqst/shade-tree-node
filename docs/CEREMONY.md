@@ -33,14 +33,14 @@ by default on the dev box.
 
 | Artifact | Setup-dependent? | Loaded by |
 | --- | --- | --- |
-| `circuits/rln/rln.wasm` | no (compiler output) | `lib/rln.mjs` `proveForSlot` (client + shim); Rust `include_bytes!` in `rust/rgoe-rln/src/prover.rs` (live binary); `rust/rgoe-rln/src/main.rs` probe |
+| `circuits/rln/rln.wasm` | no (compiler output) | `lib/rln.mjs` `proveForSlot` (client + shim); Rust `include_bytes!` in `rust/shade-tree-rln/src/prover.rs` (live binary); `rust/shade-tree-rln/src/main.rs` probe |
 | `circuits/rln/rln_final.zkey` | **yes** | `lib/rln.mjs` `proveForSlot`; Rust `include_bytes!` (live binary) |
-| `circuits/rln/verification_key.json` | **yes** | `lib/rln.mjs` `verifyEnvelope` (gateway; the built-in entry of the `RGOE_ZK_ARTIFACTS` accepted set, id `rln-<sha256[0:16]>`); Rust in-process self-check + startup lock check; `rust/rgoe-rln/interop/verify-envelope.mjs` |
+| `circuits/rln/verification_key.json` | **yes** | `lib/rln.mjs` `verifyEnvelope` (gateway; the built-in entry of the `SHADE_TREE_ZK_ARTIFACTS` accepted set, id `rln-<sha256[0:16]>`); Rust in-process self-check + startup lock check; `rust/shade-tree-rln/interop/verify-envelope.mjs` |
 | `circuits/rln/Verifier.sol` | **yes** | provenance copy of the snarkjs export; `contracts/RlnGroth16Verifier.sol` is this file + a `///` header (NOT deployed, membership is verified off-chain) |
 | `circuits/rln/withdraw.wasm` | no | `testdata/gen-withdraw-proof.mjs`; (client-side exit-auth proving: **not wired**, no CLI command yet) |
 | `circuits/rln/withdraw_final.zkey` | **yes** | `testdata/gen-withdraw-proof.mjs` |
 | `circuits/rln/withdraw_verification_key.json` | **yes** | `testdata/gen-withdraw-proof.mjs` |
-| `contracts/WithdrawGroth16Verifier.sol` | **yes** | wrapped by `contracts/WithdrawVerifier.sol`, deployed as `StakedReputationSet.withdrawVerifier` (**immutable**, `contracts/StakedReputationSet.sol:66`); `contracts/script/DeployRegistry.s.sol` (`RGOE_DEPLOY_REAL_VERIFIER=1`); `test/WithdrawVerifier.t.sol` |
+| `contracts/WithdrawGroth16Verifier.sol` | **yes** | wrapped by `contracts/WithdrawVerifier.sol`, deployed as `StakedReputationSet.withdrawVerifier` (**immutable**, `contracts/StakedReputationSet.sol:66`); `contracts/script/DeployRegistry.s.sol` (`SHADE_TREE_DEPLOY_REAL_VERIFIER=1`); `test/WithdrawVerifier.t.sol` |
 | `testdata/withdraw-proof.json` | **yes** (bound to the withdraw VK) | `test/WithdrawVerifier.t.sol`, `test/StakedReputationSet*.t.sol` |
 
 The `.wasm` files are compiler output and independent of the setup: recompiling the same
@@ -69,7 +69,7 @@ untrusted dev phase-2), `stakedReputationSet 0xFe48De8b9aCA4386DC31C845d579ae62f
 
 Decide and write down (goes into the transcript, §5):
 
-- `CEREMONY_ID` — e.g. `rgoe-rln-2026-09` (used as the beacon name and lock `ceremony.id`).
+- `CEREMONY_ID` — e.g. `shade-tree-rln-2026-09` (used as the beacon name and lock `ceremony.id`).
 - Contributor list and order; a private channel for zkey hand-off (any transport — the
   protocol tolerates a malicious relay because every hop is verifiable, §4.1).
 - **Beacon source, fixed in advance:** the hash of a future public randomness value neither
@@ -285,7 +285,7 @@ forge test
 node circuits/rln/smoke.mjs                                # GATE PASSED
 node lib/rln.selftest.mjs
 node test/rln-slash.property.selftest.mjs
-( cd rust && cargo test -p rgoe-rln && bash rgoe-rln/interop/run.sh )   # Rust prover vs JS verifier
+( cd rust && cargo test -p shade-tree-rln && bash shade-tree-rln/interop/run.sh )   # Rust prover vs JS verifier
 
 # 5.5 update the docs table + the lock (provenance flips to "ceremony")
 #   circuits/rln/ARTIFACTS.md: replace the sha256 table + toolchain rows + the "Trust / honesty
@@ -310,7 +310,7 @@ grep -rln "T-HARD-1\|untrusted\|TESTNET-ONLY\|testnet-only" --exclude-dir=node_m
   | grep -v "docs/CEREMONY.md"
 #   at least: SECURITY.md, README.md, docs/AUDIT.md, docs/THREAT-MODEL.md, docs/CONTRACTS-AUDIT.md,
 #   contracts/WithdrawVerifier.sol header, contracts/script/DeployRegistry.s.sol comments,
-#   rust/INSTALL.md, rust/rgoe-rln/README.md, rust/rgoe-rln/src/prover.rs comment,
+#   rust/INSTALL.md, rust/shade-tree-rln/README.md, rust/shade-tree-rln/src/prover.rs comment,
 #   .github/workflows/release.yml header, testdata/gen-withdraw-proof.mjs, network/sepolia/contracts.json.
 #   circuits/rln/ARTIFACTS.md also lists the artifact ids (T-HARD-8): update `rln-…` / `withdraw-…`
 #   there to the new lock's circuits.<c>.artifactId (the selftest checks the hash table, the ids
@@ -319,21 +319,21 @@ grep -rln "T-HARD-1\|untrusted\|TESTNET-ONLY\|testnet-only" --exclude-dir=node_m
 
 ### 5.7 Rust binary — embedded artifacts
 
-`rust/rgoe-rln/src/prover.rs` `mod embedded` `include_bytes!`s exactly
+`rust/shade-tree-rln/src/prover.rs` `mod embedded` `include_bytes!`s exactly
 `circuits/rln/{rln.wasm, rln_final.zkey, verification_key.json}` (paths anchored at
-`CARGO_MANIFEST_DIR/../../`), behind the `embedded-artifacts` feature that `rgoe-client`'s
-`live` feature enables (`rust/rgoe-client/Cargo.toml`). There is no `build.rs` and no copy of the
+`CARGO_MANIFEST_DIR/../../`), behind the `embedded-artifacts` feature that `shade-tree-client`'s
+`live` feature enables (`rust/shade-tree-client/Cargo.toml`). There is no `build.rs` and no copy of the
 files under `rust/` — the binary embeds the SAME files the lock hashes, so no separate hash is
 needed and the selftest checks those three include paths textually without a cargo build. The
-`live` release binaries (`.github/workflows/release.yml`, `cargo build --release -p rgoe-client
+`live` release binaries (`.github/workflows/release.yml`, `cargo build --release -p shade-tree-client
 --features live`) therefore pick up the new artifacts on the next tag with no Rust change.
 
 Wired (T-HARD-8): the `live` binary ALSO embeds `testdata/zk-artifacts.lock.json`
-(`rust/rgoe-rln/src/artifacts.rs`, `include_str!`) and at `rgoe egress` startup recomputes the
+(`rust/shade-tree-rln/src/artifacts.rs`, `include_str!`) and at `shade-tree egress` startup recomputes the
 sha256 + size of its embedded wasm/zkey/vkey against that lock and derives the set's artifact id
 (`rln-<sha256(vkey)[0:16]>` == `circuits.rln.artifactId`); any drift is a hard, named error
 (`egress: REFUSING to prove — embedded RLN artifacts do NOT match …`). Rust tests:
-`cargo test -p rgoe-rln` (lock check over the tree) and `cargo test -p rgoe-rln --features
+`cargo test -p shade-tree-rln` (lock check over the tree) and `cargo test -p shade-tree-rln --features
 embedded-artifacts` (over the actually-embedded bytes). `release.yml` runs
 `test/zk-artifacts.selftest.mjs` in a `lock-check` job that BOTH build jobs depend on, so a tag
 cannot package a binary whose artifacts drift from the lock. Still: tag only a commit that CI has
@@ -353,9 +353,9 @@ several vkeys at once, so the swap is a **window**, not a flag day (`docs/PROTOC
   lock (`circuits.rln.artifactId`). Content-derived on every side (gateway from the files it
   loads, JS client from its prover set, Rust client from its embedded bytes at startup), so
   nobody can mislabel a key: a wrong `<id>=<path>` refuses to start.
-- **Gateway** `RGOE_ZK_ARTIFACTS=<id>=<vkey path>[,<id>=<vkey path>]` = the accepted set
+- **Gateway** `SHADE_TREE_ZK_ARTIFACTS=<id>=<vkey path>[,<id>=<vkey path>]` = the accepted set
   `{id → vkey}`; the envelope's `artifact` field selects the vkey; absent field ⇒
-  `RGOE_ZK_ARTIFACT_LEGACY` (default: the lock's `previousArtifactId`, else the built-in id).
+  `SHADE_TREE_ZK_ARTIFACT_LEGACY` (default: the lock's `previousArtifactId`, else the built-in id).
   Accepted ids are advertised as SIGNED caps (`caps.artifacts`) by the heartbeat.
 - **Client** sends the newest of its sets the gateway advertises (else its newest); a mismatch is
   a precise reject carrying the accepted list, never a bare `invalid-proof`.
@@ -368,8 +368,8 @@ regenerated lock's `circuits.rln.artifactId`). Both are printed by
 ```sh
 # 1. GATEWAYS FIRST — open the window. Ship the §5 commit (new built-in set) with BOTH vkeys accepted
 #    and the legacy (field-less) envelope mapped to OLD:
-Environment=RGOE_ZK_ARTIFACTS=$NEW=circuits/rln/verification_key.json,$OLD=circuits/rln/previous/$OLD/verification_key.json
-Environment=RGOE_ZK_ARTIFACT_LEGACY=$OLD          # (== the lock's previousArtifactId; explicit is clearer)
+Environment=SHADE_TREE_ZK_ARTIFACTS=$NEW=circuits/rln/verification_key.json,$OLD=circuits/rln/previous/$OLD/verification_key.json
+Environment=SHADE_TREE_ZK_ARTIFACT_LEGACY=$OLD          # (== the lock's previousArtifactId; explicit is clearer)
 #    gateway log at start:  zk artifacts accepted=[NEW,OLD] legacy=OLD legacyStatus=accepted (window open)
 #    heartbeat log:         capabilities advertised (signed): {"proto":{...},"artifacts":["…","…"]}
 #    Old clients (no field, old zkey) verify under OLD; upgraded clients send artifact=NEW and verify
@@ -381,11 +381,11 @@ Environment=RGOE_ZK_ARTIFACT_LEGACY=$OLD          # (== the lock's previousArtif
 #    (its ad lists only OLD) fails closed BEFORE proving: `artifact negotiation failed:
 #    no-mutual-artifact:client=NEW,gateway=OLD` — i.e. do step 1 on every gateway before step 2. A JS
 #    client that must talk to both fleets during the transition can hold both sets:
-#    RGOE_ZK_PROVER_ARTIFACTS=$NEW=circuits/rln,$OLD=/path/to/old-set-dir  (newest first).
+#    SHADE_TREE_ZK_PROVER_ARTIFACTS=$NEW=circuits/rln,$OLD=/path/to/old-set-dir  (newest first).
 
 # 3. CLOSE the window — drop OLD from the accepted set, keep it named as legacy:
-Environment=RGOE_ZK_ARTIFACTS=$NEW=circuits/rln/verification_key.json
-Environment=RGOE_ZK_ARTIFACT_LEGACY=$OLD          # (or unset: the lock's previousArtifactId is OLD)
+Environment=SHADE_TREE_ZK_ARTIFACTS=$NEW=circuits/rln/verification_key.json
+Environment=SHADE_TREE_ZK_ARTIFACT_LEGACY=$OLD          # (or unset: the lock's previousArtifactId is OLD)
 #    gateway log:  … legacy=OLD legacyStatus=RETIRED
 #    Any remaining old client is now rejected `gate:artifact-retired:<OLD>` with `artifacts:[NEW]` in the
 #    reply (metrics: reason="artifact-retired") — precise and observable, never mis-verified. Once no
@@ -397,7 +397,7 @@ Environment=RGOE_ZK_ARTIFACT_LEGACY=$OLD          # (or unset: the lock's previo
 
 Rollback: revert the artifact-swap commit (§5 is one commit for exactly this reason); a gateway
 in the window keeps serving OLD-set clients throughout, and a rolled-back gateway (built-in =
-OLD again) that still has `RGOE_ZK_ARTIFACTS` naming NEW keeps accepting NEW too. The lock
+OLD again) that still has `SHADE_TREE_ZK_ARTIFACTS` naming NEW keeps accepting NEW too. The lock
 selftest goes red on any partial revert (mixed sets), which is intended. Adversarial cases the
 window does not open (proven in the selftests): a proof made with one set CLAIMING the other id
 is `invalid-proof` (verified under the claimed key); an id the gateway holds no key for is
@@ -406,8 +406,8 @@ judged under that key.
 
 On-chain: `StakedReputationSet.withdrawVerifier` is `immutable`, so the ceremony's
 `WithdrawGroth16Verifier` requires a NEW `StakedReputationSet` deployment
-(`contracts/script/DeployRegistry.s.sol` with `RGOE_DEPLOY_REAL_VERIFIER=1`, or pre-deploy the
-verifier and pass `RGOE_WITHDRAW_VERIFIER=<addr>`), and members re-enroll — the same
+(`contracts/script/DeployRegistry.s.sol` with `SHADE_TREE_DEPLOY_REAL_VERIFIER=1`, or pre-deploy the
+verifier and pass `SHADE_TREE_WITHDRAW_VERIFIER=<addr>`), and members re-enroll — the same
 fresh-deploy path `docs/RLN-MIGRATION.md` "Decisions" §5 already chose. Membership leaves are
 unchanged (`rateCommitment = Poseidon(2)([Poseidon(1)([secret]), 8])`, the circuit did not
 change), so identities carry over. Do the ceremony BEFORE the first production deploy so no
@@ -434,7 +434,7 @@ funds ever sit behind the untrusted verifier; the Sepolia contracts in
 - (T-HARD-8) the lock also carries `circuits.<c>.artifactId` (= the vkey hash prefix; the checker
   rejects a hand-edited one) and `circuits.rln.previousArtifactId` (auto-recorded when a
   regeneration sees the rln vkey change — the default legacy id for the rollout window, §6). The
-  Rust `live` binary embeds the lock and self-checks against it (`rust/rgoe-rln/src/artifacts.rs`);
+  Rust `live` binary embeds the lock and self-checks against it (`rust/shade-tree-rln/src/artifacts.rs`);
   `release.yml` runs the selftest before either build job.
 - After a ceremony: §5.5 regenerates the lock with `--provenance=ceremony`, the operator fills
   the `ceremony` block by hand, flips `EXPECTED_PROVENANCE`, and the selftest then also requires
@@ -465,13 +465,13 @@ Nothing below may be done by an agent.
       regenerate both Solidity verifiers with headers, regenerate
       `testdata/withdraw-proof.json`, update `circuits/rln/ARTIFACTS.md`, run
       `node scripts/zk-artifacts-lock.mjs --provenance=ceremony`, fill the `ceremony` block, flip
-      `EXPECTED_PROVENANCE`, sweep the "untrusted" notices, `npm test` green, `cargo test -p rgoe-rln`
-      + `rust/rgoe-rln/interop/run.sh` green.
+      `EXPECTED_PROVENANCE`, sweep the "untrusted" notices, `npm test` green, `cargo test -p shade-tree-rln`
+      + `rust/shade-tree-rln/interop/run.sh` green.
 - [ ] Merge; tag a release so `release.yml` builds `live` binaries embedding the new set; add the
       tag + asset `.sha256`s to the transcript.
-- [ ] Rollout (§6): open the dual-VK window on every gateway (`RGOE_ZK_ARTIFACTS=$NEW=…,$OLD=…`
-      + `RGOE_ZK_ARTIFACT_LEGACY=$OLD`), then ship clients / tag the Rust release, then close it
-      (`RGOE_ZK_ARTIFACTS=$NEW=…`) once `artifact-retired` drops are gone.
+- [ ] Rollout (§6): open the dual-VK window on every gateway (`SHADE_TREE_ZK_ARTIFACTS=$NEW=…,$OLD=…`
+      + `SHADE_TREE_ZK_ARTIFACT_LEGACY=$OLD`), then ship clients / tag the Rust release, then close it
+      (`SHADE_TREE_ZK_ARTIFACTS=$NEW=…`) once `artifact-retired` drops are gone.
 - [ ] Fresh production `StakedReputationSet` deployment with the ceremony
       `WithdrawGroth16Verifier`; record it in `network/<chain>/contracts.json`.
 - [ ] Update `SECURITY.md` / `docs/AUDIT.md` / `docs/THREAT-MODEL.md` residual-risk lists and

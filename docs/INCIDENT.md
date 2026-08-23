@@ -19,37 +19,37 @@ does not control. Keep that boundary in mind before escalating.
 fall back; `loadDirectory` returns `{ source: "cache" }` instead of `"fresh"`. `/health` unreachable.
 
 **Why the fleet keeps working.** Clients cache the last-known-good directory
-(`RGOE_DIRECTORY_CACHE`, default `cache/bootnode-directory.lkg`). `loadDirectory` re-verifies the
+(`SHADE_TREE_DIRECTORY_CACHE`, default `cache/bootnode-directory.lkg`). `loadDirectory` re-verifies the
 cached copy against the same pinned signer and serves it when the fresh fetch fails or is absent.
 Gateways egress independently of the bootnode: they announce TO it, they do not route THROUGH it. A
 member holding a valid directory (fresh or cached) keeps selecting and dialing gateways with no
 bootnode in the path. A dead bootnode degrades to the previous good fleet, never to nothing.
 
 **Immediate containment.** None required for existing clients. New clients with no cache and no
-static `RGOE_DIRECTORY` fallback cannot bootstrap discovery until the bootnode returns; point them at
-a static signed directory file (`RGOE_DIRECTORY` + `RGOE_DIR_SIGNER`) as a stopgap if one is
+static `SHADE_TREE_DIRECTORY` fallback cannot bootstrap discovery until the bootnode returns; point them at
+a static signed directory file (`SHADE_TREE_DIRECTORY` + `SHADE_TREE_DIR_SIGNER`) as a stopgap if one is
 published.
 
-**Root-cause investigation.** Check the box: process alive, `RGOE_BOOTNODE_PORT` bound on
+**Root-cause investigation.** Check the box: process alive, `SHADE_TREE_BOOTNODE_PORT` bound on
 `127.0.0.1`, Tor HS descriptor published for the bootnode onion, `node scripts/doctor.mjs` for
 env/tor/deps. Confirm gateways can reach `POST /announce` (a network partition looks like a dead
 bootnode from the client side only).
 
 **Recovery.** Restart `bootnode/server.mjs` (on a bootstrapped box: `systemctl restart
-rgoe-bootnode`). If the bootnode runs with `RGOE_BOOTNODE_STORE` set (the `bootstrap.sh` unit sets it
+shade-tree-bootnode`). If the bootnode runs with `SHADE_TREE_BOOTNODE_STORE` set (the `bootstrap.sh` unit sets it
 to `deploy-state/bootnode-state.json`), the live set is mirrored to that JSON file on every accepted
 announce and reloaded on boot: `loadPersisted()` re-runs each stored record through the real announce
 path (onion control + operator/stake re-verified; tampered, forged, or past-TTL entries are dropped),
 so `/directory` is populated immediately and no re-announce settling window is needed (T-DEV-4;
 `bootnode/server.mjs`, `docs/BOOTNODE.md` "Surviving a restart"). Without the store the registry is
 in-memory only, and a restart drops the fleet until every gateway re-announces on its next heartbeat
-(up to `RGOE_BOOTNODE_HEARTBEAT`, default 300s). Either way the signer key persists on disk
-(`RGOE_BOOTNODE_SIGNER_KEY`), so the pinned signer is unchanged and clients accept the rebuilt
+(up to `SHADE_TREE_BOOTNODE_HEARTBEAT`, default 300s). Either way the signer key persists on disk
+(`SHADE_TREE_BOOTNODE_SIGNER_KEY`), so the pinned signer is unchanged and clients accept the rebuilt
 directory with no re-pin.
 
-**Prevention.** Set `RGOE_BOOTNODE_STORE` so a restart is not a fleet blank. Run redundant bootnodes,
-federated with `RGOE_BOOTNODE_PEERS` so each learns the others' gateways (T-FEAT-1,
-`bootnode/federation.mjs`); clients pin one bootnode onion at a time (`RGOE_BOOTNODE_ONION`), so
+**Prevention.** Set `SHADE_TREE_BOOTNODE_STORE` so a restart is not a fleet blank. Run redundant bootnodes,
+federated with `SHADE_TREE_BOOTNODE_PEERS` so each learns the others' gateways (T-FEAT-1,
+`bootnode/federation.mjs`); clients pin one bootnode onion at a time (`SHADE_TREE_BOOTNODE_ONION`), so
 re-pointing a client to a surviving peer is still a manual re-point. Keep the LKG cache path
 writable so degradation actually works. Publish a static signed directory as a cold fallback.
 
@@ -73,19 +73,19 @@ So a stolen signer degrades to OMIT / reorder / stale-stake, not to a controlled
 
 **Immediate containment.** Treat the signer as burned. Weight concentration is the real lever (it
 narrows which gateway a member is likely to hit), so if the poisoned list is skewing selection,
-push clients back onto a trusted static directory (`RGOE_DIRECTORY` + the OLD-but-trusted signer) or
+push clients back onto a trusted static directory (`SHADE_TREE_DIRECTORY` + the OLD-but-trusted signer) or
 a redundant bootnode with a different signer while you rotate.
 
 **Root-cause investigation.** Compare the live `/directory` against a known-good snapshot: which
 onions were dropped, added, reweighted. Every added onion is by definition one whose key the attacker
 holds OR a public honest gateway (the binding guarantees no third option). Audit the box holding
-`RGOE_BOOTNODE_SIGNER_KEY` for exfiltration.
+`SHADE_TREE_BOOTNODE_SIGNER_KEY` for exfiltration.
 
-**Recovery.** Rotate the pinned signer. `RGOE_DIR_SIGNER` accepts a comma-separated **allowlist**
+**Recovery.** Rotate the pinned signer. `SHADE_TREE_DIR_SIGNER` accepts a comma-separated **allowlist**
 of signer pubkeys (T-HARD-5, `client/selection.mjs` `parsePinnedSigners`; a single value behaves as
 before), so rotation has an overlap window: (1) push the NEW signer pubkey to every client's
 allowlist alongside the old one, out of band; (2) mint the new signer key on the bootnode and
-restart it (the bootnode re-signs the directory with whatever `RGOE_BOOTNODE_SIGNER_KEY` holds);
+restart it (the bootnode re-signs the directory with whatever `SHADE_TREE_BOOTNODE_SIGNER_KEY` holds);
 (3) once every client carries both, drop the OLD pubkey from the allowlist. Clients that only carry
 the old pin reject the new directory (`signer-not-pinned` / `bad-signature`) and fall back to their
 LKG cache until re-pinned, so step (1) must precede step (2). Redistribution of the new pubkey is
@@ -111,10 +111,10 @@ tampering, downtime).
   plaintext (TLS is end-to-end client-to-target).
 - Drop, delay, or selectively censor requests routed to it.
 - Replay an exact envelope. Against the SAME gateway this fails: `makeSpentSet` fingerprints
-  `(nullifier, share.x, nonce)`, and an identical envelope seen again after `RGOE_REPLAY_WINDOW_MS`
+  `(nullifier, share.x, nonce)`, and an identical envelope seen again after `SHADE_TREE_REPLAY_WINDOW_MS`
   (5s, the honest-retry window) is rejected `replayed-envelope` (T-FEAT-12,
   `gateway/gateway.mjs`). Against OTHER gateways it fails only when the fleet runs the shared
-  per-epoch nullifier tally (`RGOE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, `gateway/fleet-tally.mjs`;
+  per-epoch nullifier tally (`SHADE_TREE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, `gateway/fleet-tally.mjs`;
   off by default, fail-open); a fleet without the tally lets a captured envelope be fanned to
   peers, each of which sees it once and egresses it. Amplification is therefore bounded to
   one egress per non-tallying gateway per captured envelope, and it never slashes (identical `x`
@@ -132,7 +132,7 @@ tampering, downtime).
 **Immediate containment.** Remove it from the fleet. There is no deregister endpoint by design; the
 mechanism is TTL drop:
 - If you control the operator: **stop its heartbeat.** The entry ages out after
-  `RGOE_BOOTNODE_TTL` (default 900s) with no one deregistering it.
+  `SHADE_TREE_BOOTNODE_TTL` (default 900s) with no one deregistering it.
 - If you do not: the bootnode cannot forcibly evict a still-announcing onion, but in stake mode you
   can cut its stake (see Recovery) so `isStaked` flips false and it drops on the next refresh.
 Clients also route around a bad gateway locally: `reportHealth` marks it `down` after 2 failures and
@@ -151,10 +151,10 @@ the operator is active or mid-unbonding (the unbonding window keeps it slashable
 exit-to-dodge escape). This is a deliberate asymmetry vs the member slash, which is a cryptographic
 proof and therefore permissionless.
 
-**Prevention.** Per-request rotation across N non-colluding gateways spreads target metadata to
-~1/N; RLN's fresh per-request nullifiers stop even colluding gateways from rejoining a member's
+**Prevention.** Per-tunnel rotation across N non-colluding gateways spreads target metadata to
+~1/N; RLN's fresh per-tunnel nullifiers stop even colluding gateways from rejoining a member's
 requests. Require `admission=stake` so misbehavior has a bond behind it. Enable the shared fleet
-tally (`RGOE_FLEET_TALLY_PEERS`, `docs/OPERATOR.md` section 5) so a captured envelope cannot be
+tally (`SHADE_TREE_FLEET_TALLY_PEERS`, `docs/OPERATOR.md` section 5) so a captured envelope cannot be
 fanned across the fleet.
 
 ---
@@ -170,7 +170,7 @@ announces indistinguishably from the legitimate gateway (`onionSig` verifies aga
 The onion is impersonable. Onion control is no longer yours.
 
 **Immediate containment.** Stop trusting that onion. Stop its heartbeat so the honest entry ages out
-(`RGOE_BOOTNODE_TTL`). Understand that stopping YOUR heartbeat does not stop the attacker's: they can
+(`SHADE_TREE_BOOTNODE_TTL`). Understand that stopping YOUR heartbeat does not stop the attacker's: they can
 keep announcing the stolen onion, and the binding check passes for them because they hold the key.
 The only real fix is to retire the onion.
 
@@ -180,14 +180,14 @@ the attacker (never plaintext, TLS stays end-to-end).
 
 **Recovery.**
 1. Retire the leaked onion. Consider it permanently burned; never reuse the seed.
-2. Mint a new identity: `rgoe keygen <hsDir>` writes fresh Tor HS key files + a new
+2. Mint a new identity: `shade-tree keygen <hsDir>` writes fresh Tor HS key files + a new
    `identity.local.json` seed.
-3. Re-announce under the new onion (heartbeat with the new `RGOE_GW_IDENTITY`). Clients pick it up on
+3. Re-announce under the new onion (heartbeat with the new `SHADE_TREE_GW_IDENTITY`). Clients pick it up on
    the next directory refresh.
 4. **On-chain operator stake is separate and survives.** The `GatewayRegistry` stakes an operator
    ADDRESS, never an onion; one stake rotates across many onions. Re-sign the durable operator
    authorization for the NEW onion (`operatorAuthMessage(newOnion, operator)`,
-   `RGOE_GW_OPERATOR_KEY`) and the same bond backs the new identity. No re-stake, no new bond.
+   `SHADE_TREE_GW_OPERATOR_KEY`) and the same bond backs the new identity. No re-stake, no new bond.
 
 **Prevention.** Guard the seed like any signing key. It is the one secret whose leak cannot be
 contained by the trust model, only by retiring the identity. Rotate onions periodically so a silent
@@ -198,7 +198,7 @@ leak has a bounded lifetime.
 ## 5. Chain / RPC outage
 
 **Symptoms.** `eth_call` / `eth_getLogs` failing. Stake checks and root refreshes error in logs.
-Applies only to on-chain profiles (`RGOE_GROUP_CONTRACT` / `RGOE_STAKE_MODE=onchain` set); the
+Applies only to on-chain profiles (`SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_STAKE_MODE=onchain` set); the
 `members.json` PoC path is unaffected.
 
 **Stake reads (bootnode admission=stake).** `verifyAnnounce` **fails closed**: if the chain read
@@ -206,7 +206,7 @@ throws under `requireStake`, the announce is rejected `stake-check-failed:<msg>`
 outage therefore blocks NEW/renewing stake-mode announces rather than admitting unverified gateways.
 Already-resident entries keep serving until their TTL, then age out (they cannot renew without a
 successful stake check). Result: the fleet shrinks safely toward whatever was already admitted, never
-admits an unverified operator. The 15s `isStaked` cache (`RGOE_STAKE_CACHE_MS`) briefly masks a very
+admits an unverified operator. The 15s `isStaked` cache (`SHADE_TREE_STAKE_CACHE_MS`) briefly masks a very
 short blip.
 
 **Root reads (gateway).** `lib/root-provider.mjs` `withCache` serves the last-known-good roots with a
@@ -216,34 +216,34 @@ successfully read. A membership change during the outage is simply not seen unti
 just-added member may be rejected; a just-removed member may still pass, bounded by the freshness
 window).
 
-**Gateway slashing.** Deferred, not lost. Without a reachable RPC (or without `RGOE_SLASH_KEY`) the
+**Gateway slashing.** Deferred, not lost. Without a reachable RPC (or without `SHADE_TREE_SLASH_KEY`) the
 slasher logs a `SLASH (dry-run)` and the over-spend evidence is still detected locally; the on-chain
 `slash()` tx is what is delayed. Re-submit once RPC returns.
 
 **Immediate containment.** None forced. Confirm the outage is RPC, not consensus. Fail-closed stake +
 last-known-good roots mean the system degrades safely on its own.
 
-**Root-cause investigation.** Is `RGOE_RPC_URL` reachable? Provider down, rate-limited, or
+**Root-cause investigation.** Is `SHADE_TREE_RPC_URL` reachable? Provider down, rate-limited, or
 partitioned? Check whether roots are being served stale (log shows `stale`/`error`).
 
 **Recovery.** Restore RPC (prefer your own node for the solo-staker path). Stake-mode announces
 resume admitting on the next successful check; root refresh catches up on the next poll; re-submit any
 deferred slashes.
 
-**Prevention.** Run your own RPC endpoint. Set `RGOE_CONFIRMATIONS` for reorg safety on a public
+**Prevention.** Run your own RPC endpoint. Set `SHADE_TREE_CONFIRMATIONS` for reorg safety on a public
 chain (stake reads default to `latest`, roots to `finalized`). Size the freshness window
-(`RGOE_FRESHNESS_ROOTS`) so a brief outage does not strand recent members.
+(`SHADE_TREE_FRESHNESS_ROOTS`) so a brief outage does not strand recent members.
 
 **Seen live — 2026-08-17 23:34 UTC, public RPC `eth_getLogs` range cap (both fleet gateways).**
-Symptom: after enabling `RGOE_PAID_ACCESS_CONTRACT` + `RGOE_GROUP_CONTRACT`, `rgoe-gateway`
+Symptom: after enabling `SHADE_TREE_PAID_ACCESS_CONTRACT` + `SHADE_TREE_GROUP_CONTRACT`, `shade-tree-gateway`
 crash-looped at startup with `eth_getLogs: exceed maximum block range: 50000` (publicnode's cap;
 the scan asked for `[0x0, finalized]` in one call) — the process died before `listen`, so even
 `members.json` members were down; not an outage, a permanent refusal that a restart cannot fix.
-Containment: `Environment=RGOE_FROM_BLOCK=<deploy block>` in the gateway drop-in, restart.
+Containment: `Environment=SHADE_TREE_FROM_BLOCK=<deploy block>` in the gateway drop-in, restart.
 Prevention (shipped right after): the scan is paged + halved on a range/size refusal
-(`RGOE_LOGS_CHUNK`), starts at each contract's record deploy block (`RGOE_FROM_BLOCKS`), and an
+(`SHADE_TREE_LOGS_CHUNK`), starts at each contract's record deploy block (`SHADE_TREE_FROM_BLOCKS`), and an
 unreadable chain source at boot no longer kills a gateway that has a static root — it starts
-degraded (`rgoe_gateway_root_source_degraded{contract=…} 1`, log `root source UNAVAILABLE at
+degraded (`shade_tree_gateway_root_source_degraded{contract=…} 1`, log `root source UNAVAILABLE at
 startup`) and heals on the next read. Full write-up: `docs/GO-LIVE-LOG-2026-08-17.md`
 "(payments, later)"; knobs: `docs/OPERATOR.md` "Public RPC log-range caps".
 
@@ -257,32 +257,32 @@ collapsing. The reason string on the `DROP` line is the diagnostic.
 **Most likely cause: a root mismatch.** The proof's public root is not in the gateway's
 `recentRoots`, so `verifyEnvelope` drops it. Candidates, in order:
 - **`members.json` vs on-chain root divergence.** Client building proofs against one root source
-  while the gateway reads another (`RGOE_GROUP_CONTRACT` set on one side only, or pointed at a
+  while the gateway reads another (`SHADE_TREE_GROUP_CONTRACT` set on one side only, or pointed at a
   different contract).
 - **Epoch skew.** `verifyEnvelope` accepts only the current/previous epoch's external nullifier. A
   clock skew larger than one epoch between client and gateway drops otherwise-valid proofs. Look for
   the epoch-window reason on the DROP line.
-- **`RGOE_EPOCH_SECONDS` mismatch** across sides (default 120). Different epoch lengths desynchronize
+- **`SHADE_TREE_EPOCH_SECONDS` mismatch** across sides (default 120). Different epoch lengths desynchronize
   the external nullifier immediately. Must match client and gateway.
-- **`RGOE_SLOTS` / `RGOE_RLN_IDENTIFIER` mismatch.** Different rate cap or RLN identifier changes the
+- **`SHADE_TREE_SLOTS` / `SHADE_TREE_RLN_IDENTIFIER` mismatch.** Different rate cap or RLN identifier changes the
   external nullifier / circuit binding.
 - **Freshness window too tight.** A membership change advanced the root and clients are still proving
-  against a root that fell out of `RGOE_FRESHNESS_ROOTS`.
+  against a root that fell out of `SHADE_TREE_FRESHNESS_ROOTS`.
 
 **Immediate containment.** Do not slash: these are gate rejections, not over-spends (no secret is
 reconstructed on a DROP). Identify the dominant DROP reason from logs first.
 
 **Root-cause investigation.** Read the DROP reasons on the gateway (`DROP <reason> target=`). Compare
 the gateway's live `recentRoots` against the root clients are proving against. Check both sides'
-`RGOE_EPOCH_SECONDS`, `RGOE_SLOTS`, `RGOE_RLN_IDENTIFIER`, and root source
-(`RGOE_GROUP_CONTRACT` vs `members.json`). Confirm clocks. If on-chain, confirm the root provider is
+`SHADE_TREE_EPOCH_SECONDS`, `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and root source
+(`SHADE_TREE_GROUP_CONTRACT` vs `members.json`). Confirm clocks. If on-chain, confirm the root provider is
 not serving `stale` roots from a chain outage (see #5).
 
 **Recovery.** Align the mismatched parameter across client and gateway, or widen
-`RGOE_FRESHNESS_ROOTS` if the cause is a too-tight window during a membership change. No key rotation
+`SHADE_TREE_FRESHNESS_ROOTS` if the cause is a too-tight window during a membership change. No key rotation
 or slashing involved.
 
-**Prevention.** Pin `RGOE_EPOCH_SECONDS`, `RGOE_SLOTS`, `RGOE_RLN_IDENTIFIER`, and the root source
+**Prevention.** Pin `SHADE_TREE_EPOCH_SECONDS`, `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and the root source
 identically across every component (they are called out as must-match in `docs/CONFIG.md`). NTP-sync
 gateway clocks.
 
@@ -298,7 +298,7 @@ the gateway's spent-set (`gateway/gateway.mjs` `makeSpentSet`) sees TWO DISTINCT
 public `x`) under the SAME `nullifier`. That is the L+1-th RLN evaluation point, which reconstructs
 the identity secret (Shamir) and derives the rate-commitment leaf. An IDENTICAL replay (same
 `share.x`) is deduped and is NEVER slashed. So a slash means two genuinely different points were
-presented on one per-slot nullifier: the member exceeded its `RGOE_SLOTS` rate cap within the epoch.
+presented on one per-slot nullifier: the member exceeded its `SHADE_TREE_SLOTS` rate cap within the epoch.
 
 **Immediate containment.** Do not assume malice. First verify the slash was legitimate before
 treating it as an incident.
@@ -309,9 +309,9 @@ treating it as an incident.
    `x` would be a bug, investigate the spent-set.
 2. Verify the on-chain slash tx: find the `SLASH tx <hash>` log line, confirm it mined, confirm the
    `commitment` matches the reconstructed leaf and the `receiver` is the intended address
-   (`RGOE_SLASH_RECEIVER`, else the slasher wallet).
+   (`SHADE_TREE_SLASH_RECEIVER`, else the slasher wallet).
 3. If the member insists it did not over-spend: check for a client bug re-using a nullifier across
-   requests, or a `RGOE_SLOTS` mismatch causing the client to think it had more slots than the
+   requests, or a `SHADE_TREE_SLOTS` mismatch causing the client to think it had more slots than the
    gateway enforces.
 4. Rule out cross-gateway amplification: an EXACT-envelope replay never slashes (identical `x` is
    deduped, and a late replay is rejected `replayed-envelope`, T-FEAT-12; with the fleet tally on,
@@ -320,12 +320,12 @@ treating it as an incident.
 
 **Recovery.** A legitimate slash is final and correct; no recovery, the rate cap worked. If
 investigation shows an illegitimate slash (a bug reconstructing on identical or mishandled shares),
-that is a code defect: freeze slashing (`RGOE_SLASH_KEY` unset falls back to dry-run so evidence is
+that is a code defect: freeze slashing (`SHADE_TREE_SLASH_KEY` unset falls back to dry-run so evidence is
 still logged without draining bonds) and fix the spent-set before re-enabling on-chain submission.
 
-**Prevention.** Keep `RGOE_SLOTS` and `RGOE_EPOCH_SECONDS` identical across client and gateway so a
+**Prevention.** Keep `SHADE_TREE_SLOTS` and `SHADE_TREE_EPOCH_SECONDS` identical across client and gateway so a
 member's own rate accounting matches what the gateway enforces. Run the slasher in dry-run
-(`RGOE_SLASH_KEY` unset) while validating a new deployment so a spent-set bug logs instead of slashes.
+(`SHADE_TREE_SLASH_KEY` unset) while validating a new deployment so a spent-set bug logs instead of slashes.
 
 ---
 
@@ -339,14 +339,14 @@ member's own rate accounting matches what the gateway enforces. Run the slasher 
   manual.
 - **Fleet-wide replay defense is opt-in** (#3, #7): per-gateway replay rejection is always on
   (T-FEAT-12); the cross-gateway tally (T-FEAT-20/20b) must be enabled with
-  `RGOE_FLEET_TALLY_PEERS` and is fail-open by design.
-- **Client zero-trust operator re-verification is opt-in** (#3): `RGOE_VERIFY_STAKE=1` makes the
+  `SHADE_TREE_FLEET_TALLY_PEERS` and is fail-open by design.
+- **Client zero-trust operator re-verification is opt-in** (#3): `SHADE_TREE_VERIFY_STAKE=1` makes the
   client re-fetch `GET /gateway/<onion>` and re-check sigs + live stake itself (T-DEV-5,
   `client/selection.mjs`); off by default, the client trusts the bootnode's `staked` label.
 
-Shipped since this playbook was written: bootnode persistence (T-DEV-4, `RGOE_BOOTNODE_STORE`),
+Shipped since this playbook was written: bootnode persistence (T-DEV-4, `SHADE_TREE_BOOTNODE_STORE`),
 per-gateway replay cache (T-FEAT-12), signer-rotation allowlist (T-HARD-5), client stake
-re-verification (T-DEV-5), encrypted key backup/restore (`rgoe backup` / `rgoe restore`,
+re-verification (T-DEV-5), encrypted key backup/restore (`shade-tree backup` / `shade-tree restore`,
 `docs/BACKUP.md`).
 </content>
 </invoke>

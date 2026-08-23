@@ -6,7 +6,7 @@
 
 ## Context
 
-RGOE has three programs sharing one wire protocol: the bootnode, the gateway, and
+Shade Tree has three programs sharing one wire protocol: the bootnode, the gateway, and
 the client. The security-critical checks (v3 onion to ed25519 binding, canonical
 directory/announce byte encodings, `verifyDirectory`, `verifyAnnounce`, the
 envelope format and target binding) currently live once, in JavaScript
@@ -41,7 +41,7 @@ Stack: `arti` (Tor), `zerokit` (PSE's canonical Rust RLN), `alloy` (chain reads)
 
 ## Boundary
 
-- **Rust:** the client (`rust/rgoe-client`), plus a `rust/rgoe-proto` lib holding
+- **Rust:** the client (`rust/shade-tree-client`), plus a `rust/shade-tree-proto` lib holding
   the trust-critical checks reimplemented from the JS reference and gated by the
   conformance vectors.
 - **JavaScript (stays):** the gateway and the bootnode. They are operator
@@ -65,7 +65,7 @@ becomes true:
   the surviving one.
 
 Absent those, the servers stay JS and the Rust surface is the client plus
-`rgoe-proto`.
+`shade-tree-proto`.
 
 ## Consequences
 
@@ -73,7 +73,7 @@ Absent those, the servers stay JS and the Rust surface is the client plus
   languages, and the conformance harness is the guard that keeps them identical.
 - Users get a single binary with embedded Tor; the Node/tor/SOCKS/torrc setup goes
   away for the client.
-- New work: keep `rgoe-proto` in lockstep with the JS checks, and keep both
+- New work: keep `shade-tree-proto` in lockstep with the JS checks, and keep both
   passing `testdata/vectors.json`.
 
 ## References

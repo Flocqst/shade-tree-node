@@ -1,10 +1,10 @@
 // deploy-test-asset — put the EIP-3009 TEST stablecoin (test/Eip3009Token.sol, "Test USD"/tUSD,
 // 6 decimals) on a testnet and mint it to buyer addresses, for fleets whose testnet has no faucet
 // stablecoin at hand (Circle's Sepolia USDC faucet is captcha-gated). Real USDC is a one-env swap
-// afterwards (RGOE_PAY_ASSET=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 on Sepolia; the registrar
+// afterwards (SHADE_TREE_PAY_ASSET=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 on Sepolia; the registrar
 // probes name()/version()/DOMAIN_SEPARATOR() and adapts). NOT for value.
 //
-//   RGOE_REGISTRAR_KEY=0x… RGOE_RPC_URL=https://… node payments/deploy-test-asset.mjs [--mint <addr>=<units>]... [--asset <existing>]
+//   SHADE_TREE_REGISTRAR_KEY=0x… SHADE_TREE_RPC_URL=https://… node payments/deploy-test-asset.mjs [--mint <addr>=<units>]... [--asset <existing>]
 //
 // Prints the token address + tx hashes as JSON on stdout (never the key). Needs `forge build` first
 // (reads out/Eip3009Token.sol/Eip3009Token.json).
@@ -19,10 +19,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ART = join(HERE, "..", "out", "Eip3009Token.sol", "Eip3009Token.json");
 
 async function main() {
-  const key = process.env.RGOE_REGISTRAR_KEY;
-  if (!key) { console.error("RGOE_REGISTRAR_KEY (deployer/minter key) is required"); process.exit(1); }
-  const rpc = process.env.RGOE_RPC_URL || networkDefault("RGOE_RPC_URL");
-  if (!rpc) { console.error("RGOE_RPC_URL is required"); process.exit(1); }
+  const key = process.env.SHADE_TREE_REGISTRAR_KEY;
+  if (!key) { console.error("SHADE_TREE_REGISTRAR_KEY (deployer/minter key) is required"); process.exit(1); }
+  const rpc = process.env.SHADE_TREE_RPC_URL || networkDefault("SHADE_TREE_RPC_URL");
+  if (!rpc) { console.error("SHADE_TREE_RPC_URL is required"); process.exit(1); }
   const argv = process.argv.slice(2);
   const mints = []; let asset = null; let name = "Test USD", symbol = "tUSD";
   for (let i = 0; i < argv.length; i++) {

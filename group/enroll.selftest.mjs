@@ -6,7 +6,7 @@
 //
 // Stream contract, read straight from group/enroll.mjs:
 //   node group/enroll.mjs --commitment-only  -> stdout: commitment ONLY (one line)
-//                                                stderr: "export RGOE_SECRET=0x..." + guidance
+//                                                stderr: "export SHADE_TREE_SECRET=0x..." + guidance
 //                                                (does NOT touch members.json)
 //   node group/enroll.mjs                     -> stdout (console.log): BOTH secret + commitment
 //                                                (and seeds group/members.json)
@@ -50,7 +50,7 @@ function isFieldElement(tok) {
   return n > 0n && n < FIELD;
 }
 
-const SECRET_RE = /RGOE_SECRET=(0x[0-9a-fA-F]{64})/;
+const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
 
 function main() {
   // === 1. commitment-only mode: stdout is the commitment ALONE, secret is NOT on stdout ===
@@ -65,13 +65,13 @@ function main() {
 
   // The secret lives on STDERR in this mode; pull it out so we can prove it is absent from stdout.
   const m = c1.stderr.match(SECRET_RE);
-  ok(!!m, "the secret (export RGOE_SECRET=0x...) is emitted on STDERR");
+  ok(!!m, "the secret (export SHADE_TREE_SECRET=0x...) is emitted on STDERR");
   const secret = m ? m[1] : "__no-secret-found__";
 
   // The security assertion: the operator channel (stdout) must not leak the bearer secret in
   // any form — not the raw hex, not the env-var line, not a 0x blob.
   ok(!c1.stdout.includes(secret), "the secret hex does NOT appear on stdout");
-  ok(!/RGOE_SECRET/.test(c1.stdout), "no RGOE_SECRET export line on stdout");
+  ok(!/SHADE_TREE_SECRET/.test(c1.stdout), "no SHADE_TREE_SECRET export line on stdout");
   ok(!/0x[0-9a-fA-F]{8,}/.test(c1.stdout), "no 0x-hex blob on stdout at all");
 
   // The commitment on stdout is the REAL leaf derived from the secret on stderr — same
@@ -106,7 +106,7 @@ function main() {
   }
   ok(d.status === 0, "exits 0");
   const dm = d.stdout.match(SECRET_RE);
-  ok(!!dm, "default mode DOES print a secret (export RGOE_SECRET=0x...) on stdout");
+  ok(!!dm, "default mode DOES print a secret (export SHADE_TREE_SECRET=0x...) on stdout");
   const dCommit = (d.stdout.match(/commitment:\s+([0-9]+)/) || [])[1];
   ok(dCommit != null && isFieldElement(dCommit), "default mode also prints a well-formed commitment");
   ok(dm && dCommit && dm[1] !== dCommit, "secret and commitment are distinct values");

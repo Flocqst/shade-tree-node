@@ -13,18 +13,18 @@ to the operator). The on-chain tree, the off-chain redemption, Layer 0 and Layer
 written.
 
 Code: `payments/registrar.mjs` (the operator's 402 service), `payments/wire.mjs` (both wire
-formats), `payments/eip3009.mjs` (the settlement typed data), `group/pay.mjs` (`rgoe pay`),
+formats), `payments/eip3009.mjs` (the settlement typed data), `group/pay.mjs` (`shade-tree pay`),
 `contracts/PaidAccessSet.sol` (the tree, PR #50), `test/Eip3009Token.sol` (a test stablecoin).
 Tests: `payments/wire.selftest.mjs` (fast, chainless; includes the x402 spec's worked-example
 signature as a cross-implementation golden), `payments/registrar.selftest.mjs` (anvil: both
-rails end to end via `rgoe pay`, replay/idempotency, the adversarial matrix, slow-loris, crash
+rails end to end via `shade-tree pay`, replay/idempotency, the adversarial matrix, slow-loris, crash
 recovery), `test/Eip3009Token.t.sol` (Foundry). Live receipts: `docs/GO-LIVE-LOG-2026-08-17.md`
 "(payments)".
 
 ### The flow
 
 ```
- buyer (rgoe pay)                registrar (operator, on the bootnode onion :8878)          chain
+ buyer (shade-tree pay)                registrar (operator, on the bootnode onion :8878)          chain
    |                                   |                                                     |
    | GET /pay/quote?limit=8            |                                                     |
    |---------------------------------->|                                                     |
@@ -44,7 +44,7 @@ recovery), `test/Eip3009Token.t.sol` (Foundry). Live receipts: `docs/GO-LIVE-LOG
    | 200  PAYMENT-RESPONSE (x402) / Payment-Receipt (MPP)                                    |
    |      {settleTx, insertTx, leafIndex, root}                                              |
    |<----------------------------------|                                                     |
-   | now: rgoe client --secret …  (RLN proof against the paid root; the gateway sees a proof, not a leaf)
+   | now: shade-tree client --secret …  (RLN proof against the paid root; the gateway sees a proof, not a leaf)
 ```
 
 x402 uses `GET /pay/quote` for the challenge; MPP uses `POST /pay` *without* a credential for
@@ -93,10 +93,10 @@ validBefore − settleBuffer` (default 20 s of headroom so the tx can still mine
 recovers to `from` over the token domain; on chain: `authorizationState(from,nonce) == false`,
 `balanceOf(from) ≥ value`, `PaidAccessSet.limitOf(commitment) == 0` (never take money for a
 leaf that cannot be inserted); an `eth_call` simulation of `transferWithAuthorization`. Then,
-serialized on the operator key: settle → wait `RGOE_PAY_CONFIRMATIONS` (1) → insert → wait.
+serialized on the operator key: settle → wait `SHADE_TREE_PAY_CONFIRMATIONS` (1) → insert → wait.
 
 **Idempotency + crash safety.** Every order is keyed by `(asset, from, nonce)` in a small JSON
-store (`RGOE_REGISTRAR_STORE`, atomic tmp+rename like the bootnode's). An identical replay of a
+store (`SHADE_TREE_REGISTRAR_STORE`, atomic tmp+rename like the bootnode's). An identical replay of a
 finished order returns the stored receipt (`200`, `replayed:true`, no second insert); the same
 nonce with a different commitment is `409 nonce-used`; a nonce already consumed on chain that
 the store never saw is `402`. A settle that mined but whose insert did not is resumed on the
@@ -121,7 +121,7 @@ service, and lets the same parse surface serve both rails and be fuzzed in one p
 
 | link | what is public | mitigation |
 |---|---|---|
-| buyer address → operator | the stablecoin transfer is on chain: `from` (buyer) → `payTo` (operator), amount = the tier's price; the insert tx (operator → set) follows within a block or two | **Layer 0 is the user's choice**: pay from a fresh address funded through a shared pool (Railgun / Privacy Pools / a CEX withdrawal…). `rgoe pay` prints this advice every run. Nothing in the protocol mandates a pool. |
+| buyer address → operator | the stablecoin transfer is on chain: `from` (buyer) → `payTo` (operator), amount = the tier's price; the insert tx (operator → set) follows within a block or two | **Layer 0 is the user's choice**: pay from a fresh address funded through a shared pool (Railgun / Privacy Pools / a CEX withdrawal…). `shade-tree pay` prints this advice every run. Nothing in the protocol mandates a pool. |
 | tier | public: the transfer amount *is* the tier price, and `insert(commitment, limit)` names the tier | by design (a tier bucket is a public anonymity set, as with the staked set); prices are fixed per tier so amounts never fingerprint within a tier |
 | payer ↔ leaf | the **operator** learns `commitment ↔ from` (it inserts the leaf right after that payment); a chain observer can correlate the transfer with the next `Inserted` event by timing | the gateway never learns it — it verifies an RLN proof against the root, not a leaf; batching inserts (`insertBatch`) and a dwell time between settle and insert would blur the chain-timing link and are a one-flag operator choice later |
 | client IP → anything | the quote/pay round trip rides the bootnode onion (`http://<onion>:8878`); the registrar sees a rendezvous circuit, never the buyer's IP | standard Tor caveats only |
@@ -132,26 +132,26 @@ service, and lets the same parse surface serve both rails and be fuzzed in one p
 
 Selling access is EACH provider's decision, not the fleet's:
 
-- **Rails.** `RGOE_PAY_PROTOCOLS=x402,mpp` (default both when the registrar is enabled; any non-empty
+- **Rails.** `SHADE_TREE_PAY_PROTOCOLS=x402,mpp` (default both when the registrar is enabled; any non-empty
   subset) is what THIS registrar serves. A disabled rail gets no challenge in any 402 (`GET /pay/quote`,
   the bodied `POST /pay`), is absent from the 402 body's `pay.protocols` and from `/health`, and a
   `POST /pay` carrying its header (`PAYMENT-SIGNATURE` / `Authorization: Payment`) is refused
-  `400 { err:"protocol-disabled", protocol, protocols:[enabled] }` before any parsing. `rgoe pay
+  `400 { err:"protocol-disabled", protocol, protocols:[enabled] }` before any parsing. `shade-tree pay
   --protocol mpp` against an x402-only registrar says so: "this registrar does not serve mpp (it
   sells via: x402); retry with --protocol x402". x402 and MPP are EQUAL on the anonymity axis (one
   EIP-3009 transfer either way); the choice is fees, tooling, and the buyer's client.
 - **Where.** A registrar rides an onion the box already runs: the bootnode's (as shipped 2026-08-17)
-  or — a gateway-only box — the GATEWAY's own onion (`bootstrap.sh RGOE_REGISTRAR=1` with
-  `RGOE_BOOTNODE_ONION` set: `HiddenServicePort 8878` in the gateway HS block, `RGOE_REGISTRAR_ONION`
+  or — a gateway-only box — the GATEWAY's own onion (`bootstrap.sh SHADE_TREE_REGISTRAR=1` with
+  `SHADE_TREE_BOOTNODE_ONION` set: `HiddenServicePort 8878` in the gateway HS block, `SHADE_TREE_REGISTRAR_ONION`
   = the gateway onion). Every provider may therefore run its own registrar + its own `PaidAccessSet`
   and sell on its own terms; nothing requires a bootnode.
 - **Advertised where.** The offer (`{protocols, onion?, port, asset, chain, tiers}`) rides in the
-  gateway's SIGNED caps as `caps.pay` (heartbeat `RGOE_REGISTRAR_ADVERTISE=1`; `onion` names the
+  gateway's SIGNED caps as `caps.pay` (heartbeat `SHADE_TREE_REGISTRAR_ADVERTISE=1`; `onion` names the
   registrar's onion when it is not the gateway's own, e.g. the bootnode's) — and, on a bootnode box,
   in the bootnode's `/health` `pay` as before. Both may coexist; the caps form is what a client
   learns from `/directory` and cannot be forged by the bootnode (`docs/PROTOCOL-API.md` §3.0.1).
-- **Admit what you sell.** A gateway must ADMIT paid leaves to sell them: `RGOE_ADMIT` must include
-  `paid` (`bootstrap.sh` refuses `RGOE_REGISTRAR=1` otherwise), and the default policy is `invited`
+- **Admit what you sell.** A gateway must ADMIT paid leaves to sell them: `SHADE_TREE_ADMIT` must include
+  `paid` (`bootstrap.sh` refuses `SHADE_TREE_REGISTRAR=1` otherwise), and the default policy is `invited`
   ALONE — a provider that never opts in never admits a paid leaf, whoever inserted it. Conversely a
   buyer's client routes ONLY to gateways whose `caps.admits` include `paid` (`docs/CLIENTS.md`
   "Leaf source"): on the sepolia demo fleet that is gateway-1 (`invited,staked,paid`), not gateway-2
@@ -164,7 +164,7 @@ Circle's Sepolia USDC (`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`) implements 
 == keccak(EIP712Domain{"USDC","2",11155111,0x1c7D…})`), but its faucet is captcha-gated, so the
 live run uses the test stablecoin `test/Eip3009Token.sol` ("Test USD"/tUSD, 6 decimals, same
 EIP-3009 surface) deployed at `network/sepolia/contracts.json` `payAsset`. **Real USDC is a
-one-env swap**: `RGOE_PAY_ASSET=0x1c7D…7238` (the registrar probes the domain and adapts).
+one-env swap**: `SHADE_TREE_PAY_ASSET=0x1c7D…7238` (the registrar probes the domain and adapts).
 `payments/deploy-test-asset.mjs` deploys/mints the test token.
 
 ---
@@ -178,20 +178,20 @@ The registrar above sells the leaf; this is what happens to it afterwards — ho
 |---|---|---|
 | **0 — identity decorrelation** | Unchanged: the buyer's choice of hop into a fresh address / account (Railgun, Privacy Pools, a CEX, a bridge; none mandated), now applied to the 402 payment as well as to any on-chain footprint. Nothing to build; documented in the leak ledger + THREAT-MODEL §5. | — |
 | **1 — payment + binding** | 402-settled off-chain payment (x402/MPP) → operator inserts the buyer's rateCommitment `Poseidon2(Poseidon1(identitySecret), limit)` into `PaidAccessSet`: the structural sibling of `StakedReputationSet` (T-DEV-9 on-chain depth-20 Poseidon tree, `currentRoot()` at storage slot 3, tiered leaf, `limitOf` / `leafCount` / `allowedLimits` / `DEFAULT_LIMIT`, `slash(commitment, secret, limit, receiver)` zeroes the leaf — no bond, no exit/withdraw). Contract: `contracts/PaidAccessSet.sol` (T-FEAT-7 1/3, PR #50; live on Sepolia at `0x4e8C2Bf5d3c5454A04837401095fce2646484111`). Off-chain readers: `lib/root-provider.mjs:TOPIC.inserted / TOPIC.deposit / TOPIC.paidSlashed` (the paid events, `(commitment indexed, limit, index, root)`), `reconstructGroup`, `loadGroupFromContract`. | `contracts/PaidAccessSet.sol`, `lib/root-provider.mjs` |
-| **2 — access** | Unchanged envelope + proof. The gateway trusts the UNION of its root sources — `members.json` (static), each `RGOE_GROUP_CONTRACT` (now a comma list) and `RGOE_PAID_ACCESS_CONTRACT` (sugar that appends) — one `RootProvider` per contract, node or light, unioned by `CompositeRootProvider`; `RGOE_ROOTS=static,onchain` selects (default = both when configured). Slashing ROUTES to the contract that holds the leaf. Anonymity floor `RGOE_PAID_MIN_LEAVES` (default 8) is logged + gauged, never enforced. Client: leaf discovery across the same sources; Rust bridge `rgoe leaves`. | `gateway/gateway.mjs:initRoots / resolveRootSources / describeRootSources / makeRoutingSlasher / makeOnchainSlasher.holds / PAID_MIN_LEAVES`, `lib/root-provider.mjs:CompositeRootProvider / configuredContracts / parseContractList / makeRootProvider`, `client/rgoe-client.mjs:makeLeafSourceLoader`, `group/leaves.mjs`, `lib/config.mjs:isEthAddressList / isRootSourceList` |
+| **2 — access** | Unchanged envelope + proof. The gateway trusts the UNION of its root sources — `members.json` (static), each `SHADE_TREE_GROUP_CONTRACT` (now a comma list) and `SHADE_TREE_PAID_ACCESS_CONTRACT` (sugar that appends) — one `RootProvider` per contract, node or light, unioned by `CompositeRootProvider`; `SHADE_TREE_ROOTS=static,onchain` selects (default = both when configured). Slashing ROUTES to the contract that holds the leaf. Anonymity floor `SHADE_TREE_PAID_MIN_LEAVES` (default 8) is logged + gauged, never enforced. Client: leaf discovery across the same sources; Rust bridge `shade-tree leaves`. | `gateway/gateway.mjs:initRoots / resolveRootSources / describeRootSources / makeRoutingSlasher / makeOnchainSlasher.holds / PAID_MIN_LEAVES`, `lib/root-provider.mjs:CompositeRootProvider / configuredContracts / parseContractList / makeRootProvider`, `client/shade-tree-client.mjs:makeLeafSourceLoader`, `group/leaves.mjs`, `lib/config.mjs:isEthAddressList / isRootSourceList` |
 
-Startup lines (ABI-of-record for scripts): `roots: members.json + staked(0x…) + paid(0x…)`, `paid-access anonymity set: N leaves (floor K=RGOE_PAID_MIN_LEAVES)` (WARN below the floor, never refuse), `slash: routing over primary(0x…) + staked(0x…) + paid(0x…)`, and on a slash `slash: routed to paid(0x…)` / `SLASH tx … via=0x…`. Metrics: `rgoe_gateway_trusted_roots{source,contract}`, `rgoe_gateway_paid_access_leaves{contract}`.
+Startup lines (ABI-of-record for scripts): `roots: members.json + staked(0x…) + paid(0x…)`, `paid-access anonymity set: N leaves (floor K=SHADE_TREE_PAID_MIN_LEAVES)` (WARN below the floor, never refuse), `slash: routing over primary(0x…) + staked(0x…) + paid(0x…)`, and on a slash `slash: routed to paid(0x…)` / `SLASH tx … via=0x…`. Metrics: `shade_tree_gateway_trusted_roots{source,contract}`, `shade_tree_gateway_paid_access_leaves{contract}`.
 
 **Decisions on the four open items** (below, "Buildable today vs open"):
 
-1. *Live root vs pinned per-epoch snapshot* → **live**, exactly as the staked set: the gateway reads the confirmed root (`finalized`, or `head - RGOE_CONFIRMATIONS`) and keeps the freshness ring (`RGOE_FRESHNESS_ROOTS`, current + 2 prior), so a proof built against a just-superseded root still verifies and a reorg is bounded by the confirmation depth. No separate pin was needed (`lib/root-provider.mjs:NodeRootProvider / LightClientRootProvider`, unchanged; the paid set is just one more child).
+1. *Live root vs pinned per-epoch snapshot* → **live**, exactly as the staked set: the gateway reads the confirmed root (`finalized`, or `head - SHADE_TREE_CONFIRMATIONS`) and keeps the freshness ring (`SHADE_TREE_FRESHNESS_ROOTS`, current + 2 prior), so a proof built against a just-superseded root still verifies and a reorg is bounded by the confirmation depth. No separate pin was needed (`lib/root-provider.mjs:NodeRootProvider / LightClientRootProvider`, unchanged; the paid set is just one more child).
 2. *One deposit = one access period vs an ongoing budget* → **subscription**: nullifier scoped to the epoch, fresh `limit` budget every epoch, for as long as the leaf lives (until slashed). Expiry is a follow-up (the contract could zero a leaf after N epochs; nothing in the gateway changes).
-3. *Anonymity-set floor K* → **logged, not enforced**: `RGOE_PAID_MIN_LEAVES` (8). `leafCount()` (total leaves ever inserted; slashed slots never reused) is read at startup and on every root refresh; below the floor the gateway WARNs and keeps serving. It is a deployment parameter, not a proven bound — say it, do not hide it.
+3. *Anonymity-set floor K* → **logged, not enforced**: `SHADE_TREE_PAID_MIN_LEAVES` (8). `leafCount()` (total leaves ever inserted; slashed slots never reused) is read at startup and on every root refresh; below the floor the gateway WARNs and keeps serving. It is a deployment parameter, not a proven bound — say it, do not hide it.
 4. *Wiring the Layer-0 hop and the payment to one decorrelated address* → **a wiring note, unchanged by the pivot**: pay the 402 from a fresh address / account funded through the hop; the registrar's insert tx carries only the commitment + tier, never the payer. THREAT-MODEL §5 lists the residual (payment-side) linkability.
 
 **Leak ledger, updated:** in addition to the rows below — the **tier bucket is public** at insertion (the `limit` in the `Inserted` event; the same is already true of a stake's `bondFor(limit)`), the insert tx is public (it names the commitment, not the payer), the 402 payment is visible to its rail, and **which root a proof opens (static / staked / paid) is visible to the gateway** (the root is a public signal) — the paid crowd is `leafCount()`, hence the floor.
 
-**Verified by:** `test/paid-access.selftest.mjs` (anvil: the real staked set + the real `PaidAccessSet` from its forge artifact, the REAL gateway, REAL proofs — static, staked and paid members all egress with three roots trusted at once; unknown root → `gate:wrong-group-root`; a paid over-spender is slashed on the PAID contract, leaf zeroed, root changed, staked set untouched; the floor WARN; `rgoe leaves` round-trips the root), `gateway/root-sources.selftest.mjs`, `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`.
+**Verified by:** `test/paid-access.selftest.mjs` (anvil: the real staked set + the real `PaidAccessSet` from its forge artifact, the REAL gateway, REAL proofs — static, staked and paid members all egress with three roots trusted at once; unknown root → `gate:wrong-group-root`; a paid over-spender is slashed on the PAID contract, leaf zeroed, root changed, staked set untouched; the floor WARN; `shade-tree leaves` round-trips the root), `gateway/root-sources.selftest.mjs`, `client/leaf-source.selftest.mjs`, `group/leaves.selftest.mjs`, `lib/root-provider.selftest.mjs`.
 
 ## Design of record (2026-08, pre-402): the four requirements and the three layers
 

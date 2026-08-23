@@ -15,9 +15,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
 const noContracts = process.argv.includes("--no-contracts");
 
-// Fast lane (RGOE_FAST=1 or --fast): skip the slow real-Groth16-proof suites and forge,
+// Fast lane (SHADE_TREE_FAST=1 or --fast): skip the slow real-Groth16-proof suites and forge,
 // running only the quick node selftests for tight iteration. CI keeps the full run.
-const fast = process.env.RGOE_FAST === "1" || process.argv.includes("--fast");
+const fast = process.env.SHADE_TREE_FAST === "1" || process.argv.includes("--fast");
 
 // Explicit denylist of slow suites, matched by filename (basename). Add here to extend.
 const SLOW_SUITES = new Set([
@@ -28,7 +28,7 @@ const SLOW_SUITES = new Set([
   "reputation-tiers.selftest.mjs",   // real proofs at two tier limits in one tree (T-FEAT-8)
   "onchain-tiers.selftest.mjs",      // anvil + forge broadcast + real gateway + real proofs (T-FEAT-8b / T-DEV-9c)
   "paid-access.selftest.mjs",        // anvil + forge + real gateway + real proofs: union roots + slasher routing (T-FEAT-7)
-  "registrar.selftest.mjs",          // anvil + forge create + the 402 registrar + rgoe pay, both rails (T-FEAT-7)
+  "registrar.selftest.mjs",          // anvil + forge create + the 402 registrar + shade-tree pay, both rails (T-FEAT-7)
 ]);
 
 // Recursively find *.selftest.mjs, skipping node_modules / out / build dirs.
@@ -52,7 +52,7 @@ const selftests = fast ? allSelftests.filter((f) => !SLOW_SUITES.has(basename(f)
 const results = [];
 
 if (fast) {
-  console.log("\n=== FAST LANE (RGOE_FAST) -- slow real-proof suites + forge skipped ===");
+  console.log("\n=== FAST LANE (SHADE_TREE_FAST) -- slow real-proof suites + forge skipped ===");
   console.log(
     `skipped ${skipped.length} slow suites: ${skipped.map((f) => relative(ROOT, f)).join(", ") || "(none matched denylist)"}`
   );
@@ -65,7 +65,7 @@ if (fast) {
 // times and stays red; a contention flake passes on the isolated retry and goes green, LOUDLY
 // logged so a flaky suite is never silently masked. Retry is bounded (exactly one) and honest:
 // the isolated retry's result is authoritative, and a failing retry prints its full output.
-const RETRY_QUIESCE_MS = Number(process.env.RGOE_RETRY_QUIESCE_MS || 750);
+const RETRY_QUIESCE_MS = Number(process.env.SHADE_TREE_RETRY_QUIESCE_MS || 750);
 
 function runSuite(f) {
   return spawnSync(process.execPath, [f], { cwd: ROOT, encoding: "utf8" });
@@ -116,7 +116,7 @@ for (const f of selftests) {
 }
 
 if (fast) {
-  console.log(`\n=== foundry contract suite ===\n  SKIP  fast lane (RGOE_FAST) -- run full 'npm test' for contracts`);
+  console.log(`\n=== foundry contract suite ===\n  SKIP  fast lane (SHADE_TREE_FAST) -- run full 'npm test' for contracts`);
 } else if (!noContracts) {
   console.log(`\n=== foundry contract suite ===`);
   const forge = spawnSync("forge", ["test"], { cwd: ROOT, encoding: "utf8" });

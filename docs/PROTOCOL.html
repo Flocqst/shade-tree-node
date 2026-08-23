@@ -1,498 +1,331 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
 <head>
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Reputation-gated egress: protocol design</title>
+  <title>Shade Tree Protocol</title>
   <style>
-html {
-color: #1a1a1a;
-background-color: #fdfdfd;
-}
-body {
-margin: 0 auto;
-max-width: 36em;
-padding-left: 50px;
-padding-right: 50px;
-padding-top: 50px;
-padding-bottom: 50px;
-hyphens: auto;
-overflow-wrap: break-word;
-text-rendering: optimizeLegibility;
-font-kerning: normal;
-}
-@media (max-width: 600px) {
-body {
-font-size: 0.9em;
-padding: 12px;
-}
-h1 {
-font-size: 1.8em;
-}
-}
-@media print {
-html {
-background-color: white;
-}
-body {
-background-color: transparent;
-color: black;
-font-size: 12pt;
-}
-p, h2, h3 {
-orphans: 3;
-widows: 3;
-}
-h2, h3, h4 {
-page-break-after: avoid;
-}
-}
-p {
-margin: 1em 0;
-}
-a {
-color: #1a1a1a;
-}
-a:visited {
-color: #1a1a1a;
-}
-img {
-max-width: 100%;
-}
-svg {
-height: auto;
-max-width: 100%;
-}
-h1, h2, h3, h4, h5, h6 {
-margin-top: 1.4em;
-}
-h5, h6 {
-font-size: 1em;
-font-style: italic;
-}
-h6 {
-font-weight: normal;
-}
-ol, ul {
-padding-left: 1.7em;
-margin-top: 1em;
-}
-li > ol, li > ul {
-margin-top: 0;
-}
-blockquote {
-margin: 1em 0 1em 1.7em;
-padding-left: 1em;
-border-left: 2px solid #e6e6e6;
-color: #606060;
-}
-code {
-font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
-font-size: 85%;
-margin: 0;
-hyphens: manual;
-}
-pre {
-margin: 1em 0;
-overflow: auto;
-}
-pre code {
-padding: 0;
-overflow: visible;
-overflow-wrap: normal;
-}
-.sourceCode {
-background-color: transparent;
-overflow: visible;
-}
-hr {
-border: none;
-border-top: 1px solid #1a1a1a;
-height: 1px;
-margin: 1em 0;
-}
-table {
-margin: 1em 0;
-border-collapse: collapse;
-width: 100%;
-overflow-x: auto;
-display: block;
-font-variant-numeric: lining-nums tabular-nums;
-}
-table caption {
-margin-bottom: 0.75em;
-}
-tbody {
-margin-top: 0.5em;
-border-top: 1px solid #1a1a1a;
-border-bottom: 1px solid #1a1a1a;
-}
-th {
-border-top: 1px solid #1a1a1a;
-padding: 0.25em 0.5em 0.25em 0.5em;
-}
-td {
-padding: 0.125em 0.5em 0.25em 0.5em;
-}
-header {
-margin-bottom: 4em;
-text-align: center;
-}
-#TOC li {
-list-style: none;
-}
-#TOC ul {
-padding-left: 1.3em;
-}
-#TOC > ul {
-padding-left: 0;
-}
-#TOC a:not(:hover) {
-text-decoration: none;
-}
-code{white-space: pre-wrap;}
-span.smallcaps{font-variant: small-caps;}
-div.columns{display: flex; gap: min(4vw, 1.5em);}
-div.column{flex: auto; overflow-x: auto;}
-div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
-
-ul.task-list[class]{list-style: none;}
-ul.task-list li input[type="checkbox"] {
-font-size: inherit;
-width: 0.8em;
-margin: 0 0.8em 0.2em -1.6em;
-vertical-align: middle;
-}
-.display.math{display: block; text-align: center; margin: 0.5rem auto;}
-</style>
-  <style>
-:root { --ink:#1a1a1a; --muted:#5b5b5b; --rule:#e4e2dd; --bg:#faf9f6; --accent:#6b4cf6; --code-bg:#f3f1ec; }
-html { -webkit-text-size-adjust:100%; }
-body {
-max-width: 760px; margin: 0 auto; padding: 72px 28px 140px;
-background: var(--bg); color: var(--ink);
-font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-font-feature-settings: "kern", "liga"; text-rendering: optimizeLegibility;
-}
-h1 { font-size: 2.1rem; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 0.2em; }
-h2 { font-size: 1.35rem; letter-spacing: -0.01em; margin: 2.4em 0 0.6em; padding-top: 1.2em; border-top: 1px solid var(--rule); }
-h3 { font-size: 1.08rem; margin: 1.8em 0 0.4em; }
-h1 + p, h2 + p { margin-top: 0.4em; }
-p, li { color: var(--ink); }
-a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(107,76,246,0.3); }
-a:hover { border-bottom-color: var(--accent); }
-strong { font-weight: 650; }
-em { color: var(--muted); }
-code { background: var(--code-bg); padding: 0.12em 0.36em; border-radius: 4px; font-size: 0.86em; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; overflow-x: auto; line-height: 1.5; }
-pre code { background: none; padding: 0; font-size: 0.82rem; }
-blockquote {
-margin: 1.6em 0; padding: 0.6em 1.2em; border-left: 3px solid var(--accent);
-background: rgba(107,76,246,0.05); border-radius: 0 8px 8px 0;
-font-size: 1.12rem; line-height: 1.5; color: #2a2440; font-style: normal;
-}
-blockquote p { margin: 0.2em 0; font-weight: 500; }
-table { border-collapse: collapse; width: 100%; margin: 1.4em 0; font-size: 0.9rem; display: block; overflow-x: auto; }
-th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
-th { font-weight: 650; border-bottom: 2px solid #d4d1c9; }
-tr:last-child td { border-bottom: none; }
-hr { border: none; border-top: 1px solid var(--rule); margin: 2.4em 0; }
-ol > li { margin: 0.7em 0; }
-ul > li { margin: 0.35em 0; }
-ol > li::marker { color: var(--accent); font-weight: 650; }
-</style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
 </head>
 <body>
 <header id="title-block-header">
-<h1 class="title">Reputation-gated egress: protocol design</h1>
+<h1 class="title">Shade Tree Protocol</h1>
 </header>
-<h1 id="reputation-gated-egress-a-protocol-design-for-anonymous-paid-access">Reputation-gated
-egress: a protocol design for anonymous paid access</h1>
-<p><strong>Status.</strong> The access layer is a live proof of concept.
-The payment layer is design, not built. Any contract, fee, or binding
-below is a plan; measured numbers are marked. Written to be read by
-people who do this for a living, so it is concrete, and where a claim is
-a deployment parameter rather than a proven bound, it says so.</p>
-<h2 id="problem">1. Problem</h2>
-<p>An open clean-IP egress is blocklisted within hours, because exit IPs
-are a shared resource and one abuser ruins them for everyone. We publish
-the egress as a Tor v3 onion service that forwards to clearnet only for
-a client presenting a valid anonymous credential, and drops everyone
-else. No exit node. The gateway never learns the client IP. The
-destination sees the gateway’s IP, not a Tor exit and not the
-client.</p>
-<p>The live credential is a Semaphore v4 membership proof with
-epoch-scoped nullifiers, the RLN construction at PoC fidelity: a member
-proves in zero knowledge that they own the secret behind some leaf in a
-Merkle tree; the proof carries a nullifier derived from (secret, epoch),
-so within an epoch a member always produces the same nullifier
-(rate-limit without identity) and across epochs it rotates (unlinkable
-over time). The gateway meters a per-nullifier budget per epoch.
-Measured: proof generation 240ms (laptop) to 800ms (2 vCPU gateway),
-once per epoch, cached client-side; verification 10 to 32ms per request,
-account-independent within noise, so timing does not fingerprint the
-member.</p>
-<p>We are adding access granted by <strong>payment</strong> rather than
-a local enroll command. The decision this document makes is what
-<em>kind</em> of payment.</p>
-<p><strong>The constraint that shapes everything: we cannot ban or
-attribute.</strong> Anonymity is the product, so we deliberately cannot
-tell which user poisoned an IP. The gateway operator must be unable to
-deanonymize its own users by cryptography, not by policy. Every
-enforcement idea has to survive that fact.</p>
-<h2 id="design-goals">2. Design goals</h2>
-<ol type="1">
-<li><strong>Anonymous.</strong> Cryptographic unlinkability between who
-paid and who used. Not no-KYC, actual unlinkability.</li>
-<li><strong>No single facilitator.</strong> The protocol assumes
-interaction with two things only: the permissionless chain (many nodes,
-no operator) and the operator you buy from (irreducible). No relayer, no
-association-set curator, no mint. The operator is made cryptographically
-unable to link payer to user.</li>
-<li><strong>Ethereum L1.</strong> Every L2 runs a single sequencer,
-exactly the party that can censor, reorder, and observe. L1 has no
-sequencer. Here L1 is the anonymity choice, not a tax paid for one.</li>
-<li><strong>Cheap and scalable.</strong> Cost and state grow with active
-users on hardware we control, not with block space. No expensive
-operation per message: per-request cost is a cached token check, never a
-fresh proof or on-chain tx.</li>
-</ol>
-<h2 id="two-use-cases-two-economics">3. Two use cases, two
-economics</h2>
-<p>One access primitive, two workloads with different abuse
-surfaces.</p>
-<p><strong>Search engines.</strong> A query is nearly free to the user.
-The scarce resource is the clean IP’s reputation, a shared externality:
-one abuser’s scraping poisons the IP for everyone, and we cannot
-attribute it. Cheap, high-volume abuse is the threat.</p>
-<p><strong>Private Ethereum transactions.</strong> Naturally throttled:
-a tx is rate-limited by gas, nonce, and balance, so you cannot fire an
-unbounded stream from a funded account. And the user already pays gas at
-the moment of use, which opens a binding search lacks: the access fee
-can be fused into the work. We intend to <strong>colocate these gateways
-with home-staker software</strong>. Home stakers run validators on
-residential IPs, which are high-reputation rather than flagged
-datacenter ranges; private-tx egress then looks like ordinary validator
-p2p traffic; the set of gateways becomes a naturally distributed fleet
-of clean residential IPs (the real answer to the scarce-IP problem); and
-the access fee subsidizes home staking, so the payment funds
-decentralization instead of one datacenter operator. It also softens
-goal 2: for this use case there are many independent operators a user
-can choose between, not one.</p>
-<p>The access layer is shared. The payment binding is not.</p>
-<h2 id="stake-or-payment">4. Stake or payment</h2>
-<p>The load-bearing decision.</p>
-<p><strong>Stake</strong> (a refundable bond) deters only abuse you can
-<strong>slash</strong>, and slashing needs attributable misbehavior. RLN
-can slash exactly one thing: exceeding your per-identity rate limit
-within an epoch (two messages under one nullifier recover the key). That
-is not the abuse we fear. Poisoning an IP is, to the gateway, a valid
-in-budget request from an anonymous member. Nothing to slash. And
-because the bond refunds, a patient adversary locks capital once,
-spreads it over Sybil identities, stays inside every per-identity limit,
-consumes huge bandwidth, poisons the shared IP, and withdraws. Cost per
-request approaches zero. Stake also locks capital and makes an RPC user
-ask when they get it back.</p>
-<p><strong>Payment</strong> (a consumed fee) inverts this. The resource
-costs money every time, so abuse is self-throttling and no
-identification is ever required.</p>
-<blockquote>
-<p>We cannot punish, so we must price. We cannot attribute, so we charge
-up front per unit, rather than bond and slash.</p>
-</blockquote>
-<p>Both use cases land on payment, for different supporting reasons
-(search because the externality must be priced in, RPC because the
-workload is already on-chain and self-limiting). Stated honestly:
-payment bounds <em>volume</em> and <em>funds recovery</em>. It does not
-<em>prevent</em> poisoning, because a single request can poison an IP
-and nothing buildable stops that under anonymity. The fee rations the
-scarce resource and pays to rotate IPs, so a poisoned IP becomes an
-amortized cost the abuser paid into. We convert an unsolvable
-enforcement problem into a pricing problem. Section 8 is honest that the
-pricing is not yet proven.</p>
-<h2 id="the-protocol">5. The protocol</h2>
-<p><strong>Two frequencies.</strong> Funding is infrequent, may be
-heavy, and is where anonymity is won. Access is per-message and
-near-free, a cached credential check. Payment gates issuance; it adds no
-per-message cost. The access half already runs.</p>
-<p><strong>Layer 0, decorrelation (optional, user’s choice).</strong> To
-keep a funding address from being publicly known as a customer, route it
-through any large shared shielded pool into a fresh address first. The
-protocol mandates no specific pool (Railgun, Privacy Pools, a CEX, a
-bridge are all replaceable). That is how no-single-party holds at the
-identity layer. A curator-free default is Railgun (client-side proof of
-innocence, decentralized broadcasters) over Privacy Pools (whose
-association-set provider is a curator).</p>
-<p><strong>Layer 1, deposit and off-chain redemption.</strong> A minimal
-immutable contract:</p>
-<pre><code>deposit(commitment) payable
-    require msg.value == D            // one fixed denomination, so amounts never fingerprint
-    append commitment to a Merkle tree
-sweep() onlyOperator
-    transfer accumulated balance to the operator   // how the operator is paid</code></pre>
-<p>No on-chain user withdrawal. Funds accumulate; the operator sweeps
-(revealing only a count). The commitment preimage is spent <strong>off
-chain</strong>, to the gateway, as the same proof the gateway already
-verifies: Merkle membership plus an epoch nullifier plus a trusted-root
-match. The only swap from the live system is the tree: the group becomes
-the <strong>on-chain deposit set</strong> instead of the enrolled list.
-The gateway reads the root from its own node, checks the nullifier is
-unspent, grants budget. This is zk-creds, “insertion equals issuance”
-(Rosenberg et al., S&amp;P 2023), with one twist: redeem off chain, so
-the user never needs a gas-funded fresh address, which is what otherwise
-forces a relayer back in.</p>
-<p>The deposit <code>D</code> is <strong>consumed, not staked</strong>.
-That is what makes it Sybil-proof: more identities never lower your
-per-unit cost. <code>D</code> buys a budget of <code>N</code> units,
-metered by the existing per-nullifier count; the price <code>D/N</code>
-rations the IP and funds rotation.</p>
-<p><strong>Per-use-case binding.</strong> Search has no natural on-chain
-event per query, so a deposit pre-buys <code>N</code> queries (prepaid
-metered credit). Private RPC fuses the fee into the submission: the
-relay behaves like a builder or ERC-4337 bundler that forwards only a tx
-carrying a tip to the operator, so payment and consumption are the same
-on-chain event, the strongest form of settled-not-promised.</p>
-<h2 id="leak-ledger">6. Leak ledger</h2>
-<table>
-<colgroup>
-<col style="width: 33%" />
-<col style="width: 33%" />
-<col style="width: 33%" />
-</colgroup>
-<thead>
-<tr>
-<th>Link</th>
-<th>Where it breaks</th>
-<th>Residual</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>payer address to use</td>
-<td>off-chain zk membership over the deposit set</td>
-<td>set is our deposit count under the root, small at low volume</td>
-</tr>
-<tr>
-<td>funding identity to customer set</td>
-<td>optional Layer 0 hop through a large shared pool</td>
-<td>bounded by the pool, shrunk by unique amounts and timing</td>
-</tr>
-<tr>
-<td>deposit amount fingerprint</td>
-<td>single fixed denomination</td>
-<td>reintroduced by any tiered price</td>
-</tr>
-<tr>
-<td>client IP to anything</td>
-<td>redemption rides the existing onion</td>
-<td>standard Tor caveats</td>
-</tr>
-<tr>
-<td>operator linking payment to use</td>
-<td>cannot, the proof hides which leaf</td>
-<td>deposit-to-first-use timing correlation</td>
-</tr>
-<tr>
-<td>RPC fee to the tx</td>
-<td>the fused tip is visible</td>
-<td>builder / private-mempool linkage, see Q5</td>
-</tr>
-</tbody>
-</table>
-<p>Two facilitator-parties are gone by construction: no relayer (nothing
-is submitted for the user), no curator (the gateway verifies its own
-deposit set and learns nothing about which depositor), no mint (value
-settles on chain).</p>
-<h2 id="rejected">7. Rejected</h2>
+<h1 id="shade-tree-protocol">Shade Tree protocol</h1>
+<p><strong>Status:</strong> research preview · protocol v4 · testnet
+only · unaudited</p>
+<p>Shade Tree carries an HTTPS tunnel from a local client to a
+destination through a proof-gated Tor onion service. This page describes
+the current protocol and its boundaries. <a
+href="PROTOCOL-API.md"><code>PROTOCOL-API.md</code></a> contains the
+byte-level directory, announce, and error formats.</p>
+<h2 id="roles">Roles</h2>
 <ul>
-<li><strong>Payment channels, including zk channels</strong> (BOLT,
-Green and Miers, CCS 2017; descendants AMHL, A2L, the dead zkChannels
-line). A channel needs a persistent counterparty established before use,
-and BOLT’s own Tor example concedes every payment on a channel links to
-all the others. That persistent counterparty is the link we
-destroy.</li>
-<li><strong>Single-mint ecash (Cashu, Taler).</strong> A mint sees every
-payment and holds the float. The single-party dependency we exist to
-avoid.</li>
-<li><strong>Privacy Pools as a mandated step.</strong> Its
-association-set provider is a curator. We keep shielded pools as a
-user-chosen Layer 0 rail, not a protocol party.</li>
-<li><strong>On-chain redemption.</strong> Trustless, but needs a
-gas-funded fresh address, reintroducing a relayer and an L1 tx per
-redemption. Loses cheap, ergonomic, scalable at once.</li>
-<li><strong>Stake.</strong> Section 4.</li>
+<li>The <strong>application</strong> speaks HTTP CONNECT to a
+loopback-only client proxy.</li>
+<li>The <strong>client</strong> discovers a node, creates an RLN
+membership proof, and reaches that node’s <code>.onion</code> address
+through Tor SOCKS.</li>
+<li>The <strong>node</strong> verifies the proof and opens a TCP
+connection to the requested target.</li>
+<li>A <strong>bootnode</strong> caches signed node announcements and
+serves a signed directory. It may omit entries, but it cannot mint a
+node’s onion identity or alter signed node capabilities.</li>
 </ul>
-<h2 id="built-vs-designed">8. Built vs designed</h2>
-<p>Built and measured: the onion egress, the membership proof, the epoch
-nullifier, the per-nullifier budget, the two-machine split, and the
-benchmarks in section 1. Designed, not built: the entire payment layer
-(deposit/sweep contract, off-chain redemption, both bindings, the
-rotation economics). Parameters that are knobs with defensible defaults
-and no proof: the issuance batch size <code>K</code>, the epoch length,
-the per-IP exposure cap <code>E</code>, and the price
-<code>D/N</code>.</p>
-<h2 id="open-questions-for-review">9. Open questions for review</h2>
-<p>Ordered by how much they worry us.</p>
+<p>The public name is <em>node</em>. Source code and low-level documents
+may call the egress process a <em>gateway</em>.</p>
+<h2 id="tunnel-flow">Tunnel flow</h2>
+<pre class="text"><code>application      local client          Tor             node.onion       destination
+     | CONNECT host:443 |                |                   |                 |
+     |-----------------&gt;|                |                   |                 |
+     |                  |-- onion dial --|------------------&gt;|                 |
+     |                  |       Shade Tree v4 envelope       |                 |
+     |                  |-----------------------------------&gt;|                 |
+     |                  |                 verify + TCP connect----------------&gt;|
+     |                  |&lt;-------------- {&quot;ok&quot;:true} --------|                 |
+     |&lt;-- 200 Connected-|                |                   |                 |
+     |========================== end-to-end TLS bytes =========================&gt;|</code></pre>
+<p>One successful envelope admits one <strong>CONNECT tunnel</strong>.
+It does not meter HTTP requests inside that tunnel. HTTP/2 can multiplex
+many streams and HTTP keep-alive can carry many requests before the
+tunnel closes.</p>
+<h2 id="v4-envelope">v4 envelope</h2>
+<p>The first client-to-node frame is one UTF-8 JSON object followed by
+<code>\n</code>, bounded to 64 KiB and an absolute read deadline. Its
+shape is:</p>
+<pre class="jsonc"><code>{
+  &quot;v&quot;: 4,
+  &quot;target&quot;: &quot;example.com:443&quot;,
+  &quot;nonce&quot;: &quot;&lt;16 random bytes, lowercase hex&gt;&quot;,
+  &quot;artifact&quot;: &quot;rln-&lt;verification-key hash prefix&gt;&quot;,
+  &quot;proof&quot;: { &quot;snarkProof&quot;: {}, &quot;epoch&quot;: &quot;...&quot;, &quot;rlnIdentifier&quot;: &quot;1&quot; },
+  &quot;nullifier&quot;: &quot;...&quot;,
+  &quot;externalNullifier&quot;: &quot;...&quot;,
+  &quot;share&quot;: { &quot;x&quot;: &quot;...&quot;, &quot;y&quot;: &quot;...&quot; }
+}</code></pre>
+<p><code>artifact</code> may be absent only while the configured legacy
+artifact remains accepted. The node takes authoritative nullifier and
+share values from the proof’s public signals, not from duplicate
+envelope fields.</p>
+<p>The request signal committed inside the proof is exactly:</p>
+<pre class="text"><code>shade-tree:v4\n&lt;target&gt;\n&lt;nonce&gt;</code></pre>
+<p>That domain change is intentionally breaking. The client and node
+both advertise <code>{min:4,max:4}</code>. A missing envelope version is
+classified as legacy v3 and rejected as
+<code>unsupported-version:3</code>; it is never silently interpreted as
+v4.</p>
+<h2 id="admission-checks">Admission checks</h2>
+<p>The node performs bounded, cheap checks before Groth16
+verification:</p>
 <ol type="1">
-<li><strong>Redemption-set vs upstream-set size.</strong> Payer-to-use
-unlinkability is bounded by deposits to <em>our</em> contract, small at
-low volume. Layer 0 protects funding identity, not the redemption link.
-Is there a construction where the redemption proof borrows a large
-external pool’s set directly, so the link is bounded by the big set, not
-our deposit count? Or is a small redemption set the price of
-self-hosting the gate? (Home-staker colocation multiplies operators; can
-independent gateways share one redemption root to pool their sets
-without trusting each other?)</li>
-<li><strong>The singleton, quantified.</strong> Every credential
-primitive scopes transport and timing metadata out, so a 1:1
-deposit-then-redeem re-links payer to user. We defend with batching,
-Tor, and epoch windows. Is there a tight analysis of how
-deposit-to-first-use timing degrades the effective set, and a dwell-time
-distribution that flattens it? What is the right <code>K</code>, and can
-it adapt without itself leaking volume?</li>
-<li><strong>Pricing an externality you cannot observe.</strong>
-Formalize the griefing game: an adversary whose utility is poisoning IPs
-(not use), paying per request, versus an operator rotating IPs from fee
-revenue and capping per-IP exposure at <code>E</code> per epoch. Is
-there an <code>f</code> and <code>E</code> making griefing a strictly
-losing trade, and what is the equilibrium? This is the mechanism-design
-heart and the part we are least sure of.</li>
-<li><strong>Quality vs quantity.</strong> Metered payment bounds volume
-but not per-request harm: one query can poison an IP. Is there an
-anonymity-preserving way to gate on request behavior, or to attach
-reputation that travels with the credential and degrades on misbehavior,
-without deanonymizing the holder? Or is pure pricing the ceiling under
-full anonymity?</li>
-<li><strong>Does the fused-fee RPC path leak?</strong> If the relay is a
-builder taking a tip, does the tip or the bundling reveal the
-payer-to-tx map the search path hides? How does a private mempool
-(Flashbots-style) compose with the onion, and what does the builder
-learn that the gateway does not?</li>
-<li><strong>Trust-minimizing off-chain redemption.</strong> It trusts
-the operator to honor a valid proof (the trust Cashu places in its
-mint). Can we get on-chain trustlessness without reintroducing a relayer
-or a per-redemption L1 tx (optimistic redemption, a fraud proof, escrow
-released on a published nullifier)? We found nothing that did not drag a
-facilitator back in.</li>
-<li><strong>Epoch length per use case.</strong> Within an epoch a
-member’s requests are linkable to each other. Search likely wants a
-shorter epoch, RPC tolerates a longer one. Should epoch be per-use-case,
-and what breaks if two workloads share a gateway but not an epoch?</li>
-<li><strong>Combined circuit.</strong> Verify the Layer 0 decorrelation
-proof inside the same circuit as the redemption (one proof) or two
-steps? Undemonstrated. Does one-proof improve anonymity, or only gas and
-latency?</li>
+<li>The envelope version is an integer in the supported range.</li>
+<li>The external nullifier belongs to the current or immediately
+previous epoch.</li>
+<li>The public share coordinate matches the proof’s committed
+signal.</li>
+<li><code>target</code> and <code>nonce</code> are bounded and
+newline-free, and their v4 signal hash equals the proof’s public
+<code>x</code> value.</li>
+<li>The proof root is a recent root from a set this operator explicitly
+admits.</li>
+<li>The declared artifact is in the node’s accepted verification-key
+set.</li>
+<li>The RLN Groth16 proof verifies under that artifact.</li>
+<li>The target matches the operator’s allow policy and no deny rule. The
+default is <code>*:443</code> only.</li>
+<li>Replay, rate, and concurrent-tunnel limits admit the nullifier.</li>
 </ol>
-<h2 id="sources">10. Sources</h2>
-<p>RLN and Semaphore: rln.waku.org, Semaphore v4.0.0 notes. zk-creds:
-Rosenberg, White, Garman, Miers, S&amp;P 2023 (eprint 2022/878).
-Channels: BOLT, Green and Miers, CCS 2017; AMHL, Malavolta et al., NDSS
-2019; A2L, Tairi/Moreno-Sanchez/Maffei, S&amp;P 2021. Shielded pools:
-Railgun; Privacy Pools, Buterin/Soleimani et al. (SSRN 4563364).
-Fused-fee path: ERC-4337, ERC-5564. A deeper non-channel payment menu
-and the funding-layer analysis live in <code>docs/PAYMENTS.md</code>;
-gas and library-maturity claims there need re-verification before
-building. This protocol depends on no single number.</p>
+<p>Only then does the node connect to the destination. The success
+acknowledgement is a newline-terminated <code>{"ok":true}</code>; an
+operator may enable a coarse, onion-signed liveness receipt that
+contains no target, nullifier, or fine timestamp.</p>
+<h2 id="rate-limiting-and-retries">Rate limiting and retries</h2>
+<p>Each membership leaf commits to a private per-epoch limit. The client
+spends one private RLN message slot for each new tunnel. A slot produces
+one nullifier for that member and epoch.</p>
+<ul>
+<li>An exact retry reuses the same envelope, signal, share, and
+nullifier. Within the short replay window it is accepted without being
+treated as an over-spend, but the current handler may open another
+upstream tunnel. Operators should account for that bounded amplification
+when sizing replay and concurrency limits.</li>
+<li>Reusing one slot in the same epoch for a different signal creates a
+second point on the RLN line. The two public shares reconstruct the
+circuit identity secret and may identify the leaf for removal or onchain
+slashing.</li>
+<li>A different epoch produces new epoch-scoped values.</li>
+</ul>
+<p>Fleet-wide replay tallying is optional and fail-open. Without a
+shared tally, replay protection and accounting are strongest per node;
+the threat model records the residual cross-node window.</p>
+<h2 id="discovery-and-trust">Discovery and trust</h2>
+<p>Each node controls a Tor v3 onion identity. Its heartbeat signs the
+announcement and capabilities with that onion key. Capabilities include
+the supported envelope range, accepted artifact identifiers, admission
+paths, destination ports, and optional payment offer.</p>
+<p>The bootnode returns a signed directory. Clients pin its directory
+signer, verify each entry’s onion-key signatures, and re-derive the
+public key from the <code>.onion</code> address. The bootnode is still a
+selection and availability dependency: it can omit, delay, or reorder
+valid nodes. Static signed directories are supported as a fallback.</p>
+<h2 id="admission-sets">Admission sets</h2>
+<p>An operator explicitly chooses any combination of:</p>
+<ul>
+<li><code>invited</code>: the configured local membership tree;</li>
+<li><code>staked</code>: one or more <code>StakedReputationSet</code>
+roots;</li>
+<li><code>paid</code>: a <code>PaidAccessSet</code> root.</li>
+</ul>
+<p>Invited-only is the default. Naming an admission path without its
+required contract or root is a startup error; the node does not silently
+weaken the requested policy.</p>
+<p>The proof hides which leaf in an accepted root the client controls.
+It does not erase links created when a wallet enrolls or pays onchain,
+and a small set remains a small anonymity set.</p>
+<h2 id="what-the-protocol-does-and-does-not-hide">What the protocol does
+and does not hide</h2>
+<ul>
+<li>The Tor onion leg does not deliver the client’s source IP to the
+node application.</li>
+<li>The destination sees the node’s public IP.</li>
+<li>With the default <code>:443</code> policy, TLS terminates at the
+destination. The node sees the target hostname, port, timing, connection
+lifetime, and byte counts, but not plaintext inside TLS.</li>
+<li>The node can refuse, delay, truncate, or misroute a valid tunnel.
+The protocol does not force availability or honest forwarding.</li>
+<li>End-to-end timing correlation remains possible for an observer able
+to watch both sides.</li>
+<li>Development proving artifacts and unaudited code are not production
+security guarantees.</li>
+</ul>
+<p>Read <a href="THREAT-MODEL.md"><code>THREAT-MODEL.md</code></a>
+before operating or depending on a node.</p>
+<h2 id="versioning">Versioning</h2>
+<p>Protocol v4 is the first Shade Tree release. Envelope-version and
+proof-artifact negotiation are separate axes: a wire shape can remain v4
+while verification keys rotate through a dual-artifact window. See <a
+href="PROTOCOL-VERSIONING.md"><code>PROTOCOL-VERSIONING.md</code></a>
+and <a href="CEREMONY.md"><code>CEREMONY.md</code></a>.</p>
 </body>
 </html>

@@ -1,14 +1,14 @@
 # Tor hardening (gateway + bootnode onion services)
 
-Operator guide for hardening the Tor layer under the rgoe fleet. This is the
+Operator guide for hardening the Tor layer under the shade-tree fleet. This is the
 **network layer**; the reputation zk-gate is the application layer and is
 unchanged by anything here. Tor DoS/deanon defenses are the cheap outer gates,
 the zk proof is the expensive inner gate.
 
 Scope: the droplet runs two v3 onion services (bootnode + gateway) via the
-`/etc/tor/torrc.d-rgoe` include that `bootnode/deploy/bootstrap.sh` writes
+`/etc/tor/torrc.d-shade-tree` include that `bootnode/deploy/bootstrap.sh` writes
 (two `HiddenServiceDir` blocks, each with `HiddenServicePoWDefensesEnabled
-<RGOE_ENABLE_POW>` — `0` by default, `1` when you opt in; gateway-only boxes get
+<SHADE_TREE_ENABLE_POW>` — `0` by default, `1` when you opt in; gateway-only boxes get
 one block).
 Clients run a SOCKS-only tor (see `tor/torrc.client`).
 
@@ -33,7 +33,7 @@ the attacker, not just the service. Under load tor raises the required effort
 and serves clients in priority order by the effort they proved.
 
 - `HiddenServicePoWDefensesEnabled 1` -- written per service by `bootstrap.sh`
-  when `RGOE_ENABLE_POW=1` (default `0`, i.e. `HiddenServicePoWDefensesEnabled 0`).
+  when `SHADE_TREE_ENABLE_POW=1` (default `0`, i.e. `HiddenServicePoWDefensesEnabled 0`).
   Requires a **pow-capable tor build on BOTH ends**: the official Tor Project
   apt package (what `bootstrap.sh` installs) ships the `pow` module; the
   Homebrew bottle does NOT (the PoW code is GPL, the bottle is BSD-only), and a
@@ -74,7 +74,7 @@ does not churn freely, raising the cost of that discovery.
   It adds a second guard layer, rotation-time randomization, and bandwidth-based
   attack detection beyond what lite does.
 
-**Recommendation.** The rgoe onions are persistent, long-lived, and worth
+**Recommendation.** The shade-tree onions are persistent, long-lived, and worth
 attacking (they front the whole fleet), so a persistent deploy should run the
 full vanguards add-on against tor's control port, not just rely on lite. It is
 an external tool, out of scope for `bootstrap.sh`; install and supervise it
@@ -94,7 +94,7 @@ Mechanism (v3, current tor):
 
 - **Server side:** drop `<name>.auth` files into an `authorized_clients/`
   subdirectory of each `HiddenServiceDir` (e.g.
-  `/var/lib/tor/rgoe-gateway/authorized_clients/`), each holding a line like
+  `/var/lib/tor/shade-tree-gateway/authorized_clients/`), each holding a line like
   `descriptor:x25519:<base32-pubkey>`. Restart tor.
 - **Client side:** `ClientOnionAuthDir <dir>` pointing at a directory of
   `<onion>.auth_private` files holding the matching private keys.
@@ -104,12 +104,12 @@ Mechanism (v3, current tor):
 > auth is the `authorized_clients/` directory described above. Verify the file
 > formats with `man tor` for your version.
 
-**Tradeoff, and why rgoe leaves it off.** Client-auth is a static, linkable
+**Tradeoff, and why shade-tree leaves it off.** Client-auth is a static, linkable
 keypair allowlist: every authorized client is a fixed public key you provision
 and manage out of band, and the set is not reputation-derived. That is exactly
 right for a small **private fleet** with a fixed operator roster, and wrong for
-the open, reputation-gated model this project exists to demonstrate -- where
-membership is a zk proof, not an entry on a keylist. The whole point of rgoe is
+the open, access-gated model this project exists to demonstrate -- where
+membership is a zk proof, not an entry on a keylist. The whole point of shade-tree is
 app-layer gating; client-auth is an optional defense-in-depth tier for private
 deployments, mutually exclusive in spirit with permissionless
 `--admission open`. Enable it only if your deployment is closed-membership.
@@ -120,7 +120,7 @@ deployments, mutually exclusive in spirit with permissionless
 
 - **Run tor as its own user.** The official apt package runs tor as
   `debian-tor` under its packaged systemd unit; keep it that way. Do not run tor
-  as root or fold it into the `rgoe` service user. `bootstrap.sh` already
+  as root or fold it into the `shade-tree` service user. `bootstrap.sh` already
   chowns the HS dirs to `debian-tor:debian-tor` because tor owns them.
 - **DataDirectory / HS dir perms.** Tor enforces `0700` (owner-only) on its
   `DataDirectory` and on each `HiddenServiceDir`, and refuses to start if they
@@ -131,8 +131,8 @@ deployments, mutually exclusive in spirit with permissionless
 - **Keep the HS secret key off-box.** The onion identity IS the ed25519 secret
   in `hs_ed25519_secret_key`. Anyone with that file can impersonate the onion.
   Take an encrypted, off-box backup and store it outside the droplet:
-  `rgoe backup <deploy-state-dir> <out.rgoebak>` / `rgoe restore` (T-FEAT-15,
-  `docs/BACKUP.md`; passphrase only via `RGOE_BACKUP_PASSPHRASE`), and verify a
+  `shade-tree backup <deploy-state-dir> <out.shade-tree-backup>` / `shade-tree restore` (T-FEAT-15,
+  `docs/BACKUP.md`; passphrase only via `SHADE_TREE_BACKUP_PASSPHRASE`), and verify a
   restored key before cutover with `scripts/onion-identity.mjs`
   (`docs/ONION-IDENTITY.md`). Never commit or log the secret key.
 - **`Sandbox 1`.** Tor's own seccomp2 syscall filter around the tor process,
@@ -146,7 +146,7 @@ deployments, mutually exclusive in spirit with permissionless
 
 ## 5. Rate / circuit isolation (client-side tor)
 
-rgoe rotates gateways and slots per request at the app layer. The client tor
+shade-tree rotates gateways and slots per tunnel at the app layer. The client tor
 should back that with circuit isolation so distinct requests do not silently
 share one path.
 
@@ -154,8 +154,8 @@ share one path.
   - `IsolateDestAddr` -- separate circuit per distinct destination `.onion`.
   - `IsolateDestPort` -- separate circuit per distinct destination port.
   - `IsolateSOCKSAuth` -- separate circuit per distinct SOCKS username/password.
-    The client can pass a per-request tag as the SOCKS auth to force a fresh
-    circuit on demand, which pairs directly with per-request rotation.
+    The client can pass a per-tunnel tag as the SOCKS auth to force a fresh
+    circuit on demand, which pairs directly with per-tunnel rotation.
 
   Example (compare `tor/torrc.client`):
   `SocksPort 9260 IsolateDestAddr IsolateDestPort IsolateSOCKSAuth`
@@ -174,7 +174,7 @@ share one path.
 
 1. Read [`bootnode/deploy/torrc.hardened`](../bootnode/deploy/torrc.hardened).
 2. Server: append the `[S]` / `[S-POW]` lines you want to
-   `/etc/tor/torrc.d-rgoe`, then `systemctl restart tor`. Confirm the PoW module
+   `/etc/tor/torrc.d-shade-tree`, then `systemctl restart tor`. Confirm the PoW module
    is present first (`tor --list-modules`).
 3. Client: apply the `[C]` isolation flags to the client `SocksPort`.
 4. Persistent deploy: install the external vanguards add-on against tor's

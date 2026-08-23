@@ -84,30 +84,30 @@ contract WithdrawVerifierTest is Cheats {
     // ---- the verifier in isolation -------------------------------------------
 
     function test_Verifier_AcceptsValidExitProof_Directly() public view {
-        bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
+        bytes32 ctx = keccak256(abi.encodePacked("SHADE_TREE_EXIT", commitA));
         assertTrue(verifier.verify(commitA, 8, ctx, exitProof), "real exit proof must verify");
     }
 
     function test_Verifier_RejectsTamperedProof_Directly() public view {
-        bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
+        bytes32 ctx = keccak256(abi.encodePacked("SHADE_TREE_EXIT", commitA));
         assertFalse(verifier.verify(commitA, 8, ctx, _tamper(exitProof)), "tampered proof must not verify");
     }
 
     function test_Verifier_RejectsWrongCommitment_Directly() public view {
         // Same valid proof, but claimed against a different leaf => leaf check fails.
-        bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
+        bytes32 ctx = keccak256(abi.encodePacked("SHADE_TREE_EXIT", commitA));
         uint256 otherLeaf = hasher.commitmentOf(222);
         assertFalse(verifier.verify(otherLeaf, 8, ctx, exitProof), "proof must not verify against another leaf");
     }
 
     function test_Verifier_RejectsWrongContext_Directly() public view {
         // The exit proof is bound to the EXIT context; a different context => false.
-        bytes32 wrongCtx = keccak256(abi.encodePacked("RGOE_WITHDRAW", commitA, RECIPIENT));
+        bytes32 wrongCtx = keccak256(abi.encodePacked("SHADE_TREE_WITHDRAW", commitA, RECIPIENT));
         assertFalse(verifier.verify(commitA, 8, wrongCtx, exitProof), "proof bound to exit ctx must fail other ctx");
     }
 
     function test_Verifier_RejectsMalformedProof_Directly() public view {
-        bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", commitA));
+        bytes32 ctx = keccak256(abi.encodePacked("SHADE_TREE_EXIT", commitA));
         assertFalse(verifier.verify(commitA, 8, ctx, hex"deadbeef"), "malformed proof => clean false");
     }
 

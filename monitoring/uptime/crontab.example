@@ -1,9 +1,9 @@
-# rgoe external uptime probe — plain crontab alternative to the systemd timer (monitoring/UPTIME.md).
+# shade-tree external uptime probe — plain crontab alternative to the systemd timer (monitoring/UPTIME.md).
 # Prereqs on the runner: node >= 20, tor running with a SOCKS port (default 9050 for the distro
-# daemon; the repo default is 9250, so RGOE_TOR_PORT is set explicitly), the repo checked out at
-# /opt/rgoe with `npm ci` done. Reads discovery inputs from /etc/rgoe/uptime-probe.env
+# daemon; the repo default is 9250, so SHADE_TREE_TOR_PORT is set explicitly), the repo checked out at
+# /opt/shade-tree with `npm ci` done. Reads discovery inputs from /etc/shade-tree/uptime-probe.env
 # (monitoring/uptime/uptime-probe.env.example is the template).
 #
-#  install: crontab -e  (as the user that owns /opt/rgoe), paste the line below.
-#  logs:    /var/log/rgoe-uptime.log (one nagios line per run; grep CRITICAL for the SLI)
-*/5 * * * * set -a; . /etc/rgoe/uptime-probe.env; set +a; RGOE_TOR_PORT=9050 /usr/bin/node /opt/rgoe/scripts/uptime-probe.mjs --format nagios >> /var/log/rgoe-uptime.log 2>&1
+#  install: crontab -e  (as the user that owns /opt/shade-tree), paste the line below.
+#  logs:    /var/log/shade-tree-uptime.log (one nagios line per run; grep CRITICAL for the SLI)
+*/5 * * * * set -a; . /etc/shade-tree/uptime-probe.env; set +a; SHADE_TREE_TOR_PORT=9050 /usr/bin/node /opt/shade-tree/scripts/uptime-probe.mjs --format nagios >> /var/log/shade-tree-uptime.log 2>&1

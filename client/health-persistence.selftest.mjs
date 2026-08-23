@@ -1,12 +1,12 @@
 // Offline proof of client-side gateway reputation PERSISTENCE (T-FEAT-19) in client/selection.mjs.
 // No Tor, no live bootnode. reportHealth/reportResult mutate in-memory dir entries, which is lost on
-// restart; this feature adds a small LOCAL, best-effort JSON cache (RGOE_HEALTH_CACHE) so a flaky
+// restart; this feature adds a small LOCAL, best-effort JSON cache (SHADE_TREE_HEALTH_CACHE) so a flaky
 // gateway stays deprioritized across sessions until it proves healthy again.
 //
 // selection.mjs reads its env AT IMPORT TIME, so we drive persistence two ways:
 //   1. the exported pure-ish helpers (loadHealthCache/saveHealthCache/seedHealthFromCache), which
 //      take an explicit path and need no import-time env coupling, and
-//   2. a full end-to-end write-through by importing the module with RGOE_HEALTH_CACHE set to a temp
+//   2. a full end-to-end write-through by importing the module with SHADE_TREE_HEALTH_CACHE set to a temp
 //      file, then reading that file back off disk.
 //
 //   node client/health-persistence.selftest.mjs
@@ -49,7 +49,7 @@ function mintSignedDirectory(gateways) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-health-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-health-"));
   try {
     const gateways = [mintGateway(100, "up"), mintGateway(100, "up"), mintGateway(100, "up")];
     const { signed, signer } = mintSignedDirectory(gateways);
@@ -62,10 +62,10 @@ async function main() {
 
     // --- (1) reportResult failures WRITE THROUGH to the cache file --------------------------------
     console.log("write-through (module e2e):");
-    process.env.RGOE_DIRECTORY = dirFile;
-    process.env.RGOE_DIR_SIGNER = signer.pub;
-    process.env.RGOE_HEALTH_CACHE = cacheFile;
-    delete process.env.RGOE_BOOTNODE_ONION;
+    process.env.SHADE_TREE_DIRECTORY = dirFile;
+    process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+    process.env.SHADE_TREE_HEALTH_CACHE = cacheFile;
+    delete process.env.SHADE_TREE_BOOTNODE_ONION;
     const sel = await import(pathToFileURL(SELECTION_PATH).href);
 
     ok(sel.directoryEnabled() === true, "directoryEnabled() true with directory + pinned signer");
@@ -119,8 +119,8 @@ async function main() {
     // --- (4) the cache is BOUNDED under many entries ---------------------------------------------
     console.log("\nbounded cache size:");
     const boundFile = join(work, "bound", "health.json");
-    process.env.RGOE_HEALTH_MAX = "50";
-    // load a fresh module instance in a subprocess so RGOE_HEALTH_MAX is read at import
+    process.env.SHADE_TREE_HEALTH_MAX = "50";
+    // load a fresh module instance in a subprocess so SHADE_TREE_HEALTH_MAX is read at import
     const bigScript = `
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
@@ -136,13 +136,13 @@ console.log(JSON.stringify({ count: keys.length, hasOldest: "onion0" in back, ha
     const { execFileSync } = await import("node:child_process");
     const out = execFileSync(process.execPath, ["--input-type=module", "-e", bigScript], {
       encoding: "utf8",
-      env: { ...process.env, RGOE_HEALTH_MAX: "50", RGOE_HEALTH_CACHE: boundFile },
+      env: { ...process.env, SHADE_TREE_HEALTH_MAX: "50", SHADE_TREE_HEALTH_CACHE: boundFile },
     });
     const bound = JSON.parse(out.trim().split("\n").pop());
-    ok(bound.count === 50, `500 entries bound down to RGOE_HEALTH_MAX=50 (got ${bound.count})`);
+    ok(bound.count === 50, `500 entries bound down to SHADE_TREE_HEALTH_MAX=50 (got ${bound.count})`);
     ok(bound.hasOldest === false, "the oldest-lastSeen entries were evicted");
     ok(bound.hasNewest === true, "the newest-lastSeen entries were retained");
-    delete process.env.RGOE_HEALTH_MAX;
+    delete process.env.SHADE_TREE_HEALTH_MAX;
 
     // --- (5) unwritable cache path: selection still works, no throw ------------------------------
     console.log("\nunwritable cache path (fail soft):");
@@ -167,24 +167,24 @@ console.log("CANDS:" + c.length);
     try {
       unwritableOut = execFileSync(process.execPath, ["--input-type=module", "-e", unwritableScript], {
         encoding: "utf8",
-        env: { ...process.env, RGOE_DIRECTORY: dirFile, RGOE_DIR_SIGNER: signer.pub, RGOE_HEALTH_CACHE: badPath, RGOE_BOOTNODE_ONION: "" },
+        env: { ...process.env, SHADE_TREE_DIRECTORY: dirFile, SHADE_TREE_DIR_SIGNER: signer.pub, SHADE_TREE_HEALTH_CACHE: badPath, SHADE_TREE_BOOTNODE_ONION: "" },
       });
     } catch (e) {
       unwritableOut = "THREW:" + ((e.stderr || e.stdout || e.message) + "");
     }
     ok(/CANDS:3/.test(unwritableOut), `selection works with an unwritable cache (${unwritableOut.trim().split("\n").pop()})`);
 
-    // OFF switch: RGOE_HEALTH_CACHE="" disables persistence and still selects.
+    // OFF switch: SHADE_TREE_HEALTH_CACHE="" disables persistence and still selects.
     let offOut = "";
     try {
       offOut = execFileSync(process.execPath, ["--input-type=module", "-e", unwritableScript], {
         encoding: "utf8",
-        env: { ...process.env, RGOE_DIRECTORY: dirFile, RGOE_DIR_SIGNER: signer.pub, RGOE_HEALTH_CACHE: "", RGOE_BOOTNODE_ONION: "" },
+        env: { ...process.env, SHADE_TREE_DIRECTORY: dirFile, SHADE_TREE_DIR_SIGNER: signer.pub, SHADE_TREE_HEALTH_CACHE: "", SHADE_TREE_BOOTNODE_ONION: "" },
       });
     } catch (e) {
       offOut = "THREW:" + ((e.stderr || e.stdout || e.message) + "");
     }
-    ok(/CANDS:3/.test(offOut), `selection works with persistence OFF (RGOE_HEALTH_CACHE="")`);
+    ok(/CANDS:3/.test(offOut), `selection works with persistence OFF (SHADE_TREE_HEALTH_CACHE="")`);
   } finally {
     await rm(work, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-// StakedReputationSet: the on-chain admission gate for the reputation-gated onion
+// StakedReputationSet: the on-chain admission gate for the access-gated onion
 // egress. See docs/ONCHAIN.md for the full design and the anonymity argument. This
 // is a REFERENCE implementation, unaudited, testnet-only. The ZK verifier and the
 // commitment hasher are abstracted behind interfaces (below); wiring the real RLN
@@ -116,7 +116,7 @@ contract StakedReputationSet {
     // removals are ZERO-IN-PLACE at the leaf's original index.
 
     uint256 public constant TREE_DEPTH = 20; // circom-rln RLN(20,16); matches lib/rln.mjs TREE_DEPTH
-    // Semaphore/RLN group id. MUST equal the JS RGOE_RLN_IDENTIFIER (default 1) so the
+    // Semaphore/RLN group id. MUST equal the JS SHADE_TREE_RLN_IDENTIFIER (default 1) so the
     // zero value — and therefore every root — matches the off-chain tree. If you change
     // one side you MUST change the other (same coordination the tree depth already needs).
     uint256 public constant GROUP_ID = 1;
@@ -328,7 +328,7 @@ contract StakedReputationSet {
         if (m.bond == 0) revert NotMember();
         if (m.exitInitiatedAt != 0) revert AlreadyExiting();
 
-        bytes32 context = keccak256(abi.encodePacked("RGOE_EXIT", commitment));
+        bytes32 context = keccak256(abi.encodePacked("SHADE_TREE_EXIT", commitment));
         if (!withdrawVerifier.verify(commitment, uint256(m.limit), context, proof)) revert BadProof();
 
         m.exitInitiatedAt = uint64(block.timestamp);
@@ -347,7 +347,7 @@ contract StakedReputationSet {
         if (m.exitInitiatedAt == 0) revert NotExiting();
         if (block.timestamp < uint256(m.exitInitiatedAt) + UNBONDING) revert StillBonded();
 
-        bytes32 context = keccak256(abi.encodePacked("RGOE_WITHDRAW", commitment, recipient));
+        bytes32 context = keccak256(abi.encodePacked("SHADE_TREE_WITHDRAW", commitment, recipient));
         if (!withdrawVerifier.verify(commitment, uint256(m.limit), context, proof)) revert BadProof();
 
         uint256 amount = m.bond;

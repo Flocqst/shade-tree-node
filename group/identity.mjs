@@ -1,6 +1,6 @@
-// identity — export THIS member's identity file for the Rust client (`rgoe egress --identity`).
+// identity — export THIS member's identity file for the Rust client (`shade-tree egress --identity`).
 //
-// The Rust `rgoe egress` (rust/rgoe-client, `--features live`) does not read RGOE_SECRET; it
+// The Rust `shade-tree egress` (rust/shade-tree-client, `--features live`) does not read SHADE_TREE_SECRET; it
 // takes the derived Semaphore-v3 identitySecret and the RLN rateCommitment leaf as a JSON file:
 //
 //   { "identitySecret": "<dec>", "leaf": "<dec>" }
@@ -10,20 +10,20 @@
 // (same secret -> same identitySecret -> same leaf == the member's group/members.json entry).
 //
 // Usage (via the router or directly):
-//   rgoe identity                              -> identity JSON on stdout
-//   rgoe identity --out identity.json          -> write the file (mode 0600), summary on stderr
-//   rgoe identity --secret-file ./.secret      -> read the secret from a file
-//   rgoe identity --secret 0x...               -> (router flag; sets RGOE_SECRET — lands in argv,
+//   shade-tree identity                              -> identity JSON on stdout
+//   shade-tree identity --out identity.json          -> write the file (mode 0600), summary on stderr
+//   shade-tree identity --secret-file ./.secret      -> read the secret from a file
+//   shade-tree identity --secret 0x...               -> (router flag; sets SHADE_TREE_SECRET — lands in argv,
 //                                                 prefer the env or --secret-file)
 //
 // Secret source, first match wins:
-//   1. --secret-file <path>   2. RGOE_SECRET (what `--secret` sets)   3. ./.secret (cwd)
+//   1. --secret-file <path>   2. SHADE_TREE_SECRET (what `--secret` sets)   3. ./.secret (cwd)
 //
 // Stream contract: stdout carries ONLY the identity JSON (and only when --out is absent), so
-// `rgoe identity > id.json` is safe. stderr carries the human summary: the public leaf and the
+// `shade-tree identity > id.json` is safe. stderr carries the human summary: the public leaf and the
 // output path. The app secret and identitySecret are NEVER printed to stderr/logs.
 //
-// The leaf depends on the member's tier limit (`--limit` / RGOE_LIMIT; default K = RGOE_SLOTS = 8)
+// The leaf depends on the member's tier limit (`--limit` / SHADE_TREE_LIMIT; default K = SHADE_TREE_SLOTS = 8)
 // like every rateCommitment in the system: derive with the limit the leaf was enrolled with, or the
 // leaf will not be in the tree. A non-default limit is written into the file (`limit`) so the Rust
 // client proves with it (T-FEAT-8).
@@ -33,7 +33,7 @@ import { resolve } from "node:path";
 import { identityFileFor, serializeIdentityFile } from "../lib/identity-file.mjs";
 import { K_SLOTS, normLimit } from "../lib/rln.mjs";
 
-const USAGE = "usage: rgoe identity [--out <path>] [--secret-file <path>] [--limit <n>]   (secret: --secret-file | RGOE_SECRET | ./.secret; limit: --limit | RGOE_LIMIT | 8)";
+const USAGE = "usage: shade-tree identity [--out <path>] [--secret-file <path>] [--limit <n>]   (secret: --secret-file | SHADE_TREE_SECRET | ./.secret; limit: --limit | SHADE_TREE_LIMIT | 8)";
 
 function parseArgs(argv) {
   const opts = { out: null, secretFile: null, limit: null };
@@ -58,10 +58,10 @@ export function resolveSecret({ secretFile, env = process.env, cwd = process.cwd
     if (!existsSync(secretFile)) throw new Error(`secret file not found: ${secretFile}`);
     return { secret: readFileSync(secretFile, "utf8").trim(), source: `--secret-file ${secretFile}` };
   }
-  if (env.RGOE_SECRET && env.RGOE_SECRET.trim()) return { secret: env.RGOE_SECRET.trim(), source: "RGOE_SECRET" };
+  if (env.SHADE_TREE_SECRET && env.SHADE_TREE_SECRET.trim()) return { secret: env.SHADE_TREE_SECRET.trim(), source: "SHADE_TREE_SECRET" };
   const dot = resolve(cwd, ".secret");
   if (existsSync(dot)) return { secret: readFileSync(dot, "utf8").trim(), source: "./.secret" };
-  throw new Error("no secret: pass --secret-file <path>, set RGOE_SECRET (or --secret), or put it in ./.secret");
+  throw new Error("no secret: pass --secret-file <path>, set SHADE_TREE_SECRET (or --secret), or put it in ./.secret");
 }
 
 // Write the identity file with owner-only permissions (0600), even if the path already existed
@@ -79,27 +79,27 @@ function main() {
   if (!secret) { console.error("identity: the secret is empty"); process.exit(1); }
 
   // Validate the shape ourselves so a malformed value is never echoed back by a library error
-  // (BigInt("...") quotes its input): 0x-hex or decimal digits, as `rgoe enroll` mints.
+  // (BigInt("...") quotes its input): 0x-hex or decimal digits, as `shade-tree enroll` mints.
   if (!/^(0x[0-9a-fA-F]+|[0-9]+)$/.test(secret)) {
     console.error(`identity: the secret from ${source} is not 0x-hex or decimal (value not shown)`);
     process.exit(1);
   }
   let limit;
-  try { limit = Number(normLimit(opts.limit ?? process.env.RGOE_LIMIT ?? K_SLOTS)); }
+  try { limit = Number(normLimit(opts.limit ?? process.env.SHADE_TREE_LIMIT ?? K_SLOTS)); }
   catch (e) { console.error(`identity: ${e.message}`); process.exit(2); }
   let file;
   try { file = identityFileFor(secret, limit); }
   catch { console.error(`identity: cannot derive from the secret (${source}) (value not shown)`); process.exit(1); }
   const bytes = serializeIdentityFile(file);
 
-  console.error(`rgoe identity — Rust client identity file (secret from ${source}; limit=${limit}${limit === K_SLOTS ? ` = K (RGOE_SLOTS)` : " (tier; written into the file)"})`);
+  console.error(`shade-tree identity — Rust client identity file (secret from ${source}; limit=${limit}${limit === K_SLOTS ? ` = K (SHADE_TREE_SLOTS)` : " (tier; written into the file)"})`);
   console.error(`  leaf (public; must be in the fleet's members.json):  ${file.leaf}`);
   if (opts.out) {
     const out = resolve(opts.out);
     try { writeIdentityFile(out, bytes); }
     catch (e) { console.error(`identity: cannot write ${out}: ${e.message}`); process.exit(1); }
     console.error(`  wrote:  ${out}   (mode 0600 — SECRET material: keep local, delete when done)`);
-    console.error(`  next (Rust -live binary): rgoe egress --identity ${opts.out} --members group/members.json --bootnode-onion <BN_ONION> --signer <SIGNER> --target <host:port>`);
+    console.error(`  next (Rust -live binary): shade-tree egress --identity ${opts.out} --members group/members.json --bootnode-onion <BN_ONION> --signer <SIGNER> --target <host:port>`);
   } else {
     process.stdout.write(bytes);
     console.error(`  (identity JSON on stdout — SECRET material; redirect only into a 0600 file, e.g. --out)`);

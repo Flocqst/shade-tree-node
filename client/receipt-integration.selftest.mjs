@@ -1,17 +1,17 @@
 // Integration selftest: the CLIENT wires a verified receipt into the quality tally (T-FEAT-23).
 //
 // T-FEAT-22 shipped the accumulation engine (reportReceipt) + scoring in client/selection.mjs but
-// deliberately left the ONE call site in client/rgoe-client.mjs unwired. T-FEAT-23 wires it: right
+// deliberately left the ONE call site in client/shade-tree-client.mjs unwired. T-FEAT-23 wires it: right
 // after connect()'s `const receipt = this._verifyReceipt(...)`, the client now calls
 //   if (receipt.present) reportReceipt(usedOnion, { valid: receipt.valid === true });
 //
-// This drives a REAL connect()-path — a real RgoeClient over a real SIGNED directory, a real proof
+// This drives a REAL connect()-path — a real ShadeTreeClient over a real SIGNED directory, a real proof
 // pipeline, and the real _verifyReceipt / reportReceipt seam — with only the network + heavy-crypto
 // leaves mocked (no Tor, no sockets, no zk proving): a module resolve hook redirects lib/semaphore.mjs
 // (proving) and lib/receipt.mjs (receipt verification) to in-memory mocks, exactly as
 // gateway/shim.selftest.mjs does. A fake `socks` client returns a fake socket that replays an injected
 // gateway ack (optionally carrying a receipt). Each scenario runs in its OWN child process because
-// selection.mjs captures RGOE_RECEIPT_SCORING at import.
+// selection.mjs captures SHADE_TREE_RECEIPT_SCORING at import.
 //
 // Asserts:
 //   (a) flag ON + receipt.present + valid  -> the tally is written and the dialed onion's score rises
@@ -35,7 +35,7 @@ let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RGOE_CLIENT_PATH = join(HERE, "rgoe-client.mjs");
+const SHADE_TREE_CLIENT_PATH = join(HERE, "shade-tree-client.mjs");
 
 function newKey() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -92,11 +92,11 @@ export async function resolve(specifier, context, next) {
 }
 `;
 
-// The child script: register the loader, import the REAL RgoeClient against the mocked leaves, drive a
+// The child script: register the loader, import the REAL ShadeTreeClient against the mocked leaves, drive a
 // real connect() over a fake socks/socket replaying the injected ack, and print the receipt evidence.
 // It writes nothing itself — the tally file (if any) is written by the real reportReceipt seam, and the
-// PARENT inspects it on disk. `RGOE_TEST_ACK` selects valid | bogus | absent.
-function childScript({ loaderHref, semaphoreHref, receiptHref, rgoeHref }) {
+// PARENT inspects it on disk. `SHADE_TREE_TEST_ACK` selects valid | bogus | absent.
+function childScript({ loaderHref, semaphoreHref, receiptHref, shadeTreeHref }) {
   return `
 import { register } from "node:module";
 import { EventEmitter } from "node:events";
@@ -104,7 +104,7 @@ register(${JSON.stringify(loaderHref)}, {
   parentURL: import.meta.url,
   data: { semaphore: ${JSON.stringify(semaphoreHref)}, receipt: ${JSON.stringify(receiptHref)} },
 });
-const { RgoeClient } = await import(${JSON.stringify(rgoeHref)});
+const { ShadeTreeClient } = await import(${JSON.stringify(shadeTreeHref)});
 
 // A fake socket that, on the client's first write (the envelope), replays a one-line gateway ack.
 function fakeSocket(ackLine) {
@@ -122,22 +122,22 @@ function fakeSocket(ackLine) {
   return s;
 }
 
-const mode = process.env.RGOE_TEST_ACK;
+const mode = process.env.SHADE_TREE_TEST_ACK;
 const ack = { ok: true };
 if (mode === "valid") ack.receipt = { kind: "valid" };
 else if (mode === "bogus") ack.receipt = { kind: "bogus" };
 // mode === "absent": no receipt field (a legacy gateway with receipts OFF)
 const fakeSocks = { createConnection: async () => ({ socket: fakeSocket(JSON.stringify(ack) + "\\n") }) };
 
-const client = new RgoeClient({
+const client = new ShadeTreeClient({
   secret: "test-secret",
-  directory: process.env.RGOE_DIRECTORY,
-  dirSigner: process.env.RGOE_DIR_SIGNER,
+  directory: process.env.SHADE_TREE_DIRECTORY,
+  dirSigner: process.env.SHADE_TREE_DIR_SIGNER,
   socksClient: fakeSocks,
   socksIsolation: false,
 });
 const tunnel = await client.connect("example.com:443");
-console.log("RESULT:" + JSON.stringify(tunnel.rgoe.receipt));
+console.log("RESULT:" + JSON.stringify(tunnel.shadeTree.receipt));
 process.exit(0);
 `;
 }
@@ -168,7 +168,7 @@ const signed = signDirectory({
   signer: signer.pub,
 }, signer.priv);
 
-const work = mkdtempSync(join(tmpdir(), "rgoe-receipt-int-"));
+const work = mkdtempSync(join(tmpdir(), "shade-tree-receipt-int-"));
 const dirPath = join(work, "directory.json");
 writeFileSync(dirPath, JSON.stringify(signed) + "\n");
 
@@ -180,15 +180,15 @@ const paths = {
   loaderHref: pathToFileURL(join(work, "loader.mjs")).href,
   semaphoreHref: pathToFileURL(join(work, "semaphore-mock.mjs")).href,
   receiptHref: pathToFileURL(join(work, "receipt-mock.mjs")).href,
-  rgoeHref: pathToFileURL(RGOE_CLIENT_PATH).href,
+  shadeTreeHref: pathToFileURL(SHADE_TREE_CLIENT_PATH).href,
 };
 
 const baseEnv = {
-  RGOE_DIRECTORY: dirPath,
-  RGOE_DIR_SIGNER: signer.pub,
-  RGOE_BOOTNODE_ONION: "",
-  RGOE_DIRECTORY_REFRESH_MS: "0",
-  RGOE_HEALTH_CACHE: "", // no health persistence noise
+  SHADE_TREE_DIRECTORY: dirPath,
+  SHADE_TREE_DIR_SIGNER: signer.pub,
+  SHADE_TREE_BOOTNODE_ONION: "",
+  SHADE_TREE_DIRECTORY_REFRESH_MS: "0",
+  SHADE_TREE_HEALTH_CACHE: "", // no health persistence noise
 };
 
 // ================================================================================================
@@ -197,9 +197,9 @@ const baseEnv = {
 console.log("flag ON + valid present receipt — connect() folds it into the tally:");
 {
   const cache = join(work, "receipts-on-valid.json");
-  const r = runChild({ ...baseEnv, RGOE_RECEIPT_SCORING: "1", RGOE_RECEIPT_CACHE: cache, RGOE_TEST_ACK: "valid" });
+  const r = runChild({ ...baseEnv, SHADE_TREE_RECEIPT_SCORING: "1", SHADE_TREE_RECEIPT_CACHE: cache, SHADE_TREE_TEST_ACK: "valid" });
   ok(r.code === 0, `connect() completed (${r.out.split("\n").pop()})`);
-  ok(r.receipt && r.receipt.present === true && r.receipt.valid === true, "tunnel.rgoe.receipt is present+valid");
+  ok(r.receipt && r.receipt.present === true && r.receipt.valid === true, "tunnel.shadeTree.receipt is present+valid");
   ok(existsSync(cache), "a tally file was written once a verified receipt was reported");
   if (existsSync(cache)) {
     const t = JSON.parse(readFileSync(cache, "utf8"));
@@ -218,9 +218,9 @@ console.log("flag ON + valid present receipt — connect() folds it into the tal
 console.log("\nflag ON + bogus present receipt — folded as a NEGATIVE outcome:");
 {
   const cache = join(work, "receipts-on-bogus.json");
-  const r = runChild({ ...baseEnv, RGOE_RECEIPT_SCORING: "1", RGOE_RECEIPT_CACHE: cache, RGOE_TEST_ACK: "bogus" });
+  const r = runChild({ ...baseEnv, SHADE_TREE_RECEIPT_SCORING: "1", SHADE_TREE_RECEIPT_CACHE: cache, SHADE_TREE_TEST_ACK: "bogus" });
   ok(r.code === 0, `connect() completed even though the receipt was bogus (not fatal) (${r.out.split("\n").pop()})`);
-  ok(r.receipt && r.receipt.present === true && r.receipt.valid === false, "tunnel.rgoe.receipt is present but valid:false");
+  ok(r.receipt && r.receipt.present === true && r.receipt.valid === false, "tunnel.shadeTree.receipt is present but valid:false");
   ok(existsSync(cache), "a bogus-but-present receipt is still entered into the tally");
   if (existsSync(cache)) {
     const e = JSON.parse(readFileSync(cache, "utf8")).entries[onionA];
@@ -235,7 +235,7 @@ console.log("\nflag OFF + present receipt — no tally file, behavior byte-ident
 let onReceiptJSON;
 {
   const cache = join(work, "receipts-off.json");
-  const r = runChild({ ...baseEnv, RGOE_RECEIPT_SCORING: "", RGOE_RECEIPT_CACHE: cache, RGOE_TEST_ACK: "valid" });
+  const r = runChild({ ...baseEnv, SHADE_TREE_RECEIPT_SCORING: "", SHADE_TREE_RECEIPT_CACHE: cache, SHADE_TREE_TEST_ACK: "valid" });
   ok(r.code === 0, `connect() completed with scoring off (${r.out.split("\n").pop()})`);
   ok(!existsSync(cache), "flag off: NO tally file is written (reportReceipt is a total no-op)");
   onReceiptJSON = JSON.stringify(r.receipt);
@@ -244,7 +244,7 @@ let onReceiptJSON;
   // Re-run the identical connect WITH the flag on and compare the returned receipt evidence: the
   // wiring must not change the tunnel/receipt path at all — only the (separate) tally file appears.
   const cache = join(work, "receipts-on-compare.json");
-  const r = runChild({ ...baseEnv, RGOE_RECEIPT_SCORING: "1", RGOE_RECEIPT_CACHE: cache, RGOE_TEST_ACK: "valid" });
+  const r = runChild({ ...baseEnv, SHADE_TREE_RECEIPT_SCORING: "1", SHADE_TREE_RECEIPT_CACHE: cache, SHADE_TREE_TEST_ACK: "valid" });
   ok(JSON.stringify(r.receipt) === onReceiptJSON,
     "the receipt evidence returned to the caller is byte-identical whether the flag is on or off");
 }
@@ -255,9 +255,9 @@ let onReceiptJSON;
 console.log("\nflag ON + absent receipt (legacy gateway) — never entered into the tally:");
 {
   const cache = join(work, "receipts-absent.json");
-  const r = runChild({ ...baseEnv, RGOE_RECEIPT_SCORING: "1", RGOE_RECEIPT_CACHE: cache, RGOE_TEST_ACK: "absent" });
+  const r = runChild({ ...baseEnv, SHADE_TREE_RECEIPT_SCORING: "1", SHADE_TREE_RECEIPT_CACHE: cache, SHADE_TREE_TEST_ACK: "absent" });
   ok(r.code === 0, `connect() completed against a receipts-off gateway (${r.out.split("\n").pop()})`);
-  ok(r.receipt && r.receipt.present === false, "tunnel.rgoe.receipt.present is false (nothing to report)");
+  ok(r.receipt && r.receipt.present === false, "tunnel.shadeTree.receipt.present is false (nothing to report)");
   ok(!existsSync(cache), "receipt.present=false never touches the tally (fully additive opt-out)");
 }
 

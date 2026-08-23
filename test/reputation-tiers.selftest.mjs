@@ -1,7 +1,7 @@
 // Reputation-weighted rate budget (T-FEAT-8) with REAL Groth16 proofs — the acceptance
 // criterion verbatim: "two tiers with different K, each proven in ZK; the gateway enforces the
 // proven tier; a member cannot claim a tier they lack." Slow suite (real proving; in
-// scripts/test-all.mjs SLOW_SUITES, skipped by RGOE_FAST=1). The fast half is lib/tiers.selftest.mjs.
+// scripts/test-all.mjs SLOW_SUITES, skipped by SHADE_TREE_FAST=1). The fast half is lib/tiers.selftest.mjs.
 //
 // Design under test (docs/adr/0006-reputation-tiers.md): the tier IS the leaf's PRIVATE
 // userMessageLimit. circom-rln's leaf is Poseidon2(Poseidon1(identitySecret), limit) and the
@@ -20,14 +20,14 @@
 //              bypassing it, the CIRCUIT's RangeCheck asserts (a tier-1 member exceeding K1 but
 //              under K2 has nothing to send => DROP at the source); A's 9th distinct request in
 //              an epoch must reuse a messageId => same nullifier, distinct x => over-spend-slashed,
-//              and the slash names A's TIER-8 leaf (resolveSlashLeaf over RGOE_TIERS=[8,32])
+//              and the slash names A's TIER-8 leaf (resolveSlashLeaf over SHADE_TREE_TIERS=[8,32])
 //   FORGED:    A cannot claim tier 2: proveForSlot(limit 32) against the real tree fails ("not
 //              in group"); a proof over A's OWN tree containing Poseidon2(Poseidon1(sA), 32) is a
 //              real, valid SNARK — rejected wrong-group-root (precise; before any SNARK work);
 //              same for a forged tree at A's true limit (root binding, control)
 //   UNLINKABLE: the tier never appears on the wire or in the verify result: same envelope keys,
 //              same public-signal set, no limit field; verifyEnvelope returns no tier
-//   CLIENT:    RgoeClient/makeSlotPool at limit 32 => buildEnvelope proves at 32 (slot 20) and
+//   CLIENT:    ShadeTreeClient/makeSlotPool at limit 32 => buildEnvelope proves at 32 (slot 20) and
 //              the gateway accepts it; B's over-spend resolves to the tier-32 leaf
 //
 //   node test/reputation-tiers.selftest.mjs
@@ -40,7 +40,7 @@ import {
   getProverSets, calculateSignalHash, cleanUp,
 } from "../lib/rln.mjs";
 import { makeSpentSet, deriveSlashLeaf } from "../gateway/gateway.mjs";
-import { buildEnvelope, makeSlotPool } from "../client/rgoe-client.mjs";
+import { buildEnvelope, makeSlotPool } from "../client/shade-tree-client.mjs";
 
 let failures = 0;
 function ok(name) { console.log("  PASS  " + name); }
@@ -51,7 +51,7 @@ console.log("reputation tiers with real proofs (T-FEAT-8):");
 
 const K1 = K_SLOTS; // 8 (default tier)
 const K2 = 32;      // tier 2
-assert.equal(K1, 8, "this suite assumes the default K (RGOE_SLOTS unset)");
+assert.equal(K1, 8, "this suite assumes the default K (SHADE_TREE_SLOTS unset)");
 const TIERS = [K1, K2];
 
 // ---- one tree, two tiers ---------------------------------------------------------------------
@@ -70,7 +70,7 @@ const leaves = new Set([rateCommitmentOf(filler).toString(), leafA, leafB]);
 const TARGET = "example.com:443";
 async function envelope(secret, slot, nonce, { limit, group: g = group } = {}) {
   const p = await proveForSlot(secret, epoch, slot, requestSignal(TARGET, nonce), { group: g, limit });
-  return { v: 3, target: TARGET, nonce, artifact: p.artifact, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
+  return { v: 4, target: TARGET, nonce, artifact: p.artifact, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
 }
 
 // ---- TWO TIERS, each proven in ZK -----------------------------------------------------------------
@@ -122,7 +122,7 @@ await test("ENFORCED: a tier-1 member's 9th distinct request in an epoch reuses 
   assert.equal(slashes[0].s, identitySecretOf(idA).toString(), "reconstructed identitySecret == A's");
   assert.equal(deriveCommitment(slashes[0].s, K1), leafA);
 });
-await test("ENFORCED: the same over-spend by the tier-2 member resolves to its TIER-32 leaf (RGOE_TIERS knows both)", async () => {
+await test("ENFORCED: the same over-spend by the tier-2 member resolves to its TIER-32 leaf (SHADE_TREE_TIERS knows both)", async () => {
   const slashes = [];
   const spent = makeSpentSet({ derive: (s) => deriveSlashLeaf(s, { tiers: TIERS, leaves }), slash: async (c) => slashes.push(c) });
   const v1 = await verifyEnvelope(b31, roots, nowMs);

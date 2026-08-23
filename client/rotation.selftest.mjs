@@ -1,8 +1,8 @@
 // Selftest for quality-aware ROTATION / load spread (T-FEAT-4).
 //
-// Today slot-0 (the gateway the shim actually dials) is a fresh independent weighted-random draw per
+// Today slot-0 (the gateway the client proxy actually dials) is a fresh independent weighted-random draw per
 // CONNECT: memoryless, so the top-weight gateway keeps winning back-to-back and equal-weight peers get
-// bursty, clumped load. With RGOE_ROTATION_SPREAD armed, slot-0 is chosen by a smooth weighted
+// bursty, clumped load. With SHADE_TREE_ROTATION_SPREAD armed, slot-0 is chosen by a smooth weighted
 // round-robin (SWRR) over the SAME healthy, weight-clamped, receipt-adjusted pool, which (1) spreads
 // load evenly / avoids re-hammering the just-used gateway (anti-stickiness) while (2) preserving the
 // long-run weighted share EXACTLY. The whole feature is OFF by default, and when off selection is
@@ -93,7 +93,7 @@ async function main() {
     signer: signer.pub,
   }, signer.priv);
 
-  const work = mkdtempSync(join(tmpdir(), "rgoe-rotation-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-rotation-"));
   const eqPath = join(work, "eq.json");
   const uwPath = join(work, "uw.json");
   writeFileSync(eqPath, JSON.stringify(eqDir) + "\n");
@@ -103,7 +103,7 @@ async function main() {
   // Config is captured at import, so the OFF proof runs in its own process with the flag UNSET. It must
   // reproduce today's behavior: weighted-random slot-0 — proportional share AND a memoryless immediate-
   // repeat rate (~1/K for equal weights), i.e. NOT spread.
-  console.log("default OFF (RGOE_ROTATION_SPREAD unset), separate process — today's weighted-random:");
+  console.log("default OFF (SHADE_TREE_ROTATION_SPREAD unset), separate process — today's weighted-random:");
   const offScript = `
 import { pathToFileURL } from "node:url";
 const sel = await import(${JSON.stringify(pathToFileURL(SELECTION_PATH).href)});
@@ -129,29 +129,29 @@ process.exit(0);`;
       encoding: "utf8",
       env: {
         ...process.env,
-        RGOE_DIRECTORY: eqPath,
-        RGOE_DIR_SIGNER: signer.pub,
-        RGOE_BOOTNODE_ONION: "",
-        RGOE_HEALTH_CACHE: join(work, "health-off.json"),
-        RGOE_DIRECTORY_REFRESH_MS: "0",
-        RGOE_ROTATION_SPREAD: "", // explicitly OFF
+        SHADE_TREE_DIRECTORY: eqPath,
+        SHADE_TREE_DIR_SIGNER: signer.pub,
+        SHADE_TREE_BOOTNODE_ONION: "",
+        SHADE_TREE_HEALTH_CACHE: join(work, "health-off.json"),
+        SHADE_TREE_DIRECTORY_REFRESH_MS: "0",
+        SHADE_TREE_ROTATION_SPREAD: "", // explicitly OFF
       },
     });
   } catch (e) { offCode = e.status ?? 1; offOut = (e.stdout || "") + (e.stderr || ""); }
   ok(offCode === 0, `flag off: weighted-random slot-0 (proportional + memoryless repeats), unchanged (${offOut.trim()})`);
 
   // ---- flag ON: arm spread for the in-process checks ---------------------------------------------
-  process.env.RGOE_DIRECTORY = eqPath;
-  process.env.RGOE_DIR_SIGNER = signer.pub;
-  process.env.RGOE_ROTATION_SPREAD = "1";
-  process.env.RGOE_HEALTH_CACHE = join(work, "health.json");
-  process.env.RGOE_DIRECTORY_REFRESH_MS = "0";
-  delete process.env.RGOE_BOOTNODE_ONION;
-  delete process.env.RGOE_VERIFY_STAKE;
-  delete process.env.RGOE_RECEIPT_SCORING;
+  process.env.SHADE_TREE_DIRECTORY = eqPath;
+  process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+  process.env.SHADE_TREE_ROTATION_SPREAD = "1";
+  process.env.SHADE_TREE_HEALTH_CACHE = join(work, "health.json");
+  process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = "0";
+  delete process.env.SHADE_TREE_BOOTNODE_ONION;
+  delete process.env.SHADE_TREE_VERIFY_STAKE;
+  delete process.env.SHADE_TREE_RECEIPT_SCORING;
 
   const sel = await import(pathToFileURL(SELECTION_PATH).href);
-  console.log("\nflag ON (RGOE_ROTATION_SPREAD=1):");
+  console.log("\nflag ON (SHADE_TREE_ROTATION_SPREAD=1):");
   ok(sel.rotationSpreadEnabled() === true, "rotationSpreadEnabled() is true with the flag armed");
   sel._setRng(mulberry32(0x1234abcd)); // deterministic jitter + failover weighting
 
@@ -171,9 +171,9 @@ process.exit(0);`;
 
   // ---- long-run weight preserved: unequal fleet still hands out slot-0 in weight ratio ------------
   console.log("\nunequal-weight fleet: spread preserves the long-run weighted share (3:1), not just evens it:");
-  const sel2Env = { ...process.env, RGOE_DIRECTORY: uwPath };
-  // Re-point at the unequal directory in-process: RGOE_DIRECTORY is read at import, so drive the
-  // unequal case in a child process with the flag ON and a fixed rng via RGOE-independent seeding.
+  const sel2Env = { ...process.env, SHADE_TREE_DIRECTORY: uwPath };
+  // Re-point at the unequal directory in-process: SHADE_TREE_DIRECTORY is read at import, so drive the
+  // unequal case in a child process with the flag ON and deterministic, config-independent seeding.
   const uwScript = `
 import { pathToFileURL } from "node:url";
 const sel = await import(${JSON.stringify(pathToFileURL(SELECTION_PATH).href)});
@@ -207,12 +207,12 @@ process.exit(0);`;
       encoding: "utf8",
       env: {
         ...sel2Env,
-        RGOE_DIRECTORY: uwPath,
-        RGOE_DIR_SIGNER: signer.pub,
-        RGOE_BOOTNODE_ONION: "",
-        RGOE_HEALTH_CACHE: join(work, "health-uw.json"),
-        RGOE_DIRECTORY_REFRESH_MS: "0",
-        RGOE_ROTATION_SPREAD: "1",
+        SHADE_TREE_DIRECTORY: uwPath,
+        SHADE_TREE_DIR_SIGNER: signer.pub,
+        SHADE_TREE_BOOTNODE_ONION: "",
+        SHADE_TREE_HEALTH_CACHE: join(work, "health-uw.json"),
+        SHADE_TREE_DIRECTORY_REFRESH_MS: "0",
+        SHADE_TREE_ROTATION_SPREAD: "1",
       },
     });
   } catch (e) { uwCode = e.status ?? 1; uwOut = (e.stdout || "") + (e.stderr || ""); }
@@ -248,7 +248,7 @@ process.exit(0);`;
   // then swap to a COMPLETELY DISJOINT fleet B and spread again — the departed fleet-A keys must be
   // pruned (size stays 3, never 6). A still-in-fleet but "down" gateway must KEEP its deficit (it is
   // still in the fleet, only out of the spread pool), so it is not pruned. DIRECTORY_PATH is fixed to
-  // eqPath at import and RGOE_DIRECTORY_REFRESH_MS=0 reloads it every call, so overwriting the file
+  // eqPath at import and SHADE_TREE_DIRECTORY_REFRESH_MS=0 reloads it every call, so overwriting the file
   // swaps the live fleet in-process.
   console.log("\n_swrr bounding (T-FEAT-24): fleet churn prunes departed onions, keeps live (incl. down) ones:");
   const fa = [newKey(), newKey(), newKey()];

@@ -20,7 +20,7 @@ import { canonicalAnnounceBytes, operatorAuthMessage, verifyOperatorSig } from "
 import { calculateSignalHash, requestSignal } from "../lib/rln.mjs";
 import { canonicalReceiptBytes, buildReceipt, RECEIPT_DOMAIN } from "../lib/receipt.mjs";
 import { acceptEnvelopeVersion } from "../gateway/gateway.mjs";
-import { selectProtoVersion } from "../client/rgoe-client.mjs";
+import { selectProtoVersion } from "../client/shade-tree-client.mjs";
 import { artifactIdOf, selectArtifact, resolveArtifact, ARTIFACT_ID_RE, isArtifactId } from "../lib/zk-artifacts.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +126,7 @@ async function main() {
   const pr = V.protoReasons;
   const badRej = acceptEnvelopeVersion("3");        // garbage/non-integer => bad-version
   ok(badRej.label === pr.badVersion, "acceptEnvelopeVersion label matches the pinned bad-version literal");
-  const unsRej = acceptEnvelopeVersion(4);          // out-of-range integer => unsupported-version
+  const unsRej = acceptEnvelopeVersion(3);          // legacy/out-of-range integer => unsupported-version
   ok(unsRej.label === pr.unsupportedVersion, "acceptEnvelopeVersion label matches the pinned unsupported-version literal");
   const nmRej = selectProtoVersion({ min: 5, max: 6 }, { min: 1, max: 2 }); // disjoint ranges => no-mutual-version
   ok(nmRej.reason.startsWith(pr.noMutualVersion + ":"), "selectProtoVersion reason prefix matches the pinned no-mutual-version literal");

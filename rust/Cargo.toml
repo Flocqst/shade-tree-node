@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "rgoe-proto",
-    "rgoe-client",
-    "rgoe-rln",
+    "shade-tree-proto",
+    "shade-tree-client",
+    "shade-tree-rln",
 ]
-# rgoe-rln (T-RUST-2b RLN-INTEROP) has a heavy dep tree (ark-circom -> wasmer). Keep
+# shade-tree-rln (T-RUST-2b RLN-INTEROP) has a heavy dep tree (ark-circom -> wasmer). Keep
 # it OUT of default-members so the everyday `cargo build` / `cargo test` only touch
-# the fast rgoe-proto + rgoe-client crates; build the RLN probe with `-p rgoe-rln`.
+# the fast shade-tree-proto + shade-tree-client crates; build the RLN probe with `-p shade-tree-rln`.
 default-members = [
-    "rgoe-proto",
-    "rgoe-client",
+    "shade-tree-proto",
+    "shade-tree-client",
 ]
 
 # Shared release profile for the distributable binary (T-RUST-4).

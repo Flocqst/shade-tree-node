@@ -1,4 +1,4 @@
-// Crypto microbenchmark for the reputation-gated egress.
+// Crypto microbenchmark for the Shade Tree.
 //
 // Isolates the two Semaphore costs the system actually pays, with NO network in
 // the path (so the numbers are the crypto, not Tor):
@@ -73,12 +73,12 @@ function hostInfo() {
 }
 
 async function main() {
-  console.log(`\n  rgoe crypto bench — label=${LABEL}`);
+  console.log(`\n  shade-tree crypto bench — label=${LABEL}`);
   const host = hostInfo();
   console.log(`  ${host.cpu_model}  (${host.cpu_count} vCPU, ${host.total_mem_gb}GB)  node ${host.node}\n`);
 
   // Build a group of N ephemeral "accounts".
-  const accounts = Array.from({ length: N_ACCOUNTS }, (_, i) => new Identity(`rgoe-bench-acct-${i}`));
+  const accounts = Array.from({ length: N_ACCOUNTS }, (_, i) => new Identity(`shade-tree-bench-acct-${i}`));
   const group = new Group(accounts.map((a) => a.commitment));
 
   // ---- generation (client side) ----

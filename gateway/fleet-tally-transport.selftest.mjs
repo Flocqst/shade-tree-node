@@ -26,7 +26,7 @@
 //   - a wrong method / wrong path is rejected without delivering
 //
 //   DEFAULT UNCHANGED
-//   - makeConfiguredFleetTally with no RGOE_FLEET_TALLY_PEERS returns null (byte-identical to
+//   - makeConfiguredFleetTally with no SHADE_TREE_FLEET_TALLY_PEERS returns null (byte-identical to
 //     today); with peers it returns a live tally over the real transport
 //
 //   NO LEAK
@@ -222,12 +222,12 @@ await test("robustness: malformed, oversized, and wrong-method/path inbound are 
 // ---- DEFAULT UNCHANGED: no peers => null; peers => live real transport --------
 await test("default OFF: makeConfiguredFleetTally with no peers returns null (byte-identical to today)", async () => {
   assert.equal(makeConfiguredFleetTally({ env: {} }), null, "no env => null");
-  assert.equal(makeConfiguredFleetTally({ env: { RGOE_FLEET_TALLY: "1" } }), null, "legacy flag, no peers => still null (fail-open)");
-  assert.equal(makeConfiguredFleetTally({ env: { RGOE_FLEET_TALLY_PEERS: "" } }), null, "empty peers => null");
+  assert.equal(makeConfiguredFleetTally({ env: { SHADE_TREE_FLEET_TALLY: "1" } }), null, "legacy flag, no peers => still null (fail-open)");
+  assert.equal(makeConfiguredFleetTally({ env: { SHADE_TREE_FLEET_TALLY_PEERS: "" } }), null, "empty peers => null");
 });
 
-await test("configured: RGOE_FLEET_TALLY_PEERS yields a live tally over the real HTTP transport", async () => {
-  const t = makeConfiguredFleetTally({ env: { RGOE_FLEET_TALLY_PEERS: "127.0.0.1:1", RGOE_FLEET_TALLY_LISTEN: "127.0.0.1:0" } });
+await test("configured: SHADE_TREE_FLEET_TALLY_PEERS yields a live tally over the real HTTP transport", async () => {
+  const t = makeConfiguredFleetTally({ env: { SHADE_TREE_FLEET_TALLY_PEERS: "127.0.0.1:1", SHADE_TREE_FLEET_TALLY_LISTEN: "127.0.0.1:0" } });
   assert.ok(t && typeof t.has === "function" && typeof t.record === "function", "peers configured => a live FleetTally");
   // record() publishes to an unreachable peer (:1) but must never throw (fail-open).
   t.record("nZ", "E1");

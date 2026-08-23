@@ -1,18 +1,18 @@
-// Tiny demo backend for the reputation-gated onion egress.
+// Tiny demo backend for the Shade Tree.
 //
 // Serves demo/index.html and two endpoints:
 //   GET /api/status  -> the demo member's address + live on-chain staked status + tor state
 //   GET /api/run     -> SSE stream of the REAL flow (prove -> Tor -> gateway -> egress),
 //                       ending with the gateway egress IP vs. your own IP.
 //
-// The proving + Tor routing are real (RgoeClient); only staking is assumed done. Config via
+// The proving + Tor routing are real (ShadeTreeClient); only staking is assumed done. Config via
 // env, with local fallbacks:
-//   RGOE_SECRET            member secret (default keys.local.json[RGOE_DEMO_INDEX|0])
-//   RGOE_DEMO_WALLET       address to show as the funder (optional, display only)
-//   RGOE_DIRECTORY         signed directory json (default network/sepolia/directory.json)
-//   RGOE_DIR_SIGNER        directory signer (required for fleet mode)
-//   RGOE_TOR_PORT          client Tor SOCKS (default 9260)
-//   RGOE_DEMO_PORT         http port (default 8790)
+//   SHADE_TREE_SECRET            member secret (default keys.local.json[SHADE_TREE_DEMO_INDEX|0])
+//   SHADE_TREE_DEMO_WALLET       address to show as the funder (optional, display only)
+//   SHADE_TREE_DIRECTORY         signed directory json (default network/sepolia/directory.json)
+//   SHADE_TREE_DIR_SIGNER        directory signer (required for fleet mode)
+//   SHADE_TREE_TOR_PORT          client Tor SOCKS (default 9260)
+//   SHADE_TREE_DEMO_PORT         http port (default 8790)
 //
 // Run:  node demo/server.mjs   (start scripts/start-tor-client.sh first, or let this spawn it)
 
@@ -25,22 +25,22 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ethers } from "ethers";
 import { SocksClient } from "socks";
-import { RgoeClient } from "../client/rgoe-client.mjs";
+import { ShadeTreeClient } from "../client/shade-tree-client.mjs";
 import { deriveCommitment, identitySecretOf, identityFor, currentEpoch, K_SLOTS, EPOCH_SECONDS } from "../lib/rln.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
-const PORT = Number(process.env.RGOE_DEMO_PORT || 8790);
-const TOR_PORT = Number(process.env.RGOE_TOR_PORT || 9260);
+const PORT = Number(process.env.SHADE_TREE_DEMO_PORT || 8790);
+const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9260);
 const TARGET = "https://api.ipify.org";
 
 // ---- config: member + directory ---------------------------------------------
-const idx = Number(process.env.RGOE_DEMO_INDEX || 0);
-const secret = process.env.RGOE_SECRET || JSON.parse(rfs(join(ROOT, "keys.local.json"), "utf8"))[idx].secret;
-const wallet = process.env.RGOE_DEMO_WALLET || null;
+const idx = Number(process.env.SHADE_TREE_DEMO_INDEX || 0);
+const secret = process.env.SHADE_TREE_SECRET || JSON.parse(rfs(join(ROOT, "keys.local.json"), "utf8"))[idx].secret;
+const wallet = process.env.SHADE_TREE_DEMO_WALLET || null;
 const dep = JSON.parse(rfs(join(ROOT, "contracts", "deployed.local.json"), "utf8"));
-const dirPath = process.env.RGOE_DIRECTORY || join(ROOT, "network", "sepolia", "directory.json");
-const dirSigner = process.env.RGOE_DIR_SIGNER || JSON.parse(rfs(dirPath, "utf8")).signer;
+const dirPath = process.env.SHADE_TREE_DIRECTORY || join(ROOT, "network", "sepolia", "directory.json");
+const dirSigner = process.env.SHADE_TREE_DIR_SIGNER || JSON.parse(rfs(dirPath, "utf8")).signer;
 const directory = JSON.parse(rfs(dirPath, "utf8"));
 
 const leaf = deriveCommitment(identitySecretOf(identityFor(secret)));
@@ -68,7 +68,7 @@ function chooseGateway() {
   return { pool, chosen: pool[Math.floor(Math.random() * pool.length)] };
 }
 
-const client = new RgoeClient({ secret, directory: dirPath, dirSigner, torPort: TOR_PORT });
+const client = new ShadeTreeClient({ secret, directory: dirPath, dirSigner, torPort: TOR_PORT });
 
 // Static cryptographic facts, attached to the prove:done event for the UI's crypto panel.
 const CRYPTO = {
@@ -252,7 +252,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`RGOE demo: http://127.0.0.1:${PORT}  (member leaf ${leaf.toString().slice(0, 14)}.., contract ${dep.stakedReputationSet})`);
+  console.log(`Shade Tree demo: http://127.0.0.1:${PORT}  (member leaf ${leaf.toString().slice(0, 14)}.., contract ${dep.stakedReputationSet})`);
   console.log(`target ${TARGET} via ${directory.gateways?.length || 0}-gateway fleet over Tor ${TOR_PORT}`);
 });
 healthLoop();

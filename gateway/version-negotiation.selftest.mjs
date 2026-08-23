@@ -2,11 +2,11 @@
 //
 // Drives the PURE negotiation logic on both sides — the gateway's version gate
 // (acceptEnvelopeVersion / PROTO_RANGE from gateway/gateway.mjs) and the client's version
-// selector (selectProtoVersion / buildEnvelope from client/rgoe-client.mjs) — plus the real
+// selector (selectProtoVersion / buildEnvelope from client/shade-tree-client.mjs) — plus the real
 // lib/rln.mjs verifyEnvelope, with NO sockets, NO Tor, NO real proof. Proves:
 //
-//   - BACKWARD-COMPAT: an envelope with no `v` is treated as v3 and accepted; buildEnvelope's
-//     default still emits `v:3` (byte-shape unchanged), and the gateway accepts it
+//   - BREAKING BOUNDARY: an envelope with no `v` is classified as legacy v3 and rejected;
+//     buildEnvelope defaults to v4 and the gateway accepts it
 //   - the gateway accepts exactly its inclusive [PROTO_MIN, PROTO_MAX] range
 //   - an out-of-range integer version is rejected `unsupported-version:<v>` (distinct reason)
 //   - a garbage/non-integer version is rejected `bad-version:<repr>` (distinct reason), BEFORE
@@ -26,7 +26,7 @@ import {
 } from "../gateway/gateway.mjs";
 import {
   selectProtoVersion, buildEnvelope, CLIENT_PROTO_MIN, CLIENT_PROTO_MAX,
-} from "../client/rgoe-client.mjs";
+} from "../client/shade-tree-client.mjs";
 import {
   verifyEnvelope, currentEpoch, externalNullifierFor, calculateSignalHash, requestSignal,
 } from "../lib/rln.mjs";
@@ -47,13 +47,13 @@ const fakeProve = async () => ({
 console.log("envelope/protocol version negotiation (T-FEAT-11):");
 
 // ---- gateway range constants ------------------------------------------------
-await test("gateway range is a sane inclusive interval and {3} today", () => {
+await test("gateway range is a sane inclusive interval and {4} today", () => {
   assert.equal(Number.isInteger(PROTO_MIN), true);
   assert.equal(Number.isInteger(PROTO_MAX), true);
   assert.ok(PROTO_MIN <= PROTO_MAX, "min <= max");
   assert.deepEqual(PROTO_RANGE, { min: PROTO_MIN, max: PROTO_MAX });
-  assert.equal(PROTO_MIN, 3);
-  assert.equal(PROTO_MAX, 3);
+  assert.equal(PROTO_MIN, 4);
+  assert.equal(PROTO_MAX, 4);
 });
 
 // ---- gateway version gate: accept / reject ----------------------------------
@@ -65,16 +65,17 @@ await test("accepts a version inside the range", () => {
   }
 });
 
-await test("BACKWARD-COMPAT: absent version (undefined/null) is treated as v3 and accepted", () => {
+await test("BREAKING BOUNDARY: absent version is classified as legacy v3 and rejected", () => {
   for (const absent of [undefined, null]) {
     const r = acceptEnvelopeVersion(absent);
-    assert.equal(r.ok, true, `absent=${absent}`);
-    assert.equal(r.version, 3, "absent maps to the legacy v3 wire");
+    assert.equal(r.ok, false, `absent=${absent}`);
+    assert.equal(r.reason, "unsupported-version:3", "absent maps to, but does not accept, legacy v3");
+    assert.deepEqual(r.proto, { min: 4, max: 4 });
   }
 });
 
 await test("rejects an out-of-range integer as unsupported-version:<v> and advertises the range", () => {
-  for (const v of [0, 1, 2, 4, 5, 99, -1]) {
+  for (const v of [0, 1, 2, 3, 5, 99, -1]) {
     if (v >= PROTO_MIN && v <= PROTO_MAX) continue;
     const r = acceptEnvelopeVersion(v);
     assert.equal(r.ok, false, `v=${v}`);
@@ -86,7 +87,7 @@ await test("rejects an out-of-range integer as unsupported-version:<v> and adver
 
 await test("rejects a garbage/non-integer version as bad-version:<repr> BEFORE any mis-parse", () => {
   const cases = [
-    ["3", 'bad-version:"3"'],
+    ["4", 'bad-version:"4"'],
     [3.5, "bad-version:3.5"],
     [NaN, "bad-version:NaN"],
     [true, "bad-version:boolean"],
@@ -104,8 +105,8 @@ await test("rejects a garbage/non-integer version as bad-version:<repr> BEFORE a
 });
 
 await test("the two rejection reasons are DISTINCT (unsupported vs bad), never confused", () => {
-  assert.notEqual(acceptEnvelopeVersion(4).reason, acceptEnvelopeVersion("4").reason);
-  assert.match(acceptEnvelopeVersion(4).reason, /^unsupported-version:/);
+  assert.notEqual(acceptEnvelopeVersion(5).reason, acceptEnvelopeVersion("4").reason);
+  assert.match(acceptEnvelopeVersion(5).reason, /^unsupported-version:/);
   assert.match(acceptEnvelopeVersion("4").reason, /^bad-version:/);
 });
 
@@ -149,21 +150,21 @@ await test("DOWNGRADE-SAFE: an accepted version still flows through verifyEnvelo
     proof: { snarkProof: { publicSignals: { x, y: "0", externalNullifier: extNull, root: "0", nullifier: "0" } } },
     share: { x, y: "0" },
   });
-  for (const v of [undefined, 3]) {
+  for (const v of [4]) {
     const gate = acceptEnvelopeVersion(makeEnv(v).v);
     assert.equal(gate.ok, true, `gate accepts v=${v}`);
     const r = await verifyEnvelope(makeEnv(v), new Set());
     assert.equal(r.reason, "unbound-target", `binding enforced regardless of v=${v}`);
   }
   // The gate result exposes NO target/binding fields — it decides version only, never binding.
-  assert.deepEqual(Object.keys(acceptEnvelopeVersion(3)).sort(), ["ok", "proto", "version"]);
+  assert.deepEqual(Object.keys(acceptEnvelopeVersion(4)).sort(), ["ok", "proto", "version"]);
 });
 
 // ---- client selection: highest mutually supported ---------------------------
-await test("client constants are a sane interval and {3} today", () => {
+await test("client constants are a sane interval and {4} today", () => {
   assert.ok(CLIENT_PROTO_MIN <= CLIENT_PROTO_MAX);
-  assert.equal(CLIENT_PROTO_MIN, 3);
-  assert.equal(CLIENT_PROTO_MAX, 3);
+  assert.equal(CLIENT_PROTO_MIN, 4);
+  assert.equal(CLIENT_PROTO_MAX, 4);
 });
 
 await test("unknown gateway range => client optimistically sends its own max", () => {
@@ -219,9 +220,9 @@ await test("ROUND-TRIP: every version the client selects for an overlapping rang
 });
 
 // ---- buildEnvelope backward-compat + evolution ------------------------------
-await test("BACKWARD-COMPAT: buildEnvelope default emits v:3 and the gateway accepts it unchanged", async () => {
+await test("Shade Tree boundary: buildEnvelope defaults to v4 and the gateway accepts it", async () => {
   const { envelope } = await buildEnvelope({ secret: "s", target: "example.com:443", pool: fakePool, prove: fakeProve });
-  assert.equal(envelope.v, 3, "default wire version is still 3 (byte-shape unchanged)");
+  assert.equal(envelope.v, 4, "default wire version is Shade Tree v4");
   // `v` is the FIRST field so the gate reads it without touching the rest of the envelope.
   assert.equal(Object.keys(envelope)[0], "v");
   assert.equal(acceptEnvelopeVersion(envelope.v).ok, true);
@@ -230,11 +231,11 @@ await test("BACKWARD-COMPAT: buildEnvelope default emits v:3 and the gateway acc
 await test("EVOLUTION: buildEnvelope honors an explicit negotiated version; a future v is out of range today", async () => {
   const { envelope } = await buildEnvelope({ secret: "s", target: "example.com:443", pool: fakePool, prove: fakeProve, version: 5 });
   assert.equal(envelope.v, 5);
-  // A v5 client talking to today's {3} gateway is cleanly rejected — not a silent mis-parse.
+  // A v5 client talking to today's {4} gateway is cleanly rejected — not a silent mis-parse.
   const r = acceptEnvelopeVersion(envelope.v);
   assert.equal(r.ok, false);
   assert.equal(r.reason, "unsupported-version:5");
-  assert.deepEqual(r.proto, PROTO_RANGE, "the reject tells the client the gateway speaks 3-3");
+  assert.deepEqual(r.proto, PROTO_RANGE, "the reject tells the client the gateway speaks 4-4");
 });
 
 console.log("");

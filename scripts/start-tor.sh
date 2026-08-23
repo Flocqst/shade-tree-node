@@ -9,7 +9,7 @@ chmod 700 tor/data tor/hs 2>/dev/null || true
 
 # Pick the tor binary: explicit override, else a locally-built pow-capable tor
 # (see scripts/build-tor-pow.sh), else whatever `tor` is on PATH (stock Homebrew).
-if [ -n "${RGOE_TOR_BIN:-}" ]; then TOR_BIN="$RGOE_TOR_BIN"
+if [ -n "${SHADE_TREE_TOR_BIN:-}" ]; then TOR_BIN="$SHADE_TREE_TOR_BIN"
 elif [ -x ./tor/tor-pow/bin/tor ]; then TOR_BIN="./tor/tor-pow/bin/tor"
 else TOR_BIN="tor"; fi
 

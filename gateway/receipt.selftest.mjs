@@ -133,7 +133,7 @@ await test("PRIVACY: the receipt exposes ONLY {v,onion,epoch,ok,sig} — no memb
 });
 
 await test("ADDITIVE / DEFAULT-OFF: receiptsEnabled() is false and successAck(null) === { ok: true }", () => {
-  assert.equal(receiptsEnabled(), false, "receipts default OFF (RGOE_RECEIPTS unset)");
+  assert.equal(receiptsEnabled(), false, "receipts default OFF (SHADE_TREE_RECEIPTS unset)");
   const ack = successAck(null);
   assert.deepEqual(ack, { ok: true }, "no signer => byte-identical to the pre-receipt reply");
   assert.deepEqual(Object.keys(ack), ["ok"], "no extra keys leak into the default ack");

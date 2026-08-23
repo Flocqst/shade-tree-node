@@ -11,7 +11,7 @@
 //   4. replay of the same signal is deduped, NOT slashed (increment A invariant),
 //   5. the clean member's time-locked exit: withdraw blocked before U, allowed after.
 //
-// SINGLE-LEAF model (RLN v3): there is now ONE leaf per member — the rateCommitment
+// SINGLE-LEAF model (retained by the rln-v4 contracts): there is ONE leaf per member — the rateCommitment
 //   rateCommitment = Poseidon(2)([ Poseidon(1)([identitySecret]), K ])
 // It is BOTH the membership-tree leaf the RLN proof is against AND the on-chain staked
 // leaf. A slash reveals the member's identitySecret (not the app seed), and
@@ -34,7 +34,7 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const dep = JSON.parse(readFileSync(join(HERE, "..", "contracts", "deployed.local.json"), "utf8"));
-const RPC = process.env.RGOE_RPC_URL || dep.rpcUrl || "http://127.0.0.1:8545";
+const RPC = process.env.SHADE_TREE_RPC_URL || dep.rpcUrl || "http://127.0.0.1:8545";
 const ADDR = dep.stakedReputationSet;
 
 const ABI = [
@@ -107,16 +107,16 @@ async function main() {
 
   h("2. anonymous egress-gate + slot rotation (increment B)");
   const epoch = currentEpoch();
-  // request 1: member A, slot 0
+  // tunnel 1: member A, slot 0
   const sig1 = requestSignal("example.com:443", "req-1");
   const env1 = await pack(await proveForSlot(secretA, epoch, 0, sig1, { group }), "example.com:443", "req-1");
   const v1 = await verifyEnvelope(env1, membershipRoots);
-  ok(v1.ok, `req1 verifies (nullifier ${short(v1.nullifier)})`);
-  // request 2: member A, slot 1 -> DIFFERENT nullifier (unlinkable to req1)
+  ok(v1.ok, `tunnel 1 verifies (nullifier ${short(v1.nullifier)})`);
+  // tunnel 2: member A, slot 1 -> DIFFERENT nullifier (unlinkable to tunnel 1)
   const sig2 = requestSignal("api.other.com:443", "req-2");
   const env2 = await pack(await proveForSlot(secretA, epoch, 1, sig2, { group }), "api.other.com:443", "req-2");
   const v2 = await verifyEnvelope(env2, membershipRoots);
-  ok(v2.ok && v2.nullifier !== v1.nullifier, `req2 verifies with a DISTINCT nullifier (${short(v2.nullifier)}) => unlinkable rotation`);
+  ok(v2.ok && v2.nullifier !== v1.nullifier, `tunnel 2 verifies with a DISTINCT nullifier (${short(v2.nullifier)}) => unlinkable rotation`);
   // member B, slot 0 -> valid member, different person
   const envB = await pack(await proveForSlot(secretB, epoch, 0, requestSignal("x.com:443", "b-1"), { group }), "x.com:443", "b-1");
   ok((await verifyEnvelope(envB, membershipRoots)).ok, "member B also gates in");
@@ -146,14 +146,14 @@ async function main() {
     return "OVER-SPEND-reconstructed";
   }
   // env1 first share recorded
-  ok((await feed(env1)) === "egress-first-share", "req1 first share recorded");
+  ok((await feed(env1)) === "egress-first-share", "tunnel 1 first share recorded");
   // replay env1 verbatim -> deduped, no slash
-  ok((await feed(env1)) === "replay-deduped", "identical replay of req1 is deduped (NOT slashed)");
+  ok((await feed(env1)) === "replay-deduped", "identical replay of tunnel 1 is deduped (NOT slashed)");
   // member A over-spends slot 0: a NEW distinct signal reusing messageId 0 => same
   // nullifier (same identity+epoch+messageId), different x => the L+1-th point.
   const sig1b = requestSignal("evil-scrape.com:443", "req-1-overspend");
   const env1b = await pack(await proveForSlot(secretA, epoch, 0, sig1b, { group }), "evil-scrape.com:443", "req-1-overspend");
-  ok(env1b.nullifier === env1.nullifier, "over-spend reuses slot 0 => SAME nullifier as req1");
+  ok(env1b.nullifier === env1.nullifier, "over-spend reuses slot 0 => SAME nullifier as tunnel 1");
   const r = await feed(env1b);
   ok(r === "OVER-SPEND-reconstructed", "second DISTINCT signal on the same nullifier triggers reconstruction");
   ok(slashed && slashed.secret === idsecA.toString(), "reconstructed secret == member A's identitySecret");
@@ -189,11 +189,11 @@ async function main() {
   console.log(`\n${FAIL === 0 ? "✓ ALL PASS" : "✗ FAILURES"} — ${PASS} passed, ${FAIL} failed`);
 }
 
-// pack a proveForSlot result into the wire envelope v3 the gateway consumes (no slot/scope).
+// Pack a proveForSlot result into the explicit v4 wire envelope the gateway consumes.
 // target + nonce ride along so the gateway can BIND the proof to this target (verifyEnvelope 2b);
 // they MUST be the same pair the signal was built from.
 async function pack(p, target, nonce) {
-  return { v: 3, target, nonce, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
+  return { v: 4, target, nonce, proof: p.proof, nullifier: p.nullifier, externalNullifier: p.externalNullifier, share: p.share };
 }
 const short = (s) => String(s).slice(0, 10) + "…";
 

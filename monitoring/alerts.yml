@@ -1,13 +1,13 @@
-# Prometheus alerting rules for reputation-gated onion egress (T-MON-3).
+# Prometheus alerting rules for Shade Tree (T-MON-3).
 #
 # Every expr references a metric that actually exists:
-#   - rgoe_bootnode_announces_total{result,reason}   (counter, bootnode/server.mjs)
-#   - rgoe_bootnode_directory_fetches_total           (counter, bootnode/server.mjs)
-#   - rgoe_bootnode_live_gateways                     (gauge,   bootnode/server.mjs)
-#   - rgoe_gateway_requests_total{result,reason}      (counter, gateway/gateway.mjs)
-#   - rgoe_gateway_slashes_total                      (counter, gateway/gateway.mjs)
-#   - rgoe_gateway_active_tunnels                     (gauge,   gateway/gateway.mjs)
-#   - rgoe_gateway_verify_seconds_bucket/_sum/_count  (histogram, gateway/gateway.mjs)
+#   - shade_tree_bootnode_announces_total{result,reason}   (counter, bootnode/server.mjs)
+#   - shade_tree_bootnode_directory_fetches_total           (counter, bootnode/server.mjs)
+#   - shade_tree_bootnode_live_gateways                     (gauge,   bootnode/server.mjs)
+#   - shade_tree_gateway_tunnels_total{result,reason}      (counter, gateway/gateway.mjs)
+#   - shade_tree_gateway_slashes_total                      (counter, gateway/gateway.mjs)
+#   - shade_tree_gateway_active_tunnels                     (gauge,   gateway/gateway.mjs)
+#   - shade_tree_gateway_verify_seconds_bucket/_sum/_count  (histogram, gateway/gateway.mjs)
 #   - up                                              (synthetic, from the scrape itself)
 #
 # Thresholds are grounded in docs/SLO.md. Numbers flagged [NEEDS DATA] in the SLO doc
@@ -15,17 +15,17 @@
 # Operational meaning of each alert is cross-referenced to docs/SLO.md and docs/INCIDENT.md.
 #
 # IMPORTANT: adjust the job matchers below to the job names you use in prometheus.yml.
-# This file assumes job="rgoe-bootnode" and job="rgoe-gateway" (see monitoring/README.md).
+# This file assumes job="shade-tree-bootnode" and job="shade-tree-gateway" (see monitoring/README.md).
 
 groups:
-  - name: rgoe-bootnode
+  - name: shade-tree-bootnode
     rules:
       # up==0 means the scrape itself failed: the bootnode /metrics endpoint (loopback,
       # same port as the HTTP transport) did not answer. Clients are cushioned by the
       # last-known-good cached directory, so this is rarely member-visible, but it burns
       # the bootnode-availability budget. See SLO.md 2.2 + INCIDENT.md #1.
       - alert: BootnodeDown
-        expr: up{job="rgoe-bootnode"} == 0
+        expr: up{job="shade-tree-bootnode"} == 0
         for: 2m
         labels:
           severity: critical
@@ -42,7 +42,7 @@ groups:
       # The whole failover story needs >=2 gateways to route between; below 2 there is no
       # anonymity spread (1/1, not 1/N) and nowhere to fail over to. SLO.md 2.3.
       - alert: FleetTooSmall
-        expr: max(rgoe_bootnode_live_gateways{job="rgoe-bootnode"}) < 2
+        expr: max(shade_tree_bootnode_live_gateways{job="shade-tree-bootnode"}) < 2
         for: 10m
         labels:
           severity: critical
@@ -50,14 +50,14 @@ groups:
         annotations:
           summary: "Fleet has fewer than 2 live gateways"
           description: >-
-            rgoe_bootnode_live_gateways = {{ $value }} for >10m (SLO wants >=2). Below 2 there
+            shade_tree_bootnode_live_gateways = {{ $value }} for >10m (SLO wants >=2). Below 2 there
             is no failover spread and target metadata is 1/1, not 1/N. Add or restore gateways
             before egress-success starts burning. Runbook: docs/INCIDENT.md #3, docs/SLO.md 2.3.
 
       # Zero live gateways: nothing is dialable at all. Correctness (never admit an
       # unverified gateway) is NOT relaxed to clear this; add real gateways.
       - alert: FleetEmpty
-        expr: max(rgoe_bootnode_live_gateways{job="rgoe-bootnode"}) < 1
+        expr: max(shade_tree_bootnode_live_gateways{job="shade-tree-bootnode"}) < 1
         for: 5m
         labels:
           severity: critical
@@ -65,7 +65,7 @@ groups:
         annotations:
           summary: "No live gateways in the directory"
           description: >-
-            rgoe_bootnode_live_gateways = {{ $value }} for >5m. The directory is empty; no
+            shade_tree_bootnode_live_gateways = {{ $value }} for >5m. The directory is empty; no
             member can egress. Restore gateways. Do NOT clear this by weakening admission
             (docs/SLO.md section 5 hard line). Runbook: docs/INCIDENT.md #3.
 
@@ -78,12 +78,12 @@ groups:
       - alert: AnnounceRejectionSpike
         expr: >-
           (
-            sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode", result="rejected"}[15m]))
+            sum by (instance) (rate(shade_tree_bootnode_announces_total{job="shade-tree-bootnode", result="rejected"}[15m]))
             /
-            clamp_min(sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode"}[15m])), 1e-9)
+            clamp_min(sum by (instance) (rate(shade_tree_bootnode_announces_total{job="shade-tree-bootnode"}[15m])), 1e-9)
           ) > 0.8
           and
-          sum by (instance) (rate(rgoe_bootnode_announces_total{job="rgoe-bootnode"}[15m])) > 0.05
+          sum by (instance) (rate(shade_tree_bootnode_announces_total{job="shade-tree-bootnode"}[15m])) > 0.05
         for: 15m
         labels:
           severity: warning
@@ -94,16 +94,16 @@ groups:
             Over 15m, >80% of announces to {{ $labels.instance }} were rejected while announce
             volume is non-trivial. Rejections are the gate working, but a sustained spike means
             forged announces, a misconfigured legitimate gateway, or a full registry. Inspect the
-            reason breakdown on the RGOE dashboard (announce panel). This is not an availability
+            reason breakdown on the Shade Tree dashboard (announce panel). This is not an availability
             outage. Context: docs/SLO.md section 1.
 
-  - name: rgoe-gateway
+  - name: shade-tree-gateway
     rules:
-      # up==0 for a gateway scrape: its loopback /metrics server (RGOE_METRICS_PORT) did not
+      # up==0 for a gateway scrape: its loopback /metrics server (SHADE_TREE_METRICS_PORT) did not
       # answer. A single gateway being down is explicitly NOT an SLO (SLO.md section 4); the
       # fleet routes around it. So this is a warning, and FleetTooSmall is the real page.
       - alert: GatewayDown
-        expr: up{job="rgoe-gateway"} == 0
+        expr: up{job="shade-tree-gateway"} == 0
         for: 5m
         labels:
           severity: warning
@@ -120,7 +120,7 @@ groups:
       # (SLO.md section 3 + 4). But a sudden rate spike is worth a human look: a broken client
       # double-spending, or an attacker probing the nullifier logic. Warning only.
       - alert: SlashSpike
-        expr: sum by (instance) (rate(rgoe_gateway_slashes_total{job="rgoe-gateway"}[15m])) > 0.1
+        expr: sum by (instance) (rate(shade_tree_gateway_slashes_total{job="shade-tree-gateway"}[15m])) > 0.1
         for: 10m
         labels:
           severity: warning
@@ -128,7 +128,7 @@ groups:
         annotations:
           summary: "Elevated slash rate on {{ $labels.instance }}"
           description: >-
-            rate(rgoe_gateway_slashes_total[15m]) = {{ printf \"%.3f\" $value }}/s on
+            rate(shade_tree_gateway_slashes_total[15m]) = {{ printf \"%.3f\" $value }}/s on
             {{ $labels.instance }} for >10m. A slash is the rate limit working (an RLN over-spend
             caught), not a failure, so this never spends error budget. Investigate the cause: a
             misbehaving client re-using a nullifier, or an attacker probing. Do NOT treat as an
@@ -138,16 +138,16 @@ groups:
       # egress-success (SLO.md 2.1), so this alert is a SIGNAL to inspect the reason mix, not
       # proof of an outage. A spike concentrated in root-not-recent across many nullifiers is
       # the false-DROP / config-mismatch signal (INCIDENT.md #6), not a capacity problem.
-      # Guarded by a minimum request rate so a quiet gateway does not fire on noise.
+      # Guarded by a minimum tunnel-attempt rate so a quiet gateway does not fire on noise.
       - alert: HighDropRate
         expr: >-
           (
-            sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway", result="drop"}[10m]))
+            sum by (instance) (rate(shade_tree_gateway_tunnels_total{job="shade-tree-gateway", result="drop"}[10m]))
             /
-            clamp_min(sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway"}[10m])), 1e-9)
+            clamp_min(sum by (instance) (rate(shade_tree_gateway_tunnels_total{job="shade-tree-gateway"}[10m])), 1e-9)
           ) > 0.5
           and
-          sum by (instance) (rate(rgoe_gateway_requests_total{job="rgoe-gateway"}[10m])) > 0.05
+          sum by (instance) (rate(shade_tree_gateway_tunnels_total{job="shade-tree-gateway"}[10m])) > 0.05
         for: 15m
         labels:
           severity: warning
@@ -155,11 +155,11 @@ groups:
         annotations:
           summary: "Drop fraction > 50% on {{ $labels.instance }}"
           description: >-
-            Over 10m, >50% of requests to {{ $labels.instance }} were dropped (with non-trivial
+            Over 10m, >50% of tunnel attempts to {{ $labels.instance }} were dropped (with non-trivial
             volume). Gate DROPs are correct rejections, so first read the drop-reason breakdown on
-            the RGOE dashboard. A root-not-recent spike is a gate/config mismatch: align
-            RGOE_EPOCH_SECONDS / RGOE_SLOTS / RGOE_RLN_IDENTIFIER / root source and widen
-            RGOE_FRESHNESS_ROOTS (docs/INCIDENT.md #6, docs/SLO.md section 3). Dial/upstream-style
+            the Shade Tree dashboard. A root-not-recent spike is a gate/config mismatch: align
+            SHADE_TREE_EPOCH_SECONDS / SHADE_TREE_SLOTS / SHADE_TREE_RLN_IDENTIFIER / root source and widen
+            SHADE_TREE_FRESHNESS_ROOTS (docs/INCIDENT.md #6, docs/SLO.md section 3). Dial/upstream-style
             drops instead point at capacity: add gateways. Do NOT slash for these.
 
       # Server-side verifyEnvelope latency vs SLO 2.4 (p95 < 50ms, p99 < 100ms, 7d). Uses the
@@ -170,7 +170,7 @@ groups:
         expr: >-
           histogram_quantile(
             0.95,
-            sum by (le, instance) (rate(rgoe_gateway_verify_seconds_bucket{job="rgoe-gateway"}[5m]))
+            sum by (le, instance) (rate(shade_tree_gateway_verify_seconds_bucket{job="shade-tree-gateway"}[5m]))
           ) > 0.05
         for: 15m
         labels:
@@ -179,17 +179,17 @@ groups:
         annotations:
           summary: "verifyEnvelope p95 > 50ms on {{ $labels.instance }}"
           description: >-
-            p95 of rgoe_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
+            p95 of shade_tree_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
             {{ $labels.instance }} for >15m, over the SLO 2.4 target of 50ms. This is server-side
             proof-verify CPU only. Approaching the ~30 verifies/sec/core ceiling: add cores or
-            gateways before backpressure turns into failed requests. Never buy latency by skipping
+            gateways before backpressure turns into failed tunnels. Never buy latency by skipping
             a verify check (docs/SLO.md 2.4 + section 5).
 
       - alert: VerifyLatencyP99High
         expr: >-
           histogram_quantile(
             0.99,
-            sum by (le, instance) (rate(rgoe_gateway_verify_seconds_bucket{job="rgoe-gateway"}[5m]))
+            sum by (le, instance) (rate(shade_tree_gateway_verify_seconds_bucket{job="shade-tree-gateway"}[5m]))
           ) > 0.1
         for: 15m
         labels:
@@ -198,7 +198,7 @@ groups:
         annotations:
           summary: "verifyEnvelope p99 > 100ms on {{ $labels.instance }}"
           description: >-
-            p99 of rgoe_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
+            p99 of shade_tree_gateway_verify_seconds = {{ printf \"%.3f\" $value }}s on
             {{ $labels.instance }} for >15m, over the SLO 2.4 target of 100ms. Tail verify latency
             is climbing; check for GC/scheduling jitter or verify-throughput saturation, and add
             capacity. Runbook: docs/SLO.md 2.4, error-budget section 3.

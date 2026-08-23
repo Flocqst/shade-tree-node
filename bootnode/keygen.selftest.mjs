@@ -31,7 +31,7 @@ function rawPubFromSeed(seedHex) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-keygen-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-keygen-"));
   try {
     // --- mint one identity and re-derive everything from its seed --------------
     console.log("keygen v3 format:");

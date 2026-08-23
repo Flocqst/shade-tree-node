@@ -1,31 +1,31 @@
-// T-TEST-1 client runner: drive the JS REFERENCE client (client/rgoe-client.mjs) through a
+// T-TEST-1 client runner: drive the JS REFERENCE client (client/shade-tree-client.mjs) through a
 // REAL published .onion gateway over Tor SOCKS, mint a real RLN membership proof per request,
 // and assert the gateway ACCEPTS (ok ack + open tunnel). The gateway proxies the CONNECT to a
 // local sink; the harness (test/real-tor-e2e.sh) asserts the sink received the connection.
 //
-// This is a THIN driver: it adds no protocol logic. It only instantiates RgoeClient exactly as
+// This is a THIN driver: it adds no protocol logic. It only instantiates ShadeTreeClient exactly as
 // a real caller would and reports the handshake outcome as JSON on the last line of stdout so
 // the shell harness can parse it. No source under client/ is touched.
 //
-//   env RGOE_SECRET  member app secret (its rateCommitment leaf must be in group/members.json)
-//       RGOE_ONION   gateway onion (with or without the .onion suffix)
-//       RGOE_TOR_PORT Tor SOCKS port to dial over
+//   env SHADE_TREE_SECRET  member app secret (its rateCommitment leaf must be in group/members.json)
+//       SHADE_TREE_ONION   gateway onion (with or without the .onion suffix)
+//       SHADE_TREE_TOR_PORT Tor SOCKS port to dial over
 //   argv[2]          target "host:port" (the local sink the gateway egresses to)
 //
 // Exit 0 + `{"accept":true,...}` on an accepted egress; nonzero + `{"accept":false,...}` otherwise.
 
-import { RgoeClient } from "../client/rgoe-client.mjs";
+import { ShadeTreeClient } from "../client/shade-tree-client.mjs";
 import { cleanUp } from "../lib/semaphore.mjs";
 
 const target = process.argv[2] || "127.0.0.1:9443";
-const secret = process.env.RGOE_SECRET;
-const onion = process.env.RGOE_ONION;
-if (!secret) { console.error("real-tor-e2e-client: RGOE_SECRET is required"); process.exit(2); }
-if (!onion) { console.error("real-tor-e2e-client: RGOE_ONION is required"); process.exit(2); }
+const secret = process.env.SHADE_TREE_SECRET;
+const onion = process.env.SHADE_TREE_ONION;
+if (!secret) { console.error("real-tor-e2e-client: SHADE_TREE_SECRET is required"); process.exit(2); }
+if (!onion) { console.error("real-tor-e2e-client: SHADE_TREE_ONION is required"); process.exit(2); }
 
 // A generous per-request dial budget: v3 HS descriptor propagation is slow on a cold onion, so
 // give the SOCKS dial several attempts before the whole run is retried by the shell.
-const dialAttempts = Number(process.env.RGOE_DIAL_ATTEMPTS || 6);
+const dialAttempts = Number(process.env.SHADE_TREE_DIAL_ATTEMPTS || 6);
 
 function emit(e) {
   // Surface each phase so a CI log shows the real cryptographic + network progress.
@@ -39,20 +39,20 @@ function emit(e) {
 }
 
 async function main() {
-  const client = new RgoeClient({ secret, onion, torPort: Number(process.env.RGOE_TOR_PORT || 9050), dialAttempts });
+  const client = new ShadeTreeClient({ secret, onion, torPort: Number(process.env.SHADE_TREE_TOR_PORT || 9050), dialAttempts });
   const t0 = Date.now();
   const tunnel = await client.connect(target, { onEvent: emit });
   // Reaching here means the gateway replied `{ ok: true }` (an ACCEPT) and opened the tunnel —
   // which the gateway only does AFTER it has connected out to the target sink. Push one byte so
   // there is genuine payload on the wire, then close cleanly.
-  await new Promise((resolve) => { tunnel.write(Buffer.from("rgoe-e2e\n")); tunnel.end(resolve); });
-  const rgoe = tunnel.rgoe || {};
+  await new Promise((resolve) => { tunnel.write(Buffer.from("shade-tree-e2e\n")); tunnel.end(resolve); });
+  const shadeTree = tunnel.shadeTree || {};
   console.log(JSON.stringify({
     accept: true,
     target,
-    onion: rgoe.onion,
-    slot: rgoe.slot,
-    nullifier: rgoe.nullifier ? String(rgoe.nullifier) : null,
+    onion: shadeTree.onion,
+    slot: shadeTree.slot,
+    nullifier: shadeTree.nullifier ? String(shadeTree.nullifier) : null,
     ms: Date.now() - t0,
   }));
 }

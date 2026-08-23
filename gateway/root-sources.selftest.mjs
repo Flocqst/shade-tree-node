@@ -1,5 +1,5 @@
 // T-FEAT-7 gateway unit tests (fast lane, no chain): the root-SOURCE resolution (the deprecated
-// RGOE_ROOTS spelling; RGOE_ADMIT proper is gateway/admission.selftest.mjs), the ABI-file `roots:` startup line, and the ROUTING slasher
+// SHADE_TREE_ROOTS spelling; SHADE_TREE_ADMIT proper is gateway/admission.selftest.mjs), the ABI-file `roots:` startup line, and the ROUTING slasher
 // (makeRoutingSlasher over a fake `ethers` — a reconstructed secret is slashed on the contract
 // whose limitOf() holds its leaf; none => the primary gets the default claim). The anvil end-to-end
 // twin is test/paid-access.selftest.mjs (slow lane).
@@ -32,27 +32,27 @@ async function main() {
   console.log("root sources + routing slasher (T-FEAT-7):");
   const A = { address: "0xA", kind: "staked" }, P = { address: "0xP", kind: "paid" };
 
-  // 1. RGOE_ROOTS resolution
+  // 1. SHADE_TREE_ROOTS resolution
   {
     let r = resolveRootSources({ spec: "", contracts: [], staticExists: true });
     ok(r.static === true && r.onchain === false, "no contract, members.json present -> static only (PoC path)");
     r = resolveRootSources({ spec: "", contracts: [], staticExists: false });
     ok(r.static === true && r.onchain === false, "no contract, no members.json -> still static (loadGroup reports the missing file, as before)");
     // T-FEAT-9 (docs/adr/0008): the default is `invited` (members.json) ALONE even with contracts
-    // configured -- a provider opts into staked/paid via RGOE_ADMIT (gateway/admission.selftest.mjs).
+    // configured -- a provider opts into staked/paid via SHADE_TREE_ADMIT (gateway/admission.selftest.mjs).
     r = resolveRootSources({ spec: "", contracts: [A], staticExists: true });
-    ok(r.static === true && r.onchain === false, "contract + members.json, RGOE_ROOTS/RGOE_ADMIT unset -> invited only (T-FEAT-9 max-anon default; opt in with RGOE_ADMIT)");
+    ok(r.static === true && r.onchain === false, "contract + members.json, SHADE_TREE_ROOTS/SHADE_TREE_ADMIT unset -> invited only (T-FEAT-9 max-anon default; opt in with SHADE_TREE_ADMIT)");
     r = resolveRootSources({ spec: "", contracts: [A, P], staticExists: false });
     ok(r.static === true && r.onchain === false, "contracts, no members.json, nothing set -> still invited only (initRoots then fails closed on the missing members.json)");
     r = resolveRootSources({ spec: "onchain", contracts: [A], staticExists: true });
-    ok(r.static === false && r.onchain === true && r.explicit, "RGOE_ROOTS=onchain -> chain alone even with members.json present");
+    ok(r.static === false && r.onchain === true && r.explicit, "SHADE_TREE_ROOTS=onchain -> chain alone even with members.json present");
     r = resolveRootSources({ spec: "static", contracts: [A], staticExists: true });
-    ok(r.static === true && r.onchain === false, "RGOE_ROOTS=static -> ignore configured contracts");
+    ok(r.static === true && r.onchain === false, "SHADE_TREE_ROOTS=static -> ignore configured contracts");
     r = resolveRootSources({ spec: " Static , ONCHAIN ", contracts: [A], staticExists: true });
-    ok(r.static && r.onchain, "RGOE_ROOTS=static,onchain (case/space tolerant) -> both");
+    ok(r.static && r.onchain, "SHADE_TREE_ROOTS=static,onchain (case/space tolerant) -> both");
     let threw = null;
     try { resolveRootSources({ spec: "onchain", contracts: [], staticExists: true }); } catch (e) { threw = e.message; }
-    ok(/no contract is configured/.test(threw || ""), "RGOE_ROOTS=onchain without a contract is a config error");
+    ok(/no contract is configured/.test(threw || ""), "SHADE_TREE_ROOTS=onchain without a contract is a config error");
     threw = null;
     try { resolveRootSources({ spec: "chain", contracts: [A], staticExists: true }); } catch (e) { threw = e.message; }
     ok(/unknown source "chain"/.test(threw || ""), "an unknown source name is rejected");
@@ -63,7 +63,7 @@ async function main() {
     ok(describeRootSources({ static: true, contracts: [A, P] }) === "roots: members.json + staked(0xA) + paid(0xP)", "`roots: members.json + staked(0x..) + paid(0x..)`");
     ok(describeRootSources({ static: false, contracts: [P] }) === "roots: paid(0xP)", "paid alone");
     ok(describeRootSources({ static: true, contracts: [] }) === "roots: members.json", "static alone");
-    ok(PAID_MIN_LEAVES === 8, "paid floor default K=8 (RGOE_PAID_MIN_LEAVES)");
+    ok(PAID_MIN_LEAVES === 8, "paid floor default K=8 (SHADE_TREE_PAID_MIN_LEAVES)");
   }
 
   // 3. routing slasher over a fake ethers
@@ -137,9 +137,9 @@ async function main() {
     let prov = flaky(1, ["777"]);
     let r = await initRoots({ contracts: [A], want: { static: true, onchain: true }, loadStatic, makeProvider: () => prov, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
     ok(r.degraded.join() === "0xa" && _getRecentRoots().has(staticRoot) && _getRecentRoots().size === 1, "chain source down at boot + members.json root -> starts DEGRADED serving the static root only");
-    ok(/rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 1/.test(scrape()), "rgoe_gateway_root_source_degraded{contract=\"0xA\"} 1");
+    ok(/shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 1/.test(scrape()), "shade_tree_gateway_root_source_degraded{contract=\"0xA\"} 1");
     await prov.poll(); // the provider's own poll recovers -> refresh merges the chain root
-    ok(_getRecentRoots().has("777") && _getRecentRoots().has(staticRoot) && /rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "next successful read -> chain root unioned in, degraded back to 0 (no restart needed)");
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has(staticRoot) && /shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "next successful read -> chain root unioned in, degraded back to 0 (no restart needed)");
 
     // fail-closed: no static root at all -> throws (main() exits nonzero; systemd restarts = the retry)
     _setRecentRoots([]);
@@ -161,7 +161,7 @@ async function main() {
     r = await initRoots({ contracts: [A, P], want: { static: false, onchain: true }, loadStatic, makeProvider: () => comp, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
     ok(r.degraded.join() === "0xa" && _getRecentRoots().has("999") && !_getRecentRoots().has("777"), "one of two chain sources down at boot -> serve the other, that one degraded (composite errors[])");
     await badChild.poll();
-    ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /rgoe_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
     _setRecentRoots([]);
   }
 

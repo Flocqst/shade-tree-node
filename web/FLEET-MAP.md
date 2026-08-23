@@ -38,7 +38,7 @@ signed directory ([`lib/directory.mjs`](../lib/directory.mjs)) is exactly
   the line that stops the map from revealing *"the only gateway in region X is …"*: the region's
   **name** is dropped at the fold and never reaches the page. The `other` bar is intentionally
   nameless, so the folded remainder is attributable to no specific region/network. Raise `k` with
-  `RGOE_FLEET_MAP_K` for a larger anonymity set.
+  `SHADE_TREE_FLEET_MAP_K` for a larger anonymity set.
 
 ## Run it
 
@@ -53,7 +53,7 @@ node web/fleet-map.mjs path/to/directory.json
 node web/fleet-map.mjs directory.json out.html
 
 # stronger fold threshold (larger anonymity set)
-RGOE_FLEET_MAP_K=3 node web/fleet-map.mjs
+SHADE_TREE_FLEET_MAP_K=3 node web/fleet-map.mjs
 ```
 
 The generated `.html` is fully self-contained — open it directly in a browser, no server needed.

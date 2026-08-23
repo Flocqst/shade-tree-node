@@ -15,8 +15,8 @@ Point it at a bootnode and pin the directory signer (the pubkey the bootnode pri
 Local / dev — a plain-http bootnode (no Tor):
 
 ```bash
-RGOE_BOOTNODE_URL=http://127.0.0.1:8877 \
-RGOE_DIR_SIGNER=<bootnode-signer-pubkey-hex> \
+SHADE_TREE_BOOTNODE_URL=http://127.0.0.1:8877 \
+SHADE_TREE_DIR_SIGNER=<bootnode-signer-pubkey-hex> \
 node web/status-server.mjs
 # -> http://127.0.0.1:8090
 ```
@@ -24,25 +24,25 @@ node web/status-server.mjs
 Production — the bootnode's v3 onion, reached over the local Tor SOCKS proxy:
 
 ```bash
-RGOE_BOOTNODE_ONION=<56-char>.onion \
-RGOE_DIR_SIGNER=<bootnode-signer-pubkey-hex> \
-RGOE_TOR_PORT=9250 \
+SHADE_TREE_BOOTNODE_ONION=<56-char>.onion \
+SHADE_TREE_DIR_SIGNER=<bootnode-signer-pubkey-hex> \
+SHADE_TREE_TOR_PORT=9250 \
 node web/status-server.mjs
 ```
 
-### Config (all `RGOE_*`)
+### Config (all `SHADE_TREE_*`)
 
 | Var                   | Meaning                                                    | Default       |
 | --------------------- | ---------------------------------------------------------- | ------------- |
-| `RGOE_BOOTNODE_ONION` | bootnode v3 onion, reached over Tor (`bootnode/fetch.mjs`) | —             |
-| `RGOE_BOOTNODE_URL`   | *or* a plain-http bootnode base URL (local/dev)            | —             |
-| `RGOE_DIR_SIGNER`     | pinned directory-signer pubkey (hex)                       | — (unverified)|
-| `RGOE_STATUS_PORT`    | loopback port for this page                                | `8090`        |
-| `RGOE_TOR_PORT`       | local Tor SOCKS port (onion path)                          | `9250`        |
-| `RGOE_TOR_HOST`       | local Tor SOCKS host                                       | `127.0.0.1`   |
+| `SHADE_TREE_BOOTNODE_ONION` | bootnode v3 onion, reached over Tor (`bootnode/fetch.mjs`) | —             |
+| `SHADE_TREE_BOOTNODE_URL`   | *or* a plain-http bootnode base URL (local/dev)            | —             |
+| `SHADE_TREE_DIR_SIGNER`     | pinned directory-signer pubkey (hex)                       | — (unverified)|
+| `SHADE_TREE_STATUS_PORT`    | loopback port for this page                                | `8090`        |
+| `SHADE_TREE_TOR_PORT`       | local Tor SOCKS port (onion path)                          | `9250`        |
+| `SHADE_TREE_TOR_HOST`       | local Tor SOCKS host                                       | `127.0.0.1`   |
 
-Set exactly one of `RGOE_BOOTNODE_URL` (dev) or `RGOE_BOOTNODE_ONION` (Tor). Without
-`RGOE_DIR_SIGNER` the page still runs but reports `signerOk: false` — the directory is shown
+Set exactly one of `SHADE_TREE_BOOTNODE_URL` (dev) or `SHADE_TREE_BOOTNODE_ONION` (Tor). Without
+`SHADE_TREE_DIR_SIGNER` the page still runs but reports `signerOk: false` — the directory is shown
 unverified.
 
 ## Endpoints

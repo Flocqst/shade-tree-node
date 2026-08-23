@@ -2,7 +2,7 @@
 // gateway onions so the whole path is runnable end to end).
 //
 // The directory signer is a long-lived ed25519 key whose PUBLIC half is PINNED in
-// the client (RGOE_DIR_SIGNER / the default in client/selection.mjs). This tool
+// the client (SHADE_TREE_DIR_SIGNER / the default in client/selection.mjs). This tool
 // holds the SECRET half, offline, and signs the list the fleet publishes.
 //
 // Usage:

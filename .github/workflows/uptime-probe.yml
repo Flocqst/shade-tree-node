@@ -6,9 +6,9 @@ name: uptime-probe
 # It installs tor on the runner, waits for it to bootstrap, then runs the probe OVER TOR against
 # the bootnode onion, verifying the served directory against the pinned signer. Configuration
 # comes from repository VARIABLES (Settings -> Secrets and variables -> Actions -> Variables):
-#   RGOE_BOOTNODE_ONION   the fleet bootnode's v3 .onion
-#   RGOE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
-#   RGOE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
+#   SHADE_TREE_BOOTNODE_ONION   the fleet bootnode's v3 .onion
+#   SHADE_TREE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
+#   SHADE_TREE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
 #                         the two values above from network/<name>/bootnode.json (lib/network-record.mjs)
 # Neither value is secret (an onion and a public key), so plain variables are the right home; the
 # same names are also read from SECRETS as a fallback for repos that prefer that. Nothing else is
@@ -40,24 +40,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      RGOE_BOOTNODE_ONION: ${{ vars.RGOE_BOOTNODE_ONION || secrets.RGOE_BOOTNODE_ONION }}
-      RGOE_DIR_SIGNER: ${{ vars.RGOE_DIR_SIGNER || secrets.RGOE_DIR_SIGNER }}
-      RGOE_NETWORK: ${{ vars.RGOE_NETWORK || secrets.RGOE_NETWORK }}
-      RGOE_TOR_HOST: 127.0.0.1
-      RGOE_TOR_PORT: 9050
+      SHADE_TREE_BOOTNODE_ONION: ${{ vars.SHADE_TREE_BOOTNODE_ONION || secrets.SHADE_TREE_BOOTNODE_ONION }}
+      SHADE_TREE_DIR_SIGNER: ${{ vars.SHADE_TREE_DIR_SIGNER || secrets.SHADE_TREE_DIR_SIGNER }}
+      SHADE_TREE_NETWORK: ${{ vars.SHADE_TREE_NETWORK || secrets.SHADE_TREE_NETWORK }}
+      SHADE_TREE_TOR_HOST: 127.0.0.1
+      SHADE_TREE_TOR_PORT: 9050
     steps:
       - name: check configuration (no-op when unset)
         id: cfg
         run: |
-          if [ -n "$RGOE_BOOTNODE_ONION" ] && [ -n "$RGOE_DIR_SIGNER" ]; then
+          if [ -n "$SHADE_TREE_BOOTNODE_ONION" ] && [ -n "$SHADE_TREE_DIR_SIGNER" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
             echo "probe target: bootnode onion + pinned signer from repository variables"
-          elif [ -n "$RGOE_NETWORK" ]; then
+          elif [ -n "$SHADE_TREE_NETWORK" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "probe target: network/$RGOE_NETWORK/bootnode.json (RGOE_NETWORK)"
+            echo "probe target: network/$SHADE_TREE_NETWORK/bootnode.json (SHADE_TREE_NETWORK)"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=uptime-probe skipped::RGOE_BOOTNODE_ONION + RGOE_DIR_SIGNER (or RGOE_NETWORK) are not set as repository variables; nothing to probe. See monitoring/UPTIME.md."
+            echo "::notice title=uptime-probe skipped::SHADE_TREE_BOOTNODE_ONION + SHADE_TREE_DIR_SIGNER (or SHADE_TREE_NETWORK) are not set as repository variables; nothing to probe. See monitoring/UPTIME.md."
           fi
 
       - uses: actions/checkout@v7
@@ -73,25 +73,25 @@ jobs:
         if: steps.cfg.outputs.configured == 'true'
         run: npm ci --ignore-scripts
 
-      - name: resolve network record (RGOE_NETWORK)
-        if: steps.cfg.outputs.configured == 'true' && env.RGOE_NETWORK != ''
+      - name: resolve network record (SHADE_TREE_NETWORK)
+        if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_NETWORK != ''
         run: |
           # A pending record (onion null) means there is nothing to probe yet: say so and stop green.
           out="$(node -e '
             import("./lib/network-record.mjs").then((m) => {
-              const d = m.networkEnvDefaults(process.env.RGOE_NETWORK);
-              const has = Boolean(process.env.RGOE_BOOTNODE_ONION || d.RGOE_BOOTNODE_ONION) && Boolean(process.env.RGOE_DIR_SIGNER || d.RGOE_DIR_SIGNER);
+              const d = m.networkEnvDefaults(process.env.SHADE_TREE_NETWORK);
+              const has = Boolean(process.env.SHADE_TREE_BOOTNODE_ONION || d.SHADE_TREE_BOOTNODE_ONION) && Boolean(process.env.SHADE_TREE_DIR_SIGNER || d.SHADE_TREE_DIR_SIGNER);
               console.log(has ? "resolved" : "pending");
             }).catch((e) => { console.error(e.message); process.exit(1); });
           ')"
           echo "record: $out"
           if [ "$out" != "resolved" ]; then
-            echo "::notice title=uptime-probe skipped::network/$RGOE_NETWORK/bootnode.json has no live bootnode onion/signer yet (status pending); nothing to probe."
-            echo "RGOE_PROBE_SKIP=1" >> "$GITHUB_ENV"
+            echo "::notice title=uptime-probe skipped::network/$SHADE_TREE_NETWORK/bootnode.json has no live bootnode onion/signer yet (status pending); nothing to probe."
+            echo "SHADE_TREE_PROBE_SKIP=1" >> "$GITHUB_ENV"
           fi
 
       - name: install + bootstrap tor
-        if: steps.cfg.outputs.configured == 'true' && env.RGOE_PROBE_SKIP != '1'
+        if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq tor >/dev/null
@@ -105,7 +105,7 @@ jobs:
           echo "tor did not bootstrap in 90s"; tail -n 20 "$RUNNER_TEMP/tor.log"; exit 1
 
       - name: probe (over Tor, signer-pinned)
-        if: steps.cfg.outputs.configured == 'true' && env.RGOE_PROBE_SKIP != '1'
+        if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
         run: |
           set +e
           line="$(node scripts/uptime-probe.mjs --format nagios)"

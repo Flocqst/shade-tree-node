@@ -57,7 +57,7 @@ async function postJson(base, path, body) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-adversarial-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-adversarial-"));
   try {
     // Real onion identities used across the scenarios. Each `.onion` IS its ed25519 identity
     // key; whoever holds the seed controls the address and only they can sign for it.
@@ -282,7 +282,7 @@ async function main() {
     // TCP server; only verify is stubbed (no Groth16) and the knobs are tiny for speed.
     // =====================================================================================
     console.log("\nSCENARIO 6 — gateway endpoint DoS (slow-loris / half-close crash / tunnel pinning):");
-    process.env.RGOE_EGRESS_ALLOW = "127.0.0.1:*"; // egress policy is built at import; allow the loopback echo target
+    process.env.SHADE_TREE_EGRESS_ALLOW = "127.0.0.1:*"; // egress policy is built at import; allow the loopback echo target
     const { makeHandler, makeConnLimiter } = await import("../gateway/gateway.mjs");
     const echo = net.createServer((c) => { c.on("data", (d) => c.write(d)); c.on("error", () => {}); });
     await new Promise((r) => echo.listen(0, "127.0.0.1", r));
@@ -297,7 +297,7 @@ async function main() {
       sock.once("connect", () => resolve(st)); sock.once("error", reject);
     });
     const until = async (pred, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return true; await new Promise((r) => setTimeout(r, 5)); } return false; };
-    const envOf = (n) => JSON.stringify({ v: 3, target: `127.0.0.1:${echo.address().port}`, nullifier: n, share: { x: "1", y: "2" }, nonce: "n" }) + "\n";
+    const envOf = (n) => JSON.stringify({ v: 4, target: `127.0.0.1:${echo.address().port}`, nullifier: n, share: { x: "1", y: "2" }, nonce: "n" }) + "\n";
     try {
       // (a) slow-loris: silence, then dribble. Both die at the ABSOLUTE deadline.
       const t0 = Date.now();

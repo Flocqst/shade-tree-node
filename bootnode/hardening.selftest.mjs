@@ -76,7 +76,7 @@ function rawDial(port) {
 
 console.log("bootnode endpoint hardening (T-HARD-4):");
 
-const work = await mkdtemp(join(tmpdir(), "rgoe-bn-hard-"));
+const work = await mkdtemp(join(tmpdir(), "shade-tree-bn-hard-"));
 try {
   const signer = await loadOrMintSigner(join(work, "signer.key"));
 

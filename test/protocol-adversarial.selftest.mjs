@@ -26,7 +26,7 @@ import {
 } from "../gateway/gateway.mjs";
 import {
   selectProtoVersion, CLIENT_PROTO_MIN, CLIENT_PROTO_MAX, CLIENT_PROTO_RANGE,
-} from "../client/rgoe-client.mjs";
+} from "../client/shade-tree-client.mjs";
 import {
   verifyEnvelope, currentEpoch, externalNullifierFor, calculateSignalHash, requestSignal,
 } from "../lib/rln.mjs";
@@ -226,19 +226,19 @@ section("version gate: non-integers => bad-version:<value-safe repr>, distinct f
     ok(r.label === "bad-version", `${describe(v)} carries the bad-version metric label`);
     ok(r.proto && r.proto.min === PROTO_MIN, `${describe(v)} reject advertises the range`);
   }
-  // The two reasons are genuinely distinct for the same numeric "4".
-  ok(acceptEnvelopeVersion(4).reason !== acceptEnvelopeVersion("4").reason, "unsupported-version:4 and bad-version:\"4\" are distinct");
+  // The two reasons are genuinely distinct for the same numeric-looking legacy version.
+  ok(acceptEnvelopeVersion(3).reason !== acceptEnvelopeVersion("3").reason, "unsupported-version:3 and bad-version:\"3\" are distinct");
 }
 
-section("version gate: absent version => v3 (backward-compat)");
+section("version gate: absent version is classified as legacy v3 and rejected");
 {
   for (const absent of [undefined, null]) {
     const r = acceptEnvelopeVersion(absent);
-    ok(r.ok === true && r.version === 3, `absent (${describe(absent)}) is treated as the legacy v3 wire`);
+    ok(r.ok === false && r.reason === "unsupported-version:3", `absent (${describe(absent)}) is classified as legacy v3 and rejected`);
   }
-  // Backward-compat is range-relative: absent maps to 3, which is accepted while the range includes 3,
-  // and would be a CLEAN unsupported-version:3 (never a mis-parse) if a future gateway dropped v3.
-  ok(acceptEnvelopeVersion(undefined, { min: 4, max: 6 }).reason === "unsupported-version:3", "absent maps to 3 and is cleanly rejected by a v4+ gateway");
+  // Classification is range-relative: an explicit legacy-only range still recognizes the old wire,
+  // while the production v4 range rejects it cleanly rather than mis-parsing it.
+  ok(acceptEnvelopeVersion(undefined, { min: 3, max: 3 }).ok === true, "a legacy-only diagnostic range recognizes an absent envelope as v3");
   // TOTALITY: the gate never throws on garbage input.
   for (const g of [Symbol("v"), () => {}, 12345678901234567890n]) {
     ok(guard(() => acceptEnvelopeVersion(g)).threw === false, `acceptEnvelopeVersion(${describe(g)}) never throws`);
@@ -247,7 +247,7 @@ section("version gate: absent version => v3 (backward-compat)");
 
 section("client selection: highest mutual / unknown => client max / disjoint => fail closed");
 {
-  ok(CLIENT_PROTO_MIN === 3 && CLIENT_PROTO_MAX === 3, "client range is {3} today");
+  ok(CLIENT_PROTO_MIN === 4 && CLIENT_PROTO_MAX === 4, "client range is {4} today");
   ok(CLIENT_PROTO_RANGE.min === CLIENT_PROTO_MIN && CLIENT_PROTO_RANGE.max === CLIENT_PROTO_MAX, "CLIENT_PROTO_RANGE mirrors the constants");
 
   // UNKNOWN gateway range -> optimistically emit our own max.
@@ -316,7 +316,7 @@ section("downgrade cannot strip target binding (drive REAL verifyEnvelope)");
     share: { x, y: "0" },
   });
 
-  for (const v of [undefined, null, 3, PROTO_MAX]) {
+  for (const v of [4, PROTO_MAX]) {
     const gate = acceptEnvelopeVersion(v);
     ok(gate.ok === true, `gate accepts v=${describe(v)}`);
     const r1 = await verifyEnvelope(envMissingNonce(v), new Set());
@@ -324,8 +324,12 @@ section("downgrade cannot strip target binding (drive REAL verifyEnvelope)");
     const r2 = await verifyEnvelope(envMissingTarget(v), new Set());
     ok(r2.ok === false && r2.reason === "unbound-target", `missing target => unbound-target regardless of v=${describe(v)}`);
   }
+  for (const v of [undefined, null, 3]) {
+    const gate = acceptEnvelopeVersion(v);
+    ok(gate.ok === false && gate.reason === "unsupported-version:3", `legacy v=${describe(v)} fails before proof verification`);
+  }
   // The gate result exposes ONLY version-decision fields — no target/binding handle rides on it.
-  ok(JSON.stringify(Object.keys(acceptEnvelopeVersion(3)).sort()) === JSON.stringify(["ok", "proto", "version"]),
+  ok(JSON.stringify(Object.keys(acceptEnvelopeVersion(4)).sort()) === JSON.stringify(["ok", "proto", "version"]),
      "the version gate result carries no target/binding fields (decides version only)");
   // verifyEnvelope truly ignores `v`: even an out-of-range/garbage version reaches the same binding
   // logic (it stops on the missing proof, never on the version) — which is WHY the gate must run first.

@@ -4649,57 +4649,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rgoe-client"
-version = "0.0.0"
-dependencies = [
- "arti-client",
- "hex",
- "rgoe-proto",
- "rgoe-rln",
- "serde",
- "serde_json",
- "tokio",
- "tor-rtcompat",
-]
-
-[[package]]
-name = "rgoe-proto"
-version = "0.0.0"
-dependencies = [
- "data-encoding",
- "ed25519-dalek 3.0.0",
- "hex",
- "num-bigint",
- "serde_json",
- "sha2 0.11.0",
- "sha3 0.12.0",
-]
-
-[[package]]
-name = "rgoe-rln"
-version = "0.0.0"
-dependencies = [
- "ark-bn254",
- "ark-circom",
- "ark-ec",
- "ark-ff",
- "ark-groth16",
- "ark-relations",
- "ark-serialize",
- "ark-std",
- "hex",
- "light-poseidon",
- "num-bigint",
- "rgoe-proto",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sha3 0.12.0",
- "tokio",
- "wasmer",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5332,6 +5281,57 @@ dependencies = [
  "digest 0.11.3",
  "keccak 0.2.1",
  "sponge-cursor",
+]
+
+[[package]]
+name = "shade-tree-client"
+version = "0.3.0"
+dependencies = [
+ "arti-client",
+ "hex",
+ "serde",
+ "serde_json",
+ "shade-tree-proto",
+ "shade-tree-rln",
+ "tokio",
+ "tor-rtcompat",
+]
+
+[[package]]
+name = "shade-tree-proto"
+version = "0.3.0"
+dependencies = [
+ "data-encoding",
+ "ed25519-dalek 3.0.0",
+ "hex",
+ "num-bigint",
+ "serde_json",
+ "sha2 0.11.0",
+ "sha3 0.12.0",
+]
+
+[[package]]
+name = "shade-tree-rln"
+version = "0.3.0"
+dependencies = [
+ "ark-bn254",
+ "ark-circom",
+ "ark-ec",
+ "ark-ff",
+ "ark-groth16",
+ "ark-relations",
+ "ark-serialize",
+ "ark-std",
+ "hex",
+ "light-poseidon",
+ "num-bigint",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sha3 0.12.0",
+ "shade-tree-proto",
+ "tokio",
+ "wasmer",
 ]
 
 [[package]]

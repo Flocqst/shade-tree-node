@@ -31,7 +31,7 @@ trusting the bootnode*, on two independent axes:
   authorization binds operator to onion; the bootnode and clients recover it and read
   `GatewayRegistry.isStaked(operator)` on chain.
 
-The bootnode signs the *list* with the pinned directory signer (`RGOE_DIR_SIGNER`),
+The bootnode signs the *list* with the pinned directory signer (`SHADE_TREE_DIR_SIGNER`),
 which authenticates that this is the bootnode's list, but the signer does not vouch for
 the entries: each entry stands on its own onion-control proof. `GET /gateway/<onion>`
 returns the raw stored announce so any client can re-run the whole verification from

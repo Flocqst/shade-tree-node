@@ -1,27 +1,27 @@
 // Paid access, off-chain half (T-FEAT-7, docs/PAYMENTS.md, ADR 0007) end to end on a throwaway
 // anvil: the gateway trusting a UNION of roots (static members.json + a StakedReputationSet + a
-// PaidAccessSet), the client discovering WHICH set holds its leaf, `rgoe leaves` exporting the paid
+// PaidAccessSet), the client discovering WHICH set holds its leaf, `shade-tree leaves` exporting the paid
 // tree for the Rust client, and the slasher ROUTING a paid over-spender's slash to the PAID
 // contract. REAL contracts on both sides (the staked set deployed by contracts/script/
 // DeployRegistry.s.sol; the operator-insert-only contracts/PaidAccessSet.sol, PR #50, deployed from
 // its forge artifact — the payment itself is off chain, HTTP 402 rails), the REAL gateway process,
 // REAL RLN Groth16 proofs. Slow suite
-// (scripts/test-all.mjs SLOW_SUITES; skipped by RGOE_FAST=1). Needs anvil + forge on PATH and TCP
+// (scripts/test-all.mjs SLOW_SUITES; skipped by SHADE_TREE_FAST=1). Needs anvil + forge on PATH and TCP
 // :8443 free; else SKIPs honestly.
 //
 // Proves:
 //   - the operator's `insert(commitment, 32)` appends the paid member's leaf (limitOf/leafCount/root
 //     agree with the JS tree); a non-operator insert reverts;
-//   - `rgoe leaves --contract <paid>` writes the members.json shape whose JS root == currentRoot;
+//   - `shade-tree leaves --contract <paid>` writes the members.json shape whose JS root == currentRoot;
 //   - gateway startup logs `roots: members.json + staked(0x..) + paid(0x..)`, the paid floor WARN
 //     (1 leaf < K=8), and `slash: routing over ...`;
 //   - the client's leaf discovery names members.json / staked / paid for the three members;
 //   - static, staked and paid members ALL egress (three roots trusted at once);
 //   - a proof under an unknown root is dropped `gate:wrong-group-root`;
-//   - T-FEAT-9 admission policy: the DEFAULT gateway (RGOE_ADMIT unset) admits invited ONLY even with
+//   - T-FEAT-9 admission policy: the DEFAULT gateway (SHADE_TREE_ADMIT unset) admits invited ONLY even with
 //     the staked + paid contracts configured (a staked member's real proof -> wrong-group-root);
-//     RGOE_ADMIT=invited,staked admits it back and routes slashes over the staked set only; the
-//     deprecated RGOE_ROOTS alias still works with a warning;
+//     SHADE_TREE_ADMIT=invited,staked admits it back and routes slashes over the staked set only; the
+//     deprecated SHADE_TREE_ROOTS alias still works with a warning;
 //   - the paid member's over-spend is slashed on the PAID contract (leaf zeroed, root changes) and
 //     the staked contract is untouched.
 //
@@ -40,7 +40,7 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
-const CLI = join(ROOT, "bin", "rgoe.mjs");
+const CLI = join(ROOT, "bin", "shade-tree.mjs");
 const ANVIL_KEY_0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // deployer + staker
 const ANVIL_KEY_1 = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"; // gateway slasher hot key
 const ANVIL_ADDR_2 = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"; // slash receiver
@@ -48,6 +48,7 @@ const ANVIL_ADDR_3 = "0x90F79bf6EB2c4f870365E785982E1f101E93b906"; // paid-set o
 const ANVIL_KEY_3 = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
 const ANVIL_KEY_4 = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a"; // NOT the operator
 const ANVIL_KEY_5 = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba"; // JS-side deployer (its own nonce lane: never shared with the forge broadcast key)
+const ANVIL_KEY_6 = "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e"; // second JS deployer: avoids provider nonce-cache races between library + contract deploys
 
 async function rpc(url, method, params = []) {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
@@ -68,8 +69,8 @@ function localTarget() {
     srv.listen(0, "127.0.0.1", () => resolve({ port: srv.address().port, close: () => srv.close() }));
   });
 }
-function rgoe(args, env) {
-  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: ROOT, encoding: "utf8", env: { ...process.env, RGOE_NETWORK: "", ...env }, timeout: 180000 });
+function shadeTree(args, env) {
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: ROOT, encoding: "utf8", env: { ...process.env, SHADE_TREE_NETWORK: "", ...env }, timeout: 180000 });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
 async function waitFor(pred, ms, stepMs = 500) {
@@ -88,15 +89,15 @@ async function main() {
   const port = 19545 + Math.floor(Math.random() * 1000);
   const url = `http://127.0.0.1:${port}`;
   const anvil = spawn(anvilBin, ["--port", String(port), "--silent"], { stdio: "ignore" });
-  const work = mkdtempSync(join(tmpdir(), "rgoe-paid-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-paid-"));
   const targets = [await localTarget(), await localTarget()];
   const targetList = targets.map((t) => `127.0.0.1:${t.port}`);
-  // The static members.json this gateway trusts (RGOE_MEMBERS_FILE) — set BEFORE lib/rln.mjs loads.
+  // The static members.json this gateway trusts (SHADE_TREE_MEMBERS_FILE) — set BEFORE lib/rln.mjs loads.
   const membersFile = join(work, "members.json");
-  process.env.RGOE_MEMBERS_FILE = membersFile;
-  process.env.RGOE_CONFIRMATIONS = "1";
-  process.env.RGOE_HELIOS_RPC_URL = "";
-  process.env.RGOE_NETWORK = "";
+  process.env.SHADE_TREE_MEMBERS_FILE = membersFile;
+  process.env.SHADE_TREE_CONFIRMATIONS = "1";
+  process.env.SHADE_TREE_HELIOS_RPC_URL = "";
+  process.env.SHADE_TREE_NETWORK = "";
   let gw = null;
   try {
     let up = false;
@@ -107,7 +108,7 @@ async function main() {
     const outJson = join(ROOT, "cache", `paid-selftest-${port}.local.json`);
     const dep = spawnSync(forgeBin, ["script", "contracts/script/DeployRegistry.s.sol:DeployRegistry", "--rpc-url", url, "--broadcast", "--private-key", ANVIL_KEY_0, "-vv"], {
       cwd: ROOT, encoding: "utf8", timeout: 300000,
-      env: { ...process.env, RGOE_BOND_WEI: "1000000000000000", RGOE_TIER_LIMITS: "32", RGOE_TIER_BONDS_WEI: "4000000000000000", RGOE_DEPLOY_OUT: outJson, RGOE_RPC_URL: url },
+      env: { ...process.env, SHADE_TREE_BOND_WEI: "1000000000000000", SHADE_TREE_TIER_LIMITS: "32", SHADE_TREE_TIER_BONDS_WEI: "4000000000000000", SHADE_TREE_DEPLOY_OUT: outJson, SHADE_TREE_RPC_URL: url },
     });
     ok(dep.status === 0 && existsSync(outJson), "DeployRegistry.s.sol broadcast the tiered StakedReputationSet on anvil");
     if (dep.status !== 0) { console.log((dep.stdout || "").split("\n").slice(-15).join("\n"), dep.stderr); return; }
@@ -120,16 +121,17 @@ async function main() {
     // A DIFFERENT key than the forge broadcast (key 0), behind a NonceManager: CI's anvil answered
     // eth_getTransactionCount("pending") stale right after a mined tx, so back-to-back deploys from
     // one account raced on the nonce ("nonce has already been used"); local nonce tracking sidesteps it.
-    const deployer = new ethers.NonceManager(new ethers.Wallet(ANVIL_KEY_5, provider));
+    const poseidonDeployer = new ethers.Wallet(ANVIL_KEY_5, provider);
+    const paidDeployer = new ethers.Wallet(ANVIL_KEY_6, provider);
     // PoseidonT3 (external library) + the linked PaidAccessSet, from the forge artifacts (the deploy
     // script above already built the tree; build if the artifact is missing).
     const readArtifact = (rel) => JSON.parse(readFileSync(join(ROOT, "out", rel), "utf8"));
     if (!existsSync(join(ROOT, "out", "PaidAccessSet.sol", "PaidAccessSet.json"))) spawnSync(forgeBin, ["build"], { cwd: ROOT, encoding: "utf8", timeout: 300000 });
     const poseidonArt = readArtifact("PoseidonT3.sol/PoseidonT3.json");
-    const poseidon = await (await new ethers.ContractFactory(poseidonArt.abi, poseidonArt.bytecode.object, deployer).deploy()).waitForDeployment();
+    const poseidon = await (await new ethers.ContractFactory(poseidonArt.abi, poseidonArt.bytecode.object, poseidonDeployer).deploy()).waitForDeployment();
     const paidArt = readArtifact("PaidAccessSet.sol/PaidAccessSet.json");
     const linked = paidArt.bytecode.object.replace(/__\$[0-9a-fA-F]{34}\$__/g, (await poseidon.getAddress()).slice(2).toLowerCase());
-    const paidC = await (await new ethers.ContractFactory(paidArt.abi, linked, deployer).deploy(ANVIL_ADDR_3, hasher, [8n, 32n])).waitForDeployment();
+    const paidC = await (await new ethers.ContractFactory(paidArt.abi, linked, paidDeployer).deploy(ANVIL_ADDR_3, hasher, [8n, 32n])).waitForDeployment();
     const paid = await paidC.getAddress();
     ok(/^0x[0-9a-fA-F]{40}$/.test(paid) && (await paidC.allowedLimits()).map(Number).join(",") === "8,32" && (await paidC.operator()) === ANVIL_ADDR_3, `PaidAccessSet (contracts/PaidAccessSet.sol) deployed at ${paid} (operator = anvil #3; tiers 8,32; insert-only)`);
     const slot3 = await rpc(url, "eth_getStorageAt", [paid, "0x3", "latest"]);
@@ -138,13 +140,13 @@ async function main() {
     // ---- 2. three members: static S (tier 8), staked A (tier 8), paid P (tier 32) --------------
     const { memberOf, sendEnvelope, startGateway, stakeViaCli } = await import("../scripts/integration-tiers.mjs");
     const { groupFromIdentities, newGroup, currentEpoch, requestSignal, proveForSlot } = await import("../lib/rln.mjs");
-    const { makeSlotPool, buildEnvelope, makeLeafSourceLoader } = await import("../client/rgoe-client.mjs");
+    const { makeSlotPool, buildEnvelope, makeLeafSourceLoader } = await import("../client/shade-tree-client.mjs");
     const seed = () => "0x" + randomBytes(32).toString("hex");
     const S = memberOf(seed(), 8), A = memberOf(seed(), 8), P = memberOf(seed(), 32);
     writeFileSync(membersFile, JSON.stringify({ version: 2, members: [S.leaf] }, null, 2) + "\n");
 
     const st = stakeViaCli(A, { rpcUrl: url, set: staked, key: ANVIL_KEY_0 });
-    ok(st.code === 0 && !!st.tx, "staked member A: `rgoe register-member --limit 8` on the StakedReputationSet");
+    ok(st.code === 0 && !!st.tx, "staked member A: `shade-tree register-member --limit 8` on the StakedReputationSet");
 
     // The paid member: the operator (registrar) inserts P's leaf after the off-chain 402 payment.
     const paidAsOp = paidC.connect(new ethers.Wallet(ANVIL_KEY_3, provider));
@@ -157,37 +159,37 @@ async function main() {
     ok((await paidC.limitOf(P.leaf)) === 32n && (await paidC.leafCount()) === 1n, "paid set: limitOf(P.leaf) == 32, leafCount == 1");
     ok((await paidC.currentRoot()).toString() === groupFromIdentities([{ identity: P.identity, limit: 32 }]).root.toString(), "paid currentRoot() == JS tree of [P@32]");
 
-    // rgoe leaves: the Rust-client bridge
+    // shade-tree leaves: the Rust-client bridge
     const leavesOut = join(work, "paid-members.json");
-    const lv = rgoe(["leaves", "--contract", paid, "--out", leavesOut], { RGOE_RPC_URL: url });
+    const lv = shadeTree(["leaves", "--contract", paid, "--out", leavesOut], { SHADE_TREE_RPC_URL: url });
     const lvDoc = existsSync(leavesOut) ? JSON.parse(readFileSync(leavesOut, "utf8")) : null;
-    ok(lv.code === 0 && lvDoc && lvDoc.version === 2 && Array.isArray(lvDoc.members) && lvDoc.members[0] === P.leaf && newGroup(lvDoc.members.map(BigInt)).root.toString() === (await paidC.currentRoot()).toString(), "`rgoe leaves --contract <paid> --out` writes {version:2, members:[..]} whose root == currentRoot()");
+    ok(lv.code === 0 && lvDoc && lvDoc.version === 2 && Array.isArray(lvDoc.members) && lvDoc.members[0] === P.leaf && newGroup(lvDoc.members.map(BigInt)).root.toString() === (await paidC.currentRoot()).toString(), "`shade-tree leaves --contract <paid> --out` writes {version:2, members:[..]} whose root == currentRoot()");
 
     await rpc(url, "evm_mine", []); // head-1 now covers the stake + the deposit
 
     // ---- 3. the REAL gateway: union of the three roots + routing slasher ------------------------
     const gwEnv = {
-      RGOE_RPC_URL: url,
-      RGOE_GROUP_CONTRACT: staked,
-      RGOE_PAID_ACCESS_CONTRACT: paid,
-      RGOE_ADMIT: "invited,staked,paid", // T-FEAT-9: the union is now an EXPLICIT policy (default = invited alone; step 7)
-      RGOE_MEMBERS_FILE: membersFile,
-      RGOE_ROOT_PROVIDER: "node",
-      RGOE_CONFIRMATIONS: "1",
-      RGOE_FROM_BLOCK: "0x0",
-      RGOE_SLASH_KEY: ANVIL_KEY_1,
-      RGOE_SLASH_RECEIVER: ANVIL_ADDR_2,
-      RGOE_SLASH_CONTRACT: "",
-      RGOE_TIERS: "8,32",
-      RGOE_HELIOS_RPC_URL: "",
-      RGOE_NETWORK: "",
-      RGOE_EGRESS_ALLOW: targetList.join(","),
-      RGOE_EPOCH_SECONDS: "120",
+      SHADE_TREE_RPC_URL: url,
+      SHADE_TREE_GROUP_CONTRACT: staked,
+      SHADE_TREE_PAID_ACCESS_CONTRACT: paid,
+      SHADE_TREE_ADMIT: "invited,staked,paid", // T-FEAT-9: the union is now an EXPLICIT policy (default = invited alone; step 7)
+      SHADE_TREE_MEMBERS_FILE: membersFile,
+      SHADE_TREE_ROOT_PROVIDER: "node",
+      SHADE_TREE_CONFIRMATIONS: "1",
+      SHADE_TREE_FROM_BLOCK: "0x0",
+      SHADE_TREE_SLASH_KEY: ANVIL_KEY_1,
+      SHADE_TREE_SLASH_RECEIVER: ANVIL_ADDR_2,
+      SHADE_TREE_SLASH_CONTRACT: "",
+      SHADE_TREE_TIERS: "8,32",
+      SHADE_TREE_HELIOS_RPC_URL: "",
+      SHADE_TREE_NETWORK: "",
+      SHADE_TREE_EGRESS_ALLOW: targetList.join(","),
+      SHADE_TREE_EPOCH_SECONDS: "120",
     };
-    const gwLog = { log: (step, line) => { if (/roots:|admits:|RGOE_ADMIT|paid-access|slash:|SLASH|root source|routed/.test(line)) console.log("    " + line); } };
+    const gwLog = { log: (step, line) => { if (/roots:|admits:|SHADE_TREE_ADMIT|paid-access|slash:|SLASH|root source|routed/.test(line)) console.log("    " + line); } };
     gw = startGateway(gwEnv, gwLog);
     await gw.ready;
-    ok(/admits: invited\+staked\+paid/.test(gw.out), "startup log: `admits: invited+staked+paid` (RGOE_ADMIT, T-FEAT-9)");
+    ok(/admits: invited\+staked\+paid/.test(gw.out), "startup log: `admits: invited+staked+paid` (SHADE_TREE_ADMIT, T-FEAT-9)");
     ok(new RegExp(`roots: members\\.json \\+ staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "startup log: `roots: members.json + staked(0x..) + paid(0x..)`");
     ok(/paid-access anonymity set: 1 leaves \(floor K=8\)/.test(gw.out) && /BELOW the floor/.test(gw.out), "startup log WARNs the paid anonymity set (1 leaf) is below the floor K=8 (and keeps running)");
     ok(new RegExp(`slash: routing over staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "slasher routes over staked + paid");
@@ -216,7 +218,7 @@ async function main() {
     const epoch = currentEpoch();
     const nx = "x-" + randomBytes(4).toString("hex");
     const ex = await proveForSlot(X.seed, epoch, 0, requestSignal(targetList[0], nx), { group: gX, limit: 8 });
-    const ackX = await sendEnvelope({ v: 3, target: targetList[0], nonce: nx, proof: ex.proof, nullifier: ex.nullifier, externalNullifier: ex.externalNullifier, share: ex.share });
+    const ackX = await sendEnvelope({ v: 4, target: targetList[0], nonce: nx, proof: ex.proof, nullifier: ex.nullifier, externalNullifier: ex.externalNullifier, share: ex.share });
     ok(ackX.ok === false && ackX.err === "gate:wrong-group-root", `a proof under an unknown root is dropped -> ${JSON.stringify(ackX)}`);
 
     // ---- 6. paid over-spend -> slash routed to the PAID contract --------------------------------
@@ -227,7 +229,7 @@ async function main() {
     // slot 5: a fresh nullifier (slot 0 was P's normal request above); two DISTINCT signals under it.
     const e1 = await proveForSlot(P.seed, epoch, 5, requestSignal(targetList[0], n1), { group: dP.group, limit: 32 });
     const e2 = await proveForSlot(P.seed, epoch, 5, requestSignal(targetList[0], n2), { group: dP.group, limit: 32 });
-    const mk = (n, e) => ({ v: 3, target: targetList[0], nonce: n, proof: e.proof, nullifier: e.nullifier, externalNullifier: e.externalNullifier, share: e.share });
+    const mk = (n, e) => ({ v: 4, target: targetList[0], nonce: n, proof: e.proof, nullifier: e.nullifier, externalNullifier: e.externalNullifier, share: e.share });
     const a1 = await sendEnvelope(mk(n1, e1));
     const a2 = await sendEnvelope(mk(n2, e2), { timeoutMs: 180000 });
     ok(a1.ok === true && a2.ok === false && a2.err === "over-spend-slashed", `P's second distinct signal on slot 5 is dropped over-spend-slashed (${JSON.stringify(a1)} then ${JSON.stringify(a2)})`);
@@ -241,14 +243,14 @@ async function main() {
     ok((await stakedC.limitOf(A.leaf)) === 8n && (await stakedC.currentRoot()).toString() === stakedRootBefore, "staked contract untouched (A still tier 8, root unchanged)");
     ok(!/slash: leaf not held by the contract/.test(gw.out), "no default-tier fallback claim was needed (routing resolved the holder)");
 
-    // ---- 7. ADMISSION POLICY (T-FEAT-9): the DEFAULT gateway (RGOE_ADMIT unset) admits invited ONLY;
-    //         the staked member's REAL proof is dropped wrong-group-root; RGOE_ADMIT=invited,staked admits it back.
+    // ---- 7. ADMISSION POLICY (T-FEAT-9): the DEFAULT gateway (SHADE_TREE_ADMIT unset) admits invited ONLY;
+    //         the staked member's REAL proof is dropped wrong-group-root; SHADE_TREE_ADMIT=invited,staked admits it back.
     gw.stop();
     await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
-    const { RGOE_ADMIT: _drop, ...noPolicy } = gwEnv;
-    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "" }, gwLog); // "" = unset for the resolver (contracts STILL configured)
+    const { SHADE_TREE_ADMIT: _drop, ...noPolicy } = gwEnv;
+    gw = startGateway({ ...noPolicy, SHADE_TREE_ADMIT: "" }, gwLog); // "" = unset for the resolver (contracts STILL configured)
     await gw.ready;
-    ok(/admits: invited(?!\+)/.test(gw.out) && /RGOE_ADMIT is unset: admitting invited ONLY/.test(gw.out) && new RegExp(`set RGOE_ADMIT=invited,staked,paid`).test(gw.out), "default (RGOE_ADMIT unset, contracts configured): `admits: invited` + a WARN naming the exact RGOE_ADMIT that would trust the configured sets");
+    ok(/admits: invited(?!\+)/.test(gw.out) && /SHADE_TREE_ADMIT is unset: admitting invited ONLY/.test(gw.out) && new RegExp(`set SHADE_TREE_ADMIT=invited,staked,paid`).test(gw.out), "default (SHADE_TREE_ADMIT unset, contracts configured): `admits: invited` + a WARN naming the exact SHADE_TREE_ADMIT that would trust the configured sets");
     ok(/roots: members\.json\b/.test(gw.out) && !new RegExp(`staked\\(${staked}\\)`).test(gw.out.split("roots:")[1] || "") && /trustedRoots=1/.test(gw.out), "…roots: members.json alone (trustedRoots=1): the configured staked + paid sets are NOT root sources");
     ok(!/slash: routing over/.test(gw.out), "…and the slasher does not route over the un-admitted contracts");
     const envS7 = await buildEnvelope({ secret: S.seed, target: targetList[0], pool: pools.S });
@@ -258,22 +260,22 @@ async function main() {
     ok(ackA7.ok === false && ackA7.err === "gate:wrong-group-root", `staked member A's REAL proof is dropped by the invited-only gateway: ${JSON.stringify(ackA7)}`);
     gw.stop();
     await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
-    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "invited,staked" }, gwLog);
+    gw = startGateway({ ...noPolicy, SHADE_TREE_ADMIT: "invited,staked" }, gwLog);
     await gw.ready;
     {
       const rootsLine = gw.out.split("\n").find((l) => l.startsWith("roots:")) || "";
       const slashLines = gw.out.split("\n").filter((l) => /^slash: (routing over|on-chain)/.test(l)).join("\n");
       // ONE admitted contract => the plain single-contract slasher (`slash: on-chain … via=<staked>`), not the router.
-      ok(/admits: invited\+staked(?!\+)/.test(gw.out) && rootsLine.startsWith(`roots: members.json + staked(${staked}) `) && !rootsLine.includes("paid(") && new RegExp(`slash: on-chain .*via=${staked}`).test(slashLines) && !slashLines.includes(paid), "RGOE_ADMIT=invited,staked: `admits: invited+staked`, roots = members.json + staked only, the slasher targets the staked set only (paid excluded)");
+      ok(/admits: invited\+staked(?!\+)/.test(gw.out) && rootsLine.startsWith(`roots: members.json + staked(${staked}) `) && !rootsLine.includes("paid(") && new RegExp(`slash: on-chain .*via=${staked}`).test(slashLines) && !slashLines.includes(paid), "SHADE_TREE_ADMIT=invited,staked: `admits: invited+staked`, roots = members.json + staked only, the slasher targets the staked set only (paid excluded)");
     }
     const envA7b = await buildEnvelope({ secret: A.seed, target: targetList[0], pool: pools.A });
     ok((await sendEnvelope(envA7b.envelope)).ok === true, "staked member A egresses again once the policy admits staked (fresh slot)");
     // the deprecated alias still works, with a warning
     gw.stop();
     await waitFor(async () => (await portFree(8443)) ? true : null, 20000, 250);
-    gw = startGateway({ ...noPolicy, RGOE_ADMIT: "", RGOE_ROOTS: "static,onchain" }, gwLog);
+    gw = startGateway({ ...noPolicy, SHADE_TREE_ADMIT: "", SHADE_TREE_ROOTS: "static,onchain" }, gwLog);
     await gw.ready;
-    ok(/RGOE_ROOTS is DEPRECATED/.test(gw.out) && /admits: invited\+staked\+paid/.test(gw.out), "RGOE_ROOTS=static,onchain (deprecated alias) -> WARN + admits: invited+staked+paid");
+    ok(/SHADE_TREE_ROOTS is DEPRECATED/.test(gw.out) && /admits: invited\+staked\+paid/.test(gw.out), "SHADE_TREE_ROOTS=static,onchain (deprecated alias) -> WARN + admits: invited+staked+paid");
   } finally {
     if (gw) gw.stop();
     for (const t of targets) t.close();

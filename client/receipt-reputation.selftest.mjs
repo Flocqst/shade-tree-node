@@ -69,14 +69,14 @@ async function main() {
   };
   const signed = signDirectory(base, signer.priv);
 
-  const work = mkdtempSync(join(tmpdir(), "rgoe-receipt-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-receipt-"));
   const dirPath = join(work, "directory.json");
   const receiptCache = join(work, "receipts.json");
   writeFileSync(dirPath, JSON.stringify(signed) + "\n");
 
   // ---- default OFF: byte-identical + nothing persisted (separate process) -------------------
   // Config is captured at import, so the OFF proof must run in its own process with the flag UNSET.
-  console.log("default OFF (RGOE_RECEIPT_SCORING unset), separate process:");
+  console.log("default OFF (SHADE_TREE_RECEIPT_SCORING unset), separate process:");
   const offCache = join(work, "receipts-off.json");
   const offScript = `
 import { pathToFileURL } from "node:url";
@@ -100,30 +100,30 @@ process.exit(0);`;
       encoding: "utf8",
       env: {
         ...process.env,
-        RGOE_DIRECTORY: dirPath,
-        RGOE_DIR_SIGNER: signer.pub,
-        RGOE_BOOTNODE_ONION: "",
-        RGOE_HEALTH_CACHE: join(work, "health-off.json"),
-        RGOE_RECEIPT_CACHE: offCache,
-        RGOE_DIRECTORY_REFRESH_MS: "0",
-        RGOE_RECEIPT_SCORING: "", // explicitly OFF
+        SHADE_TREE_DIRECTORY: dirPath,
+        SHADE_TREE_DIR_SIGNER: signer.pub,
+        SHADE_TREE_BOOTNODE_ONION: "",
+        SHADE_TREE_HEALTH_CACHE: join(work, "health-off.json"),
+        SHADE_TREE_RECEIPT_CACHE: offCache,
+        SHADE_TREE_DIRECTORY_REFRESH_MS: "0",
+        SHADE_TREE_RECEIPT_SCORING: "", // explicitly OFF
       },
     });
   } catch (e) { offCode = e.status ?? 1; offOut = (e.stdout || "") + (e.stderr || ""); }
   ok(offCode === 0, `flag off: reportReceipt is a no-op, no file, selection unchanged (${offOut.trim()})`);
 
   // ---- flag ON: arm scoring for the in-process checks --------------------------------------
-  process.env.RGOE_DIRECTORY = dirPath;
-  process.env.RGOE_DIR_SIGNER = signer.pub;
-  process.env.RGOE_RECEIPT_SCORING = "1";
-  process.env.RGOE_RECEIPT_CACHE = receiptCache;
-  process.env.RGOE_HEALTH_CACHE = join(work, "health.json");
-  process.env.RGOE_DIRECTORY_REFRESH_MS = "0";
-  delete process.env.RGOE_BOOTNODE_ONION;
-  delete process.env.RGOE_VERIFY_STAKE;
+  process.env.SHADE_TREE_DIRECTORY = dirPath;
+  process.env.SHADE_TREE_DIR_SIGNER = signer.pub;
+  process.env.SHADE_TREE_RECEIPT_SCORING = "1";
+  process.env.SHADE_TREE_RECEIPT_CACHE = receiptCache;
+  process.env.SHADE_TREE_HEALTH_CACHE = join(work, "health.json");
+  process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = "0";
+  delete process.env.SHADE_TREE_BOOTNODE_ONION;
+  delete process.env.SHADE_TREE_VERIFY_STAKE;
 
   const sel = await import(pathToFileURL(SELECTION_PATH).href);
-  console.log("\nflag ON (RGOE_RECEIPT_SCORING=1):");
+  console.log("\nflag ON (SHADE_TREE_RECEIPT_SCORING=1):");
   ok(sel.receiptScoringEnabled() === true, "receiptScoringEnabled() is true with the flag armed");
 
   // Load the fleet so reportReceipt has a directory to attribute onions to.
@@ -188,7 +188,7 @@ process.exit(0);`;
     ok(Math.abs(a - b) < 400, `stale tally ignored, selection returns to ~50/50 (${a}/${b})`);
   }
 
-  // ---- bounded: the tally can never grow past RGOE_RECEIPT_MAX (oldest-lastSeen evicted) -----
+  // ---- bounded: the tally can never grow past SHADE_TREE_RECEIPT_MAX (oldest-lastSeen evicted) -----
   console.log("\ntally is bounded (oldest-lastSeen evicted past the cap):");
   const boundCache = join(work, "receipts-bound.json");
   const boundScript = `
@@ -212,15 +212,15 @@ process.exit(0);`;
       encoding: "utf8",
       env: {
         ...process.env,
-        RGOE_RECEIPT_SCORING: "1",
-        RGOE_RECEIPT_CACHE: boundCache,
-        RGOE_RECEIPT_MAX: "5",
-        RGOE_DIRECTORY: dirPath,
-        RGOE_DIR_SIGNER: signer.pub,
+        SHADE_TREE_RECEIPT_SCORING: "1",
+        SHADE_TREE_RECEIPT_CACHE: boundCache,
+        SHADE_TREE_RECEIPT_MAX: "5",
+        SHADE_TREE_DIRECTORY: dirPath,
+        SHADE_TREE_DIR_SIGNER: signer.pub,
       },
     });
   } catch (e) { boundCode = e.status ?? 1; boundOut = (e.stdout || "") + (e.stderr || ""); }
-  ok(boundCode === 0, `tally capped at RGOE_RECEIPT_MAX with oldest-first eviction (${boundOut.trim()})`);
+  ok(boundCode === 0, `tally capped at SHADE_TREE_RECEIPT_MAX with oldest-first eviction (${boundOut.trim()})`);
 
   rmSync(work, { recursive: true, force: true });
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: receipt-reputation selftest (${failures} failure${failures === 1 ? "" : "s"})`);

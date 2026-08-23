@@ -21,7 +21,7 @@
 //   node group/enroll.mjs --limit 32 ...  -> enrol at a reputation TIER (T-FEAT-8): the leaf
 //                                            commits to userMessageLimit=32 instead of the
 //                                            default K (8). The member must then run its client
-//                                            with the SAME limit (RGOE_LIMIT=32 / identity file
+//                                            with the SAME limit (SHADE_TREE_LIMIT=32 / identity file
 //                                            `limit`) — a leaf carries exactly one tier. Whether
 //                                            a member MAY hold a tier is the operator's / the
 //                                            contract's admission call (docs/adr/0006).
@@ -58,15 +58,15 @@ const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2
 // deriveCommitment() lands here). One coherent leaf, no scheme flag.
 const secret = "0x" + randomBytes(32).toString("hex");
 const commitment = rateCommitmentOf(identityFor(secret), limit).toString();
-const tierNote = limit === K_SLOTS ? "" : `   (tier limit ${limit}: run the client with RGOE_LIMIT=${limit})`;
+const tierNote = limit === K_SLOTS ? "" : `   (tier limit ${limit}: run the client with SHADE_TREE_LIMIT=${limit})`;
 
 if (commitmentOnly) {
   // Machine path: stdout is the commitment alone, so it can be piped straight to
   // the on-chain register or handed to the operator. The secret goes to stderr so
   // it is visible to the human running this but never captured by a pipe.
   process.stderr.write("Self-enrollment (commitment-only). Keep this secret PRIVATE; it never leaves your machine:\n");
-  process.stderr.write("\n  export RGOE_SECRET=" + secret + "\n");
-  if (limit !== K_SLOTS) process.stderr.write("  export RGOE_LIMIT=" + limit + "   (this leaf's tier; the client must prove with it)\n");
+  process.stderr.write("\n  export SHADE_TREE_SECRET=" + secret + "\n");
+  if (limit !== K_SLOTS) process.stderr.write("  export SHADE_TREE_LIMIT=" + limit + "   (this leaf's tier; the client must prove with it)\n");
   process.stderr.write("\nSubmit the commitment below (stdout) to the operator, or stake it on chain:\n");
   process.stderr.write("  node group/register-onchain.mjs " + commitment + "\n\n");
   process.stdout.write(commitment + "\n");
@@ -91,8 +91,8 @@ console.log("  group root:   " + root);
 console.log("");
 console.log("Keep THIS SECRET private (the operator never sees it):");
 console.log("");
-console.log("  export RGOE_SECRET=" + secret);
-if (limit !== K_SLOTS) console.log("  export RGOE_LIMIT=" + limit);
+console.log("  export SHADE_TREE_SECRET=" + secret);
+if (limit !== K_SLOTS) console.log("  export SHADE_TREE_LIMIT=" + limit);
 console.log("");
 console.log("To stake the commitment on the on-chain StakedReputationSet instead of the local set:");
 console.log("  node group/register-onchain.mjs " + commitment);

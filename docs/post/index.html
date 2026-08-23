@@ -1,10 +1,19 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Reputation-gated egress for Tor</title>
+  <meta name="description" content="Shade Tree is a research preview for carrying access-gated HTTPS tunnels through Tor onion services." />
+  <meta name="theme-color" content="#f7f5ef" />
+  <meta property="og:title" content="Shade Tree" />
+  <meta property="og:description" content="A small grove for local AI." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp" />
+  <meta property="og:image:alt" content="A sparse grove casting a patch of shade" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="canonical" href="https://shade-tree-node.vercel.app/" />
+  <title>Shade Tree</title>
   <style>
     html {
       color: #1a1a1a;
@@ -163,21 +172,236 @@
       vertical-align: middle;
     }
     .display.math{display: block; text-align: center; margin: 0.5rem auto;}
-  #title-block-header { display: none; }
+    :root {
+      --paper: #f7f5ef;
+      --ink: #191c17;
+      --moss: #59624f;
+      --rule: #d7dbcf;
+      --soft: #eceee7;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html {
+      color: var(--ink);
+      background: var(--paper);
+    }
+    body {
+      max-width: none;
+      margin: 0;
+      padding: 0 1.5rem 6rem;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: 17px;
+      line-height: 1.65;
+    }
+    body > :not(.shade-hero) {
+      width: 100%;
+      max-width: 40rem;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    a,
+    a:visited {
+      color: var(--ink);
+      text-decoration-color: color-mix(in srgb, var(--moss) 64%, transparent);
+      text-underline-offset: 0.18em;
+      text-decoration-thickness: 0.08em;
+    }
+    a:hover {
+      color: var(--moss);
+    }
+    a:focus-visible {
+      outline: 2px solid var(--moss);
+      outline-offset: 4px;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--ink);
+      line-height: 1.15;
+      letter-spacing: -0.018em;
+      text-wrap: balance;
+    }
+    h2 {
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--rule);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.84em;
+    }
+    blockquote {
+      border-left-color: var(--moss);
+      color: #4f554b;
+    }
+    hr,
+    tbody,
+    th {
+      border-color: var(--rule);
+    }
+    .shade-hero {
+      position: relative;
+      width: min(72rem, calc(100vw - 3rem));
+      margin: 1.5rem auto 5rem;
+      border-bottom: 1px solid var(--rule);
+      text-align: left;
+    }
+    .shade-hero > img {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 3 / 1;
+      object-fit: cover;
+    }
+    .shade-lockup {
+      position: absolute;
+      top: 50%;
+      right: clamp(2rem, 7vw, 6rem);
+      width: min(25rem, 39%);
+      transform: translateY(-50%);
+    }
+    .shade-lockup h1 {
+      margin: 0.08em 0 0;
+      font-size: clamp(3rem, 6vw, 5.75rem);
+      font-weight: 500;
+      letter-spacing: -0.055em;
+    }
+    .shade-eyebrow,
+    .article-kicker,
+    .shade-links {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.4;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+    .shade-eyebrow {
+      display: inline-block;
+      margin: 0;
+      padding: 0.35rem 0.5rem 0.3rem;
+      color: #f8f7f1;
+      background: var(--moss);
+    }
+    .shade-tagline {
+      margin: 0.6rem 0 0;
+      font-size: clamp(1.05rem, 1.8vw, 1.35rem);
+      font-style: italic;
+    }
+    .shade-dek {
+      margin: 0.9rem 0 0;
+      max-width: 25rem;
+      font-size: 0.93rem;
+      line-height: 1.45;
+    }
+    .shade-links {
+      display: flex;
+      gap: 1rem;
+      margin: 1.3rem 0 0;
+      letter-spacing: 0.06em;
+    }
+    .article-kicker {
+      margin-bottom: 0.75rem;
+      color: var(--moss);
+    }
+    .article-title {
+      margin-top: 0;
+      font-size: clamp(2.25rem, 6vw, 3.7rem);
+      font-weight: 500;
+      letter-spacing: -0.045em;
+    }
+    .article-lede {
+      margin-bottom: 3rem;
+      color: #40463d;
+      font-size: 1.12rem;
+      line-height: 1.55;
+    }
+    .implementation-note {
+      margin-top: -1rem;
+      margin-bottom: 3rem;
+      padding: 1rem 1.1rem;
+      border-left: 3px solid var(--moss);
+      background: color-mix(in srgb, var(--soft) 62%, transparent);
+      color: #40463d;
+      font-size: 0.92rem;
+    }
+    #TOC {
+      margin-top: 3rem;
+      margin-bottom: 4rem;
+      padding: 1.1rem 1.25rem 1.25rem;
+      border: 1px solid var(--rule);
+      background: color-mix(in srgb, var(--soft) 55%, transparent);
+    }
+    #TOC > p {
+      margin-top: 0;
+    }
+    @media (max-width: 760px) {
+      body {
+        padding: 0 1rem 4rem;
+        font-size: 16px;
+      }
+      .shade-hero {
+        width: calc(100vw - 2rem);
+        margin: 1rem auto 3.5rem;
+      }
+      .shade-hero > img {
+        height: 14rem;
+        object-position: left center;
+      }
+      .shade-lockup {
+        position: static;
+        width: auto;
+        padding: 1.4rem 0 1.6rem;
+        transform: none;
+      }
+      .shade-lockup h1 {
+        font-size: clamp(3rem, 17vw, 4.4rem);
+      }
+      .shade-dek {
+        font-size: 0.9rem;
+      }
+    }
+    @media print {
+      .shade-hero {
+        break-after: avoid;
+      }
+      .shade-lockup {
+        position: static;
+        width: auto;
+        padding: 1rem 0;
+        transform: none;
+      }
+    }
   </style>
 </head>
 <body>
-<header id="title-block-header">
-<h1 class="title">Reputation-gated egress for Tor</h1>
+<header id="title-block-header" class="shade-hero">
+<img src="fig/shade-tree-banner.webp" width="2172" height="724" alt="" />
+<div class="shade-lockup">
+<p class="shade-eyebrow">Research preview</p>
+<h1 class="title">Shade Tree</h1>
+<p class="shade-tagline">A small grove for local AI.</p>
+<p class="shade-dek">Access-gated HTTPS tunnels through Tor onion services.</p>
+<p class="shade-links"><a href="https://github.com/dmarzzz/shade-tree-node">Source</a> <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node</a></p>
+</div>
 </header>
-<h1 id="reputation-gated-egress-for-tor">Reputation-gated egress for
-Tor</h1>
-<p><em>TLDR: a working <a href="https://www.torproject.org/">Tor</a>
-onion service that gates egress on a proof of membership instead of an
-identity, a response to the fate sharing problem, and the open problem
-underneath it: pricing the burn of a shared IP when anonymity forbids
-attribution, a problem that reduces to a spent set no single party may
-own. Code at <a href="https://github.com/dmarzzz/reputation-gated-onion-egress">dmarzzz/reputation-gated-onion-egress</a>.</em></p>
+<p class="article-kicker">Research note · August 2026</p>
+<h1 id="access-gated-onion-egress" class="article-title">Access-gated
+onion egress for local AI</h1>
+<p class="article-lede">Shade Tree is an experiment in carrying HTTPS
+tunnels through <a href="https://www.torproject.org/">Tor</a> onion
+services. A node admits each tunnel with a rate-limited proof of
+membership, without asking the client for an account or a stable
+identity. The design, measurements, and unresolved tradeoffs are
+documented below. Code at <a href="https://github.com/dmarzzz/shade-tree-node">dmarzzz/shade-tree-node</a>.</p>
+<p class="implementation-note"><strong>Implementation note.</strong> The
+research note below records the first prototype and its measurements. The
+current implementation speaks Shade Tree protocol v4 and adds signed fleet
+discovery plus optional onchain admission. For current wire behavior and
+security boundaries, use the <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PROTOCOL.md">protocol</a>
+and <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">threat
+model</a> in the repository.</p>
 <nav id="TOC" role="doc-toc">
 <p><strong>Table of contents</strong></p>
 <ul>
@@ -226,7 +450,7 @@ sharing</a>: everyone behind a shared address inherits the penalty that
 any one of them earned.</p>
 <p>In this post we show a simple reproduction of an agent being blocked
 when using SearXNG over Tor. We then present the design and
-implementation of a candidate solution: a reputation-gated onion service
+implementation of a candidate solution: an access-gated onion service
 that admits requests on a zk proof of membership, rate-limited with a <a
 href="https://rate-limiting-nullifier.github.io/rln-docs">rate-limiting
 nullifier</a> (RLN). The open problem underneath is pricing the burn of
@@ -244,7 +468,7 @@ Tor is a checkbox. The folklore is easy to check directly. I fetched the
 same real pages over a Tor exit, a home IP, and a datacenter IP, same
 client and same request rate, and recorded the HTTP status each site
 returned, so the only variable was the address I arrived from. The <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/docs/exit-blocking-benchmark.md">Tor-arm
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md">Tor-arm
 method and scripts</a> are in the repo. At the request level, over the
 same 36 sites, the home IP was blocked 8.3 percent of the time, the
 datacenter IP 16.7 percent, and Tor 17.1 percent. Each non-Tor lane is
@@ -261,7 +485,7 @@ Akamai, or DataDome, and the rest block almost none. The search-engine
 arm is messier, its 24 engines spread from fully open to Google’s 83
 percent.</p>
 <figure>
-<img src="fig/rge-blocking.png" alt="tor exit blocking distribution" />
+<img src="fig/shade-tree-blocking.png" alt="tor exit blocking distribution" />
 <figcaption aria-hidden="true">tor exit blocking
 distribution</figcaption>
 </figure>
@@ -288,7 +512,7 @@ by status code, search-engine blocks are roughly two-thirds reputation
 and one-third rate limit, against about 98 percent reputation for web
 destinations.</p>
 <figure>
-<img src="fig/rge-blockkind.png" alt="block by kind" />
+<img src="fig/shade-tree-blockkind.png" alt="block by kind" />
 <figcaption aria-hidden="true">block by kind</figcaption>
 </figure>
 <p><em>every block, classified by kind and split by arm: reputation
@@ -331,7 +555,7 @@ member with RLN. To get there we deliberately put off a pile of protocol
 design decisions. The membership set is hard coded rather than
 maintained by onchain staking, so admission stays an explicit trust
 root. There is no payment layer, though one would slot in as an extra
-per-request check exactly where the rate limit sits today. We wanted a
+per-tunnel check exactly where the rate limit sits today. We wanted a
 working system first, and the harder design questions it raises are the
 subject of the last section. Below we describe the two components of the
 design, then the results of deploying it.</p>
@@ -357,7 +581,7 @@ very blocklist we are trying to escape.</li>
 <p>Tor offers another, lesser known kind of node for almost this exact
 reason: the onion service.</p>
 <figure>
-<img src="fig/rge-exit-vs-onion.png" alt="exit node vs onion service" />
+<img src="fig/shade-tree-exit-vs-onion.png" alt="exit node vs onion service" />
 <figcaption aria-hidden="true">exit node vs onion service</figcaption>
 </figure>
 <p><em>network flow diagram of a Tor exit relay versus a Tor onion
@@ -395,19 +619,21 @@ widely deployed package. The set of allowed users is a Merkle tree whose
 leaves are identity commitments; each member holds a secret, and their
 leaf is a hash of it. To pass the gate, a client proves in zero
 knowledge that it knows the secret behind some leaf of the tree, without
-revealing which leaf. Every valid proof looks identical from the
-gateway’s side, so the anonymity set is the whole tree.</p>
-<p>The second half comes from one extra public output of the same proof.
-Alongside the membership claim, the circuit exposes a nullifier, a hash
-of (secret, scope), and we set the scope to the current epoch number.
-Two properties fall out of the hash:</p>
+revealing which leaf. Proof values are not literally identical: they
+carry a public root, nullifier, and signal commitment. Under the proof
+assumptions, those values hide which eligible leaf inside the revealed
+root was used.</p>
+<p>The second half comes from the public outputs of the RLN proof. A
+private message slot produces a nullifier scoped to the current epoch.
+Two properties follow:</p>
 <ol type="1">
-<li>Within an epoch a member can only ever produce one nullifier, so the
-gateway can count requests per nullifier and keep each member inside a
-budget without knowing who anyone is.</li>
-<li>Across epochs the nullifier changes to a fresh value that cannot be
-linked to the old one, so the pseudonym expires as the epoch rolls
-over.</li>
+<li>Within an epoch a member can create distinct nullifiers only for the
+private slots allowed by its leaf. Reusing a slot for a different signal
+reveals enough public-share information to recover the slashable identity
+secret.</li>
+<li>Across epochs the nullifier inputs change. The proof transcript does
+not expose a stable member identifier, though network and application
+metadata may still correlate tunnels.</li>
 </ol>
 <p>Together the two halves resolve the contradiction the gate opened
 with: it admits only members and meters each one, without ever learning
@@ -444,7 +670,7 @@ as HTTP CONNECT: a short preamble before TLS begins, so TLS stays end to
 end, and the preamble is never visible on the network because it rides
 inside the Tor encryption.</p>
 <figure>
-<img src="fig/rge-protocol.png" alt="the gateway handshake" />
+<img src="fig/shade-tree-protocol.png" alt="the gateway handshake" />
 <figcaption aria-hidden="true">the gateway handshake</figcaption>
 </figure>
 <p><em>sequence diagram of the gateway handshake between the client,
@@ -485,14 +711,14 @@ rather than the hard-coded set the PoC ships with.</li>
 </ul>
 <h3 id="deployment-and-results">Deployment and results</h3>
 <p>We deployed the <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress">full
+href="https://github.com/dmarzzz/shade-tree-node">full
 open-source system</a> on a single DigitalOcean server. It runs as two
 processes, which is just how a Tor onion service works, not a design
 choice of ours: a <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/tor/torrc">Tor
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc">Tor
 daemon</a> that publishes the onion service and handles the rendezvous
 routing, and the <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/gateway/gateway.mjs">gateway</a>
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs">gateway</a>
 itself, a small Node process that listens on localhost and does the
 proof checks. Tor maps the onion address onto that local port, and the
 gateway binds nothing public, so the box is reachable only through Tor.
@@ -503,12 +729,14 @@ restarts. There is no DNS and no certificate authority, and nothing to
 enumerate, because the address exists only as long as we hold the
 key.</p>
 <p>To use it, a member runs a <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/scripts/run-client.sh">small
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh">small
 client</a> that starts its own Tor and a local proxy, then sends
 ordinary traffic through it. Through that proxy we hit a whatismyip
 service, <a href="https://api.ipify.org">api.ipify.org</a>, and it
 reported back the gateway’s DigitalOcean address, not the client’s. The
-world sees the clean egress IP, never the member behind it. A
+destination sees the gateway IP rather than the client source IP. It may
+still identify or link a member through accounts, cookies, application
+identifiers, or traffic correlation. A
 thousand-request load test to Google then returned 1000 of 1000 with
 none blocked, which makes sense: this is a presumably fresh IP with no
 bad history, though DigitalOcean could have recycled it from a prior
@@ -528,7 +756,7 @@ takes a median of 32.5 milliseconds on the gateway regardless of set
 size, a serialized ceiling of roughly 27 to 31 checks per second per
 core, and each proof is about 0.9 kilobytes on the wire.</p>
 <figure>
-<img src="fig/rge-latency.png" alt="latency of the gated path" />
+<img src="fig/shade-tree-latency.png" alt="latency of the gated path" />
 <figcaption aria-hidden="true">latency of the gated path</figcaption>
 </figure>
 <p><em>latency of the 1000-request load test to google, warm (reused
@@ -552,14 +780,14 @@ ideally even zero outside of standard rate limits. Made precise, that
 vibe comes down to four properties, each stated against the adversary it
 actually holds against.</p>
 <ul>
-<li><strong>Requester unlinkability.</strong> No party, the gateway
-included, can tell which member sent a request or link two requests to
-the same member.</li>
-<li><strong>Relationship anonymity.</strong> No one learns which
-destinations a member reaches, holding against any single gateway or
-colluding subset and a partial network observer but, like the Tor
-circuit beneath us, not against a global passive adversary correlating
-both ends.</li>
+<li><strong>Proof unlinkability.</strong> The proof does not reveal which
+eligible leaf sent a tunnel or expose a stable identifier across slots.
+Gateways may still correlate traffic through timing, volume, or
+application metadata.</li>
+<li><strong>Distributed observation.</strong> Each serving gateway learns
+the destination for the tunnels it handles. Rotation can spread that
+view across independent operators; it does not make the destination
+invisible to the serving gateway or defeat a colluding/global observer.</li>
 <li><strong>Priced burn.</strong> Egress is priced to at least cover the
 reputation damage it is expected to cause, so a member who burns an
 address has already paid to replace it and the egress finances its own
@@ -568,41 +796,43 @@ rotation.</li>
 ordinary IPs and reputation blocks fall toward zero, which takes both
 priced burn and a residential supply that was never pre-scored.</li>
 </ul>
-<p>You could name others, operator privacy, a fail-closed admission
+<p>These are design goals for the system, not guarantees established by
+the research preview. You could name others, operator privacy, a fail-closed admission
 gate, data-minimization at the gateway, latency within a constant of
 Tor, but these four are the essentials this protocol stands or falls on.
 The first two are the anonymity Tor already gives; the last two are the
 reputation story it does not.</p>
 <h3 id="the-design-space">The design space</h3>
-<p>Ultimately the privacy in terms of requester unlinkability of a
-Tor-based protocol is proportional to the anonymity set size, which is
-roughly equivalent to the number of nodes passing around traffic. If the
-set is size 1 and the adversary controls it, they can correlate requests
-trivially. If the size is thousands, well then an adversary needs to
-control a much larger amount to correlate. In particular the most
-effective attack involves controlling entry and exit points to the
-network (<a
+<p>Two different sets matter. The membership anonymity set is the set of
+eligible leaves under the public root: its size and distribution govern
+how many members a valid proof could represent. Gateway diversity is a
+separate property: more independent operators spread destination and
+traffic observations, while a single or colluding operator can correlate
+the tunnels it serves. More gateways do not by themselves enlarge the
+membership set. Network-level correlation also depends on who can observe
+the Tor path and the egress. In particular, a well-known attack involves
+controlling entry and exit observations (<a
 href="https://dl.acm.org/doi/10.1145/2508859.2516651">Johnson et al.,
 <em>Users Get Routed</em>, CCS 2013</a>).</p>
-<p>Therefore, different choices in topology and payment have different
-impacts on the anonymity set. Anything which relies on a committee for
-agreeing on shared resource consumption or for payment de facto
-decreases the anonymity set by some amount for some period of time.
+<p>Therefore, topology, membership, and payment choices affect different
+parts of the privacy story. Committees and payment rails may expose new
+links or shrink the eligible membership set, while operator diversity
+changes how concentrated destination observations are.
 Ultimately the desired privacy level, as well as the shape of the
 traffic expected to go through it, should dictate the answer to these
 questions. For instance, Tor is much better for async GET requests than
 streaming Netflix over websocket. Our PoC was one node and no payment: a
 single gateway in front of a hard-coded membership, enough to prove the
 gate works and to measure the path. One gateway is one IP, one burn away
-from dead, and an anonymity set of one on the gateway side, so
+from dead, and one observer of every prototype tunnel, so
 production cannot stay that small. From here the design space branches
 two ways.</p>
 <ol type="1">
-<li><strong>Topology:</strong> what is the target anonymity set size,
-aka the target number of gateways serving requests.</li>
+<li><strong>Topology:</strong> how many independent gateways serve and
+observe requests, and how clients rotate among them.</li>
 <li><strong>Payment:</strong> what does a member pay and where is it
 counted, from a refundable stake that buys a base allowance, to a fee
-per request, to both, and whether that budget is metered at each gateway
+per tunnel, to both, and whether that budget is metered at each gateway
 or once across the whole fleet.</li>
 </ol>
 <p>So what’s the actual problem? An onion service is represented as a
@@ -674,7 +904,7 @@ everywhere and the fleet-wide budget is silently N times what any
 operator intended; and a budget caps what a member spends, not where, so
 the whole membership can converge on one gateway. A stake alone also
 never prices the burn.</li>
-<li><strong>Pay per request.</strong> The target, and the hard one. A
+<li><strong>Pay per tunnel.</strong> The target, and the hard one. A
 fee that counts once across the fleet is the distributed spent set: N
 mutually distrusting gateways agreeing on what an anonymous member has
 spent, without any one of them keeping the ledger. The largest crowd,
@@ -695,7 +925,7 @@ href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot">Nym</a
 already ships double-spend protection for anonymous credentials across
 its gateways. The next version starts there: a fee counted once across a
 small fleet of three gateways over one deposit-contract set, with the
-burn priced per member rather than per request.</p>
+burn priced per member rather than per tunnel.</p>
 <h3 id="addendum-zk-payment-channels">Addendum: zk payment channels</h3>
 <p>The payment section above treats the distributed spent set as the
 price of the flat fleet. There is a design that refuses to pay it: a zk
@@ -780,9 +1010,9 @@ balance, and the deposit-edge KYC leak.</p>
 <ol type="1">
 <li>The Tor Project. <a href="https://www.torproject.org/"
 class="uri">https://www.torproject.org/</a></li>
-<li>dmarz, reputation-gated-onion-egress. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress</a></li>
+<li>dmarz, shade-tree-node. <a
+href="https://github.com/dmarzzz/shade-tree-node"
+class="uri">https://github.com/dmarzzz/shade-tree-node</a></li>
 <li>Prince, The Trouble with Tor, Cloudflare blog, 2016. <a
 href="https://blog.cloudflare.com/the-trouble-with-tor/"
 class="uri">https://blog.cloudflare.com/the-trouble-with-tor/</a></li>
@@ -808,8 +1038,8 @@ addresses). <a
 href="https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists/built-in-edls"
 class="uri">https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists/built-in-edls</a></li>
 <li>dmarz, Tor exit-blocking benchmark: method and classifier. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/docs/exit-blocking-benchmark.md"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/docs/exit-blocking-benchmark.md</a></li>
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md</a></li>
 <li>Singh, Nithyanand, Afroz, Pearce, Tschantz, Gill, Paxson,
 Characterizing the Nature and Dynamics of Tor Exit Blocking, USENIX
 Security 2017. <a
@@ -826,15 +1056,15 @@ href="https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/"
 class="uri">https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/</a></li>
 <li>Semaphore. <a href="https://semaphore.pse.dev"
 class="uri">https://semaphore.pse.dev</a></li>
-<li>dmarz, reputation-gated-onion-egress: tor/torrc. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/tor/torrc"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/tor/torrc</a></li>
-<li>dmarz, reputation-gated-onion-egress: gateway/gateway.mjs. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/gateway/gateway.mjs"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/gateway/gateway.mjs</a></li>
-<li>dmarz, reputation-gated-onion-egress: scripts/run-client.sh. <a
-href="https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/scripts/run-client.sh"
-class="uri">https://github.com/dmarzzz/reputation-gated-onion-egress/blob/main/scripts/run-client.sh</a></li>
+<li>dmarz, shade-tree-node: tor/torrc. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc</a></li>
+<li>dmarz, shade-tree-node: gateway/gateway.mjs. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs</a></li>
+<li>dmarz, shade-tree-node: scripts/run-client.sh. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh</a></li>
 <li>ipify, a public IP address API. <a href="https://api.ipify.org"
 class="uri">https://api.ipify.org</a></li>
 <li>Johnson, Wacek, Jansen, Sherr, Syverson, Users Get Routed: Traffic

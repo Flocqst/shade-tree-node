@@ -11,7 +11,7 @@
 //     - a distinct signal on a DIFFERENT nullifier => no slash (independent counter)
 //
 //   Shim slot pool (makeSlotPool / buildEnvelope):
-//     - one slot per request, cursor rotates and wraps at K
+//     - one slot per tunnel, cursor rotates and wraps at K
 //     - the envelope carries the PRECOMPUTED membership proof and a REQUEST-BOUND share
 //     - the share is bound to requestSignal(target, nonce) (deterministic-retry seam)
 //
@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 
-const work = join(tmpdir(), "rgoe-selftest-" + process.pid);
+const work = join(tmpdir(), "shade-tree-selftest-" + process.pid);
 await mkdir(work, { recursive: true });
 
 // ---- mock lib modules -------------------------------------------------------
@@ -181,25 +181,25 @@ function mockProve(calls) {
   };
 }
 
-await test("one slot per request; cursor rotates and wraps at K", async () => {
+await test("one slot per tunnel; cursor rotates and wraps at K", async () => {
   const calls = [];
   const pool = makeSlotPool({ secret: "sek", prove: mockProve(calls), epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
   const got = [];
   for (let n = 0; n < 6; n++) got.push(pool.nextSlot().slot);
-  assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per request and wrap at K");
+  assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per tunnel and wrap at K");
 });
 
-await test("envelope is a coherent v3 bundle; share bound to requestSignal(target,nonce)", async () => {
+await test("envelope is a coherent v4 bundle; share bound to requestSignal(target,nonce)", async () => {
   const calls = [];
   const prove = mockProve(calls);
   const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
   const { envelope, signal, slot } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
 
-  assert.equal(envelope.v, 3);
+  assert.equal(envelope.v, 4);
   assert.equal(envelope.target, "example.com:443");
   assert.equal(typeof slot, "number");
   assert.ok(!("slot" in envelope), "slot is a private witness — never on the wire");
-  assert.ok(!("scope" in envelope), "scope is gone in v3");
+  assert.ok(!("scope" in envelope), "scope is gone in the v4 wire format");
   for (const k of ["proof", "nullifier", "externalNullifier", "share"]) assert.ok(k in envelope, "missing " + k);
 
   // request-bound: share is evaluated at H(target, nonce) ...

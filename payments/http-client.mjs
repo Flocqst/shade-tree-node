@@ -13,7 +13,7 @@ import { SocksClient } from "socks";
 const MAX_RESP = 256 * 1024;
 
 export async function request({ onion = null, port = 8878, url = null, method = "GET", path = "/", headers = {}, body = null,
-    torHost = process.env.RGOE_TOR_HOST || "127.0.0.1", torPort = Number(process.env.RGOE_TOR_PORT || 9250),
+    torHost = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1", torPort = Number(process.env.SHADE_TREE_TOR_PORT || 9250),
     timeoutMs = 30000, attempts = 3 } = {}) {
   if (url) return viaFetch(url.replace(/\/$/, "") + path, method, headers, body, timeoutMs);
   if (!onion) throw new Error("request: onion or url required");

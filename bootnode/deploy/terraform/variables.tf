@@ -1,4 +1,4 @@
-# Inputs for the rgoe bootnode/gateway droplet module.
+# Inputs for the shade-tree bootnode/gateway droplet module.
 # Defaults mirror bootnode/deploy/bootstrap.sh so `tofu apply` reproduces the
 # hand-run one-command bring-up. This module only STANDS UP the box and hands
 # off to bootstrap.sh; it never re-implements the provisioning logic.
@@ -17,7 +17,7 @@ variable "ssh_public_key" {
 variable "droplet_name" {
   description = "Name/hostname for the droplet (also used to name the SSH key + firewall)."
   type        = string
-  default     = "rgoe-bootnode"
+  default     = "shade-tree-bootnode"
 }
 
 variable "region" {
@@ -41,25 +41,25 @@ variable "image" {
 variable "tags" {
   description = "DigitalOcean tags applied to the droplet."
   type        = list(string)
-  default     = ["rgoe", "bootnode", "gateway"]
+  default     = ["shade-tree", "bootnode", "gateway"]
 }
 
 # ---- handoff to bootstrap.sh (env tunables it reads) ----
 
 variable "git_repo" {
-  description = "Git URL the box clones (passed to bootstrap.sh as RGOE_REPO). Also used to derive the raw.githubusercontent.com slug for fetching bootstrap.sh itself."
+  description = "Git URL the box clones (passed to bootstrap.sh as SHADE_TREE_REPO). Also used to derive the raw.githubusercontent.com slug for fetching bootstrap.sh itself."
   type        = string
-  default     = "https://github.com/dmarzzz/reputation-gated-onion-egress"
+  default     = "https://github.com/dmarzzz/shade-tree-node"
 }
 
 variable "git_ref" {
-  description = "Pinned branch/tag/sha to deploy (RGOE_REF). Pin a tag or sha for reproducibility; T-DEPLOY-6's rolling-update.sh moves a live box to a new ref later."
+  description = "Pinned branch/tag/sha to deploy (SHADE_TREE_REF). Pin a tag or sha for reproducibility; T-DEPLOY-6's rolling-update.sh moves a live box to a new ref later."
   type        = string
   default     = "main"
 }
 
 variable "admission" {
-  description = "Bootnode admission policy (RGOE_ADMISSION): 'open' or 'stake'."
+  description = "Bootnode admission policy (SHADE_TREE_ADMISSION): 'open' or 'stake'."
   type        = string
   default     = "open"
 
@@ -70,19 +70,19 @@ variable "admission" {
 }
 
 variable "bootnode_port" {
-  description = "Loopback backend port for the bootnode (RGOE_BOOTNODE_PORT). Published as an onion; NEVER opened to clearnet."
+  description = "Loopback backend port for the bootnode (SHADE_TREE_BOOTNODE_PORT). Published as an onion; NEVER opened to clearnet."
   type        = number
   default     = 8877
 }
 
 variable "gateway_port" {
-  description = "Loopback backend port for the gateway (RGOE_GATEWAY_PORT). Published as an onion; NEVER opened to clearnet."
+  description = "Loopback backend port for the gateway (SHADE_TREE_GATEWAY_PORT). Published as an onion; NEVER opened to clearnet."
   type        = number
   default     = 8443
 }
 
 variable "tor_socks_port" {
-  description = "Local Tor SOCKS port used for the verify curl in the outputs. bootstrap.sh currently pins the heartbeat's RGOE_TOR_PORT to 9050; this is informational for the operator's verify command."
+  description = "Local Tor SOCKS port used for the verify curl in the outputs. bootstrap.sh currently pins the heartbeat's SHADE_TREE_TOR_PORT to 9050; this is informational for the operator's verify command."
   type        = number
   default     = 9050
 }
