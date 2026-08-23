@@ -37,7 +37,7 @@ BOOTNODE_PORT="${SHADE_TREE_BOOTNODE_PORT:-8877}"
 GATEWAY_PORT="${SHADE_TREE_GATEWAY_PORT:-8443}"
 MODE="${E2E_MODE:-bootnode+gateway}"
 # gateway-only: a well-formed v3 onion nobody serves (heartbeat target only; never dialed by us).
-REMOTE_BN_ONION="${E2E_REMOTE_BN_ONION:-shade-treee2eremotebootnodeplaceholderaaaaaaaaaaaaaaaaaaaaaaaa.onion}"
+REMOTE_BN_ONION="${E2E_REMOTE_BN_ONION:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion}"
 case "$MODE" in bootnode+gateway|gateway-only) ;; *) echo "E2E_MODE must be bootnode+gateway or gateway-only" >&2; exit 2 ;; esac
 
 log()  { echo -e "\n\033[1;36m== $*\033[0m"; }
