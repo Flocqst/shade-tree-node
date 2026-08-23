@@ -102,7 +102,8 @@ function main() {
   const envT = read(join(HERE, "uptime-probe.env.example"));
   const active = envT.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#"));
   ok(active.every((l) => /^[A-Z_]+=.*$/.test(l)), "every active line is KEY=value");
-  ok(active.some((l) => l.startsWith("SHADE_TREE_NETWORK=")), "template names a network record by default (SHADE_TREE_NETWORK)");
+  ok(/#SHADE_TREE_NETWORK=your-v4-network/.test(envT), "template documents a current v4 network selector without activating a retired preset");
+  ok(!active.some((l) => /^SHADE_TREE_NETWORK=sepolia$/.test(l)), "template never activates the retired Sepolia record");
   ok(/SHADE_TREE_BOOTNODE_ONION=/.test(envT) && /SHADE_TREE_DIR_SIGNER=/.test(envT), "template documents SHADE_TREE_BOOTNODE_ONION + SHADE_TREE_DIR_SIGNER");
   ok(!/[a-z2-7]{56}\.onion/.test(envT), "template carries no real onion");
   ok(!/\b[0-9a-f]{64}\b/.test(envT), "template carries no real 64-hex key");
