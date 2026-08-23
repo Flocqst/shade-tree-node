@@ -7,9 +7,10 @@ hosted uptime service (with a tor-capable runner) invokes it on an interval and 
 Unlike the loopback `/health` on the bootnode (`bootnode/server.mjs`, reachable only on 127.0.0.1
 or through the onion), this prober reaches the bootnode the way a client does — a SOCKS dial
 through the local Tor daemon, no exit node, the bootnode never learns the monitor's IP — then
-verifies the served directory against the **pinned** signer. So a green check means more than
-"the box answers": it means the fleet is serving an authentic, signer-pinned directory. A
-swapped or MITM'd bootnode fails `signerOk`, not merely reachability.
+verifies the served directory against the **pinned** signer and rejects issue times outside a
+bounded freshness window. So a green check means more than "the box answers": it means the
+fleet is serving a fresh, authentic, signer-pinned directory. A swapped, replayed, or MITM'd
+directory fails closed.
 
 ## Run it
 
@@ -36,6 +37,8 @@ SHADE_TREE_DIR_SIGNER=<pinned signer pubkey hex> \
 | `SHADE_TREE_TOR_HOST` / `SHADE_TREE_TOR_PORT` | local Tor SOCKS proxy | `127.0.0.1` / `9250` |
 | `SHADE_TREE_BOOTNODE_URL` | plain-http base, dev only (bypasses Tor) | — |
 | `SHADE_TREE_DIR_SIGNER` | pinned directory-signer pubkey (hex), **required** | — |
+| `SHADE_TREE_DIR_MAX_AGE_SEC` | maximum accepted age of the signed directory issue time | `300` |
+| `SHADE_TREE_DIR_FUTURE_SEC` | maximum accepted future clock skew for the issue time | `300` |
 | `SHADE_TREE_NETWORK` | `<name>`: default `SHADE_TREE_BOOTNODE_ONION` + `SHADE_TREE_DIR_SIGNER` from `network/<name>/bootnode.json` (explicit env wins; a `pending` record supplies nothing → misconfig) | — |
 | `SHADE_TREE_PROBE_TIMEOUT_MS` | per-request timeout | `20000` |
 
@@ -48,7 +51,7 @@ any error (unreachable, bad signature, timeout, misconfig) reports UNHEALTHY.
 **Default (JSON).** One line to stdout; exit `0` healthy, nonzero unhealthy:
 
 ```json
-{"ok":true,"bootnodeReachable":true,"signerOk":true,"fleetSize":3,"ts":1786675086}
+{"ok":true,"bootnodeReachable":true,"signerOk":true,"directoryFresh":true,"fleetSize":3,"ts":1786675086}
 ```
 
 (An optional `reason` field is appended when unhealthy.)
@@ -57,14 +60,16 @@ any error (unreachable, bad signature, timeout, misconfig) reports UNHEALTHY.
 OK / `2` CRITICAL:
 
 ```
-OK: bootnode reachable, directory signer pinned, fleet=3
+OK: bootnode reachable, signed directory fresh
 CRITICAL: bootnode unreachable (timeout)
 ```
 
 ## Privacy posture
 
-Mirrors the status page: the prober prints a **count** (`fleetSize`), never gateway onions or
-operator addresses, and scrubs any `.onion` out of error text. `fleetSize` is a number, not identities.
+The JSON format includes a **count** (`fleetSize`) for private operator monitoring, never gateway
+onions or operator addresses, and scrubs any `.onion` out of error text. The Nagios format used by
+the hosted workflow, systemd unit, and example cron deliberately omits the count so public Actions
+logs and long-lived journals do not create another exact-count history.
 
 ## Scheduling it (T-DEPLOY-5 / GAP-8)
 
@@ -111,6 +116,12 @@ fork never red-flags. A `pending` network record likewise skips green. Once conf
 CRITICAL probe fails the run with an `::error::` (which is the alert). GitHub's schedule floor is
 5 minutes but scheduled runs are best-effort and often late, so this is the coarse hosted signal;
 the systemd timer is the 5-minute SLI source.
+
+The public Grove also requires the `SHADE_TREE_GROVE_SIGNING_KEY` Actions **secret**. Its public
+half is pinned in `network/grove-signing-public.pem`. The read-only probe job signs only the
+allowlisted aggregate; a separate minimal publisher job receives temporary `contents: write`,
+checks out no code, and force-updates a one-file, parentless `network-state` commit. See
+[`docs/PUBLIC-GROVE.md`](../docs/PUBLIC-GROVE.md).
 
 ### cron
 

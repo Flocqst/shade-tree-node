@@ -33,6 +33,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`OPERATOR.md`](OPERATOR.md) | Deploy a gateway + bootnode, join the fleet as a new operator, day-2 health and logs, keys, slash response, rotate or retire, config reference, what you admit and what you sell |
 | [`../bootnode/deploy/README.md`](../bootnode/deploy/README.md) | The one-command droplet bootstrap and every tunable it accepts |
 | [`BOOTNODE.md`](BOOTNODE.md) | Live discovery: announce, signed directory, per-gateway signed caps, the trust boundary |
+| [`PUBLIC-GROVE.md`](PUBLIC-GROVE.md) | The public Grove data contract: verified aggregate counts, bounded history, stale behavior, and the fields that never leave the observer |
 | [`FLEET.md`](FLEET.md) | Per-tunnel gateway selection, weights, failover, fleet budget |
 | [`INCIDENT.md`](INCIDENT.md) | Incident playbook |
 | [`SLO.md`](SLO.md) | Service-level objectives and error budget (proposals, recalibrated on live data) |
@@ -89,7 +90,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 |-----|------------|
 | [`exit-blocking-benchmark.md`](exit-blocking-benchmark.md) | The benchmark: 51 exits, web and search destinations, block rates and reasons |
 | [`residential-proxies.md`](residential-proxies.md), [`residential-proxy-providers.md`](residential-proxy-providers.md) | What residential proxies do to your privacy; a provider taxonomy |
-| [`post/`](post/) | The published landing page ([`index.html`](post/index.html)), full [research note](post/research/index.html), figures, plus [`JOIN.md`](post/JOIN.md) and [`RUN-A-GATEWAY.md`](post/RUN-A-GATEWAY.md) |
+| [`post/`](post/) | The published landing page ([`index.html`](post/index.html)), [live Grove](post/grove/index.html), full [research note](post/research/index.html), figures, plus [`JOIN.md`](post/JOIN.md) and [`RUN-A-GATEWAY.md`](post/RUN-A-GATEWAY.md) |
 | [`SHIP-PLAN.md`](SHIP-PLAN.md), [`ROADMAP.md`](ROADMAP.md) | The shipping backlog and release gates; the forward roadmap |
 | [`ROADMAP-v1.md`](ROADMAP-v1.md), [`NEXT-VERSION.md`](NEXT-VERSION.md), [`RLN-MIGRATION.md`](RLN-MIGRATION.md) | Historical designs (milestones 1 to 5, next-version spec, RLN migration); what they specified is built |
 | [`REPORT.md`](REPORT.md), [`DEPLOY.md`](DEPLOY.md), [`DEPLOYMENT.md`](DEPLOYMENT.md), [`walkthrough.html`](walkthrough.html) | Historical: the June 2026 PoC report and deploy guide, the July fleet deployment record, the request walkthrough |

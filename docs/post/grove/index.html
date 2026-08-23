@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="The Grove is a delayed, aggregate view of nodes in Shade Tree's last verified signed directory. No locations, identities, or client activity.">
+  <meta name="theme-color" content="#101712">
+  <meta property="og:title" content="The Grove · Shade Tree">
+  <meta property="og:description" content="A living, privacy-preserving view of the Shade Tree network.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
+  <meta property="og:image:alt" content="A sparse grove casting a patch of shade">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <link rel="stylesheet" href="/grove/grove.css">
+  <script type="module" src="/grove/network.js"></script>
+  <title>The Grove · Shade Tree</title>
+</head>
+<body class="network-page">
+  <a class="skip-link" href="#grove-main">Skip to network details</a>
+
+  <header class="network-hero" aria-labelledby="grove-title">
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a class="wordmark" href="/" aria-label="Shade Tree home">
+        <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Shade Tree</span>
+      </a>
+      <span class="preview-label">Research preview</span>
+      <div class="nav-links">
+        <a href="/research/">Research</a>
+        <a href="/grove/" aria-current="page">Grove</a>
+        <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
+      </div>
+    </nav>
+
+    <div class="network-stage" id="network-stage">
+      <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true"></div>
+      <canvas id="network-canvas" aria-hidden="true"></canvas>
+      <div class="map-key" aria-hidden="true">
+        <span class="map-key-line"></span>
+        <span>topology, not territory</span>
+      </div>
+    </div>
+
+    <div class="network-copy">
+      <p class="eyebrow">The Grove · delayed public view</p>
+      <h1 id="grove-title"><span data-hero-count>Last</span> <span data-hero-tree-word>view</span><em data-hero-tail>of the grove.</em></h1>
+      <p class="network-lede">A delayed count from the last signed directory the project observer verified over Tor. No locations. No identities. No client activity.</p>
+      <div class="snapshot-state" role="status" aria-live="polite">
+        <span class="state-pulse" aria-hidden="true"></span>
+        <span data-view-state>Checking the signed public snapshot…</span>
+      </div>
+      <div class="hero-actions">
+        <a class="primary-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node <span aria-hidden="true">↗</span></a>
+        <a class="text-action" href="#privacy">How the view forgets <span aria-hidden="true">↓</span></a>
+      </div>
+    </div>
+
+    <div class="network-legend" aria-label="Map legend">
+      <span>Canopy density follows the directory count</span>
+      <span>Roots show announcements, not traffic</span>
+      <span data-snapshot-cadence>15-minute snapshots</span>
+    </div>
+  </header>
+
+  <main id="grove-main">
+    <section class="grove-journal page-grid" aria-labelledby="journal-title">
+      <div class="journal-heading">
+        <p class="eyebrow dark">Field notes</p>
+        <h2 id="journal-title">A count with a small memory.</h2>
+        <p>The exact total makes growth visible. The history remembers counts, never which tree joined or left.</p>
+      </div>
+
+      <dl class="journal-values">
+        <div>
+          <dt data-canopy-label>Current canopy</dt>
+          <dd><span data-node-count>—</span> <small>announced</small></dd>
+        </div>
+        <div>
+          <dt>Announced node-hours · 24h</dt>
+          <dd><span data-node-hours>—</span> <small>count-derived</small></dd>
+        </div>
+        <div>
+          <dt>Last verified view</dt>
+          <dd><span data-view-age>—</span></dd>
+        </div>
+      </dl>
+
+      <figure class="growth-rings">
+        <svg id="growth-rings" viewBox="0 0 420 420" aria-hidden="true" focusable="false">
+          <circle class="ring-ground" cx="210" cy="210" r="176"></circle>
+          <g id="history-rings"></g>
+          <circle class="ring-heart" cx="210" cy="210" r="9"></circle>
+        </svg>
+        <figcaption data-ring-summary>Recent count-only observations · the public history retains no identities</figcaption>
+      </figure>
+    </section>
+
+    <section class="forget-section" id="privacy" aria-labelledby="forget-title">
+      <div class="forget-heading">
+        <p class="eyebrow">Privacy is the shape</p>
+        <h2 id="forget-title">The view forgets on purpose.</h2>
+      </div>
+      <div class="forget-list">
+        <p><span>Identity</span> No onion, key, wallet, operator, or stable visual position enters the snapshot.</p>
+        <p><span>Place</span> No IP, ASN, city, coordinate, or geographic pin is collected or inferred.</p>
+        <p><span>Activity</span> No destinations, traffic volumes, tunnel counts, users, or agents are measured.</p>
+        <p><span>Time</span> Observations are rounded to the publication cadence; only a bounded count history remains.</p>
+      </div>
+    </section>
+
+    <section class="observation-path page-grid" aria-labelledby="path-title">
+      <div class="path-copy">
+        <p class="eyebrow dark">How this view is made</p>
+        <h2 id="path-title">A census, outside the path.</h2>
+        <p>The bootnode helps clients discover nodes; it never carries agent traffic. A scheduled observer reaches it over Tor, verifies a fresh signed directory, discards every entry, then signs the aggregate. This page verifies that dedicated publication signature before drawing.</p>
+      </div>
+      <ol class="data-path" aria-label="Public grove observation path">
+        <li><span>01</span><strong>Node heartbeat</strong><small>Fresh, signed announcement over Tor</small></li>
+        <li><span>02</span><strong>Signed directory</strong><small>The bootnode’s current TTL-bounded view</small></li>
+        <li><span>03</span><strong>Tor observer</strong><small>Pins and verifies the directory signer</small></li>
+        <li><span>04</span><strong>Signed aggregate</strong><small>Count remains; node records are discarded</small></li>
+      </ol>
+    </section>
+
+    <section class="quiet-section page-grid" aria-labelledby="quiet-title">
+      <div class="quiet-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="quiet-copy">
+        <p class="eyebrow dark">Future shared stats</p>
+        <h2 id="quiet-title">Small groves stay quiet.</h2>
+        <p>Nodes do not send public usage telemetry today. If coarse, opt-in totals are added later, the public view will wait for at least five reporting nodes, delay the result by six hours, and round it heavily. That threshold would not prove five independent operators. Until then, silence is the privacy feature.</p>
+        <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PUBLIC-GROVE.md">Read the public-data contract <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+
+    <section class="grow-section page-grid" aria-labelledby="grow-title">
+      <div>
+        <p class="eyebrow dark">Add shade</p>
+        <h2 id="grow-title">Grow the grove.</h2>
+      </div>
+      <div class="grow-copy">
+        <p>Run a Shade Tree node to provide destination-facing egress for admitted agents. The next verified snapshot deepens the canopy.</p>
+        <a class="primary-action ink" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <a class="wordmark footer-mark" href="/">
+      <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Shade Tree</span>
+    </a>
+    <p>Research preview. Aggregate view. Built in the open.</p>
+    <nav aria-label="Project links">
+      <a href="/research/">Research</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node">GitHub</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/SECURITY.md">Security</a>
+    </nav>
+  </footer>
+</body>
+</html>

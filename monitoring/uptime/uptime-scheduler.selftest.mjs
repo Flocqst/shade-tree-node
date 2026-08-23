@@ -12,7 +12,8 @@
 //     structural checks run regardless), schedule cron is valid and >= GitHub's 5-min floor,
 //     workflow_dispatch present, every step after the config check is `if:`-guarded so an
 //     unconfigured repo no-ops green with a ::notice::, vars/secrets names match the probe's env,
-//     tor is installed + bootstrapped before the probe, and no secret is echoed.
+//     tor is installed + bootstrapped before the probe, no secret is echoed, the collector is
+//     read-only, and an isolated publisher writes only the signed aggregate snapshot.
 //
 //   node monitoring/uptime/uptime-scheduler.selftest.mjs
 
@@ -129,7 +130,7 @@ function main() {
     const parsed = cronFields(cronExpr);
     ok(parsed && parsed.minuteStep != null && parsed.minuteStep >= 5, `schedule cron "${cronExpr}" is valid and >= GitHub's 5-minute floor`);
     ok(on && "workflow_dispatch" in on, "workflow_dispatch present (manual run)");
-    ok(doc.permissions && doc.permissions.contents === "read", "permissions: contents: read only");
+    ok(doc.permissions && doc.permissions.contents === "read", "default permissions are read-only");
     const job = doc.jobs && doc.jobs.probe;
     ok(job && Array.isArray(job.steps) && job.steps.length >= 5, "jobs.probe has the step list");
     ok(job && job["timeout-minutes"] && job["timeout-minutes"] <= 15, "job has a short timeout");
@@ -142,19 +143,39 @@ function main() {
     const first = steps[0] || {};
     ok(first.id === "cfg" && /configured=/.test(first.run || "") && /::notice/.test(first.run || ""), "first step is the config check that emits ::notice:: when unset");
     ok(steps.slice(1).every((s) => typeof s.if === "string" && /steps\.cfg\.outputs\.configured == 'true'/.test(s.if)), "every later step is guarded on the config check (no-op green when unset)");
+    const checkout = steps.find((s) => /actions\/checkout@/.test(s.uses || ""));
+    const setupNode = steps.find((s) => /actions\/setup-node@/.test(s.uses || ""));
+    ok(checkout?.with?.["persist-credentials"] === false, "collector checkout does not persist GitHub credentials");
+    ok(/actions\/checkout@[0-9a-f]{40}$/.test(checkout?.uses || "") && /actions\/setup-node@[0-9a-f]{40}$/.test(setupNode?.uses || ""), "third-party actions are pinned to full commit SHAs");
     const runs = steps.map((s) => s.run || "").join("\n");
     ok(/apt-get install .*tor/.test(runs), "installs tor");
     ok(/--SocksPort 9050/.test(runs) && /Bootstrapped 100%/.test(runs), "starts tor on 9050 and waits for bootstrap");
     ok(/scripts\/uptime-probe\.mjs --format nagios/.test(runs), "runs the probe with --format nagios");
+    ok(/scripts\/grove-snapshot\.mjs/.test(runs), "builds the public Grove snapshot with the allowlisting collector");
+    const groveStep = steps.find((s) => s.id === "grove");
+    ok(/secrets\.SHADE_TREE_GROVE_SIGNING_KEY/.test(groveStep?.env?.SHADE_TREE_GROVE_SIGNING_KEY || ""), "signing key is scoped to the aggregate-build step");
     ok(/::error/.test(runs), "a CRITICAL probe surfaces as an ::error::");
     ok(!/echo .*\$\{\{ ?secrets\./.test(wf) && !/echo "\$SHADE_TREE_DIR_SIGNER|echo "\$SHADE_TREE_BOOTNODE_ONION/.test(wf), "no secret / onion / signer is echoed");
     const probeStep = steps.find((s) => /probe \(over Tor/.test(s.name || ""));
     ok(probeStep && /SHADE_TREE_PROBE_SKIP != '1'/.test(probeStep.if), "probe step is also skipped when the network record is pending");
+    ok(!/fleet=/.test(probeStep?.run || "") && !/nodes\.announced/.test(groveStep?.run || ""), "hosted workflow does not print the exact fleet count");
+
+    const publisher = doc.jobs?.publish;
+    const publishSteps = publisher?.steps || [];
+    const publishRun = publishSteps.map((s) => s.run || "").join("\n");
+    ok(publisher?.needs === "probe" && publisher?.permissions?.contents === "write", "write permission exists only in the dependent publisher job");
+    ok(publishSteps.length === 1 && publishSteps.every((s) => !s.uses), "publisher checks out no code and invokes no external action");
+    ok(/GROVE_SNAPSHOT_B64/.test(publishRun) && /git\/blobs/.test(publishRun) && /git\/trees/.test(publishRun), "publisher accepts only the encoded snapshot and uses the Git data API");
+    ok(/path:\"grove\.json\"/.test(publishRun) && /parents:\[\]/.test(publishRun), "publisher creates a one-file parentless commit (no retained count history)");
+    ok(!/npm|node scripts|checkout|git push/.test(publishRun), "publisher executes no repository code or dependency install");
   } else {
     // structural fallback
     ok(/^on:\n\s+schedule:\n\s+- cron: "\*\/(5|1[0-9]|[2-5][0-9]) \* \* \* \*"/m.test(wf), "on.schedule cron */N with N>=5 (structural)");
     ok(/workflow_dispatch:/.test(wf), "workflow_dispatch present (structural)");
     ok(/steps\.cfg\.outputs\.configured == 'true'/.test(wf) && /::notice/.test(wf), "config guard + ::notice present (structural)");
+    ok(/permissions:\n  contents: read/.test(wf) && /publish:[\s\S]*permissions:\n      contents: write/.test(wf), "read-only collector and isolated write publisher (structural)");
+    ok(/persist-credentials: false/.test(wf) && !/actions\/(?:checkout|setup-node)@v\d/.test(wf), "collector drops credentials and actions are SHA-pinned (structural)");
+    ok(/parents:\[\]/.test(wf) && /path:\"grove\.json\"/.test(wf), "publisher emits a one-file parentless commit (structural)");
   }
 
   console.log(failures ? `\n${failures} FAILED` : "\nall uptime-scheduler checks passed");

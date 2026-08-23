@@ -19,7 +19,7 @@ Shade Tree has two ways to take part:
 The two sides meet through access-gated [Tor onion services][tor], one admitted
 HTTPS tunnel at a time.
 
-[Site][site] · [Research note][research-note] · [Docs](docs/README.md) ·
+[Site][site] · [Live grove][grove] · [Research note][research-note] · [Docs](docs/README.md) ·
 [Run a node](docs/OPERATOR.md) · [Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
 
 > [!WARNING]
@@ -158,5 +158,6 @@ Shade Tree is open source under the [MIT license](LICENSE).
 [license-badge]: https://img.shields.io/badge/license-MIT-59624f.svg
 [license-url]: LICENSE
 [site]: https://shade-tree-node.vercel.app
+[grove]: https://shade-tree-node.vercel.app/grove/
 [research-note]: https://shade-tree-node.vercel.app/research/
 [tor]: https://www.torproject.org/

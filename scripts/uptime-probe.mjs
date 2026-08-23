@@ -16,13 +16,15 @@
 //   SHADE_TREE_TOR_HOST/PORT    local Tor SOCKS proxy   (default 127.0.0.1:9250)
 //   SHADE_TREE_BOOTNODE_URL     plain http base, e.g. http://127.0.0.1:8877  (DEV ONLY; bypasses Tor)
 //   SHADE_TREE_DIR_SIGNER       pinned directory-signer pubkey (hex) -- REQUIRED
+//   SHADE_TREE_DIR_MAX_AGE_SEC  oldest accepted signed-directory issue time (default 300)
+//   SHADE_TREE_DIR_FUTURE_SEC   accepted future clock skew for issue time (default 300)
 //   SHADE_TREE_NETWORK          <name>: default BOOTNODE_ONION + DIR_SIGNER from network/<name>/bootnode.json
 //                         (explicit env wins; a pending record supplies nothing -> misconfig)
 //   SHADE_TREE_PROBE_TIMEOUT_MS per-request timeout     (default 20000)
 //
-// PRIVACY: this mirrors the status page's posture. It prints a COUNT (fleetSize), never gateway
-// onions or operator addresses, and scrubs any .onion out of error text. Fail-closed: any error
-// (unreachable, bad signature, timeout, misconfig) reports UNHEALTHY and never hangs.
+// PRIVACY: machine-readable output can include a COUNT for private monitoring, but the hosted
+// workflow uses the count-free Nagios line. Neither mode prints gateway identities, and errors
+// scrub any .onion. Fail-closed: any error reports UNHEALTHY and never hangs.
 
 import http from "node:http";
 import { fetchOverTor } from "../bootnode/fetch.mjs";
@@ -33,6 +35,12 @@ const TOR_HOST = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
 const TOR_PORT = Number(process.env.SHADE_TREE_TOR_PORT || 9250);
 const TIMEOUT_MS = Number(process.env.SHADE_TREE_PROBE_TIMEOUT_MS || 20000);
 const MAX_RESP = Number(process.env.SHADE_TREE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
+const boundedSeconds = (value, fallback) => {
+  const parsed = Number(value ?? fallback);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 3600 ? parsed : fallback;
+};
+const DIR_MAX_AGE_SEC = boundedSeconds(process.env.SHADE_TREE_DIR_MAX_AGE_SEC, 300);
+const DIR_FUTURE_SEC = boundedSeconds(process.env.SHADE_TREE_DIR_FUTURE_SEC, 300);
 
 // Never let an onion address leak into monitor logs via an error string.
 const scrub = (s) => String(s == null ? "" : s).replace(/[a-z2-7]{56}\.onion/gi, "<onion>");
@@ -83,41 +91,54 @@ function makeFetcher({ preferUrl = false } = {}) {
   return null; // misconfigured
 }
 
-export async function probe() {
+export async function observeFleet() {
   // Fail-closed default: everything false / zero until proven otherwise.
-  const result = { ok: false, bootnodeReachable: false, signerOk: false, fleetSize: 0, ts: Math.floor(Date.now() / 1000) };
+  const result = { ok: false, bootnodeReachable: false, signerOk: false, directoryFresh: false, fleetSize: 0, ts: Math.floor(Date.now() / 1000) };
+  let health = null;
+  let directory = null;
 
   // SHADE_TREE_NETWORK: fill unset discovery inputs from the committed record; a broken record is a
   // misconfig (fail closed), never a throw out of probe().
   const explicitUrl = !!process.env.SHADE_TREE_BOOTNODE_URL && !process.env.SHADE_TREE_BOOTNODE_ONION;
-  try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return result; }
+  try { applyNetworkEnv(process.env); } catch (e) { result.reason = "misconfig:" + scrub(e.message).split("\n")[0]; return { result, health, directory }; }
   const pinnedSigner = process.env.SHADE_TREE_DIR_SIGNER;
   const fetchJson = makeFetcher({ preferUrl: explicitUrl });
-  if (!fetchJson) { result.reason = "misconfig:set SHADE_TREE_BOOTNODE_ONION or SHADE_TREE_BOOTNODE_URL"; return result; }
-  if (!pinnedSigner) { result.reason = "misconfig:set SHADE_TREE_DIR_SIGNER (pinned signer)"; return result; }
+  if (!fetchJson) { result.reason = "misconfig:set SHADE_TREE_BOOTNODE_ONION or SHADE_TREE_BOOTNODE_URL"; return { result, health, directory }; }
+  if (!pinnedSigner) { result.reason = "misconfig:set SHADE_TREE_DIR_SIGNER (pinned signer)"; return { result, health, directory }; }
 
   try {
-    const health = await fetchJson("/health");
+    health = await fetchJson("/health");
     result.bootnodeReachable = true;            // we got a 200 from the bootnode
     const healthOk = health?.ok === true;       // the bootnode's own self-report
 
     const dir = await fetchJson("/directory");
     const v = verifyDirectory(dir, pinnedSigner);
     result.signerOk = v.ok;
-    result.fleetSize = v.ok && Array.isArray(dir.gateways) ? dir.gateways.length : 0;
-    result.ok = healthOk && result.signerOk;
+    const nowSec = Math.floor(Date.now() / 1000);
+    result.directoryFresh = v.ok
+      && Number.isInteger(dir?.issued)
+      && dir.issued >= nowSec - DIR_MAX_AGE_SEC
+      && dir.issued <= nowSec + DIR_FUTURE_SEC;
+    result.fleetSize = result.directoryFresh && Array.isArray(dir.gateways) ? dir.gateways.length : 0;
+    result.ok = healthOk && result.signerOk && result.directoryFresh;
+    if (result.directoryFresh) directory = dir; // exposed only to trusted local aggregators; never printed here
 
     if (!v.ok) result.reason = "directory:" + v.reason;
+    else if (!result.directoryFresh) result.reason = "directory:issued-outside-freshness-window";
     else if (!healthOk) result.reason = "bootnode health not ok";
   } catch (e) {
     // Unreachable, timeout, bad JSON, oversized body -> stay unhealthy, record a scrubbed reason.
     result.reason = scrub(e?.message || e);
   }
-  return result;
+  return { result, health, directory };
+}
+
+export async function probe() {
+  return (await observeFleet()).result;
 }
 
 function nagiosLine(r) {
-  if (r.ok) return `OK: bootnode reachable, directory signer pinned, fleet=${r.fleetSize}`;
+  if (r.ok) return "OK: bootnode reachable, signed directory fresh";
   let why = r.reason || "unhealthy";
   if (!r.bootnodeReachable) why = "bootnode unreachable" + (r.reason ? ` (${r.reason})` : "");
   else if (!r.signerOk) why = "directory signer check failed" + (r.reason ? ` (${r.reason})` : "");
@@ -132,16 +153,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(nagiosLine(result));
       process.exit(result.ok ? 0 : 2); // Nagios convention: 0 OK, 2 CRITICAL
     } else {
-      // Ordered, machine-readable one-liner: { ok, bootnodeReachable, signerOk, fleetSize, ts }.
-      const { ok, bootnodeReachable, signerOk, fleetSize, ts, reason } = result;
-      console.log(JSON.stringify({ ok, bootnodeReachable, signerOk, fleetSize, ts, ...(reason ? { reason } : {}) }));
+      // Ordered, machine-readable one-liner for private/operator monitoring.
+      const { ok, bootnodeReachable, signerOk, directoryFresh, fleetSize, ts, reason } = result;
+      console.log(JSON.stringify({ ok, bootnodeReachable, signerOk, directoryFresh, fleetSize, ts, ...(reason ? { reason } : {}) }));
       process.exit(ok ? 0 : 1);
     }
   }).catch((e) => {
     // Last-resort fail-closed: even an unexpected throw reports unhealthy, never hangs.
     const ts = Math.floor(Date.now() / 1000);
     if (format === "nagios") { console.log(`CRITICAL: ${scrub(e?.message || e)}`); process.exit(2); }
-    console.log(JSON.stringify({ ok: false, bootnodeReachable: false, signerOk: false, fleetSize: 0, ts, reason: scrub(e?.message || e) }));
+    console.log(JSON.stringify({ ok: false, bootnodeReachable: false, signerOk: false, directoryFresh: false, fleetSize: 0, ts, reason: scrub(e?.message || e) }));
     process.exit(1);
   });
 }

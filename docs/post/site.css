@@ -607,6 +607,10 @@ img {
   color: rgba(23, 27, 23, 0.7);
 }
 
+.operator-copy .underlined-link + .underlined-link {
+  margin-left: 1.5rem;
+}
+
 .site-footer {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -870,6 +874,10 @@ img {
 
   .operator-copy {
     margin-top: 2.5rem;
+  }
+
+  .operator-copy .underlined-link + .underlined-link {
+    margin-left: 1rem;
   }
 
   .site-footer {

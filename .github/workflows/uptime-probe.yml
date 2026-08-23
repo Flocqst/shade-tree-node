@@ -10,9 +10,12 @@ name: uptime-probe
 #   SHADE_TREE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
 #   SHADE_TREE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
 #                         the two values above from network/<name>/bootnode.json (lib/network-record.mjs)
-# Neither value is secret (an onion and a public key), so plain variables are the right home; the
-# same names are also read from SECRETS as a fallback for repos that prefer that. Nothing else is
-# ever printed: the probe emits a fleet COUNT and scrubs onions from error text.
+#   SHADE_TREE_GROVE_SIGNING_KEY  dedicated Ed25519 private key, stored only as an Actions secret
+# The onion and signer are not secret, so plain variables are the right home; the same names are
+# also read from SECRETS as a fallback. The Grove signing key is secret. The hosted probe never
+# prints the count and scrubs onions from error text. After a fresh, verified
+# probe, the workflow force-updates the generated network-state branch with one allowlisted
+# signed aggregate snapshot for the public Grove. No directory rows are written to that branch.
 #
 # NO-OP GUARD: if none of the variables/secrets is set, the job writes a ::notice:: and exits
 # green without installing anything, so an unconfigured fork/repo never red-flags. Only a real
@@ -39,6 +42,8 @@ jobs:
     name: fleet uptime probe (over Tor)
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    outputs:
+      grove_snapshot: ${{ steps.grove.outputs.snapshot }}
     env:
       SHADE_TREE_BOOTNODE_ONION: ${{ vars.SHADE_TREE_BOOTNODE_ONION || secrets.SHADE_TREE_BOOTNODE_ONION }}
       SHADE_TREE_DIR_SIGNER: ${{ vars.SHADE_TREE_DIR_SIGNER || secrets.SHADE_TREE_DIR_SIGNER }}
@@ -60,10 +65,12 @@ jobs:
             echo "::notice title=uptime-probe skipped::SHADE_TREE_BOOTNODE_ONION + SHADE_TREE_DIR_SIGNER (or SHADE_TREE_NETWORK) are not set as repository variables; nothing to probe. See monitoring/UPTIME.md."
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.cfg.outputs.configured == 'true'
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         if: steps.cfg.outputs.configured == 'true'
         with:
           node-version: 22
@@ -116,4 +123,69 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::error title=uptime-probe CRITICAL::$line"
             exit "$rc"
+          fi
+
+      - name: load previous public Grove snapshot
+        if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
+        run: |
+          : > "$RUNNER_TEMP/grove.previous.json"
+          if git fetch --quiet --no-tags origin refs/heads/network-state:refs/remotes/origin/network-state 2>/dev/null; then
+            git show refs/remotes/origin/network-state:grove.json > "$RUNNER_TEMP/grove.previous.json" 2>/dev/null || true
+          fi
+
+      - name: build aggregate-only public Grove snapshot
+        id: grove
+        if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
+        env:
+          SHADE_TREE_GROVE_SIGNING_KEY: ${{ secrets.SHADE_TREE_GROVE_SIGNING_KEY }}
+        run: |
+          if [ -z "$SHADE_TREE_GROVE_SIGNING_KEY" ]; then
+            echo "::notice title=public Grove skipped::SHADE_TREE_GROVE_SIGNING_KEY is not configured; uptime probe completed without publishing a snapshot."
+            exit 0
+          fi
+          node scripts/grove-snapshot.mjs \
+            --network "${SHADE_TREE_NETWORK:-unknown}" \
+            --previous "$RUNNER_TEMP/grove.previous.json" \
+            --out "$RUNNER_TEMP/grove.json"
+          echo "snapshot=$(base64 -w0 "$RUNNER_TEMP/grove.json")" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: publish signed aggregate
+    needs: probe
+    if: needs.probe.outputs.grove_snapshot != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    steps:
+      # This job deliberately checks out no code and runs no action. It receives only a signed,
+      # base64-encoded JSON blob and constructs a one-file, parentless commit through GitHub's API.
+      - name: publish generated network state
+        env:
+          GROVE_SNAPSHOT_B64: ${{ needs.probe.outputs.grove_snapshot }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          auth="Authorization: Bearer $GH_TOKEN"
+          accept="Accept: application/vnd.github+json"
+          version="X-GitHub-Api-Version: 2022-11-28"
+
+          blob_payload="$(jq -n --arg content "$GROVE_SNAPSHOT_B64" '{content:$content,encoding:"base64"}')"
+          blob_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$blob_payload" | jq -er .sha)"
+          tree_payload="$(jq -n --arg sha "$blob_sha" '{tree:[{path:"grove.json",mode:"100644",type:"blob",sha:$sha}]}')"
+          tree_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/trees" -d "$tree_payload" | jq -er .sha)"
+          commit_payload="$(jq -n --arg tree "$tree_sha" '{message:"data: update public Grove snapshot",tree:$tree,parents:[]}')"
+          commit_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/commits" -d "$commit_payload" | jq -er .sha)"
+
+          ref_status="$(curl -sS -o "$RUNNER_TEMP/grove-ref.json" -w '%{http_code}' -H "$auth" -H "$accept" -H "$version" "$api/git/ref/heads/network-state")"
+          if [ "$ref_status" = "200" ]; then
+            ref_payload="$(jq -n --arg sha "$commit_sha" '{sha:$sha,force:true}')"
+            curl -fsS -X PATCH -H "$auth" -H "$accept" -H "$version" "$api/git/refs/heads/network-state" -d "$ref_payload" >/dev/null
+          elif [ "$ref_status" = "404" ]; then
+            ref_payload="$(jq -n --arg sha "$commit_sha" '{ref:"refs/heads/network-state",sha:$sha}')"
+            curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/refs" -d "$ref_payload" >/dev/null
+          else
+            echo "unexpected network-state ref response: $ref_status" >&2
+            exit 1
           fi

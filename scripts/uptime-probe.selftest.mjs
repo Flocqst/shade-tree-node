@@ -3,8 +3,9 @@
 // Spins a MOCK bootnode (local http server) serving a real signDirectory()-signed /directory and
 // a /health, points the prober at it via SHADE_TREE_BOOTNODE_URL (dev mode, no Tor), and drives it as a
 // SUBPROCESS so we can assert the actual process EXIT CODES a monitor consumes:
-//   healthy         -> exit 0, ok:true, signerOk:true, correct fleetSize
+//   healthy         -> exit 0, ok:true, signerOk:true, directoryFresh:true, correct fleetSize
 //   wrong signer    -> unhealthy, signerOk:false, nonzero exit
+//   stale directory -> unhealthy even with a valid signer
 //   unreachable     -> unhealthy, bootnodeReachable:false, nonzero exit
 //   --format nagios -> "OK: ..." exit 0 healthy / "CRITICAL: ..." exit 2 unhealthy
 //
@@ -29,13 +30,13 @@ function mintEd() { const { publicKey, privateKey } = generateKeyPairSync("ed255
 
 // Build a real signed directory: each gateway's pubkey is the ed25519 key encoded in its own v3
 // .onion (pubkeyToOnion), so verifyDirectory's onion<->pubkey binding check passes.
-function makeSignedDir(signer, n) {
+function makeSignedDir(signer, n, issued = Math.floor(Date.now() / 1000)) {
   const gateways = [];
   for (let i = 0; i < n; i++) {
     const gw = mintEd();
     gateways.push({ onion: pubkeyToOnion(gw.pub), pubkey: gw.pub, weight: 100, health: "up" });
   }
-  return signDirectory({ version: 1, issued: Math.floor(Date.now() / 1000), gateways, signer: signer.pub }, signer.priv);
+  return signDirectory({ version: 1, issued, gateways, signer: signer.pub }, signer.priv);
 }
 
 // The mock bootnode MUST run in its own process: the tests drive the prober with execFileSync
@@ -70,6 +71,7 @@ function startMockBootnode(dirJson, healthJson) {
 function runProbe(overrides, args = []) {
   const env = { ...process.env };
   delete env.SHADE_TREE_BOOTNODE_ONION; delete env.SHADE_TREE_BOOTNODE_URL; delete env.SHADE_TREE_DIR_SIGNER; delete env.SHADE_TREE_NETWORK;
+  delete env.SHADE_TREE_DIR_MAX_AGE_SEC; delete env.SHADE_TREE_DIR_FUTURE_SEC;
   Object.assign(env, overrides);
   try {
     const stdout = execFileSync(process.execPath, [PROBE, ...args], { env, encoding: "utf8" });
@@ -90,6 +92,12 @@ async function main() {
     JSON.stringify({ ok: true, count: FLEET, admission: "open", signer: signer.pub })
   );
   const base = `http://127.0.0.1:${await portP}`;
+  const staleDir = makeSignedDir(signer, FLEET, Math.floor(Date.now() / 1000) - 3600);
+  const { child: staleChild, port: stalePortP } = startMockBootnode(
+    JSON.stringify(staleDir),
+    JSON.stringify({ ok: true, count: FLEET, admission: "open", signer: signer.pub })
+  );
+  const staleBase = `http://127.0.0.1:${await stalePortP}`;
   // A port nothing listens on -> connection refused (fast, no hang).
   const deadBase = "http://127.0.0.1:1";
 
@@ -103,6 +111,7 @@ async function main() {
     ok(hj.ok === true, "healthy -> ok:true");
     ok(hj.bootnodeReachable === true, "healthy -> bootnodeReachable:true");
     ok(hj.signerOk === true, "healthy -> signerOk:true");
+    ok(hj.directoryFresh === true, "healthy -> directoryFresh:true");
     ok(hj.fleetSize === FLEET, `healthy -> fleetSize:${FLEET} (count, not identities)`);
     ok(!/\.onion/.test(h.stdout), "output prints no onion address (count only)");
 
@@ -117,7 +126,16 @@ async function main() {
     ok(wj.bootnodeReachable === true, "wrong signer -> still reachable (signature is what fails)");
     ok(wj.signerOk === false, "wrong signer -> signerOk:false");
 
-    // 3. UNREACHABLE BOOTNODE ---------------------------------------------
+    // 3. STALE, VALIDLY SIGNED DIRECTORY -----------------------------------
+    console.log("\nstale signed directory:");
+    const s = runProbe({ SHADE_TREE_BOOTNODE_URL: staleBase, SHADE_TREE_DIR_SIGNER: signer.pub });
+    let sj = {};
+    try { sj = JSON.parse(s.stdout.trim()); } catch {}
+    ok(s.status !== 0 && sj.ok === false, "stale signed directory -> unhealthy");
+    ok(sj.signerOk === true, "stale signed directory -> signature still valid");
+    ok(sj.directoryFresh === false && sj.fleetSize === 0, "stale signed directory -> rejected before counting");
+
+    // 4. UNREACHABLE BOOTNODE ---------------------------------------------
     console.log("\nunreachable bootnode:");
     const u = runProbe({ SHADE_TREE_BOOTNODE_URL: deadBase, SHADE_TREE_DIR_SIGNER: signer.pub });
     ok(u.status !== 0, "unreachable -> nonzero exit");
@@ -126,19 +144,19 @@ async function main() {
     ok(uj.ok === false, "unreachable -> ok:false");
     ok(uj.bootnodeReachable === false, "unreachable -> bootnodeReachable:false");
 
-    // 4. NAGIOS FORMAT -----------------------------------------------------
+    // 5. NAGIOS FORMAT -----------------------------------------------------
     console.log("\nnagios format:");
     const nOk = runProbe({ SHADE_TREE_BOOTNODE_URL: base, SHADE_TREE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
     ok(nOk.status === 0, "nagios healthy -> exit 0");
     ok(/^OK:/.test(nOk.stdout.trim()), "nagios healthy -> 'OK: ...' line");
-    ok(nOk.stdout.includes(`fleet=${FLEET}`), "nagios healthy line reports fleet count");
+    ok(!nOk.stdout.includes(`fleet=${FLEET}`) && !/\b\d+\b/.test(nOk.stdout), "hosted Nagios line omits the fleet count");
 
     const nBad = runProbe({ SHADE_TREE_BOOTNODE_URL: deadBase, SHADE_TREE_DIR_SIGNER: signer.pub }, ["--format", "nagios"]);
     ok(nBad.status === 2, "nagios unhealthy -> exit 2 (CRITICAL)");
     ok(/^CRITICAL:/.test(nBad.stdout.trim()), "nagios unhealthy -> 'CRITICAL: ...' line");
     ok(!/\.onion/.test(nBad.stdout), "nagios line leaks no onion address");
 
-    // 5. SHADE_TREE_NETWORK RECORD (lib/network-record.mjs) ------------------------
+    // 6. SHADE_TREE_NETWORK RECORD (lib/network-record.mjs) ------------------------
     // Explicit env wins over the record (the mock URL + signer still drive the probe); a record
     // that resolves NO bootnode (network/sepolia/bootnode.json is pending, or an unknown network)
     // is a misconfig -> unhealthy, never a throw / hang.
@@ -155,6 +173,7 @@ async function main() {
     ok(nBadNet.status === 1 && bj.ok === false && /^misconfig:/.test(bj.reason || ""), "unknown SHADE_TREE_NETWORK -> misconfig reason, exit 1");
   } finally {
     child.kill();
+    staleChild.kill();
   }
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: uptime-probe selftest (${failures} failure${failures === 1 ? "" : "s"})`);

@@ -1,0 +1,37 @@
+{
+  "schema": "shade-tree-public-grove-v1",
+  "network": "sepolia",
+  "observedAt": "2026-08-17T00:00:00.000Z",
+  "source": {
+    "bootnodeReachable": true,
+    "directoryVerified": true,
+    "definition": "announced-within-ttl",
+    "cadenceMinutes": 15
+  },
+  "nodes": {
+    "announced": 2
+  },
+  "growth": {
+    "windowHours": 24,
+    "announcedNodeHours": null,
+    "samples": 1
+  },
+  "privacy": {
+    "identities": false,
+    "locations": false,
+    "traffic": false,
+    "stablePositions": false,
+    "futureSharedStatsMinReportingNodes": 5
+  },
+  "history": [
+    {
+      "at": "2026-08-17T00:00:00.000Z",
+      "announced": 2
+    }
+  ],
+  "attestation": {
+    "algorithm": "Ed25519",
+    "keyId": "grove-2026-08",
+    "signature": "Asthf7wWfbQgbwrUW/ZsLC733WYBIRaTmVZmEvJ9wn8dOTaEPoeLBvIJgRV58h6IeePUP28c29E+NW2cqZHICA=="
+  }
+}
