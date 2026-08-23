@@ -13,13 +13,13 @@ ssh_public_key = "ssh-ed25519 AAAA...replace... you@host"
 
 # --- optional (defaults shown; all match bootstrap.sh) ---
 
-# droplet_name  = "rgoe-bootnode"
+# droplet_name  = "shade-tree-bootnode"
 # region        = "nyc3"
 # droplet_size  = "s-1vcpu-1gb"
 # image         = "ubuntu-24-04-x64"
-# tags          = ["rgoe", "bootnode", "gateway"]
+# tags          = ["shade-tree", "bootnode", "gateway"]
 
-# git_repo      = "https://github.com/dmarzzz/reputation-gated-onion-egress"
+# git_repo      = "https://github.com/dmarzzz/shade-tree-node"
 # git_ref       = "main"   # pin a tag/sha for reproducibility
 # admission     = "open"                              # or "stake"
 # bootnode_port = 8877

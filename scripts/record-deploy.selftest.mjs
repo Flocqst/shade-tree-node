@@ -48,7 +48,7 @@ const bundle = () => ({
 });
 
 function setup(rec = baseRecord()) {
-  const root = mkdtempSync(join(tmpdir(), "rgoe-record-"));
+  const root = mkdtempSync(join(tmpdir(), "shade-tree-record-"));
   mkdirSync(join(root, "testnet"));
   writeFileSync(join(root, "testnet", "contracts.json"), JSON.stringify(rec, null, 2) + "\n");
   const bpath = join(root, "run-latest.json");

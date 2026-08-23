@@ -41,7 +41,7 @@ function makePeer({ recs = [], dropDir = false, missing = new Set() } = {}) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-fed-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-fed-"));
   try {
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });
     const g2 = await generateOnionIdentity(join(work, "g2"), { label: "g2" });

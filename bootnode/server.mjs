@@ -18,27 +18,27 @@
 // The onion is NEVER on chain (contracts/GatewayRegistry.sol stakes only an operator address).
 // Discovery of the onion happens HERE, through the bootnode, exactly as intended.
 //
-// Config (all RGOE_*):
-//   RGOE_BOOTNODE_PORT       loopback port Tor maps the onion to        (default 8877)
-//   RGOE_BOOTNODE_SIGNER_KEY {pub,priv} JSON path for the pinned signer (default bootnode/bootnode-signer.key)
-//   RGOE_BOOTNODE_ADMISSION  open | stake                               (default open)
-//   RGOE_BOOTNODE_TTL        seconds a gateway stays live w/o re-announce (default 900)
-//   RGOE_BOOTNODE_STORE      OPTIONAL JSON path for write-through persistence  (default off)
+// Config (all SHADE_TREE_*):
+//   SHADE_TREE_BOOTNODE_PORT       loopback port Tor maps the onion to        (default 8877)
+//   SHADE_TREE_BOOTNODE_SIGNER_KEY {pub,priv} JSON path for the pinned signer (default bootnode/bootnode-signer.key)
+//   SHADE_TREE_BOOTNODE_ADMISSION  open | stake                               (default open)
+//   SHADE_TREE_BOOTNODE_TTL        seconds a gateway stays live w/o re-announce (default 900)
+//   SHADE_TREE_BOOTNODE_STORE      OPTIONAL JSON path for write-through persistence  (default off)
 //                            When set, accepted announces are mirrored to disk and reloaded
 //                            on boot so a restart does not blank the fleet until every gateway
 //                            re-announces. Reload re-runs each stored record through the real
 //                            announce path, so persistence can never admit anything a live
 //                            announce would reject (see loadPersisted below).
-//   RGOE_BOOTNODE_PROBE      1 => ACTIVELY probe live gateways (needs Tor); default off (0).
+//   SHADE_TREE_BOOTNODE_PROBE      1 => ACTIVELY probe live gateways (needs Tor); default off (0).
 //                            When off, behavior is byte-for-byte today's: every live entry == up.
 //                            When on, the bootnode periodically dials each live gateway's onion
 //                            (a cheap SOCKS connect on port 80) and demotes one that fails the
 //                            last N probes to health:"down" in /directory (still LISTED — TTL, not
 //                            the probe, governs removal — just deprioritized by the client). A
 //                            false-negative probe is therefore a soft failure, never an outage.
-//   RGOE_BOOTNODE_PROBE_INTERVAL  seconds between probe cycles                 (default 120)
-//   RGOE_BOOTNODE_PROBE_FAILS     consecutive failed probes before demote      (default 3)
-//   RGOE_BOOTNODE_PEERS      OPTIONAL comma-list of PEER bootnode onions to federate with
+//   SHADE_TREE_BOOTNODE_PROBE_INTERVAL  seconds between probe cycles                 (default 120)
+//   SHADE_TREE_BOOTNODE_PROBE_FAILS     consecutive failed probes before demote      (default 3)
+//   SHADE_TREE_BOOTNODE_PEERS      OPTIONAL comma-list of PEER bootnode onions to federate with
 //                            (default off/empty => today's standalone behavior, byte-identical).
 //                            When set, a pull loop periodically fetches each peer's /directory over
 //                            Tor, pulls each listed gateway's stored announce (GET /gateway/<onion>),
@@ -47,21 +47,21 @@
 //                            directory signature is NEVER trusted as authority over entries -- a
 //                            forged/tampered gossiped gateway is rejected exactly as a direct
 //                            announce. See bootnode/federation.mjs + docs/BOOTNODE.md (Federation).
-//   RGOE_BOOTNODE_FED_INTERVAL    seconds between federation pull cycles       (default 60)
-//   RGOE_BOOTNODE_FED_MAX_PULL    max gateways pulled per peer per cycle (bounds a hostile peer)
-//   RGOE_BOOTNODE_ONION      OPTIONAL this bootnode's own onion, filtered out of the peer set
-//   RGOE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
-//   RGOE_BOOTNODE_ANNOUNCE_RATE   GLOBAL announce token-bucket refill, announces/second that reach
+//   SHADE_TREE_BOOTNODE_FED_INTERVAL    seconds between federation pull cycles       (default 60)
+//   SHADE_TREE_BOOTNODE_FED_MAX_PULL    max gateways pulled per peer per cycle (bounds a hostile peer)
+//   SHADE_TREE_BOOTNODE_ONION      OPTIONAL this bootnode's own onion, filtered out of the peer set
+//   SHADE_TREE_STAKE_MODE etc.     the StakeVerifier (lib/gateway-registry.mjs)
+//   SHADE_TREE_BOOTNODE_ANNOUNCE_RATE   GLOBAL announce token-bucket refill, announces/second that reach
 //                            signature verification (default 2*maxEntries/heartbeat = 66.7/s; see
 //                            makeAnnounceBucket for the sizing math). Over => 429 global-rate-limited.
-//   RGOE_BOOTNODE_ANNOUNCE_BURST  the bucket's capacity (default max(100, maxEntries/10) = 1000).
-//   RGOE_BOOTNODE_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
+//   SHADE_TREE_BOOTNODE_ANNOUNCE_BURST  the bucket's capacity (default max(100, maxEntries/10) = 1000).
+//   SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS / _REQUEST_TIMEOUT_MS / _KEEPALIVE_TIMEOUT_MS /
 //   _MAX_HEADER_BYTES / _CONN_CHECK_MS   HTTP slow-client limits (see HTTP_LIMITS below).
-//   RGOE_REGISTRAR_ADVERTISE OPTIONAL: advertise the operator's 402 registrar (payments/registrar.mjs,
+//   SHADE_TREE_REGISTRAR_ADVERTISE OPTIONAL: advertise the operator's 402 registrar (payments/registrar.mjs,
 //                            T-FEAT-7) in GET /health as `pay: {port, protocols, asset, chain, tiers}`
 //                            so a client can discover "this fleet sells access, here". Either a JSON
-//                            object literal, or "1" to compose it from RGOE_REGISTRAR_PORT (8878),
-//                            RGOE_PAY_ASSET, RGOE_PAY_PRICES ("8=100000,32=400000"), RGOE_PAY_CHAIN_ID
+//                            object literal, or "1" to compose it from SHADE_TREE_REGISTRAR_PORT (8878),
+//                            SHADE_TREE_PAY_ASSET, SHADE_TREE_PAY_PRICES ("8=100000,32=400000"), SHADE_TREE_PAY_CHAIN_ID
 //                            (11155111). Unset (default) => /health is byte-identical to before.
 
 import http from "node:http";
@@ -85,9 +85,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Registered against the process-wide registry at import time; this only populates
 // in-memory state — it binds no port and starts no server (see lib/metrics.mjs).
 const M = {
-  announces: metrics.counter("rgoe_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
-  directoryFetches: metrics.counter("rgoe_bootnode_directory_fetches_total", "GET /directory requests served."),
-  deltaFetches: metrics.counter("rgoe_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
+  announces: metrics.counter("shade_tree_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
+  directoryFetches: metrics.counter("shade_tree_bootnode_directory_fetches_total", "GET /directory requests served."),
+  deltaFetches: metrics.counter("shade_tree_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
 };
 
 // ---- signer key (mint + persist if absent) ----------------------------------
@@ -136,7 +136,7 @@ function makeNonceGuard(ttlMs) {
 // (e.g. a fleet-wide restart) passes in one instant; an attacker minting fresh onions gets at most
 // `burst` verifies up front and then `rate`/s — 1000 then 66.7/s instead of 10000 in a burst.
 // The floor of 100 on burst keeps small/dev registries (tiny maxEntries) usable. Only fleets
-// LARGER than `burst` that restart in lockstep need RGOE_BOOTNODE_ANNOUNCE_BURST raised.
+// LARGER than `burst` that restart in lockstep need SHADE_TREE_BOOTNODE_ANNOUNCE_BURST raised.
 // A throttled legit heartbeat is not lost: it is refused 429 with Retry-After and re-sent at the
 // next beat (TTL 900s = 3 beats), so a healthy gateway is never aged out by the bucket.
 // Refill uses the registry's injected `now()` (seconds) so tests are deterministic; fractional
@@ -171,9 +171,9 @@ export function makeAnnounceBucket({ rate, burst, now = () => Math.floor(Date.no
   };
 }
 export function defaultAnnounceBucketParams(maxEntries) {
-  const heartbeatSec = Number(process.env.RGOE_BOOTNODE_HEARTBEAT || 300);
-  const rate = envInt("RGOE_BOOTNODE_ANNOUNCE_RATE", (2 * maxEntries) / heartbeatSec);
-  const burst = envInt("RGOE_BOOTNODE_ANNOUNCE_BURST", Math.max(100, Math.floor(maxEntries / 10)));
+  const heartbeatSec = Number(process.env.SHADE_TREE_BOOTNODE_HEARTBEAT || 300);
+  const rate = envInt("SHADE_TREE_BOOTNODE_ANNOUNCE_RATE", (2 * maxEntries) / heartbeatSec);
+  const burst = envInt("SHADE_TREE_BOOTNODE_ANNOUNCE_BURST", Math.max(100, Math.floor(maxEntries / 10)));
   return { rate, burst, heartbeatSec };
 }
 
@@ -198,7 +198,7 @@ export function defaultAnnounceBucketParams(maxEntries) {
 // Pure, testable health-tracking unit: per-onion consecutive-fail counter. `failThreshold`
 // consecutive failed probes => isDown() true; ANY success resets (and drops the entry, so a
 // perpetually-healthy fleet holds no state). Bounded via retain(), driven from the registry sweep.
-export function makeProbeHealth({ failThreshold = Number(process.env.RGOE_BOOTNODE_PROBE_FAILS || 3),
+export function makeProbeHealth({ failThreshold = Number(process.env.SHADE_TREE_BOOTNODE_PROBE_FAILS || 3),
     now = () => Date.now() } = {}) {
   const state = new Map(); // onion -> { fails, lastAt }  (present only while failing)
   return {
@@ -228,9 +228,9 @@ export function makeProbeHealth({ failThreshold = Number(process.env.RGOE_BOOTNO
 async function defaultProbe(onion) {
   const { SocksClient } = await import("socks");
   const host = String(onion).replace(/\.onion$/, "") + ".onion";
-  const torHost = process.env.RGOE_TOR_HOST || "127.0.0.1";
-  const torPort = Number(process.env.RGOE_TOR_PORT || 9250);
-  const timeoutMs = Number(process.env.RGOE_BOOTNODE_PROBE_TIMEOUT_MS || 20000);
+  const torHost = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
+  const torPort = Number(process.env.SHADE_TREE_TOR_PORT || 9250);
+  const timeoutMs = Number(process.env.SHADE_TREE_BOOTNODE_PROBE_TIMEOUT_MS || 20000);
   return await new Promise((resolve) => {
     let done = false, socket;
     const finish = (v) => { if (done) return; done = true; try { socket?.destroy(); } catch {} resolve(v); };
@@ -244,11 +244,11 @@ async function defaultProbe(onion) {
 
 // The prober: on each cycle, dial every currently-live onion (via the injected probe) and record
 // the outcome into the pure health tracker. OFF by default -- nothing dials until start() is called
-// (main() only calls it under RGOE_BOOTNODE_PROBE=1). The test drives runCycle() directly with an
+// (main() only calls it under SHADE_TREE_BOOTNODE_PROBE=1). The test drives runCycle() directly with an
 // injected probe + injected clock and never arms the timer.
 export function makeProber({ probe = defaultProbe, health = makeProbeHealth(),
     listOnions = () => [],
-    intervalMs = Number(process.env.RGOE_BOOTNODE_PROBE_INTERVAL || 120) * 1000,
+    intervalMs = Number(process.env.SHADE_TREE_BOOTNODE_PROBE_INTERVAL || 120) * 1000,
     setTimer = setInterval, clearTimer = clearInterval } = {}) {
   let timer = null;
   // One probe pass over the whole live set. Each dial is independent and fail-closed: a probe that
@@ -278,15 +278,15 @@ export function makeProber({ probe = defaultProbe, health = makeProbeHealth(),
 //                   a huge weight and capture ~all client traffic (a concentration/deanon lever).
 const MAX_WEIGHT = 1000;
 export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, now = () => Math.floor(Date.now() / 1000),
-    maxEntries = Number(process.env.RGOE_BOOTNODE_MAX_ENTRIES || 10000),
-    minReannounceSec = Number(process.env.RGOE_BOOTNODE_MIN_REANNOUNCE || 5),
+    maxEntries = Number(process.env.SHADE_TREE_BOOTNODE_MAX_ENTRIES || 10000),
+    minReannounceSec = Number(process.env.SHADE_TREE_BOOTNODE_MIN_REANNOUNCE || 5),
     // How many recent directory versions the delta protocol (T-FEAT-6) remembers. A client
     // whose last etag has aged past this window is told full:true and re-fetches. This is a
     // bounded, recent history — memory is O(deltaHistoryMax * live-set-size of onion strings).
-    deltaHistoryMax = Number(process.env.RGOE_BOOTNODE_DELTA_HISTORY || 64),
+    deltaHistoryMax = Number(process.env.SHADE_TREE_BOOTNODE_DELTA_HISTORY || 64),
     // OPTIONAL persistence: a JSON store the live set is mirrored to. Off (null) by default, so
     // unset behavior — and every existing test — is byte-for-byte unchanged.
-    persistPath = process.env.RGOE_BOOTNODE_STORE || null,
+    persistPath = process.env.SHADE_TREE_BOOTNODE_STORE || null,
     // OPTIONAL active prober (T-DEV-12). Off (null) by default => directory() marks every live
     // entry up, exactly as before. When supplied, directory() consults prober.health.isDown() to
     // demote a silently-dead gateway to health:"down" (still listed, just deprioritized).
@@ -519,7 +519,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
   const etagKey = (e) => String(e || "").trim().replace(/^"|"$/g, "").toLowerCase();
   // etagKey -> Map(onion -> serialized entry) for that served version. Keyed by BODY, not only
   // onion, so an entry whose signed content changed in place (weight, health, or its signed caps
-  // -- e.g. a provider flipping RGOE_ADMIT, T-FEAT-9) is re-shipped in `added` (the client's
+  // -- e.g. a provider flipping SHADE_TREE_ADMIT, T-FEAT-9) is re-shipped in `added` (the client's
   // by-onion reconstruction overrides its cached copy) instead of leaving the client to
   // reconstruct with a stale body that would no longer verify.
   const versionHistory = new Map();
@@ -578,25 +578,25 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
 // sells; it never proxies a payment. Pure over env so the selftest can pin the shape. Returns null
 // when unset/garbage (=> no `pay` key in /health at all).
 export function payAdvertFromEnv(env = process.env) {
-  const raw = env.RGOE_REGISTRAR_ADVERTISE;
+  const raw = env.SHADE_TREE_REGISTRAR_ADVERTISE;
   if (!raw || String(raw).trim() === "" || String(raw).trim() === "0") return null;
   if (String(raw).trim().startsWith("{")) {
     try { const j = JSON.parse(raw); return j && typeof j === "object" && !Array.isArray(j) ? j : null; } catch { return null; }
   }
-  const asset = env.RGOE_PAY_ASSET;
+  const asset = env.SHADE_TREE_PAY_ASSET;
   if (!/^0x[0-9a-fA-F]{40}$/.test(asset || "")) return null;
   const tiers = {};
-  for (const part of String(env.RGOE_PAY_PRICES || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+  for (const part of String(env.SHADE_TREE_PAY_PRICES || "").split(",").map((x) => x.trim()).filter(Boolean)) {
     const m = /^([1-9][0-9]{0,4})=([1-9][0-9]*)$/.exec(part);
     if (!m) return null;
     tiers[m[1]] = m[2];
   }
   if (!Object.keys(tiers).length) return null;
-  const chainId = Number(env.RGOE_PAY_CHAIN_ID || 11155111);
-  // T-FEAT-9: only the rails the registrar actually serves (RGOE_PAY_PROTOCOLS; default both).
+  const chainId = Number(env.SHADE_TREE_PAY_CHAIN_ID || 11155111);
+  // T-FEAT-9: only the rails the registrar actually serves (SHADE_TREE_PAY_PROTOCOLS; default both).
   let protocols;
-  try { protocols = parsePayProtocols(env.RGOE_PAY_PROTOCOLS); } catch { return null; }
-  return { port: envInt("RGOE_REGISTRAR_PORT", 8878), protocols, asset, chain: `eip155:${chainId}`, tiers };
+  try { protocols = parsePayProtocols(env.SHADE_TREE_PAY_PROTOCOLS); } catch { return null; }
+  return { port: envInt("SHADE_TREE_REGISTRAR_PORT", 8878), protocols, asset, chain: `eip155:${chainId}`, tiers };
 }
 
 // ---- HTTP transport ---------------------------------------------------------
@@ -612,18 +612,18 @@ function send(res, code, obj, extraHeaders = null) {
 // timeouts are only enforced every connectionsCheckingInterval=30s. Every request the bootnode
 // serves is small and fast (a signed JSON announce or a directory fetch), so these can be tight.
 // Env-configurable, an explicit 0 disables the corresponding timeout (opt-out, never the default).
-//   RGOE_BOOTNODE_HEADERS_TIMEOUT_MS   complete request headers must arrive within (default 10000)
-//   RGOE_BOOTNODE_REQUEST_TIMEOUT_MS   the WHOLE request (headers+body) within (default 30000);
+//   SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS   complete request headers must arrive within (default 10000)
+//   SHADE_TREE_BOOTNODE_REQUEST_TIMEOUT_MS   the WHOLE request (headers+body) within (default 30000);
 //                                      a slow-dribbled body is cut at 408 (must be >= headers)
-//   RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS idle keep-alive connection closed after (default 5000, Node's)
-//   RGOE_BOOTNODE_MAX_HEADER_BYTES     max total header bytes, over => 431 (default 8192)
-//   RGOE_BOOTNODE_CONN_CHECK_MS        how often the timeouts are enforced (default 1000)
+//   SHADE_TREE_BOOTNODE_KEEPALIVE_TIMEOUT_MS idle keep-alive connection closed after (default 5000, Node's)
+//   SHADE_TREE_BOOTNODE_MAX_HEADER_BYTES     max total header bytes, over => 431 (default 8192)
+//   SHADE_TREE_BOOTNODE_CONN_CHECK_MS        how often the timeouts are enforced (default 1000)
 export const HTTP_LIMITS = Object.freeze({
-  headersTimeout: envInt("RGOE_BOOTNODE_HEADERS_TIMEOUT_MS", 10000),
-  requestTimeout: envInt("RGOE_BOOTNODE_REQUEST_TIMEOUT_MS", 30000),
-  keepAliveTimeout: envInt("RGOE_BOOTNODE_KEEPALIVE_TIMEOUT_MS", 5000),
-  maxHeaderSize: envInt("RGOE_BOOTNODE_MAX_HEADER_BYTES", 8192),
-  connectionsCheckingInterval: envInt("RGOE_BOOTNODE_CONN_CHECK_MS", 1000),
+  headersTimeout: envInt("SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS", 10000),
+  requestTimeout: envInt("SHADE_TREE_BOOTNODE_REQUEST_TIMEOUT_MS", 30000),
+  keepAliveTimeout: envInt("SHADE_TREE_BOOTNODE_KEEPALIVE_TIMEOUT_MS", 5000),
+  maxHeaderSize: envInt("SHADE_TREE_BOOTNODE_MAX_HEADER_BYTES", 8192),
+  connectionsCheckingInterval: envInt("SHADE_TREE_BOOTNODE_CONN_CHECK_MS", 1000),
 });
 function readBody(req, max = 64 * 1024) {
   return new Promise((resolve, reject) => {
@@ -637,7 +637,7 @@ function readBody(req, max = 64 * 1024) {
 // `limits` overrides HTTP_LIMITS (the selftest sets tiny timeouts); main() passes none.
 export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}) {
   // Current live-gateway count as a gauge, evaluated at scrape time from this registry.
-  metrics.gauge("rgoe_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
+  metrics.gauge("shade_tree_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
 
   const lim = { ...HTTP_LIMITS, ...limits };
   // Node refuses headersTimeout > requestTimeout (when both are on); clamp so a partial override
@@ -767,19 +767,19 @@ export function makeGracefulShutdown(server, {
 
 // ---- main -------------------------------------------------------------------
 async function main() {
-  const port = Number(process.env.RGOE_BOOTNODE_PORT || 8877);
-  const admission = process.env.RGOE_BOOTNODE_ADMISSION || "open";
-  const ttlSec = Number(process.env.RGOE_BOOTNODE_TTL || 900);
-  const signerPath = process.env.RGOE_BOOTNODE_SIGNER_KEY || join(HERE, "bootnode-signer.key");
+  const port = Number(process.env.SHADE_TREE_BOOTNODE_PORT || 8877);
+  const admission = process.env.SHADE_TREE_BOOTNODE_ADMISSION || "open";
+  const ttlSec = Number(process.env.SHADE_TREE_BOOTNODE_TTL || 900);
+  const signerPath = process.env.SHADE_TREE_BOOTNODE_SIGNER_KEY || join(HERE, "bootnode-signer.key");
 
   const signer = await loadOrMintSigner(signerPath);
   const stake = makeStakeVerifier();
-  const persistPath = process.env.RGOE_BOOTNODE_STORE || null;
-  // OPTIONAL active health probing (T-DEV-12). Off unless RGOE_BOOTNODE_PROBE=1 (needs Tor). The
+  const persistPath = process.env.SHADE_TREE_BOOTNODE_STORE || null;
+  // OPTIONAL active health probing (T-DEV-12). Off unless SHADE_TREE_BOOTNODE_PROBE=1 (needs Tor). The
   // prober lists onions from the registry, so it's built first with a getter that closes over the
   // registry declared just below, then handed in.
   let registry;
-  const prober = process.env.RGOE_BOOTNODE_PROBE === "1"
+  const prober = process.env.SHADE_TREE_BOOTNODE_PROBE === "1"
     ? makeProber({ health: makeProbeHealth(), listOnions: () => registry.liveOnions() })
     : null;
   registry = makeRegistry({ signer, stake, admission, ttlSec, persistPath, prober });
@@ -798,11 +798,11 @@ async function main() {
     log.info("active health probing on", { intervalSec: prober.intervalMs / 1000, failThreshold: prober.health.failThreshold });
   }
 
-  // OPTIONAL bootnode federation / gossip (T-FEAT-1). Off unless RGOE_BOOTNODE_PEERS is set, so
+  // OPTIONAL bootnode federation / gossip (T-FEAT-1). Off unless SHADE_TREE_BOOTNODE_PEERS is set, so
   // the default (empty) is byte-for-byte today's standalone bootnode. When on, we pull each peer's
   // directory + per-gateway announces over Tor and re-verify every entry through the real announce
   // path before merging (bootnode/federation.mjs). The timer self-unrefs (never holds the process).
-  const peers = parsePeers(process.env.RGOE_BOOTNODE_PEERS, { self: process.env.RGOE_BOOTNODE_ONION });
+  const peers = parsePeers(process.env.SHADE_TREE_BOOTNODE_PEERS, { self: process.env.SHADE_TREE_BOOTNODE_ONION });
   if (peers.length) {
     const federation = makeFederation({ registry, peers, log });
     federation.start();
@@ -820,14 +820,14 @@ async function main() {
   server.listen(port, "127.0.0.1", () => {
     // "bootnode up on <host>:<port>" substring preserved for any startup-readiness grep.
     log.info(`bootnode up on 127.0.0.1:${port}`, { admission, stake: stake.mode, ttlSec });
-    log.info("pinned signer pubkey (clients set RGOE_DIR_SIGNER to this):");
+    log.info("pinned signer pubkey (clients set SHADE_TREE_DIR_SIGNER to this):");
     log.info(`  ${signer.pub}`);
     log.info("endpoints: POST /announce  GET /directory  GET /directory/delta?since=<etag>  GET /gateway/<onion>  GET /health");
     const b = registry.announceBucket;
     log.info("endpoint hardening", { announceRatePerSec: Number(b.rate.toFixed(2)), announceBurst: b.burst, ...server.limits });
   });
 
-  const timeoutMs = Number(process.env.RGOE_SHUTDOWN_TIMEOUT_MS || 10000);
+  const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);
   const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "bootnode" });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));

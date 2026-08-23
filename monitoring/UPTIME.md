@@ -15,32 +15,32 @@ swapped or MITM'd bootnode fails `signerOk`, not merely reachability.
 
 ```
 # Production: over Tor to the bootnode onion
-RGOE_BOOTNODE_ONION=<bootnode>.onion \
-RGOE_DIR_SIGNER=<pinned signer pubkey hex> \
+SHADE_TREE_BOOTNODE_ONION=<bootnode>.onion \
+SHADE_TREE_DIR_SIGNER=<pinned signer pubkey hex> \
   node scripts/uptime-probe.mjs
 
 # Dev: plain HTTP straight to a local bootnode (bypasses Tor)
-RGOE_BOOTNODE_URL=http://127.0.0.1:8877 \
-RGOE_DIR_SIGNER=<pinned signer pubkey hex> \
+SHADE_TREE_BOOTNODE_URL=http://127.0.0.1:8877 \
+SHADE_TREE_DIR_SIGNER=<pinned signer pubkey hex> \
   node scripts/uptime-probe.mjs
 ```
 
-`RGOE_DIR_SIGNER` is the pinned directory-signer pubkey the bootnode prints on boot
-("pinned signer pubkey (clients set RGOE_DIR_SIGNER to this)").
+`SHADE_TREE_DIR_SIGNER` is the pinned directory-signer pubkey the bootnode prints on boot
+("pinned signer pubkey (clients set SHADE_TREE_DIR_SIGNER to this)").
 
-## Config (all `RGOE_*`)
+## Config (all `SHADE_TREE_*`)
 
 | var | meaning | default |
 | --- | --- | --- |
-| `RGOE_BOOTNODE_ONION` | bootnode v3 `.onion` (fetched over Tor) | — |
-| `RGOE_TOR_HOST` / `RGOE_TOR_PORT` | local Tor SOCKS proxy | `127.0.0.1` / `9250` |
-| `RGOE_BOOTNODE_URL` | plain-http base, dev only (bypasses Tor) | — |
-| `RGOE_DIR_SIGNER` | pinned directory-signer pubkey (hex), **required** | — |
-| `RGOE_NETWORK` | `<name>`: default `RGOE_BOOTNODE_ONION` + `RGOE_DIR_SIGNER` from `network/<name>/bootnode.json` (explicit env wins; a `pending` record supplies nothing → misconfig) | — |
-| `RGOE_PROBE_TIMEOUT_MS` | per-request timeout | `20000` |
+| `SHADE_TREE_BOOTNODE_ONION` | bootnode v3 `.onion` (fetched over Tor) | — |
+| `SHADE_TREE_TOR_HOST` / `SHADE_TREE_TOR_PORT` | local Tor SOCKS proxy | `127.0.0.1` / `9250` |
+| `SHADE_TREE_BOOTNODE_URL` | plain-http base, dev only (bypasses Tor) | — |
+| `SHADE_TREE_DIR_SIGNER` | pinned directory-signer pubkey (hex), **required** | — |
+| `SHADE_TREE_NETWORK` | `<name>`: default `SHADE_TREE_BOOTNODE_ONION` + `SHADE_TREE_DIR_SIGNER` from `network/<name>/bootnode.json` (explicit env wins; a `pending` record supplies nothing → misconfig) | — |
+| `SHADE_TREE_PROBE_TIMEOUT_MS` | per-request timeout | `20000` |
 
-Provide `RGOE_BOOTNODE_ONION` **or** `RGOE_BOOTNODE_URL` (or `RGOE_NETWORK` naming a live record). Reads are bounded
-(`RGOE_BOOTNODE_MAX_RESP`, 2 MB) and time out; the prober never hangs and **fails closed** —
+Provide `SHADE_TREE_BOOTNODE_ONION` **or** `SHADE_TREE_BOOTNODE_URL` (or `SHADE_TREE_NETWORK` naming a live record). Reads are bounded
+(`SHADE_TREE_BOOTNODE_MAX_RESP`, 2 MB) and time out; the prober never hangs and **fails closed** —
 any error (unreachable, bad signature, timeout, misconfig) reports UNHEALTHY.
 
 ## Check formats
@@ -74,37 +74,37 @@ scheduler on a tor-capable runner **outside** the fleet. Three shipped options, 
 
 | runner | files | cadence | notes |
 |---|---|---|---|
-| systemd (any Linux box with tor) | `rgoe-uptime-probe.service` + `rgoe-uptime-probe.timer` | 5 min | sandboxed oneshot; exit code in the journal |
+| systemd (any Linux box with tor) | `shade-tree-uptime-probe.service` + `shade-tree-uptime-probe.timer` | 5 min | sandboxed oneshot; exit code in the journal |
 | GitHub Actions (hosted) | `.github/workflows/uptime-probe.yml` | 15 min | installs tor on the runner; **no-ops green** until repo variables are set |
-| plain cron | `crontab.example` | 5 min | one line, appends nagios lines to `/var/log/rgoe-uptime.log` |
+| plain cron | `crontab.example` | 5 min | one line, appends nagios lines to `/var/log/shade-tree-uptime.log` |
 
-All three read the same inputs: `RGOE_BOOTNODE_ONION` + `RGOE_DIR_SIGNER`, **or**
-`RGOE_NETWORK=<name>` (resolved from `network/<name>/bootnode.json`, `lib/network-record.mjs`).
+All three read the same inputs: `SHADE_TREE_BOOTNODE_ONION` + `SHADE_TREE_DIR_SIGNER`, **or**
+`SHADE_TREE_NETWORK=<name>` (resolved from `network/<name>/bootnode.json`, `lib/network-record.mjs`).
 Neither input is secret (an onion and a public key). `uptime-probe.env.example` is the
-`/etc/rgoe/uptime-probe.env` template the systemd unit and cron line source.
+`/etc/shade-tree/uptime-probe.env` template the systemd unit and cron line source.
 
 ### systemd timer
 
 ```bash
-# on the prober box: repo at /opt/rgoe (npm ci done), tor running with SocksPort 9050, user `rgoe`
-sudo install -m 0644 monitoring/uptime/rgoe-uptime-probe.{service,timer} /etc/systemd/system/
-sudo install -d -m 0755 /etc/rgoe
-sudo install -m 0644 monitoring/uptime/uptime-probe.env.example /etc/rgoe/uptime-probe.env   # edit: onion+signer or RGOE_NETWORK
+# on the prober box: repo at /opt/shade-tree (npm ci done), tor running with SocksPort 9050, user `shade-tree`
+sudo install -m 0644 monitoring/uptime/shade-tree-uptime-probe.{service,timer} /etc/systemd/system/
+sudo install -d -m 0755 /etc/shade-tree
+sudo install -m 0644 monitoring/uptime/uptime-probe.env.example /etc/shade-tree/uptime-probe.env   # edit: onion+signer or SHADE_TREE_NETWORK
 sudo systemctl daemon-reload
-sudo systemctl enable --now rgoe-uptime-probe.timer
-systemctl list-timers rgoe-uptime-probe.timer            # next fire
-journalctl -u rgoe-uptime-probe.service -n 20            # last probe lines (OK: … / CRITICAL: …)
+sudo systemctl enable --now shade-tree-uptime-probe.timer
+systemctl list-timers shade-tree-uptime-probe.timer            # next fire
+journalctl -u shade-tree-uptime-probe.service -n 20            # last probe lines (OK: … / CRITICAL: …)
 ```
 
 The service uses `SuccessExitStatus=1 2` so a CRITICAL probe is a **journal line, not a failed
 unit** — the timer keeps firing and the SLI is `grep CRITICAL` over the journal (or ship the
-journal to your log stack). Adjust `User=`, `WorkingDirectory=`, `RGOE_TOR_PORT` for your box.
+journal to your log stack). Adjust `User=`, `WorkingDirectory=`, `SHADE_TREE_TOR_PORT` for your box.
 
 ### GitHub Actions
 
 `.github/workflows/uptime-probe.yml` runs `*/15 * * * *` (+ `workflow_dispatch`). Set repository
-**variables** (Settings → Secrets and variables → Actions → Variables): `RGOE_BOOTNODE_ONION` +
-`RGOE_DIR_SIGNER`, or `RGOE_NETWORK` (e.g. `sepolia`) to read them from the committed record.
+**variables** (Settings → Secrets and variables → Actions → Variables): `SHADE_TREE_BOOTNODE_ONION` +
+`SHADE_TREE_DIR_SIGNER`, or `SHADE_TREE_NETWORK` (e.g. `sepolia`) to read them from the committed record.
 Secrets of the same names are read as a fallback. Until one of those is set the job emits a
 `::notice::` and exits green (it does not even check out the repo), so an unconfigured repo or
 fork never red-flags. A `pending` network record likewise skips green. Once configured, a
@@ -115,7 +115,7 @@ the systemd timer is the 5-minute SLI source.
 ### cron
 
 ```
-*/5 * * * * set -a; . /etc/rgoe/uptime-probe.env; set +a; RGOE_TOR_PORT=9050 /usr/bin/node /opt/rgoe/scripts/uptime-probe.mjs --format nagios >> /var/log/rgoe-uptime.log 2>&1
+*/5 * * * * set -a; . /etc/shade-tree/uptime-probe.env; set +a; SHADE_TREE_TOR_PORT=9050 /usr/bin/node /opt/shade-tree/scripts/uptime-probe.mjs --format nagios >> /var/log/shade-tree-uptime.log 2>&1
 ```
 
 (`monitoring/uptime/crontab.example`, verbatim.)

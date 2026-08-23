@@ -3,7 +3,7 @@
     {
       "name": "DS_PROMETHEUS",
       "label": "Prometheus",
-      "description": "Prometheus data source scraping the RGOE bootnode and gateway /metrics endpoints.",
+      "description": "Prometheus data source scraping the Shade Tree bootnode and gateway /metrics endpoints.",
       "type": "datasource",
       "pluginId": "prometheus",
       "pluginName": "Prometheus"
@@ -28,7 +28,7 @@
       }
     ]
   },
-  "description": "Reputation-gated onion egress: bootnode discovery + gateway fleet health. Every panel is built only on metrics emitted by lib/metrics.mjs and registered in bootnode/server.mjs and gateway/gateway.mjs (T-MON-2).",
+  "description": "Shade Tree: bootnode discovery + gateway fleet health. Every panel is built only on metrics emitted by lib/metrics.mjs and registered in bootnode/server.mjs and gateway/gateway.mjs (T-MON-2).",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -37,7 +37,7 @@
   "liveNow": false,
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["rgoe", "onion-egress", "reputation-gate"],
+  "tags": ["shade-tree", "onion-service", "tunnel"],
   "templating": {
     "list": [
       {
@@ -86,8 +86,8 @@
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "RGOE Fleet & Bootnode",
-  "uid": "rgoe-fleet-bootnode",
+  "title": "Shade Tree Fleet & Bootnode",
+  "uid": "shade-tree-fleet-bootnode",
   "version": 1,
   "weekStart": "",
   "panels": [
@@ -102,7 +102,7 @@
     {
       "type": "stat",
       "title": "Live gateways (fleet size)",
-      "description": "rgoe_bootnode_live_gateways: gateways currently announced within TTL, read at scrape time. SLO 2.3 wants >=2. Below 2 there is no failover spread.",
+      "description": "shade_tree_bootnode_live_gateways: gateways currently announced within TTL, read at scrape time. SLO 2.3 wants >=2. Below 2 there is no failover spread.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
       "id": 1,
@@ -132,7 +132,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "max(rgoe_bootnode_live_gateways{job=~\"$job\", instance=~\"$instance\"})",
+          "expr": "max(shade_tree_bootnode_live_gateways{job=~\"$job\", instance=~\"$instance\"})",
           "legendFormat": "live gateways",
           "refId": "A"
         }
@@ -141,7 +141,7 @@
     {
       "type": "timeseries",
       "title": "Fleet size over time",
-      "description": "rgoe_bootnode_live_gateways gauge over time. The red band (<2) is where SLO 2.3 is violated and failover has nowhere to route.",
+      "description": "shade_tree_bootnode_live_gateways gauge over time. The red band (<2) is where SLO 2.3 is violated and failover has nowhere to route.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 9, "x": 6, "y": 1 },
       "id": 2,
@@ -174,7 +174,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "rgoe_bootnode_live_gateways{job=~\"$job\", instance=~\"$instance\"}",
+          "expr": "shade_tree_bootnode_live_gateways{job=~\"$job\", instance=~\"$instance\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -183,7 +183,7 @@
     {
       "type": "timeseries",
       "title": "Directory fetch rate",
-      "description": "rate(rgoe_bootnode_directory_fetches_total[5m]): GET /directory requests served per second. A flatline to zero while clients are active is a bootnode-serving problem (INCIDENT.md #1).",
+      "description": "rate(shade_tree_bootnode_directory_fetches_total[5m]): GET /directory requests served per second. A flatline to zero while clients are active is a bootnode-serving problem (INCIDENT.md #1).",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 9, "x": 15, "y": 1 },
       "id": 3,
@@ -208,7 +208,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (instance) (rate(rgoe_bootnode_directory_fetches_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (instance) (rate(shade_tree_bootnode_directory_fetches_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -217,7 +217,7 @@
     {
       "type": "timeseries",
       "title": "Announce rate by result / reason",
-      "description": "rate(rgoe_bootnode_announces_total[5m]) split by result (accepted|rejected) and reason. Rejected announces are the gate working; a spike in a specific reject reason is the signal (see AnnounceRejectionSpike alert). Reject reasons come from bootnode/announce.mjs + registry (rate-limited, registry-full, bad signature, etc.).",
+      "description": "rate(shade_tree_bootnode_announces_total[5m]) split by result (accepted|rejected) and reason. Rejected announces are the gate working; a spike in a specific reject reason is the signal (see AnnounceRejectionSpike alert). Reject reasons come from bootnode/announce.mjs + registry (rate-limited, registry-full, bad signature, etc.).",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
       "id": 4,
@@ -248,7 +248,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (result, reason) (rate(rgoe_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (result, reason) (rate(shade_tree_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
           "legendFormat": "{{result}} {{reason}}",
           "refId": "A"
         }
@@ -292,7 +292,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(rgoe_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\", result=\"rejected\"}[15m])) / clamp_min(sum(rate(rgoe_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\"}[15m])), 1e-9)",
+          "expr": "sum(rate(shade_tree_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\", result=\"rejected\"}[15m])) / clamp_min(sum(rate(shade_tree_bootnode_announces_total{job=~\"$job\", instance=~\"$instance\"}[15m])), 1e-9)",
           "legendFormat": "reject fraction",
           "refId": "A"
         }
@@ -309,7 +309,7 @@
     {
       "type": "stat",
       "title": "Active egress tunnels",
-      "description": "rgoe_gateway_active_tunnels: open egress tunnels right now, summed across gateways. Capacity signal, not an SLO.",
+      "description": "shade_tree_gateway_active_tunnels: open egress tunnels right now, summed across gateways. Capacity signal, not an SLO.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
       "id": 6,
@@ -332,7 +332,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rgoe_gateway_active_tunnels{job=~\"$job\", instance=~\"$instance\"})",
+          "expr": "sum(shade_tree_gateway_active_tunnels{job=~\"$job\", instance=~\"$instance\"})",
           "legendFormat": "open tunnels",
           "refId": "A"
         }
@@ -341,7 +341,7 @@
     {
       "type": "timeseries",
       "title": "Active tunnels by gateway",
-      "description": "rgoe_gateway_active_tunnels per instance. Uneven distribution is a selection/load-balance signal; a gateway pinned at 0 while others carry load may be undialable.",
+      "description": "shade_tree_gateway_active_tunnels per instance. Uneven distribution is a selection/load-balance signal; a gateway pinned at 0 while others carry load may be undialable.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 9, "x": 6, "y": 16 },
       "id": 7,
@@ -367,7 +367,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "rgoe_gateway_active_tunnels{job=~\"$job\", instance=~\"$instance\"}",
+          "expr": "shade_tree_gateway_active_tunnels{job=~\"$job\", instance=~\"$instance\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -376,7 +376,7 @@
     {
       "type": "timeseries",
       "title": "Slash events",
-      "description": "rate(rgoe_gateway_slashes_total[15m]) and total. A slash is an RLN over-spend caught (2nd distinct signal on a nullifier). This is the rate limit WORKING, not a failure (SLO section 3, INCIDENT.md #7). A sudden spike still warrants a look: it can mean a broken client or a probing attacker.",
+      "description": "rate(shade_tree_gateway_slashes_total[15m]) and total. A slash is an RLN over-spend caught (2nd distinct signal on a nullifier). This is the rate limit WORKING, not a failure (SLO section 3, INCIDENT.md #7). A sudden spike still warrants a look: it can mean a broken client or a probing attacker.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 9, "x": 15, "y": 16 },
       "id": 8,
@@ -407,13 +407,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (instance) (rate(rgoe_gateway_slashes_total{job=~\"$job\", instance=~\"$instance\"}[15m]))",
+          "expr": "sum by (instance) (rate(shade_tree_gateway_slashes_total{job=~\"$job\", instance=~\"$instance\"}[15m]))",
           "legendFormat": "slash/s {{instance}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(increase(rgoe_gateway_slashes_total{job=~\"$job\", instance=~\"$instance\"}[1h]))",
+          "expr": "sum(increase(shade_tree_gateway_slashes_total{job=~\"$job\", instance=~\"$instance\"}[1h]))",
           "legendFormat": "slashes (1h)",
           "refId": "B"
         }
@@ -421,8 +421,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Gateway request rate by result / reason",
-      "description": "rate(rgoe_gateway_requests_total[5m]) split by result (pass|drop) and reason. Drop reasons come from gateway.mjs (no-share, rate-slashed, bad-target, over-spend-slashed, and verifyEnvelope reasons e.g. root-not-recent). Gate DROPs are correct rejections, not egress-success failures (SLO 2.1).",
+      "title": "Gateway tunnel rate by result / reason",
+      "description": "rate(shade_tree_gateway_tunnels_total[5m]) split by result (pass|drop) and reason. Drop reasons come from gateway.mjs (no-share, rate-slashed, bad-target, over-spend-slashed, and verifyEnvelope reasons e.g. root-not-recent). Gate DROPs are correct rejections, not egress-success failures (SLO 2.1).",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
       "id": 9,
@@ -453,7 +453,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (result, reason) (rate(rgoe_gateway_requests_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (result, reason) (rate(shade_tree_gateway_tunnels_total{job=~\"$job\", instance=~\"$instance\"}[5m]))",
           "legendFormat": "{{result}} {{reason}}",
           "refId": "A"
         }
@@ -497,7 +497,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(rgoe_gateway_requests_total{job=~\"$job\", instance=~\"$instance\", result=\"drop\"}[10m])) / clamp_min(sum(rate(rgoe_gateway_requests_total{job=~\"$job\", instance=~\"$instance\"}[10m])), 1e-9)",
+          "expr": "sum(rate(shade_tree_gateway_tunnels_total{job=~\"$job\", instance=~\"$instance\", result=\"drop\"}[10m])) / clamp_min(sum(rate(shade_tree_gateway_tunnels_total{job=~\"$job\", instance=~\"$instance\"}[10m])), 1e-9)",
           "legendFormat": "drop fraction",
           "refId": "A"
         }
@@ -514,7 +514,7 @@
     {
       "type": "timeseries",
       "title": "verifyEnvelope latency p50 / p95 / p99",
-      "description": "histogram_quantile over rgoe_gateway_verify_seconds_bucket (5m window). Server-side proof-verify CPU only, not end-to-end. SLO 2.4: p95 < 50 ms, p99 < 100 ms (7d). Thresholds mark those lines.",
+      "description": "histogram_quantile over shade_tree_gateway_verify_seconds_bucket (5m window). Server-side proof-verify CPU only, not end-to-end. SLO 2.4: p95 < 50 ms, p99 < 100 ms (7d). Thresholds mark those lines.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 16, "x": 0, "y": 31 },
       "id": 11,
@@ -547,19 +547,19 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(rgoe_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(shade_tree_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(rgoe_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(shade_tree_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(rgoe_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(shade_tree_gateway_verify_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[5m])))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -568,7 +568,7 @@
     {
       "type": "stat",
       "title": "Verify latency & throughput (now)",
-      "description": "Average verify time = rgoe_gateway_verify_seconds_sum / _count over 5m, plus verifies/sec. As mean approaches the ~30 verifies/sec/core ceiling (SLO 2.4), add cores or gateways before it becomes an egress-success problem.",
+      "description": "Average verify time = shade_tree_gateway_verify_seconds_sum / _count over 5m, plus verifies/sec. As mean approaches the ~30 verifies/sec/core ceiling (SLO 2.4), add cores or gateways before it becomes an egress-success problem.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 31 },
       "id": 12,
@@ -605,13 +605,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(rgoe_gateway_verify_seconds_sum{job=~\"$job\", instance=~\"$instance\"}[5m])) / clamp_min(sum(rate(rgoe_gateway_verify_seconds_count{job=~\"$job\", instance=~\"$instance\"}[5m])), 1e-9)",
+          "expr": "sum(rate(shade_tree_gateway_verify_seconds_sum{job=~\"$job\", instance=~\"$instance\"}[5m])) / clamp_min(sum(rate(shade_tree_gateway_verify_seconds_count{job=~\"$job\", instance=~\"$instance\"}[5m])), 1e-9)",
           "legendFormat": "mean verify",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(rgoe_gateway_verify_seconds_count{job=~\"$job\", instance=~\"$instance\"}[5m]))",
+          "expr": "sum(rate(shade_tree_gateway_verify_seconds_count{job=~\"$job\", instance=~\"$instance\"}[5m]))",
           "legendFormat": "verifies/sec",
           "refId": "B"
         }

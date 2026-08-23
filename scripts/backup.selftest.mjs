@@ -30,7 +30,7 @@ const SEED_HEX = "deadbeef".repeat(8); // 64 hex chars = 32 bytes
 const FAKE_HS_SECRET = Buffer.from("== ed25519v1-secret: type0 ==\0\0\0" + "A".repeat(64), "binary");
 
 function makeSrc() {
-  const src = mkdtempSync(join(tmpdir(), "rgoe-bk-src-"));
+  const src = mkdtempSync(join(tmpdir(), "shade-tree-bk-src-"));
   const hsDir = join(src, "gateway-hs");
   mkdirSync(hsDir, { recursive: true });
   writeFileSync(join(hsDir, "identity.local.json"),
@@ -45,9 +45,9 @@ function makeSrc() {
 
 function main() {
   const src = makeSrc();
-  const out = mkdtempSync(join(tmpdir(), "rgoe-bk-out-"));
-  const dest = mkdtempSync(join(tmpdir(), "rgoe-bk-dest-"));
-  const outFile = join(out, "keys.rgoebak");
+  const out = mkdtempSync(join(tmpdir(), "shade-tree-bk-out-"));
+  const dest = mkdtempSync(join(tmpdir(), "shade-tree-bk-dest-"));
+  const outFile = join(out, "keys.shade-tree-backup");
 
   try {
     // --- collection: only the sensitive files, by name ---------------------
@@ -86,7 +86,7 @@ function main() {
 
     // --- restore (wrong passphrase): fails, writes nothing ----------------
     console.log("\nrestore (wrong passphrase):");
-    const dest2 = mkdtempSync(join(tmpdir(), "rgoe-bk-dest2-"));
+    const dest2 = mkdtempSync(join(tmpdir(), "shade-tree-bk-dest2-"));
     let threw = false;
     try { runRestore({ inFile: outFile, destDir: dest2, passphrase: WRONG }); }
     catch (e) { threw = true; ok(/wrong passphrase|decryption failed/i.test(e.message), "wrong passphrase -> loud GCM/decryption error"); }

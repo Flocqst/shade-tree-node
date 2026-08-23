@@ -13,10 +13,10 @@
 //        --from-broadcast broadcast/DeployRegistry.s.sol/11155111/run-latest.json
 //   node scripts/record-deploy.mjs --network sepolia --contract gatewayRegistry \
 //        --address 0x... --tx 0x... --block 1234567
-//   (or: rgoe record-deploy --network sepolia --from-broadcast <run-latest.json>)
+//   (or: shade-tree record-deploy --network sepolia --from-broadcast <run-latest.json>)
 //
 // Flags:
-//   --network <name>        network/<name>/contracts.json to update   (or RGOE_NETWORK)
+//   --network <name>        network/<name>/contracts.json to update   (or SHADE_TREE_NETWORK)
 //   --from-broadcast <p>    Foundry run-latest.json to read address/tx/block from
 //   --contract <slot>       which slot to record (default gatewayRegistry; e.g. paidAccessSet); with
 //                           --from-broadcast the CREATE whose contractName maps to that slot is used
@@ -49,7 +49,7 @@ export const CONTRACT_SLOTS = {
 };
 
 export function parseArgs(rawArgv) {
-  const f = { network: process.env.RGOE_NETWORK || null, contract: "gatewayRegistry", all: false, force: false, dryRun: false };
+  const f = { network: process.env.SHADE_TREE_NETWORK || null, contract: "gatewayRegistry", all: false, force: false, dryRun: false };
   // normalize --flag=value into --flag value
   const argv = rawArgv.flatMap((a) => (a.startsWith("--") && a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a]));
   for (let i = 0; i < argv.length; i++) {
@@ -115,7 +115,7 @@ export function applyDeployment(record, slot, { address, tx, block }, { force = 
 }
 
 export function recordDeploy(flags, { root = NETWORK_ROOT, log = console.log } = {}) {
-  if (!isNetworkName(flags.network || "")) throw new Error("--network <name> (or RGOE_NETWORK) is required, e.g. --network sepolia");
+  if (!isNetworkName(flags.network || "")) throw new Error("--network <name> (or SHADE_TREE_NETWORK) is required, e.g. --network sepolia");
   const path = join(root, flags.network, "contracts.json");
   if (!existsSync(path)) throw new Error(`no record at ${path} (create network/${flags.network}/contracts.json first, see network/README.md)`);
   const record = JSON.parse(readFileSync(path, "utf8"));

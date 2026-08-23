@@ -37,7 +37,7 @@ function rawGet(base, path, headers = {}) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-dir-scale-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-dir-scale-"));
   let server;
   try {
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });

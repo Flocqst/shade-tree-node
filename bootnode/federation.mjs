@@ -46,7 +46,7 @@ export function normOnion(s) {
   return t.endsWith(".onion") ? t : t + ".onion";
 }
 
-// Parse RGOE_BOOTNODE_PEERS: a comma-list of peer bootnode onions. Empty/unset => [] (off, so the
+// Parse SHADE_TREE_BOOTNODE_PEERS: a comma-list of peer bootnode onions. Empty/unset => [] (off, so the
 // bootnode is byte-for-byte today's standalone one). Blanks are dropped, entries deduped, and our
 // OWN onion (opts.self) filtered out so a bootnode never gossips from itself.
 export function parsePeers(raw, { self = null } = {}) {
@@ -75,9 +75,9 @@ export function makeFederation({
   fetchDir = (peer) => fetchOverTor(peer, "/directory"),
   // async (peerOnion, onion) => the peer's stored signed announce rec for that gateway
   fetchGateway = (peer, onion) => fetchOverTor(peer, "/gateway/" + encodeURIComponent(onion)),
-  intervalMs = Number(process.env.RGOE_BOOTNODE_FED_INTERVAL || 60) * 1000,
+  intervalMs = Number(process.env.SHADE_TREE_BOOTNODE_FED_INTERVAL || 60) * 1000,
   // Bound per-peer gateway fetches. Default to the registry's own cap (can't hold more anyway).
-  maxPullPerPeer = Number(process.env.RGOE_BOOTNODE_FED_MAX_PULL || (registry.maxEntries?.() ?? 10000)),
+  maxPullPerPeer = Number(process.env.SHADE_TREE_BOOTNODE_FED_MAX_PULL || (registry.maxEntries?.() ?? 10000)),
   log = console,
   setTimer = setInterval,
   clearTimer = clearInterval,
@@ -149,7 +149,7 @@ export function makeFederation({
     pullPeer,
     pullAll,
     // Start the periodic pull. No-op if already started or if there are no peers, so the default
-    // (no RGOE_BOOTNODE_PEERS) never dials anything. Kicks one convergence pull immediately
+    // (no SHADE_TREE_BOOTNODE_PEERS) never dials anything. Kicks one convergence pull immediately
     // (non-blocking), then every intervalMs. The timer self-unrefs.
     start() {
       if (timer || peers.length === 0) return timer;

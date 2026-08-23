@@ -29,7 +29,7 @@ async function get(base, path) {
 }
 
 async function main() {
-  const work = await mkdtemp(join(tmpdir(), "rgoe-bootnode-"));
+  const work = await mkdtemp(join(tmpdir(), "shade-tree-bootnode-"));
   try {
     // --- mint three real onion identities ------------------------------------
     const g1 = await generateOnionIdentity(join(work, "g1"), { label: "g1" });
@@ -180,11 +180,11 @@ async function main() {
 
     // registrar advert (T-FEAT-7): /health carries `pay` ONLY when advertised; the default is unchanged.
     console.log("\nregistrar advert in /health:");
-    ok(payAdvertFromEnv({}) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "0" }) === null, "unset / 0 -> no advert");
-    const adv = payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=100000,32=400000" });
-    ok(adv && adv.port === 8878 && adv.protocols.join() === "x402,mpp" && adv.chain === "eip155:11155111" && adv.tiers["32"] === "400000", "=1 composes {port, protocols, asset, chain, tiers} from RGOE_PAY_*");
-    ok(payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "nope", RGOE_PAY_PRICES: "8=1" }) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "1", RGOE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", RGOE_PAY_PRICES: "8=x" }) === null && payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: "{bad" }) === null, "garbage asset / prices / JSON -> no advert (never a half advert)");
-    ok(payAdvertFromEnv({ RGOE_REGISTRAR_ADVERTISE: '{"port":9999,"protocols":["x402"]}' }).port === 9999, "JSON literal form is passed through");
+    ok(payAdvertFromEnv({}) === null && payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: "0" }) === null, "unset / 0 -> no advert");
+    const adv = payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: "1", SHADE_TREE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", SHADE_TREE_PAY_PRICES: "8=100000,32=400000" });
+    ok(adv && adv.port === 8878 && adv.protocols.join() === "x402,mpp" && adv.chain === "eip155:11155111" && adv.tiers["32"] === "400000", "=1 composes {port, protocols, asset, chain, tiers} from SHADE_TREE_PAY_*");
+    ok(payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: "1", SHADE_TREE_PAY_ASSET: "nope", SHADE_TREE_PAY_PRICES: "8=1" }) === null && payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: "1", SHADE_TREE_PAY_ASSET: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", SHADE_TREE_PAY_PRICES: "8=x" }) === null && payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: "{bad" }) === null, "garbage asset / prices / JSON -> no advert (never a half advert)");
+    ok(payAdvertFromEnv({ SHADE_TREE_REGISTRAR_ADVERTISE: '{"port":9999,"protocols":["x402"]}' }).port === 9999, "JSON literal form is passed through");
     const regP = makeRegistry({ signer, stake: MockStakeVerifier({}), admission: "open" });
     const serverP = makeServer(regP, { signerPub: signer.pub, pay: adv });
     await new Promise((r) => serverP.listen(0, "127.0.0.1", r));

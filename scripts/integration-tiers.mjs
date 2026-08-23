@@ -9,11 +9,11 @@
 //
 // Flow (mirrors network/sepolia/integration-report-rln.md, now with tiers):
 //   1. ALICE stakes at tier 8 (bondFor(8)), BOB at tier 32 (bondFor(32)) — via the real
-//      `rgoe register-member --limit N` command (group/register-onchain.mjs);
+//      `shade-tree register-member --limit N` command (group/register-onchain.mjs);
 //   2. the ON-CHAIN currentRoot() equals the JS groupFromIdentities([{A,8},{B,32}]) root;
-//   3. the gateway starts with RGOE_GROUP_CONTRACT (NodeRootProvider reconstructs the SAME
-//      root from the rln-v4 events) + RGOE_SLASH_CONTRACT/RGOE_SLASH_KEY (tiered slasher);
-//   4. ALICE: 3 requests at slots 0..2 (tier 8) -> PASS; BOB: a request at slot 20 (a budget
+//   3. the gateway starts with SHADE_TREE_GROUP_CONTRACT (NodeRootProvider reconstructs the SAME
+//      root from the rln-v4 events) + SHADE_TREE_SLASH_CONTRACT/SHADE_TREE_SLASH_KEY (tiered slasher);
+//   4. ALICE: 3 tunnels at slots 0..2 (tier 8) -> PASS; BOB: a tunnel at slot 20 (a budget
 //      only tier 32 has) -> PASS;
 //   5. BOB over-spends slot 0 (two distinct signals, one nullifier) -> the gateway reconstructs
 //      his identitySecret, resolves the tier ON CHAIN (limitOf), and submits
@@ -23,16 +23,16 @@
 //      with BOB's leaf zeroed in place.
 //
 // Env (CLI mode; the selftest passes an options object):
-//   RGOE_RPC_URL, RGOE_GROUP_CONTRACT (the rln-v4 set), RGOE_SLASH_KEY (gateway hot key; also
-//   the staking funder unless RGOE_REGISTER_KEY is set), RGOE_SLASH_RECEIVER (default: the
-//   slasher address), RGOE_MEMBER_A_SECRET / RGOE_MEMBER_B_SECRET (app seeds, 0x-hex; default:
-//   fresh random ones — printed as commitments only), RGOE_CONFIRMATIONS (gateway root depth;
+//   SHADE_TREE_RPC_URL, SHADE_TREE_GROUP_CONTRACT (the rln-v4 set), SHADE_TREE_SLASH_KEY (gateway hot key; also
+//   the staking funder unless SHADE_TREE_REGISTER_KEY is set), SHADE_TREE_SLASH_RECEIVER (default: the
+//   slasher address), SHADE_TREE_MEMBER_A_SECRET / SHADE_TREE_MEMBER_B_SECRET (app seeds, 0x-hex; default:
+//   fresh random ones — printed as commitments only), SHADE_TREE_CONFIRMATIONS (gateway root depth;
 //   default 1 here so a fresh stake is visible without waiting for finality),
-//   RGOE_TARGETS (comma list of host:port the gateway egresses to; default example.com:443,
-//   api.ipify.org:443, cloudflare.com:443), RGOE_REPORT_OUT (write the timeline there).
+//   SHADE_TREE_TARGETS (comma list of host:port the gateway egresses to; default example.com:443,
+//   api.ipify.org:443, cloudflare.com:443), SHADE_TREE_REPORT_OUT (write the timeline there).
 //
 // The gateway's egress connect is what acks ok:true, so the targets must be reachable from
-// where this runs (the selftest uses local listeners + RGOE_EGRESS_ALLOW).
+// where this runs (the selftest uses local listeners + SHADE_TREE_EGRESS_ALLOW).
 
 import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
@@ -45,10 +45,10 @@ import {
   identityFor, identitySecretOf, rateCommitmentOf, groupFromIdentities, newGroup, deriveCommitment,
   currentEpoch, requestSignal, proveForSlot, toField, EPOCH_SECONDS,
 } from "../lib/rln.mjs";
-import { makeSlotPool, buildEnvelope } from "../client/rgoe-client.mjs";
+import { makeSlotPool, buildEnvelope } from "../client/shade-tree-client.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CLI = join(ROOT, "bin", "rgoe.mjs");
+const CLI = join(ROOT, "bin", "shade-tree.mjs");
 const GATEWAY_PORT = 8443; // gateway/gateway.mjs LISTEN_PORT (fixed; Tor maps the onion here)
 
 export const SET_ABI = [
@@ -86,7 +86,7 @@ function makeLog(sink) {
   return { log, trace };
 }
 
-// Send one v3 envelope to the local gateway over TCP; resolve its ack line.
+// Send one explicit v4 envelope to the local gateway over TCP; resolve its ack line.
 export function sendEnvelope(envelope, { port = GATEWAY_PORT, timeoutMs = 90000 } = {}) {
   return new Promise((resolve, reject) => {
     const sock = net.connect(port, "127.0.0.1", () => sock.write(JSON.stringify(envelope) + "\n"));
@@ -136,10 +136,10 @@ async function waitFor(pred, ms, stepMs = 500) {
   return null;
 }
 
-// Stake `member` at its tier through the real CLI (`rgoe register-member <leaf> --limit N`).
+// Stake `member` at its tier through the real CLI (`shade-tree register-member <leaf> --limit N`).
 export function stakeViaCli(member, { rpcUrl, set, key }) {
   const r = spawnSync(process.execPath, [CLI, "register-member", member.leaf, "--limit", String(member.limit), "--rpc-url", rpcUrl, "--group-contract", set], {
-    cwd: ROOT, encoding: "utf8", env: { ...process.env, RGOE_REGISTER_KEY: key, RGOE_NETWORK: "" }, timeout: 180000,
+    cwd: ROOT, encoding: "utf8", env: { ...process.env, SHADE_TREE_REGISTER_KEY: key, SHADE_TREE_NETWORK: "" }, timeout: 180000,
   });
   const out = (r.stdout || "") + (r.stderr || "");
   const tx = (out.match(/tx:\s+(0x[0-9a-fA-F]{64})/) || [])[1] || null;
@@ -185,7 +185,7 @@ export async function runTierIntegration(opts) {
       log("stake", `${name} register(leaf, ${m.limit}) + bond ${ethers.formatEther(m.limit === 8 ? bond8 : bond32)} ETH ...`);
       const r = stakeViaCli(m, { rpcUrl, set, key: registerKey });
       txs[`stake${name}`] = { tx: r.tx, block: r.block };
-      check(r.code === 0 && !!r.tx, `${name} staked at tier ${m.limit} via \`rgoe register-member --limit ${m.limit}\` (tx ${r.tx ? r.tx.slice(0, 12) + ".." : "none"} block ${r.block})`);
+      check(r.code === 0 && !!r.tx, `${name} staked at tier ${m.limit} via \`shade-tree register-member --limit ${m.limit}\` (tx ${r.tx ? r.tx.slice(0, 12) + ".." : "none"} block ${r.block})`);
       if (r.code !== 0) log("stake", r.out.trim().split("\n").slice(-3).join(" | "));
     }
     const [mA, mB, active] = await Promise.all([c.members(A.leaf), c.members(B.leaf), c.activeCount()]);
@@ -207,18 +207,18 @@ export async function runTierIntegration(opts) {
 
     // 3. the REAL gateway in on-chain root mode + tiered on-chain slasher
     gw = startGateway({
-      RGOE_RPC_URL: rpcUrl,
-      RGOE_GROUP_CONTRACT: set,        // on-chain root mode (NodeRootProvider event reconstruction)
-      RGOE_ADMIT: "staked",            // T-FEAT-9: admit the staked set ALONE (the default would be invited/members.json only)
-      RGOE_ROOT_PROVIDER: "node",
-      RGOE_CONFIRMATIONS: String(confirmations),
-      RGOE_FROM_BLOCK: "0x" + Math.max(0, (txs.stakeALICE.block || 1) - 1).toString(16),
-      RGOE_SLASH_CONTRACT: set,
-      RGOE_SLASH_KEY: slashKey,
-      RGOE_SLASH_RECEIVER: rcv,
-      RGOE_TIERS: "8,32",
-      RGOE_HELIOS_RPC_URL: "",
-      RGOE_NETWORK: "",
+      SHADE_TREE_RPC_URL: rpcUrl,
+      SHADE_TREE_GROUP_CONTRACT: set,        // on-chain root mode (NodeRootProvider event reconstruction)
+      SHADE_TREE_ADMIT: "staked",            // T-FEAT-9: admit the staked set ALONE (the default would be invited/members.json only)
+      SHADE_TREE_ROOT_PROVIDER: "node",
+      SHADE_TREE_CONFIRMATIONS: String(confirmations),
+      SHADE_TREE_FROM_BLOCK: "0x" + Math.max(0, (txs.stakeALICE.block || 1) - 1).toString(16),
+      SHADE_TREE_SLASH_CONTRACT: set,
+      SHADE_TREE_SLASH_KEY: slashKey,
+      SHADE_TREE_SLASH_RECEIVER: rcv,
+      SHADE_TREE_TIERS: "8,32",
+      SHADE_TREE_HELIOS_RPC_URL: "",
+      SHADE_TREE_NETWORK: "",
       ...gatewayEnv,
     }, { log });
     await gw.ready;
@@ -233,8 +233,8 @@ export async function runTierIntegration(opts) {
       const t0 = Date.now();
       const { envelope, slot } = await buildEnvelope({ secret: A.seed, target, pool: poolA });
       const ack = await sendEnvelope(envelope);
-      log("alice", `req ${i + 1} slot ${slot} nullifier ${envelope.nullifier.slice(0, 12)}.. -> ${JSON.stringify(ack)} (${Date.now() - t0}ms)`);
-      check(ack.ok === true, `ALICE (tier 8) request ${i + 1} at slot ${slot} accepted`);
+      log("alice", `tunnel ${i + 1} slot ${slot} nullifier ${envelope.nullifier.slice(0, 12)}.. -> ${JSON.stringify(ack)} (${Date.now() - t0}ms)`);
+      check(ack.ok === true, `ALICE (tier 8) tunnel ${i + 1} at slot ${slot} accepted`);
     }
     // BOB at slot 20: a messageId only a tier-32 leaf can prove (>= 8, < 32). Built through the
     // same client path as ALICE at K=32: drain the pool to slot 20 (it wraps at K, proves at 32).
@@ -248,17 +248,17 @@ export async function runTierIntegration(opts) {
     check(!!bobEnv && bobEnv.slot === 20, "BOB (tier 32) built a slot-20 proof (a budget tier 8 cannot have)");
     const ack20 = await sendEnvelope(bobEnv.envelope);
     log("bob", `slot 20 nullifier ${bobEnv.envelope.nullifier.slice(0, 12)}.. -> ${JSON.stringify(ack20)}`);
-    check(ack20.ok === true, "BOB (tier 32) slot-20 request accepted by the gateway");
+    check(ack20.ok === true, "BOB (tier 32) slot-20 tunnel accepted by the gateway");
 
     // 5. BOB over-spends slot 0: two distinct signals under one nullifier -> slash on chain.
     // The gateway recomputes signal = requestSignal(target, nonce), so each envelope carries its
     // nonce; distinct nonces => distinct signals (x) under the SAME nullifier (slot 0, this epoch).
     const n1 = "b-n1-" + randomBytes(4).toString("hex");
     const e1 = await proveForSlot(B.seed, epoch, 0, requestSignal(targets[0], n1), { group: g, limit: 32 });
-    const env1 = { v: 3, target: targets[0], nonce: n1, proof: e1.proof, nullifier: e1.nullifier, externalNullifier: e1.externalNullifier, share: e1.share };
+    const env1 = { v: 4, target: targets[0], nonce: n1, proof: e1.proof, nullifier: e1.nullifier, externalNullifier: e1.externalNullifier, share: e1.share };
     const n2 = "b-n2-" + randomBytes(4).toString("hex");
     const e2 = await proveForSlot(B.seed, epoch, 0, requestSignal(targets[0], n2), { group: g, limit: 32 });
-    const env2 = { v: 3, target: targets[0], nonce: n2, proof: e2.proof, nullifier: e2.nullifier, externalNullifier: e2.externalNullifier, share: e2.share };
+    const env2 = { v: 4, target: targets[0], nonce: n2, proof: e2.proof, nullifier: e2.nullifier, externalNullifier: e2.externalNullifier, share: e2.share };
     log("bob", `over-spend 1/2 slot 0 nullifier ${e1.nullifier.slice(0, 12)}.. -> sending`);
     const a1 = await sendEnvelope(env1);
     log("bob", `over-spend 1/2 -> ${JSON.stringify(a1)}`);
@@ -312,26 +312,26 @@ export async function runTierIntegration(opts) {
 
 // ---- CLI --------------------------------------------------------------------------------
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const rpcUrl = process.env.RGOE_RPC_URL;
-  const set = process.env.RGOE_GROUP_CONTRACT;
-  const slashKey = process.env.RGOE_SLASH_KEY;
+  const rpcUrl = process.env.SHADE_TREE_RPC_URL;
+  const set = process.env.SHADE_TREE_GROUP_CONTRACT;
+  const slashKey = process.env.SHADE_TREE_SLASH_KEY;
   if (!rpcUrl || !set || !slashKey) {
-    console.error("integration-tiers: need RGOE_RPC_URL, RGOE_GROUP_CONTRACT (rln-v4 set), RGOE_SLASH_KEY");
+    console.error("integration-tiers: need SHADE_TREE_RPC_URL, SHADE_TREE_GROUP_CONTRACT (rln-v4 set), SHADE_TREE_SLASH_KEY");
     process.exit(2);
   }
-  const targets = (process.env.RGOE_TARGETS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const targets = (process.env.SHADE_TREE_TARGETS || "").split(",").map((s) => s.trim()).filter(Boolean);
   runTierIntegration({
     rpcUrl, set, slashKey,
-    registerKey: process.env.RGOE_REGISTER_KEY || slashKey,
-    receiver: process.env.RGOE_SLASH_RECEIVER || null,
-    seedA: process.env.RGOE_MEMBER_A_SECRET || undefined,
-    seedB: process.env.RGOE_MEMBER_B_SECRET || undefined,
-    confirmations: Number(process.env.RGOE_CONFIRMATIONS || 1),
+    registerKey: process.env.SHADE_TREE_REGISTER_KEY || slashKey,
+    receiver: process.env.SHADE_TREE_SLASH_RECEIVER || null,
+    seedA: process.env.SHADE_TREE_MEMBER_A_SECRET || undefined,
+    seedB: process.env.SHADE_TREE_MEMBER_B_SECRET || undefined,
+    confirmations: Number(process.env.SHADE_TREE_CONFIRMATIONS || 1),
     targets: targets.length ? targets : undefined,
   }).then((r) => {
-    if (process.env.RGOE_REPORT_OUT) {
-      writeFileSync(process.env.RGOE_REPORT_OUT, JSON.stringify({ pass: r.pass, chainId: r.chainId, txs: r.txs, members: r.members, checks: r.checks, trace: r.trace }, null, 2) + "\n");
-      console.log("wrote", process.env.RGOE_REPORT_OUT);
+    if (process.env.SHADE_TREE_REPORT_OUT) {
+      writeFileSync(process.env.SHADE_TREE_REPORT_OUT, JSON.stringify({ pass: r.pass, chainId: r.chainId, txs: r.txs, members: r.members, checks: r.checks, trace: r.trace }, null, 2) + "\n");
+      console.log("wrote", process.env.SHADE_TREE_REPORT_OUT);
     }
     process.exit(r.pass ? 0 : 1);
   }).catch((e) => { console.error(e); process.exit(1); });

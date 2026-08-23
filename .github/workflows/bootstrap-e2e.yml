@@ -3,11 +3,11 @@ name: bootstrap-e2e
 # T-TEST-8: prove bootnode/deploy/bootstrap.sh actually brings a fleet up, instead of
 # being hand-run once. It runs the SAME local runner a developer uses
 # (bootnode/deploy/e2e-container.sh): boot ubuntu:24.04 with real systemd as PID 1,
-# run bootstrap.sh against this checkout, and assert tor + the rgoe units are active,
+# run bootstrap.sh against this checkout, and assert tor + the shade-tree units are active,
 # both onion hostname files were written, and the bootnode answers /health on loopback.
 # Reaching the onion over the live Tor network is attempted best-effort (non-fatal).
 # A second matrix entry runs the same container in bootstrap.sh's GATEWAY-ONLY mode
-# (RGOE_BOOTNODE_ONION set -> no bootnode unit / HS, heartbeat -> the remote onion; T-DEPLOY-5
+# (SHADE_TREE_BOOTNODE_ONION set -> no bootnode unit / HS, heartbeat -> the remote onion; T-DEPLOY-5
 # GAP-6). See bootnode/deploy/E2E-CONTAINER.md for the systemd-in-container rationale +
 # honest coverage notes.
 

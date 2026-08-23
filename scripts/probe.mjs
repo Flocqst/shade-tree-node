@@ -39,7 +39,7 @@ const { socket } = await SocksClient.createConnection({
   timeout: 60000,
 });
 
-socket.write(JSON.stringify({ v: 1, target: "api.ipify.org:443", proof }) + "\n");
+socket.write(JSON.stringify({ v: 4, target: "api.ipify.org:443", nonce: `probe-${mode}`, proof }) + "\n");
 let buf = "";
 socket.on("data", (d) => {
   buf += d.toString();

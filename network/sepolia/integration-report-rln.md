@@ -70,9 +70,9 @@ Leaves (rateCommitments): ALICE `835981380137162055943001…`, BOB `221825739623
 
 ## What this proves
 
-- **Real RLN membership** — each request is a circom-rln Groth16 proof against the depth-20
+- **Real RLN membership** — each tunnel carries a circom-rln Groth16 proof against the depth-20
   rateCommitment tree; the gateway verifies it with the deployed `verification_key.json`.
-- **Rotation / unlinkability** — ALICE's three requests carry three distinct nullifiers
+- **Rotation / unlinkability** — ALICE's three tunnels carry three distinct nullifiers
   under one per-epoch external nullifier; no shared key links them.
 - **Rate cap = K enforced by construction** — BOB reusing slot 0 (messageId 0) in one epoch
   yields the *same* nullifier; a second distinct signal is the (K+1)-th point.
@@ -84,16 +84,16 @@ Leaves (rateCommitments): ALICE `835981380137162055943001…`, BOB `221825739623
 
 All three DO gateways were re-provisioned onto the RLN branch (`git HEAD 8bd7b62`, `rlnjs`
 installed, wired to the new contract `0xdAE242AE…20FC`, PoW off). A local shim built **real
-RLN proofs** and routed over Tor to the fleet; every request returned a **gateway** IP, never
+RLN proofs** and routed over Tor to the fleet; every tunnel returned a **gateway** IP, never
 the laptop's (`67.245.238.193`), rotating across all three:
 
 | req | egress IP | gateway | onion |
 |---|---|---|---|
-| 1,2 | 167.172.237.22 | rgoe-03 | spoe2hmw… |
+| 1,2 | 167.172.237.22 | shade-tree-03 | spoe2hmw… |
 | 3,4,5,7 | 165.227.118.154 | egress-01 | kjeyt2gt… |
 | 6 | 167.172.224.177 | egress-02 | oi73ktti… |
 
-Gateway logs: RLN `PASS egress` on all three (egress-01 ×4, rgoe-03 ×2, egress-02 ×1);
+Gateway logs: RLN `PASS egress` on all three (egress-01 ×4, shade-tree-03 ×2, egress-02 ×1);
 the laptop's public IP appears **0 times** across every gateway — Tor rendezvous never
 reveals the client. The signed directory (`directory.json`, signer `189f4511…1321`) already
 carried the three current onions, so no re-sign was needed.
@@ -130,7 +130,7 @@ share state (a known follow-up).
 
 One operator note (not a fault): a freshly started **client** tor has marginal onion-connect
 success for the first several minutes (measured ~1/10 at one point); the shim's directory
-mode requires `RGOE_DIR_SIGNER` set or it silently falls back to a stale local
+mode requires `SHADE_TREE_DIR_SIGNER` set or it silently falls back to a stale local
 `tor/hs/hostname`. With the signer set and tor warm, round-trips are reliable.
 
 ## Honesty / scope

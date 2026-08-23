@@ -1,4 +1,4 @@
-# End-to-end run report — reputation-gated onion egress on Sepolia
+# End-to-end run report — Shade Tree on Sepolia
 
 **One document, the whole system, every flow.** This is the comprehensive record of a
 live end-to-end run: contracts on Ethereum Sepolia, a 3-gateway Tor fleet on
@@ -20,8 +20,8 @@ onion, and hop is here, with the flows drawn out.
 | Property | How it was proven | Evidence |
 |---|---|---|
 | Staking is real & on-chain | 2 members registered bonds on Sepolia | `activeCount` 0→2, tx `0x7451…`, `0x62a2…` |
-| Anonymous gated egress works | client builds a ZK proof, gateway verifies, egresses | live round-trip returns the **gateway's** IP |
-| Per-request rotation (gateway + slot) | 3 requests spread across gateways + slots | egress-02→rgoe-03, slots 0/1/2 |
+| Anonymous outbound tunnel works | client builds a ZK proof, gateway verifies, egresses | live round-trip returns the **gateway's** IP |
+| Per-tunnel rotation (gateway + slot) | 3 tunnels spread across gateways + slots | egress-02→shade-tree-03, slots 0/1/2 |
 | Client stays anonymous to the gateway | rendezvous hides the client IP | laptop IP appears **0×** in gateway logs |
 | Over-spend is detected & punished | gateway reconstructs the secret, slashes on-chain | slash tx `0x70a6…`, bond zeroed |
 | Honest members are never exposed | only the over-spender's leaf is revealed | alice bond intact, still `active` |
@@ -36,7 +36,7 @@ Final on-chain state now: `activeCount = 1` (alice staked, bob slashed).
 flowchart TB
     subgraph Laptop["Client (laptop)"]
         curl["curl / SearXNG<br/>http_proxy=127.0.0.1:8888"]
-        shim["shim.mjs<br/>· builds Semaphore proof per slot<br/>· picks a gateway (rotation)<br/>· holds RGOE_SECRET"]
+        shim["shim.mjs<br/>· builds Semaphore proof per slot<br/>· picks a gateway (rotation)<br/>· holds SHADE_TREE_SECRET"]
         ctor["client Tor<br/>SOCKS 9260"]
         curl --> shim --> ctor
     end
@@ -49,7 +49,7 @@ flowchart TB
         direction TB
         gw1["egress-01<br/>gateway.mjs :8443<br/>kjeyt…onion"]
         gw2["egress-02<br/>gateway.mjs :8443<br/>oi73k…onion"]
-        gw3["rgoe-03<br/>gateway.mjs :8443<br/>spoe2…onion"]
+        gw3["shade-tree-03<br/>gateway.mjs :8443<br/>spoe2…onion"]
     end
 
     subgraph Chain["Ethereum Sepolia"]
@@ -114,14 +114,14 @@ Params: bond **0.001 ETH**, unbonding **300 s** (≥ F+E+C), epoch **120 s**, K 
 |---|---|---|---|
 | gateway-1 | egress-01 | 165.227.118.154 | `kjeyt2gtzcvnbshedns5wvtahtqbqwlmw4e56ku3iuqiykf5mwwdqdad.onion` |
 | gateway-2 | egress-02 | 167.172.224.177 | `oi73kttiriqhfmoxo42pstfobrhbjxko3gzzs54bovwhs2ayuw64imad.onion` |
-| gateway-3 | rgoe-03 | 167.172.237.22 | `spoe2hmwp62w5bg74by7plx54rn4rzjro4bq6qzv5q6ewi4lqlovlbqd.onion` |
+| gateway-3 | shade-tree-03 | 167.172.237.22 | `spoe2hmwp62w5bg74by7plx54rn4rzjro4bq6qzv5q6ewi4lqlovlbqd.onion` |
 
-Directory signer (pinned in client as `RGOE_DIR_SIGNER`):
+Directory signer (pinned in client as `SHADE_TREE_DIR_SIGNER`):
 `189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321`.
 
 ---
 
-## 4. The request lifecycle (a single normal request, hop by hop)
+## 4. The tunnel lifecycle (a single normal tunnel, hop by hop)
 
 ```mermaid
 sequenceDiagram
@@ -182,7 +182,7 @@ sequenceDiagram
     Note over Chain: tx 0x7451… blk 11274571
     Bob->>Chain: register(Poseidon(secret_B)) + 0.001 ETH
     Note over Chain: tx 0x62a2… blk 11274572 · activeCount=2
-    Alice->>GW: 3 requests, slots 0/1/2 (distinct nullifiers)
+    Alice->>GW: 3 tunnels, slots 0/1/2 (distinct nullifiers)
     GW-->>Alice: PASS × 3 (within budget)
     Bob->>GW: slot 0, signal #1 → PASS (1 share held)
     Bob->>GW: slot 0, signal #2 (rate violation → 2nd share)
@@ -202,7 +202,7 @@ sequenceDiagram
 | Bob stake | [`0x62a2eafc…b5f5`](https://sepolia.etherscan.io/tx/0x62a2eafc8b38a490f7112cb7541da3bd88aea7d354fe8f116700bd1cec1ab5f5) | 11274572 | bond held, activeCount=2 |
 | **Slash (Bob)** | [`0x70a67009…d6b9`](https://sepolia.etherscan.io/tx/0x70a670093401b4675d3535d9738675928a3949b8858beac4daa20691c831d6b9) | 11274574 | Bob bond → 0, paid to slasher |
 
-Timing (elapsed): Alice staked +9.8s, Bob staked +19.1s, 3 honest requests +20–21s
+Timing (elapsed): Alice staked +9.8s, Bob staked +19.1s, 3 honest tunnels +20–21s
 (round-trips 67–250ms), over-spend detected +21.7s, slash mined +55.6s, verified +56.3s.
 
 ---
@@ -240,13 +240,13 @@ Full path, laptop → clearnet, with both rotations visible:
 |---|---|---|---|
 | 1 | 167.172.224.177 (egress-02) | oi73ktti… | 0 |
 | 2 | 167.172.224.177 (egress-02) | oi73ktti… | 1 |
-| 3 | 167.172.237.22 (rgoe-03) | spoe2hmw… | 2 |
+| 3 | 167.172.237.22 (shade-tree-03) | spoe2hmw… | 2 |
 
 - The destination sees the **gateway's** clean IP, not the laptop's.
 - **Privacy check:** the laptop's public IP (`67.245.238.193`) appears **0 times** in the
   gateways' logs — Tor rendezvous never reveals the client.
-- Both rotations are live: gateway changed (egress-02 → rgoe-03) and slot advanced per
-  request (distinct per-request nullifiers).
+- Both rotations are live: gateway changed (egress-02 → shade-tree-03) and slot advanced per
+  tunnel (distinct per-tunnel nullifiers).
 
 ---
 
@@ -258,10 +258,10 @@ Every one of these is committed; the run flushed out real defects, not config no
 |---|---|---|---|
 | 1 | client hangs forever, no reply | `verifyEnvelope` did `.map` on `recentRoots`, a **Set** → TypeError thrown outside the gateway try/catch → no reply | `Array.from()`; gateway replies on any throw; shim readLine timeout (`e58d224`) |
 | 2 | slashing silently dry-run | `makeSlasher` read `deployed.StakedReputationSet` but Deploy writes `stakedReputationSet` (lowercase) | key casing fixed (`9c16f67`) |
-| 3 | can't enable fleet slashing without breaking membership | one env var flipped both slashing **and** on-chain root mode | added `RGOE_SLASH_CONTRACT`, decoupled (`0e50d56`) |
+| 3 | can't enable fleet slashing without breaking membership | one env var flipped both slashing **and** on-chain root mode | added `SHADE_TREE_SLASH_CONTRACT`, decoupled (`0e50d56`) |
 | 4 | env template crash `int has no len()` | a `0x`+64-hex key is a valid YAML integer; sops re-parsed it to an int | store bare hex, prepend `0x` in group_vars (devops) |
 | 5 | fleet round-trip `HostUnreachable` | directory onions carry `.onion`; `dialOnion` re-appends → `…onion.onion` | strip suffix in the directory path (`45dd65c`) |
-| 6 | laptop can't reach fleet onions (but reaches DuckDuckGo) | gateways required Tor **PoW**; laptop's Homebrew tor is `pow: no` | PoW default OFF (`rgoe_enable_pow`, devops) |
+| 6 | laptop can't reach fleet onions (but reaches DuckDuckGo) | gateways required Tor **PoW**; laptop's Homebrew tor is `pow: no` | PoW default OFF (`shade_tree_enable_pow`, devops) |
 | 7 | intermittent onion unreachability | onion **cold-start**: each re-provision restarts tor; descriptor needs minutes to republish | latency, not a fault; `dialOnion` retries cover steady state |
 
 Note on the misdiagnosis worth recording: #5–#7 initially read as "the Tor network is
@@ -272,7 +272,7 @@ causes were a client bug (#5), a capability mismatch (#6), and restart latency (
 
 ## 9. What is proven vs. the documented seams
 
-**Proven live:** on-chain staking, anonymous gated egress, per-request gateway + slot
+**Proven live:** on-chain staking, anonymous outbound tunnels, per-tunnel gateway + slot
 rotation, client-IP privacy, over-spend detection, secret reconstruction, on-chain
 slashing, time-locked exit/withdraw (in the anvil e2e), and the full Tor transport.
 
@@ -298,23 +298,23 @@ slashing, time-locked exit/withdraw (in the anvil e2e), and the full Tor transpo
 
 ```bash
 # Contracts (Sepolia) — deployer must hold a little Sepolia ETH
-export RGOE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-export RGOE_BOND_WEI=1000000000000000 RGOE_UNBONDING=300 RGOE_MIN_UNBONDING=270
-forge script script/Deploy.s.sol:Deploy --rpc-url "$RGOE_RPC_URL" --broadcast --private-key <deployer>
+export SHADE_TREE_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+export SHADE_TREE_BOND_WEI=1000000000000000 SHADE_TREE_UNBONDING=300 SHADE_TREE_MIN_UNBONDING=270
+forge script script/Deploy.s.sol:Deploy --rpc-url "$SHADE_TREE_RPC_URL" --broadcast --private-key <deployer>
 
 # On-chain integration test (stake → use → over-spend → slash)
 node scripts/integration-sepolia.mjs
 
 # Live Tor round-trip through the fleet
-export RGOE_DIRECTORY=network/sepolia/directory.json
-export RGOE_DIR_SIGNER=189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321
-export RGOE_SECRET=<a seeded member secret>
+export SHADE_TREE_DIRECTORY=network/sepolia/directory.json
+export SHADE_TREE_DIR_SIGNER=189f4511bad18f7d9e1fa1339b8b7ac27a7920ddf27b9a9c286b599bc0b21321
+export SHADE_TREE_SECRET=<a seeded member secret>
 bash scripts/run-client.sh
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json   # returns a gateway IP
 ```
 
 Fleet provisioning + on-chain slashing wiring live in `~/agent-devops`
-(`rgoe_gateway` role, branch `rgoe-gateway-fleet`).
+(`shade_tree_gateway` role, branch `shade-tree-gateway-fleet`).
 
 ---
 
@@ -327,8 +327,8 @@ dbbbad8  deploy: StakedReputationSet live on Sepolia
 e58d224  fix: verifyEnvelope accepts a Set of roots; gateway never hangs the client
 9c16f67  test: live Sepolia integration (stake → use → over-spend → slash) + report
 2239d02  docs: protocol design + build report + live experiment harnesses
-0e50d56  feat: decouple on-chain slashing from membership root mode (RGOE_SLASH_CONTRACT)
+0e50d56  feat: decouple on-chain slashing from membership root mode (SHADE_TREE_SLASH_CONTRACT)
 45dd65c  fix: strip .onion suffix in directory dial path (double-suffix HostUnreachable)
 c28439c  docs: live Tor round-trip confirmed; record the 3 root causes
 ```
-(agent-devops: `rgoe_gateway` role + fleet slashing + PoW-off on branch `rgoe-gateway-fleet`.)
+(agent-devops: `shade_tree_gateway` role + fleet slashing + PoW-off on branch `shade-tree-gateway-fleet`.)

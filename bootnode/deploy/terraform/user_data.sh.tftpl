@@ -9,16 +9,16 @@
 set -euo pipefail
 
 # --- tunables passed straight through to bootstrap.sh ---
-export RGOE_REPO="${git_repo}"
-export RGOE_REF="${git_ref}"
-export RGOE_ADMISSION="${admission}"
-export RGOE_BOOTNODE_PORT="${bootnode_port}"
-export RGOE_GATEWAY_PORT="${gateway_port}"
+export SHADE_TREE_REPO="${git_repo}"
+export SHADE_TREE_REF="${git_ref}"
+export SHADE_TREE_ADMISSION="${admission}"
+export SHADE_TREE_BOOTNODE_PORT="${bootnode_port}"
+export SHADE_TREE_GATEWAY_PORT="${gateway_port}"
 
-LOG=/var/log/rgoe-bootstrap.log
+LOG=/var/log/shade-tree-bootstrap.log
 exec > >(tee -a "$LOG") 2>&1
 
-echo "[rgoe] $(date -u) first-boot provisioning: ref=${git_ref} admission=${admission}"
+echo "[shade-tree] $(date -u) first-boot provisioning: ref=${git_ref} admission=${admission}"
 
 # On first boot cloud-init and unattended-upgrades can hold the apt lock; wait it
 # out so bootstrap.sh's own apt-get calls don't race.
@@ -26,17 +26,17 @@ for i in $(seq 1 30); do
   if apt-get update -qq >/dev/null 2>&1; then
     break
   fi
-  echo "[rgoe] waiting for apt lock (attempt $i)..."
+  echo "[shade-tree] waiting for apt lock (attempt $i)..."
   sleep 5
 done
 
 # Fetch bootstrap.sh at the SAME pinned ref the box will clone, then delegate.
 RAW_URL="https://raw.githubusercontent.com/${repo_slug}/${git_ref}/bootnode/deploy/bootstrap.sh"
-echo "[rgoe] fetching bootstrap.sh: $RAW_URL"
-curl -fsSL --retry 5 --retry-delay 5 "$RAW_URL" -o /root/rgoe-bootstrap.sh
+echo "[shade-tree] fetching bootstrap.sh: $RAW_URL"
+curl -fsSL --retry 5 --retry-delay 5 "$RAW_URL" -o /root/shade-tree-bootstrap.sh
 
-echo "[rgoe] handing off to bootstrap.sh"
-bash /root/rgoe-bootstrap.sh
+echo "[shade-tree] handing off to bootstrap.sh"
+bash /root/shade-tree-bootstrap.sh
 
-echo "[rgoe] $(date -u) provisioning complete."
-echo "[rgoe] onions + signer were printed above; also: journalctl -u rgoe-bootnode -u rgoe-gateway -u rgoe-heartbeat"
+echo "[shade-tree] $(date -u) provisioning complete."
+echo "[shade-tree] onions + signer were printed above; also: journalctl -u shade-tree-bootnode -u shade-tree-gateway -u shade-tree-heartbeat"

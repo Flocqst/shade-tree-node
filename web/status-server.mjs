@@ -12,13 +12,13 @@
 // path (lib/directory.mjs verifyDirectory), so a lying bootnode shows up here as signerOk=false
 // rather than as a forged fleet.
 //
-// Config (all RGOE_*):
-//   RGOE_BOOTNODE_ONION   the bootnode's v3 onion; reached over Tor (bootnode/fetch.mjs)
-//   RGOE_BOOTNODE_URL     OR a plain http base URL (e.g. http://127.0.0.1:8877) for local/dev
-//   RGOE_DIR_SIGNER       the pinned directory-signer pubkey (hex) the bootnode prints on boot
-//   RGOE_STATUS_PORT      loopback port for this status page          (default 8090)
-//   RGOE_TOR_PORT         local Tor SOCKS port for the onion path     (default 9250)
-//   RGOE_TOR_HOST         local Tor SOCKS host                        (default 127.0.0.1)
+// Config (all SHADE_TREE_*):
+//   SHADE_TREE_BOOTNODE_ONION   the bootnode's v3 onion; reached over Tor (bootnode/fetch.mjs)
+//   SHADE_TREE_BOOTNODE_URL     OR a plain http base URL (e.g. http://127.0.0.1:8877) for local/dev
+//   SHADE_TREE_DIR_SIGNER       the pinned directory-signer pubkey (hex) the bootnode prints on boot
+//   SHADE_TREE_STATUS_PORT      loopback port for this status page          (default 8090)
+//   SHADE_TREE_TOR_PORT         local Tor SOCKS port for the onion path     (default 9250)
+//   SHADE_TREE_TOR_HOST         local Tor SOCKS host                        (default 127.0.0.1)
 //
 // It binds LOOPBACK by default and has no auth: everything it serves is already-public,
 // privacy-scrubbed data, and loopback keeps it off the network until an operator chooses to
@@ -79,12 +79,12 @@ function makeHistoryRing(cap = HISTORY_CAP) {
 
 export function configFromEnv(env = process.env) {
   return {
-    bootnodeUrl: env.RGOE_BOOTNODE_URL || null,
-    bootnodeOnion: env.RGOE_BOOTNODE_ONION || null,
-    dirSigner: env.RGOE_DIR_SIGNER || null,
-    torHost: env.RGOE_TOR_HOST || "127.0.0.1",
-    torPort: Number(env.RGOE_TOR_PORT || 9250),
-    port: Number(env.RGOE_STATUS_PORT || 8090),
+    bootnodeUrl: env.SHADE_TREE_BOOTNODE_URL || null,
+    bootnodeOnion: env.SHADE_TREE_BOOTNODE_ONION || null,
+    dirSigner: env.SHADE_TREE_DIR_SIGNER || null,
+    torHost: env.SHADE_TREE_TOR_HOST || "127.0.0.1",
+    torPort: Number(env.SHADE_TREE_TOR_PORT || 9250),
+    port: Number(env.SHADE_TREE_STATUS_PORT || 8090),
   };
 }
 
@@ -96,7 +96,7 @@ async function fetchBootnode(cfg, path) {
   if (cfg.bootnodeOnion) {
     return await fetchOverTor(cfg.bootnodeOnion, path, { torHost: cfg.torHost, torPort: cfg.torPort });
   }
-  throw new Error("no bootnode configured (set RGOE_BOOTNODE_URL or RGOE_BOOTNODE_ONION)");
+  throw new Error("no bootnode configured (set SHADE_TREE_BOOTNODE_URL or SHADE_TREE_BOOTNODE_ONION)");
 }
 
 // Minimal plain-http GET + JSON parse, bounded read (mirrors fetch.mjs's cap). Dev/local only.
@@ -166,7 +166,7 @@ export async function buildStatus(cfg) {
     out.signerOk = v.ok === true;
     if (!v.ok) out.error = "directory verify: " + v.reason;
   } else {
-    out.error = "no RGOE_DIR_SIGNER pinned; signature not verified";
+    out.error = "no SHADE_TREE_DIR_SIGNER pinned; signature not verified";
   }
   out.gateways = scrubGateways(dir);
   out.fleetSize = out.gateways.length;
@@ -213,10 +213,10 @@ export function makeStatusServer(cfg, { historyCap = HISTORY_CAP } = {}) {
 async function main() {
   const cfg = configFromEnv();
   if (!cfg.bootnodeUrl && !cfg.bootnodeOnion) {
-    console.error("set RGOE_BOOTNODE_URL (dev) or RGOE_BOOTNODE_ONION (Tor). See web/README.md");
+    console.error("set SHADE_TREE_BOOTNODE_URL (dev) or SHADE_TREE_BOOTNODE_ONION (Tor). See web/README.md");
     process.exit(1);
   }
-  if (!cfg.dirSigner) console.warn("warning: RGOE_DIR_SIGNER unset -- signature will not be verified (signerOk=false)");
+  if (!cfg.dirSigner) console.warn("warning: SHADE_TREE_DIR_SIGNER unset -- signature will not be verified (signerOk=false)");
   const server = makeStatusServer(cfg);
   server.listen(cfg.port, "127.0.0.1", () => {
     const target = cfg.bootnodeUrl || cfg.bootnodeOnion;

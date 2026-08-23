@@ -1,9 +1,9 @@
 name: real-tor-e2e
 
-# T-TEST-1: real-Tor END-TO-END member egress. It boots the SAME systemd-container fleet as
-# bootstrap-e2e (bootnode/deploy/bootstrap.sh -> tor + rgoe-bootnode + rgoe-gateway with REAL
-# published v3 onions), then runs the JS REFERENCE client (client/rgoe-client.mjs, driven by
-# test/real-tor-e2e-client.mjs): it mints a real per-request RLN membership proof and dials the
+# T-TEST-1: real-Tor END-TO-END member tunnel. It boots the SAME systemd-container fleet as
+# bootstrap-e2e (bootnode/deploy/bootstrap.sh -> tor + shade-tree-bootnode + shade-tree-gateway with REAL
+# published v3 onions), then runs the JS REFERENCE client (client/shade-tree-client.mjs, driven by
+# test/real-tor-e2e-client.mjs): it mints a real per-tunnel RLN membership proof and dials the
 # gateway's .onion over the container's Tor SOCKS, and the real gateway must ACCEPT and proxy the
 # CONNECT to a local sink.
 #
@@ -33,7 +33,7 @@ on:
 
 jobs:
   real-tor-e2e:
-    name: real-Tor client egress e2e (systemd fleet)
+    name: real-Tor client tunnel e2e (systemd fleet)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

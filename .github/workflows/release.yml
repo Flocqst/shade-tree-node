@@ -1,19 +1,19 @@
 name: release
 
-# Build the distributable `rgoe` binary and attach it to a GitHub Release (T-RUST-4).
+# Build the distributable `shade-tree` binary and attach it to a GitHub Release (T-RUST-4).
 # SEPARATE from ci.yml (which stays the correctness gate) — this workflow only packages.
 #
 # Two honest binary flavors:
-#   - DEFAULT `rgoe` (deterministic core: verify-directory / select / verify-receipt /
+#   - DEFAULT `shade-tree` (deterministic core: verify-directory / select / verify-receipt /
 #     fetch-directory). Pure Rust, no native deps, so it CROSS-COMPILES cleanly to the full
 #     target matrix (linux gnu+musl x64/arm64, macOS x64/arm64, windows x64). Linux cross is
 #     done with cargo-zigbuild (zig supplies the cross linker); macOS/windows build on their
 #     own runner. No embedded circuit artifacts, so it stays small.
-#   - LIVE `rgoe` (egress: RLN Groth16 prover via ark-circom->wasmer + embedded Tor via arti).
+#   - LIVE `shade-tree` (egress: RLN Groth16 prover via ark-circom->wasmer + embedded Tor via arti).
 #     Heavy native deps that are NOT worth statically cross-linking, so each `live` binary is
 #     built NATIVELY on its runner OS: ubuntu=linux-x64, macos=arm64, windows=x64. The RLN
-#     circuit artifacts are `include_bytes!`'d in (rgoe-rln `embedded-artifacts` feature,
-#     enabled by `rgoe-client`'s `live`), so the `live` binary is self-contained — no external
+#     circuit artifacts are `include_bytes!`'d in (shade-tree-rln `embedded-artifacts` feature,
+#     enabled by `shade-tree-client`'s `live`), so the `live` binary is self-contained — no external
 #     circuit files needed to egress.
 #
 # TESTNET-ONLY artifacts: the embedded ZK artifacts are from an UNTRUSTED testnet ceremony
@@ -22,19 +22,19 @@ name: release
 # ARTIFACT LOCK GATE (T-HARD-8): `lock-check` runs test/zk-artifacts.selftest.mjs on the tagged
 # commit and BOTH build jobs depend on it, so a tag can never package a `live` binary whose
 # embedded circuits/rln/* drift from testdata/zk-artifacts.lock.json (the binary also re-checks
-# its embedded bytes against the embedded lock at `egress` startup — rust/rgoe-rln/src/artifacts.rs).
+# its embedded bytes against the embedded lock at `egress` startup — rust/shade-tree-rln/src/artifacts.rs).
 #
-# Assets are named `rgoe-<version>-<target>` (default) and `rgoe-<version>-<target>-live`
+# Assets are named `shade-tree-<version>-<target>` (default) and `shade-tree-<version>-<target>-live`
 # (live), each with a `.sha256`. Symbols are stripped by `[profile.release]` (strip = true).
 #
 # v0.1.1 release-fix notes (v0.1.0 shipped with 3 of 10 targets missing):
 #   - Package: `shasum` does not exist on the windows runner's bash -> use `sha256sum` where
 #     available (linux/windows) and `shasum -a 256` on macOS. Same "<hex>  <file>" format.
 #   - live windows: rusqlite (arti's tor-dirmgr) linked the SYSTEM sqlite3.lib (LNK1181) ->
-#     rgoe-client's `live` now turns on `arti-client/static-sqlite` (bundled amalgamation),
+#     shade-tree-client's `live` now turns on `arti-client/static-sqlite` (bundled amalgamation),
 #     which also drops the libsqlite3 dynamic dep from the linux/macos live binaries.
 #   - live linux x64: wasmer-vm 4 references `__rust_probestack`, which rustc >= 1.89 no
-#     longer exports -> rgoe-rln/src/prover.rs carries the compiler-builtins definition.
+#     longer exports -> shade-tree-rln/src/prover.rs carries the compiler-builtins definition.
 
 on:
   push:
@@ -111,19 +111,19 @@ jobs:
       - name: Build (cross via zigbuild)
         if: ${{ matrix.cross }}
         working-directory: rust
-        run: cargo zigbuild --release -p rgoe-client --target ${{ matrix.target }}
+        run: cargo zigbuild --release -p shade-tree-client --target ${{ matrix.target }}
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
         working-directory: rust
-        run: cargo build --release -p rgoe-client --target ${{ matrix.target }}
+        run: cargo build --release -p shade-tree-client --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
         run: |
           mkdir -p dist
-          BIN="rust/target/${{ matrix.target }}/release/rgoe${{ matrix.ext }}"
-          OUT="rgoe-${{ needs.set-version.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
+          BIN="rust/target/${{ matrix.target }}/release/shade-tree${{ matrix.ext }}"
+          OUT="shade-tree-${{ needs.set-version.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
           cp "$BIN" "dist/$OUT"
           # sha256sum on linux + windows(git-bash); shasum -a 256 on macOS (no sha256sum there).
           # The hex is re-framed by hand as "<hex>  <file>" so the .sha256 asset format is
@@ -137,7 +137,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rgoe-${{ matrix.target }}
+          name: shade-tree-${{ matrix.target }}
           path: dist/*
 
       - name: Attach to Release
@@ -170,14 +170,14 @@ jobs:
 
       - name: Build live (native, embedded artifacts)
         working-directory: rust
-        run: cargo build --release -p rgoe-client --features live --target ${{ matrix.target }}
+        run: cargo build --release -p shade-tree-client --features live --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
         run: |
           mkdir -p dist
-          BIN="rust/target/${{ matrix.target }}/release/rgoe${{ matrix.ext }}"
-          OUT="rgoe-${{ needs.set-version.outputs.version }}-${{ matrix.target }}-live${{ matrix.ext }}"
+          BIN="rust/target/${{ matrix.target }}/release/shade-tree${{ matrix.ext }}"
+          OUT="shade-tree-${{ needs.set-version.outputs.version }}-${{ matrix.target }}-live${{ matrix.ext }}"
           cp "$BIN" "dist/$OUT"
           # sha256sum on linux + windows(git-bash); shasum -a 256 on macOS (no sha256sum there).
           # The hex is re-framed by hand as "<hex>  <file>" so the .sha256 asset format is
@@ -191,7 +191,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rgoe-${{ matrix.target }}-live
+          name: shade-tree-${{ matrix.target }}-live
           path: dist/*
 
       - name: Attach to Release

@@ -35,11 +35,11 @@ Task: T-FEAT-7 (`docs/SHIP-PLAN.md`), design `docs/PAYMENTS.md`, contract notes
 | PaidAccessSet | [`0x4e8C2Bf5d3c5454A04837401095fce2646484111`](https://sepolia.etherscan.io/address/0x4e8C2Bf5d3c5454A04837401095fce2646484111) |
 | deploy tx / block | `0x9835d062d007642dc739b6e2bae434f81286f25ea807f4d99dc74a2c880e4086` / 11510873 |
 | deploy gas | 2,071,319 at ~1.08 gwei ≈ 0.0022 ETH (one CREATE; both Poseidon libraries reused via `--libraries`) |
-| operator (registrar / insert authority) | `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key; `RGOE_PAY_OPERATOR` unset ⇒ deployer) |
-| hasher (reused, rln-v4 tiered) | `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` (`RGOE_COMMITMENT_HASHER`) |
+| operator (registrar / insert authority) | `0xc8606C75E003EDA7C0a377B4708AbEC6EB7a7f02` (fleet operator hot key; `SHADE_TREE_PAY_OPERATOR` unset ⇒ deployer) |
+| hasher (reused, rln-v4 tiered) | `0x29e9D6ae8d46A9D86D6A92a43307850e0FA06586` (`SHADE_TREE_COMMITMENT_HASHER`) |
 | PoseidonT2 / PoseidonT3 (linked, reused) | `0xA20D550b5b3b99c0abB6E51d68d2a39955E69b55` / `0x82Cb42c70208a92DD5938b5f4D67C7d2313bE022` |
-| params | `RGOE_PAY_LIMITS=8,32` → `allowedLimits() == [8, 32]`, `DEFAULT_LIMIT` 8, `MAX_LIMIT` 65535; no prices on chain |
-| receipt bundle | [`paid-access-broadcast.json`](paid-access-broadcast.json); recorded with `rgoe record-deploy --network sepolia --contract paidAccessSet --from-broadcast …` |
+| params | `SHADE_TREE_PAY_LIMITS=8,32` → `allowedLimits() == [8, 32]`, `DEFAULT_LIMIT` 8, `MAX_LIMIT` 65535; no prices on chain |
+| receipt bundle | [`paid-access-broadcast.json`](paid-access-broadcast.json); recorded with `shade-tree record-deploy --network sepolia --contract paidAccessSet --from-broadcast …` |
 
 Verified with `cast call` right after the broadcast: `currentRoot()` ==
 `10354334201938752428558948798274962999644820234654929486063894213598717249307` (the empty
@@ -83,12 +83,12 @@ Balance 0.04300 → 0.03946 ETH: deploy ≈ 0.0022 ETH + insert ≈ 0.0014 ETH �
 ## Honesty / scope
 
 - This is Layer 1 only. The **402 registrar** (x402 / MPP settlement → `insert`), the
-  gateway's **root union** (`RGOE_PAID_ACCESS_CONTRACT`, one root provider per contract,
+  gateway's **root union** (`SHADE_TREE_PAID_ACCESS_CONTRACT`, one root provider per contract,
   `roots: members.json + staked(0x…) + paid(0x…)` startup line, anonymity-set floor log) and
   the **client** flow are the other two thirds of T-FEAT-7 and are NOT exercised here.
 - The event-replay root provider needs the two new topics (`Inserted` / `Slashed(commitment,
   limit, index, root)`; both carry the post-update root); the light-client provider (slot 3)
-  is unchanged. `RGOE_NETWORK=sepolia` already resolves `RGOE_PAID_ACCESS_CONTRACT` to this
+  is unchanged. `SHADE_TREE_NETWORK=sepolia` already resolves `SHADE_TREE_PAID_ACCESS_CONTRACT` to this
   address (`lib/network-record.mjs`).
 - The trust statement is unchanged from `docs/PAYMENTS.md`: the operator can decline to
   insert or to honor a valid proof (buyer–seller trust); what the chain gives is a public,

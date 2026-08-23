@@ -7,7 +7,7 @@
 // lib/directory.mjs verifyDirectory(), so a lying or MITM'd bootnode cannot forge an entry.
 //
 // Onion services cold-start slowly right after publication (descriptor propagation), so the
-// dial retries a few times, exactly like client/rgoe-client.mjs.
+// dial retries a few times, exactly like client/shade-tree-client.mjs.
 
 import { SocksClient } from "socks";
 
@@ -24,7 +24,7 @@ export async function postOverTor(onion, path, body, opts = {}) {
 // cannot forge a verified entry, but it CAN try to exhaust the long-running client/heartbeat by
 // streaming an unbounded body. Cap the response so a hostile bootnode gets a bounded read, not an
 // OOM. A signed directory is tiny (~a few hundred bytes/entry); 2 MB is generous headroom.
-const MAX_RESP = Number(process.env.RGOE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
+const MAX_RESP = Number(process.env.SHADE_TREE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
 
 export async function requestOverTor(onion, { method = "GET", path = "/", body = null, torHost = "127.0.0.1", torPort = 9250, timeoutMs = 20000, attempts = 4, maxBytes = MAX_RESP } = {}) {
   const host = onion.replace(/\.onion$/, "") + ".onion";

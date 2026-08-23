@@ -29,7 +29,7 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 const perms = (p) => statSync(p).mode & 0o777;
 
 async function main() {
-  const work = mkdtempSync(join(tmpdir(), "rgoe-onion-"));
+  const work = mkdtempSync(join(tmpdir(), "shade-tree-onion-"));
   try {
     // --- mint a real onion identity: gives us the ground-truth onion + secret key file --------
     console.log("mint (bootnode/keygen.mjs):");

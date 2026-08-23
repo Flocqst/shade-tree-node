@@ -16,7 +16,7 @@
 //
 //   2. OPERATOR STAKE (optional, `admission=stake`). A DURABLE authorization signed once
 //      by the operator's Ethereum key binding operator<->onion:
-//         operatorSig = personal_sign("RGOE gateway operator authorization\n
+//         operatorSig = personal_sign("Shade Tree gateway operator authorization\n
 //                                      onion=<onion>\noperator=<operator>")
 //      The bootnode/clients recover the signer, confirm it equals `operator`, and check
 //      GatewayRegistry.isStaked(operator) on chain (lib/gateway-registry.mjs). The
@@ -49,7 +49,7 @@ export function canonicalAnnounceBytes({ v, onion, weight, ts, nonce, caps }) {
 // The human-readable message the OPERATOR key signs (personal_sign). Durable: no ts, so
 // one signature authorizes this onion for as long as the operator stays staked.
 export function operatorAuthMessage(onion, operator) {
-  return `RGOE gateway operator authorization\nonion=${onion}\noperator=${String(operator).toLowerCase()}`;
+  return `Shade Tree gateway operator authorization\nonion=${onion}\noperator=${String(operator).toLowerCase()}`;
 }
 
 // Build a signed announce. `onionSeedHex` is the 32-byte ed25519 seed behind the onion

@@ -9,8 +9,8 @@
 // (the single rateCommitment leaf, same value on-chain); staking + slashing are real
 // Sepolia transactions.
 //
-// NOT RUN in the P2 phase (no testnet funds here). Kept envelope-v3 + single-leaf +
-// identitySecret-reveal consistent with demo-e2e.mjs so it is ready for the live phase.
+// NOT RUN in the P2 phase (no testnet funds here). Kept on the current v4 envelope +
+// single-leaf + identitySecret-reveal path so it is ready for the live phase.
 //
 // Run:  node scripts/integration-sepolia.mjs   (needs the scratchpad wallet files)
 
@@ -28,7 +28,7 @@ const idsecOf = (seed) => identitySecretOf(identityFor(seed));
 const leafOf = (seed) => deriveCommitment(idsecOf(seed)); // == on-chain hasher.commitmentOf(identitySecret)
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SC = process.env.RGOE_SCRATCH || "/private/tmp/claude-501/-Users-halcyon/6dceab6d-31b0-45a6-a4ab-dc2201ffe155/scratchpad";
+const SC = process.env.SHADE_TREE_SCRATCH || "/private/tmp/claude-501/-Users-halcyon/6dceab6d-31b0-45a6-a4ab-dc2201ffe155/scratchpad";
 const dep = JSON.parse(readFileSync(join(ROOT, "contracts", "deployed.local.json"), "utf8"));
 const RPC = dep.rpcUrl;
 const SET = dep.stakedReputationSet;
@@ -52,7 +52,7 @@ const stamp = () => new Date(T0 + (Date.now() - T0)).toISOString().replace("T", 
 const trace = [];
 function log(step, msg) { const line = `[${stamp()}] [+${((Date.now() - T0) / 1000).toFixed(1)}s] ${step}: ${msg}`; console.log(line); trace.push(line); }
 
-// send a v3 envelope to the local gateway over TCP; resolve the gateway's ack line.
+// Send an explicit v4 envelope to the local gateway over TCP; resolve its ack line.
 function sendEnvelope(envelope, timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
     const sock = net.connect(8443, "127.0.0.1", () => sock.write(JSON.stringify(envelope) + "\n"));
@@ -78,11 +78,11 @@ function startGateway() {
       cwd: ROOT,
       env: { ...process.env,
         // T-FEAT-9: the gateway admits invited (members.json) ONLY by default; this integration
-        // proves against the staked set, so admit it explicitly (RGOE_ADMIT in the caller's env wins).
-        RGOE_ADMIT: process.env.RGOE_ADMIT || (process.env.RGOE_GROUP_CONTRACT ? "invited,staked" : "invited"),
-        RGOE_EPOCH_SECONDS: "120",
-        RGOE_SLASH_KEY: slasher.private_key,
-        RGOE_SLASH_RECEIVER: slasher.address, // slashed bond -> slasher
+        // proves against the staked set, so admit it explicitly (SHADE_TREE_ADMIT in the caller's env wins).
+        SHADE_TREE_ADMIT: process.env.SHADE_TREE_ADMIT || (process.env.SHADE_TREE_GROUP_CONTRACT ? "invited,staked" : "invited"),
+        SHADE_TREE_EPOCH_SECONDS: "120",
+        SHADE_TREE_SLASH_KEY: slasher.private_key,
+        SHADE_TREE_SLASH_RECEIVER: slasher.address, // slashed bond -> slasher
       },
     });
     const onData = (d) => {
@@ -131,16 +131,16 @@ async function main() {
   // 2. start the gateway (wired for on-chain slashing on Sepolia)
   await startGateway();
 
-  // 3. ALICE uses the gateway normally — 3 requests, auto slot rotation (slots 0,1,2)
+  // 3. ALICE uses the gateway normally — 3 tunnels, auto slot rotation (slots 0,1,2)
   const poolA = makeSlotPool({ secret: alice.secret });
   for (let i = 0; i < 3; i++) {
     const target = ["example.com:443", "api.ipify.org:443", "cloudflare.com:443"][i];
     const tBuild = Date.now();
     const { envelope, slot } = await buildEnvelope({ secret: alice.secret, target, pool: poolA });
-    log("alice", `req ${i + 1}: built envelope slot=${slot} nullifier=${envelope.nullifier.slice(0, 12)}.. (${Date.now() - tBuild}ms) -> sending`);
+    log("alice", `tunnel ${i + 1}: built envelope slot=${slot} nullifier=${envelope.nullifier.slice(0, 12)}.. (${Date.now() - tBuild}ms) -> sending`);
     const tSend = Date.now();
     const ack = await sendEnvelope(envelope);
-    log("alice", `req ${i + 1}: gateway ack ${JSON.stringify(ack)} (round-trip ${Date.now() - tSend}ms)`);
+    log("alice", `tunnel ${i + 1}: gateway ack ${JSON.stringify(ack)} (round-trip ${Date.now() - tSend}ms)`);
   }
   log("alice", "3/3 within budget — normal use OK, no slash");
 
@@ -148,12 +148,15 @@ async function main() {
   //    shares => the gateway reconstructs BOB's secret and slashes his bond on-chain.
   const group = (await loadGroup()).group;
   const epoch = currentEpoch();
-  const e1 = await proveForSlot(bob.secret, epoch, 0, requestSignal("scrape-a.com:443", "b-n1"), { group });
-  const env1 = { v: 3, target: "example.com:443", proof: e1.proof, nullifier: e1.nullifier, externalNullifier: e1.externalNullifier, share: e1.share };
+  const target = "example.com:443";
+  const n1 = "b-n1";
+  const e1 = await proveForSlot(bob.secret, epoch, 0, requestSignal(target, n1), { group });
+  const env1 = { v: 4, target, nonce: n1, proof: e1.proof, nullifier: e1.nullifier, externalNullifier: e1.externalNullifier, share: e1.share };
   log("bob", `over-spend 1/2: slot 0 first signal, nullifier ${e1.nullifier.slice(0, 12)}.. -> sending`);
   log("bob", `over-spend 1/2: gateway ack ${JSON.stringify(await sendEnvelope(env1))}`);
-  const e2 = await proveForSlot(bob.secret, epoch, 0, requestSignal("scrape-b.com:443", "b-n2"), { group });
-  const env2 = { v: 3, target: "example.com:443", proof: e2.proof, nullifier: e2.nullifier, externalNullifier: e2.externalNullifier, share: e2.share };
+  const n2 = "b-n2";
+  const e2 = await proveForSlot(bob.secret, epoch, 0, requestSignal(target, n2), { group });
+  const env2 = { v: 4, target, nonce: n2, proof: e2.proof, nullifier: e2.nullifier, externalNullifier: e2.externalNullifier, share: e2.share };
   log("bob", `over-spend 2/2: slot 0 SECOND distinct signal (same nullifier) -> this is the rate violation -> sending`);
   const ack2 = await sendEnvelope(env2, 90000); // slash mines before ack
   log("bob", `over-spend 2/2: gateway ack ${JSON.stringify(ack2)}`);

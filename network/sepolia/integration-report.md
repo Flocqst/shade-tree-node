@@ -45,7 +45,7 @@ Bob `0x08df8b77917e47cec5b7b38c947ff1015db38e9f1930cd21d4f94677c27c7987`.
 | +21.4s | Bob | over-spend 1/2: slot 0, first signal, nullifier `165906939032…` → `PASS`, ack ok |
 | +21.7s | Bob | over-spend 2/2: **slot 0 again, a second distinct signal → same nullifier = the rate violation** |
 | +22.8s | gateway | reconstructs Bob's secret from the two shares → **submits slash** tx `0x70a670…d6b9` |
-| **+55.6s** | gateway | **SLASH mined** block 11274574; Bob's over-spend request answered `{ok:false,"over-spend-slashed"}` |
+| **+55.6s** | gateway | **SLASH mined** block 11274574; Bob's over-spend tunnel answered `{ok:false,"over-spend-slashed"}` |
 | +56.1s | verify | Alice bond on-chain = **0.001 ETH (intact)** |
 | +56.1s | verify | Bob bond on-chain = **0.0 ETH (slashed)** |
 | +56.3s | verify | slasher balance +0.001 ETH (received Bob's forfeited bond) |
@@ -59,8 +59,8 @@ Slash tx: [`0x70a670093401b4675d3535d9738675928a3949b8858beac4daa20691c831d6b9`]
    commitments with bonds; `activeCount` went to 2.
 2. **The client↔gateway message loop works** — the shim forms a v2 envelope
    (Semaphore membership proof + slot nullifier + RLN share), sends it, and gets a signed
-   `{ok:true}` back in tens of milliseconds after the first (warm) request.
-3. **Per-request slot rotation** — Alice's three requests each used a distinct slot →
+   `{ok:true}` back in tens of milliseconds after the first (warm) tunnel.
+3. **Per-tunnel slot rotation** — Alice's three tunnels each used a distinct slot →
    distinct, mutually-unlinkable nullifier. Honest use never trips the gate.
 4. **Over-spend is detected and punished without deanonymizing honest members** — Bob
    reusing a slot revealed a second Shamir share; the gateway reconstructed his secret,
@@ -75,7 +75,7 @@ Slash tx: [`0x70a670093401b4675d3535d9738675928a3949b8858beac4daa20691c831d6b9`]
   gateway keeps as a `Set` → `TypeError` thrown outside the gateway's try/catch → no reply
   → the client waited forever. The anvil e2e passed an array, so it never surfaced. Fixed:
   `Array.from(recentRoots)`, plus the gateway now replies on any throw and the shim has a
-  readLine timeout + a per-request start log so a hang can never be silent again.
+  readLine timeout + a per-tunnel start log so a hang can never be silent again.
 - **Slasher couldn't find the contract:** `makeSlasher` read `deployed.StakedReputationSet`
   but `Deploy.s.sol` writes `stakedReputationSet` (lowercase) → silent dry-run. Fixed the
   key casing so on-chain slashing works from `deployed.local.json` without forcing the

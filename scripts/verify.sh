@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the gated egress works, end to end, from the CLIENT side.
+# Prove the Shade Tree tunnel works, end to end, from the CLIENT side.
 #
 # It compares your real IP against the IP the world sees when you go through the
 # tunnel. Getting a well-formed IP back at all means the full path worked:
@@ -9,14 +9,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PORT="${RGOE_SHIM_PORT:-8888}"
+PORT="${SHADE_TREE_SHIM_PORT:-8888}"
 PROXY="http://127.0.0.1:${PORT}"
 IPRE='[0-9]{1,3}(\.[0-9]{1,3}){3}'
-EPOCH=$(( $(date +%s) / ${RGOE_EPOCH_SECONDS:-86400} ))
+EPOCH=$(( $(date +%s) / ${SHADE_TREE_EPOCH_SECONDS:-120} ))
 
 line(){ printf '  %-22s %s\n' "$1" "$2"; }
 echo ""
-echo "  reputation-gated egress — client verification"
+echo "  Shade Tree — client verification"
 echo "  ────────────────────────────────────────────"
 line "shim proxy" "$PROXY"
 line "epoch (matches gateway)" "$EPOCH"
@@ -35,7 +35,7 @@ if [ -z "$EGRESS" ]; then
   echo "  ✗ FAIL — no IP came back through the tunnel."
   echo "    The path did not complete. Check that the client is up and the onion is right:"
   echo "      tail -n 20 shim.log"
-  echo "      echo \$RGOE_ONION   (must be the gateway's .onion)"
+  echo "      echo \$SHADE_TREE_ONION   (must be the gateway's .onion)"
   exit 1
 fi
 
@@ -47,15 +47,15 @@ GCODE=$(curl -s -o /dev/null --max-time 75 -x "$PROXY" -w '%{http_code}' https:/
 line "google.com over tunnel" "HTTP ${GCODE:-?}"
 
 echo "  ────────────────────────────────────────────"
-if [ -n "${RGOE_EXPECT_IP:-}" ]; then
+if [ -n "${SHADE_TREE_EXPECT_IP:-}" ]; then
   # Deploy mode: assert egress comes out of the droplet we expect.
-  if [ "$EGRESS" = "$RGOE_EXPECT_IP" ]; then
-    echo "  ✓ PASS — egress IP == the droplet (${RGOE_EXPECT_IP})."
+  if [ "$EGRESS" = "$SHADE_TREE_EXPECT_IP" ]; then
+    echo "  ✓ PASS — egress IP == the droplet (${SHADE_TREE_EXPECT_IP})."
     echo "    Google saw the droplet, never you. Deployed path proven end to end."
   else
-    echo "  ✗ FAIL — egress IP ${EGRESS} != expected droplet ${RGOE_EXPECT_IP}."
+    echo "  ✗ FAIL — egress IP ${EGRESS} != expected droplet ${SHADE_TREE_EXPECT_IP}."
     echo "    The tunnel returned an IP, so the path works, but it is not the box"
-    echo "    you expected. Check RGOE_ONION points at THIS droplet's gateway."
+    echo "    you expected. Check SHADE_TREE_ONION points at THIS droplet's gateway."
     exit 1
   fi
 elif [ -n "$REAL" ] && [ "$EGRESS" = "$REAL" ]; then
@@ -69,6 +69,6 @@ else
   echo "  ✓ TUNNEL WORKS — got ${EGRESS} back through the gated path."
 fi
 echo ""
-echo "    On the gateway, this request appears as a PASS at epoch=${EPOCH}."
+echo "    On the gateway, this tunnel appears as a PASS at epoch=${EPOCH}."
 echo "    Confirm it there with:  bash scripts/gateway-status.sh"
 echo ""

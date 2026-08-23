@@ -3,13 +3,13 @@
 # bootstrapped enough to build circuits. Prints the SOCKS port.
 #
 # Used by the LAPTOP role (run-client.sh). On a real laptop you can skip this
-# entirely and point the shim at any existing Tor SOCKS via RGOE_TOR_PORT
+# entirely and point the shim at any existing Tor SOCKS via SHADE_TREE_TOR_PORT
 # (system tor 9050, Tor Browser 9150). This exists so the split can be run
 # self-contained, including on the same machine as the gateway Tor.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-TOR_BIN="${RGOE_TOR_BIN:-tor}"
+TOR_BIN="${SHADE_TREE_TOR_BIN:-tor}"
 mkdir -p tor/data-client
 chmod 700 tor/data-client 2>/dev/null || true
 

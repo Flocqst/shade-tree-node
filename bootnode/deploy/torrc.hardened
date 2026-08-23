@@ -1,9 +1,9 @@
-# rgoe: hardened torrc reference fragment.
+# shade-tree: hardened torrc reference fragment.
 #
 # This is a REFERENCE, not wired into bootstrap.sh. bootstrap.sh writes the
-# minimal working config (/etc/tor/torrc.d-rgoe: two HiddenServiceDir blocks +
+# minimal working config (/etc/tor/torrc.d-shade-tree: two HiddenServiceDir blocks +
 # HiddenServicePoWDefensesEnabled 1). The lines below are the safe extra subset
-# you can layer on. Copy the SERVER block onto the droplet's torrc.d-rgoe, and
+# you can layer on. Copy the SERVER block onto the droplet's torrc.d-shade-tree, and
 # the CLIENT block onto the laptop/client tor. See docs/TOR-HARDENING.md for the
 # reasoning and for the options deliberately left out (vanguards, client-auth).
 #
@@ -17,7 +17,7 @@
 
 
 # ============================================================================
-# SERVER SIDE  (droplet: /etc/tor/torrc.d-rgoe, alongside the HiddenServiceDir
+# SERVER SIDE  (droplet: /etc/tor/torrc.d-shade-tree, alongside the HiddenServiceDir
 # blocks that bootstrap.sh already writes)
 # ============================================================================
 
@@ -54,7 +54,7 @@ Sandbox 1
 # NOTE (server-side client-auth) is intentionally NOT here. For a PRIVATE fleet
 # you would add an authorized_clients/ subdir under each HiddenServiceDir (v3
 # mechanism), NOT the old v2 "HiddenServiceAuthorizeClient" torrc line. It is
-# off by design: rgoe gates at the app layer (zk reputation), which is the whole
+# off by design: shade-tree gates at the app layer (zk reputation), which is the whole
 # point. See docs/TOR-HARDENING.md section 3 before enabling.
 
 
@@ -62,7 +62,7 @@ Sandbox 1
 # CLIENT SIDE  (laptop tor; compare tor/torrc.client in this repo)
 # ============================================================================
 
-# [C] Per-request circuit isolation. rgoe rotates gateways per request; these
+# [C] Per-request circuit isolation. shade-tree rotates gateways per request; these
 # flags make tor also use a SEPARATE circuit per distinct destination and per
 # distinct SOCKS auth, so two requests do not share one exit-less path by
 # accident. Ties directly to the per-request rotation goal.
@@ -80,5 +80,5 @@ SocksPort 9260 IsolateDestAddr IsolateDestPort IsolateSOCKSAuth
 # MaxCircuitDirtiness 600
 
 # [C] Client-auth private keys (only if the SERVER enabled v3 client-auth).
-# Point tor at a dir of "<onion>.auth_private" files. Off by default in rgoe.
-# ClientOnionAuthDir /var/lib/tor/rgoe-onion-auth
+# Point tor at a dir of "<onion>.auth_private" files. Off by default in shade-tree.
+# ClientOnionAuthDir /var/lib/tor/shade-tree-onion-auth

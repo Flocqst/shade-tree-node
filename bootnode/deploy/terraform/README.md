@@ -5,8 +5,8 @@ Infrastructure-as-code for **standing up the droplet** that
 wrapper**: it creates the DigitalOcean droplet + firewall + SSH key and, via
 cloud-init `user_data`, fetches `bootstrap.sh` at a pinned git ref and hands off.
 All real provisioning — Node 24, Tor (with `pow: yes`), the minted onion
-identities, and the three hardened systemd units (`rgoe-bootnode`,
-`rgoe-gateway`, `rgoe-heartbeat`) — lives in `bootstrap.sh` and is **not**
+identities, and the three hardened systemd units (`shade-tree-bootnode`,
+`shade-tree-gateway`, `shade-tree-heartbeat`) — lives in `bootstrap.sh` and is **not**
 duplicated here.
 
 Works with either [OpenTofu](https://opentofu.org) (`tofu`, the SHIP-PLAN's
@@ -47,7 +47,7 @@ tofu plan                # preview
 tofu apply               # create the box; user_data runs bootstrap.sh at first boot
 
 # watch first-boot provisioning (Node + Tor + onion mint + units):
-ssh root@$(tofu output -raw ipv4_address) 'tail -f /var/log/rgoe-bootstrap.log'
+ssh root@$(tofu output -raw ipv4_address) 'tail -f /var/log/shade-tree-bootstrap.log'
 
 # the bootnode onion, pinned signer, and gateway onion are printed at the tail
 # of that log (bootstrap.sh's final banner). Verify over Tor:
@@ -75,22 +75,22 @@ IP(s) in production (default is open).
 | `region` | `nyc3` | any DO region slug |
 | `droplet_size` | `s-1vcpu-1gb` | 1vCPU/1GB runs Tor + 3 Node units comfortably |
 | `image` | `ubuntu-24-04-x64` | bootstrap targets fresh 24.04 |
-| `droplet_name` | `rgoe-bootnode` | also names the key + firewall |
-| `git_repo` | `github.com/dmarzzz/reputation-gated-onion-egress` | passed as `RGOE_REPO` |
-| `git_ref` | `main` | passed as `RGOE_REF`; **pin a tag/sha for reproducibility** |
-| `admission` | `open` | `open` or `stake` → `RGOE_ADMISSION` |
-| `bootnode_port` | `8877` | loopback → `RGOE_BOOTNODE_PORT` |
-| `gateway_port` | `8443` | loopback → `RGOE_GATEWAY_PORT` |
-| `tor_socks_port` | `9050` | informational; used in the `verify_command` output (bootstrap pins the heartbeat's `RGOE_TOR_PORT` to 9050) |
+| `droplet_name` | `shade-tree-bootnode` | also names the key + firewall |
+| `git_repo` | `github.com/dmarzzz/shade-tree-node` | passed as `SHADE_TREE_REPO` |
+| `git_ref` | `main` | passed as `SHADE_TREE_REF`; **pin a tag/sha for reproducibility** |
+| `admission` | `open` | `open` or `stake` → `SHADE_TREE_ADMISSION` |
+| `bootnode_port` | `8877` | loopback → `SHADE_TREE_BOOTNODE_PORT` |
+| `gateway_port` | `8443` | loopback → `SHADE_TREE_GATEWAY_PORT` |
+| `tor_socks_port` | `9050` | informational; used in the `verify_command` output (bootstrap pins the heartbeat's `SHADE_TREE_TOR_PORT` to 9050) |
 | `ssh_allowed_cidrs` | `["0.0.0.0/0", "::/0"]` | lock down in prod |
-| `tags` | `["rgoe","bootnode","gateway"]` | DO tags |
+| `tags` | `["shade-tree","bootnode","gateway"]` | DO tags |
 
 ## How it delegates to `bootstrap.sh`
 
 `user_data.sh.tftpl` renders a small first-boot script that:
 
-1. exports `RGOE_REPO`, `RGOE_REF`, `RGOE_ADMISSION`, `RGOE_BOOTNODE_PORT`,
-   `RGOE_GATEWAY_PORT` — the exact env tunables `bootstrap.sh` reads;
+1. exports `SHADE_TREE_REPO`, `SHADE_TREE_REF`, `SHADE_TREE_ADMISSION`, `SHADE_TREE_BOOTNODE_PORT`,
+   `SHADE_TREE_GATEWAY_PORT` — the exact env tunables `bootstrap.sh` reads;
 2. waits out the first-boot apt lock;
 3. `curl`s `bootstrap.sh` from `raw.githubusercontent.com` at the **same pinned
    ref**, and runs it as root.
@@ -115,7 +115,7 @@ recreate the droplet and mint new onions. Instead use
 
 ```bash
 ssh root@$(tofu output -raw ipv4_address) \
-  'sudo bash /opt/rgoe/bootnode/deploy/rolling-update.sh <ref>'
+  'sudo bash /opt/shade-tree/bootnode/deploy/rolling-update.sh <ref>'
 ```
 
 For a multi-box fleet, sequence one gateway at a time per `ROLLING-UPDATE.md` so
