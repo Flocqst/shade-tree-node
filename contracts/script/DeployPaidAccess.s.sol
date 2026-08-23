@@ -13,9 +13,9 @@ import {console} from "./DeployRegistry.s.sol";
 /// contract holds no funds and has no prices, only the immutable allowed-tier table and the
 /// operator (registrar) key that inserts. Every constructor argument comes from an env var with
 /// a safe default, so the same script targets a local anvil, Sepolia or an L2 by changing only
-/// `--rpc-url` and the env. It logs the address and records it to a JSON file (RGOE_DEPLOY_OUT).
+/// `--rpc-url` and the env. It logs the address and records it to a JSON file (SHADE_TREE_DEPLOY_OUT).
 ///
-/// The tiered RateCommitmentHasher is REUSED by address (RGOE_COMMITMENT_HASHER = the live rln-v4
+/// The tiered RateCommitmentHasher is REUSED by address (SHADE_TREE_COMMITMENT_HASHER = the live rln-v4
 /// hasher on Sepolia); a fresh one is deployed only when that is unset. The PaidAccessSet links
 /// the external PoseidonT3 library: pass `--libraries contracts/PoseidonT3.sol:PoseidonT3:<addr>`
 /// to reuse the one already on chain (network/sepolia/contracts.json `libraries`), else forge
@@ -25,18 +25,18 @@ import {console} from "./DeployRegistry.s.sol";
 /// action documented in docs/ONCHAIN-DEPLOY.md §9. Reference, unaudited, testnet-only.
 ///
 /// Environment variables (all optional; defaults in parens):
-///   RGOE_PAY_LIMITS         tiers this set admits, comma-separated userMessageLimits, ascending,
+///   SHADE_TREE_PAY_LIMITS         tiers this set admits, comma-separated userMessageLimits, ascending,
 ///                           distinct, 1..65535, must include 8                    ("8,32")
-///   RGOE_PAY_OPERATOR       the registrar / insert authority              (0 => the deployer)
-///   RGOE_COMMITMENT_HASHER  pre-deployed TIERED ICommitmentHasher    (0 => deploy RateCommitmentHasher)
-///   RGOE_RPC_URL            endpoint, recorded into the JSON        ("http://127.0.0.1:8545")
-///   RGOE_DEPLOY_OUT         JSON output path (must be under the repo: foundry.toml fs_permissions)
+///   SHADE_TREE_PAY_OPERATOR       the registrar / insert authority              (0 => the deployer)
+///   SHADE_TREE_COMMITMENT_HASHER  pre-deployed TIERED ICommitmentHasher    (0 => deploy RateCommitmentHasher)
+///   SHADE_TREE_RPC_URL            endpoint, recorded into the JSON        ("http://127.0.0.1:8545")
+///   SHADE_TREE_DEPLOY_OUT         JSON output path (must be under the repo: foundry.toml fs_permissions)
 ///                                                                    ("contracts/paid-access.local.json")
 contract DeployPaidAccess is Cheats {
     function run() external returns (address paidAccessSet, address commitmentHasher, address operator) {
-        uint256[] memory limits = _parseUintList(vm.envOr("RGOE_PAY_LIMITS", string("8,32")));
-        address opEnv = vm.envOr("RGOE_PAY_OPERATOR", address(0));
-        commitmentHasher = vm.envOr("RGOE_COMMITMENT_HASHER", address(0));
+        uint256[] memory limits = _parseUintList(vm.envOr("SHADE_TREE_PAY_LIMITS", string("8,32")));
+        address opEnv = vm.envOr("SHADE_TREE_PAY_OPERATOR", address(0));
+        commitmentHasher = vm.envOr("SHADE_TREE_COMMITMENT_HASHER", address(0));
 
         console.log("== DeployPaidAccess ==");
         console.log("chainid    ", block.chainid);
@@ -74,23 +74,23 @@ contract DeployPaidAccess is Cheats {
         bool any = false;
         for (uint256 i = 0; i < b.length; i++) {
             if (b[i] == ",") {
-                require(any, "RGOE_PAY_LIMITS: empty list item");
+                require(any, "SHADE_TREE_PAY_LIMITS: empty list item");
                 out[k++] = acc;
                 acc = 0;
                 any = false;
             } else {
-                require(b[i] >= "0" && b[i] <= "9", "RGOE_PAY_LIMITS: digits only");
+                require(b[i] >= "0" && b[i] <= "9", "SHADE_TREE_PAY_LIMITS: digits only");
                 acc = acc * 10 + (uint8(b[i]) - 48);
                 any = true;
             }
         }
-        require(any, "RGOE_PAY_LIMITS: empty list item");
+        require(any, "SHADE_TREE_PAY_LIMITS: empty list item");
         out[k] = acc;
     }
 
     function _writeDeployment(address set, address hasher, address op) internal {
-        string memory outPath = vm.envOr("RGOE_DEPLOY_OUT", string("contracts/paid-access.local.json"));
-        string memory rpcUrl = vm.envOr("RGOE_RPC_URL", string("http://127.0.0.1:8545"));
+        string memory outPath = vm.envOr("SHADE_TREE_DEPLOY_OUT", string("contracts/paid-access.local.json"));
+        string memory rpcUrl = vm.envOr("SHADE_TREE_RPC_URL", string("http://127.0.0.1:8545"));
         string memory json = string.concat(
             "{\n",
             '  "paidAccessSet": "', vm.toString(set), '",\n',

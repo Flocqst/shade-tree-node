@@ -24,7 +24,7 @@ import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 ///      pre-deployed RLN/Groth16 verifier can be wired in. It falls back to deploying the
 ///      in-repo Mock verifier/hasher ONLY when those env vars are unset, and shouts a
 ///      warning when it does, because the mocks are not zero-knowledge (testnet-only).
-///   2. The output path is parameterized (RGOE_DEPLOY_OUT), so a simulation run can be
+///   2. The output path is parameterized (SHADE_TREE_DEPLOY_OUT), so a simulation run can be
 ///      pointed at a scratch file and never clobber a committed record.
 ///
 /// SCOPE: this file is deploy TOOLING. Broadcasting a real transaction (spending funds on
@@ -35,27 +35,27 @@ import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 /// Reference implementation, unaudited, testnet-only.
 ///
 /// Environment variables (all optional; defaults in parens):
-///   RGOE_BOND_WEI          fixed stake denomination, wei         (0.01 ether)
-///   RGOE_UNBONDING         exit time-lock, seconds               (300)
-///   RGOE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270)
-///   RGOE_GATEWAY_OWNER     GatewayRegistry slashing/gov address  (0 => deployer)
-///   RGOE_DEPLOY_STAKED     1 = also deploy StakedReputationSet   (1)
-///   RGOE_DEPLOY_REGISTRY   1 = deploy GatewayRegistry; 0 = keep an existing one and only
-///                          record RGOE_GATEWAY_REGISTRY (addr) in the JSON     (1)
+///   SHADE_TREE_BOND_WEI          fixed stake denomination, wei         (0.01 ether)
+///   SHADE_TREE_UNBONDING         exit time-lock, seconds               (300)
+///   SHADE_TREE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270)
+///   SHADE_TREE_GATEWAY_OWNER     GatewayRegistry slashing/gov address  (0 => deployer)
+///   SHADE_TREE_DEPLOY_STAKED     1 = also deploy StakedReputationSet   (1)
+///   SHADE_TREE_DEPLOY_REGISTRY   1 = deploy GatewayRegistry; 0 = keep an existing one and only
+///                          record SHADE_TREE_GATEWAY_REGISTRY (addr) in the JSON     (1)
 ///                          (the rln-v4 Sepolia redeploy: the live registry stays as is)
-///   RGOE_WITHDRAW_VERIFIER pre-deployed IWithdrawVerifier addr   (0 => deploy per below)
-///   RGOE_DEPLOY_REAL_VERIFIER 1 = deploy REAL Groth16 verifier   (0 => deploy Mock)
-///                          (only when RGOE_WITHDRAW_VERIFIER unset; testnet-only VK)
-///   RGOE_COMMITMENT_HASHER pre-deployed ICommitmentHasher addr   (0 => deploy RateCommitmentHasher)
+///   SHADE_TREE_WITHDRAW_VERIFIER pre-deployed IWithdrawVerifier addr   (0 => deploy per below)
+///   SHADE_TREE_DEPLOY_REAL_VERIFIER 1 = deploy REAL Groth16 verifier   (0 => deploy Mock)
+///                          (only when SHADE_TREE_WITHDRAW_VERIFIER unset; testnet-only VK)
+///   SHADE_TREE_COMMITMENT_HASHER pre-deployed ICommitmentHasher addr   (0 => deploy RateCommitmentHasher)
 ///                          (must implement the TIERED commitmentOf(secret, limit); the
 ///                          rln-v3 hasher 0x08F9a754… pins K=8 and cannot be reused)
-///   RGOE_TIER_LIMITS       extra admitted tiers, comma-separated   ("" => default tier 8 only)
+///   SHADE_TREE_TIER_LIMITS       extra admitted tiers, comma-separated   ("" => default tier 8 only)
 ///                          e.g. "32" or "32,64"; ascending, distinct, 1..65535, != 8
-///   RGOE_TIER_BONDS_WEI    bond of each extra tier, comma-separated, same length as
-///                          RGOE_TIER_LIMITS; each nonzero            (required with RGOE_TIER_LIMITS)
-///                          The default tier 8 always costs RGOE_BOND_WEI.
-///   RGOE_RPC_URL           endpoint, recorded into the JSON      ("http://127.0.0.1:8545")
-///   RGOE_DEPLOY_OUT        JSON output path                      ("contracts/deployed.local.json")
+///   SHADE_TREE_TIER_BONDS_WEI    bond of each extra tier, comma-separated, same length as
+///                          SHADE_TREE_TIER_LIMITS; each nonzero            (required with SHADE_TREE_TIER_LIMITS)
+///                          The default tier 8 always costs SHADE_TREE_BOND_WEI.
+///   SHADE_TREE_RPC_URL           endpoint, recorded into the JSON      ("http://127.0.0.1:8545")
+///   SHADE_TREE_DEPLOY_OUT        JSON output path                      ("contracts/deployed.local.json")
 contract DeployRegistry is Cheats {
     function run()
         external
@@ -67,12 +67,12 @@ contract DeployRegistry is Cheats {
         )
     {
         // ---- parameters (env-overridable) ------------------------------------
-        uint256 bond = vm.envOr("RGOE_BOND_WEI", uint256(0.01 ether));
-        uint256 unbonding = vm.envOr("RGOE_UNBONDING", uint256(300));
-        uint256 minUnbonding = vm.envOr("RGOE_MIN_UNBONDING", uint256(270)); // F+E+C
-        address gwOwner = vm.envOr("RGOE_GATEWAY_OWNER", address(0)); // 0 => deployer
-        bool deployStaked = vm.envOr("RGOE_DEPLOY_STAKED", uint256(1)) != 0;
-        bool deployRegistry = vm.envOr("RGOE_DEPLOY_REGISTRY", uint256(1)) != 0;
+        uint256 bond = vm.envOr("SHADE_TREE_BOND_WEI", uint256(0.01 ether));
+        uint256 unbonding = vm.envOr("SHADE_TREE_UNBONDING", uint256(300));
+        uint256 minUnbonding = vm.envOr("SHADE_TREE_MIN_UNBONDING", uint256(270)); // F+E+C
+        address gwOwner = vm.envOr("SHADE_TREE_GATEWAY_OWNER", address(0)); // 0 => deployer
+        bool deployStaked = vm.envOr("SHADE_TREE_DEPLOY_STAKED", uint256(1)) != 0;
+        bool deployRegistry = vm.envOr("SHADE_TREE_DEPLOY_REGISTRY", uint256(1)) != 0;
 
         console.log("== DeployRegistry ==");
         console.log("chainid    ", block.chainid);
@@ -84,13 +84,13 @@ contract DeployRegistry is Cheats {
 
         // ---- GatewayRegistry: the gateway-operator stake ---------------------
         // owner (slasher/governance) defaults to the deployer when 0 (ctor enforces it).
-        // RGOE_DEPLOY_REGISTRY=0 keeps a live registry untouched and just records its address.
+        // SHADE_TREE_DEPLOY_REGISTRY=0 keeps a live registry untouched and just records its address.
         if (deployRegistry) {
             GatewayRegistry gwReg = new GatewayRegistry(bond, unbonding, minUnbonding, gwOwner);
             gatewayRegistry = address(gwReg);
         } else {
-            gatewayRegistry = vm.envOr("RGOE_GATEWAY_REGISTRY", address(0));
-            console.log("GatewayRegistry: not deployed (RGOE_DEPLOY_REGISTRY=0); recording", gatewayRegistry);
+            gatewayRegistry = vm.envOr("SHADE_TREE_GATEWAY_REGISTRY", address(0));
+            console.log("GatewayRegistry: not deployed (SHADE_TREE_DEPLOY_REGISTRY=0); recording", gatewayRegistry);
         }
 
         // ---- StakedReputationSet: the member admission set (optional) --------
@@ -108,7 +108,7 @@ contract DeployRegistry is Cheats {
             console.log("withdrawVerifier    ", withdrawVerifier);
             console.log("commitmentHasher    ", commitmentHasher);
         } else {
-            console.log("StakedReputationSet   (skipped: RGOE_DEPLOY_STAKED=0)");
+            console.log("StakedReputationSet   (skipped: SHADE_TREE_DEPLOY_STAKED=0)");
         }
 
         _writeDeployment(
@@ -118,22 +118,22 @@ contract DeployRegistry is Cheats {
 
     /// Deploy the member admission set: hasher + exit-auth verifier (pre-deployed addresses
     /// from env, else fresh) + the tiered StakedReputationSet (T-FEAT-8b tier table from
-    /// RGOE_TIER_LIMITS / RGOE_TIER_BONDS_WEI). Split out of run() to keep the stack shallow.
+    /// SHADE_TREE_TIER_LIMITS / SHADE_TREE_TIER_BONDS_WEI). Split out of run() to keep the stack shallow.
     function _deploySet(uint256 bond, uint256 unbonding, uint256 minUnbonding)
         internal
         returns (address set, address verifierAddr, address hasherAddr)
     {
-        verifierAddr = vm.envOr("RGOE_WITHDRAW_VERIFIER", address(0));
-        hasherAddr = vm.envOr("RGOE_COMMITMENT_HASHER", address(0));
+        verifierAddr = vm.envOr("SHADE_TREE_WITHDRAW_VERIFIER", address(0));
+        hasherAddr = vm.envOr("SHADE_TREE_COMMITMENT_HASHER", address(0));
         // Opt-in: when no pre-deployed verifier address is given, deploy the REAL Groth16
         // exit-auth verifier (T-DEV-1) instead of the revealed-secret Mock. Default 0 keeps
         // the Mock so the local demo (scripts/demo-e2e.mjs, which authorizes by revealing the
         // secret) still works. The REAL verifier is TESTNET-ONLY until T-HARD-1 (untrusted VK).
-        bool realVerifier = vm.envOr("RGOE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
-        // T-FEAT-8b tier table (extra tiers beyond the default limit 8 => RGOE_BOND_WEI).
-        uint256[] memory extraLimits = _parseUintList(vm.envOr("RGOE_TIER_LIMITS", string("")));
-        uint256[] memory extraBonds = _parseUintList(vm.envOr("RGOE_TIER_BONDS_WEI", string("")));
-        require(extraLimits.length == extraBonds.length, "RGOE_TIER_LIMITS / RGOE_TIER_BONDS_WEI length mismatch");
+        bool realVerifier = vm.envOr("SHADE_TREE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
+        // T-FEAT-8b tier table (extra tiers beyond the default limit 8 => SHADE_TREE_BOND_WEI).
+        uint256[] memory extraLimits = _parseUintList(vm.envOr("SHADE_TREE_TIER_LIMITS", string("")));
+        uint256[] memory extraBonds = _parseUintList(vm.envOr("SHADE_TREE_TIER_BONDS_WEI", string("")));
+        require(extraLimits.length == extraBonds.length, "SHADE_TREE_TIER_LIMITS / SHADE_TREE_TIER_BONDS_WEI length mismatch");
         console.log("tier 8 bond", bond);
         for (uint256 i = 0; i < extraLimits.length; i++) {
             console.log("tier       ", extraLimits[i]);
@@ -190,22 +190,22 @@ contract DeployRegistry is Cheats {
         bool any = false;
         for (uint256 i = 0; i < b.length; i++) {
             if (b[i] == ",") {
-                require(any, "RGOE_TIER_*: empty list item");
+                require(any, "SHADE_TREE_TIER_*: empty list item");
                 out[k++] = acc;
                 acc = 0;
                 any = false;
             } else {
-                require(b[i] >= "0" && b[i] <= "9", "RGOE_TIER_*: digits only");
+                require(b[i] >= "0" && b[i] <= "9", "SHADE_TREE_TIER_*: digits only");
                 acc = acc * 10 + (uint8(b[i]) - 48);
                 any = true;
             }
         }
-        require(any, "RGOE_TIER_*: empty list item");
+        require(any, "SHADE_TREE_TIER_*: empty list item");
         out[k] = acc;
     }
 
     /// Record the addresses to a JSON file the gateway/lib read to find the contracts.
-    /// Path is env-overridable (RGOE_DEPLOY_OUT) so a simulation can target a scratch file
+    /// Path is env-overridable (SHADE_TREE_DEPLOY_OUT) so a simulation can target a scratch file
     /// and leave the committed `contracts/deployed.local.json` untouched.
     function _writeDeployment(
         address gwReg,
@@ -214,8 +214,8 @@ contract DeployRegistry is Cheats {
         address verifier,
         bool deployStaked
     ) internal {
-        string memory outPath = vm.envOr("RGOE_DEPLOY_OUT", string("contracts/deployed.local.json"));
-        string memory rpcUrl = vm.envOr("RGOE_RPC_URL", string("http://127.0.0.1:8545"));
+        string memory outPath = vm.envOr("SHADE_TREE_DEPLOY_OUT", string("contracts/deployed.local.json"));
+        string memory rpcUrl = vm.envOr("SHADE_TREE_RPC_URL", string("http://127.0.0.1:8545"));
 
         // stakedReputationSet/hasher/verifier are the zero address when the set is skipped;
         // the gateway/lib only need gatewayRegistry + rpcUrl for stake-mode admission.

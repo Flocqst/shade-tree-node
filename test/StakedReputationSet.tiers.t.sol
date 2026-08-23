@@ -314,7 +314,7 @@ contract StakedReputationSetTiersTest is Cheats {
         bytes memory exitProof8 = vm.parseJsonBytes(json, ".exit.proof");
         uint256 leaf32 = hasher.commitmentOf(SECRET_A, 32);
         assertEq(leaf32, LEAF_A_32);
-        bytes32 ctx = keccak256(abi.encodePacked("RGOE_EXIT", leaf32));
+        bytes32 ctx = keccak256(abi.encodePacked("SHADE_TREE_EXIT", leaf32));
         // direct verifier checks
         assertTrue(real.verify(leaf32, 32, ctx, exitProof32), "fixture proof authorizes the tier-32 leaf at 32");
         assertFalse(real.verify(leaf32, 8, ctx, exitProof32), "...but not at limit 8 (leaf mismatch)");

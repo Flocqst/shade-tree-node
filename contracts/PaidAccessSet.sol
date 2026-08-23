@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-// PaidAccessSet: the PAID-ACCESS membership tree for the reputation-gated onion egress
+// PaidAccessSet: the paid-access membership tree for Shade Tree
 // (docs/PAYMENTS.md "Layer 1", T-FEAT-7). It is the structural sibling of the live
 // StakedReputationSet (contracts/StakedReputationSet.sol, rln-v4-tiers): the SAME on-chain
 // depth-20 Poseidon(2) incremental Merkle tree, the SAME leaf (the RLN rate commitment
@@ -9,7 +9,7 @@ pragma solidity ^0.8.24;
 // RateCommitmentHasher), the SAME immutable allowed-tier table, the SAME zero-in-place removal
 // on slash, and `currentRoot` in the SAME storage slot (ROOT_STORAGE_SLOT = 3), so every
 // off-chain reader that already understands the staked set (lib/root-provider.mjs
-// NodeRootProvider / LightClientRootProvider, the gateway's tiered slasher, `rgoe`'s ABI probes:
+// NodeRootProvider / LightClientRootProvider, the gateway's tiered slasher, `shade-tree`'s ABI probes:
 // DEFAULT_LIMIT / allowedLimits / limitOf) works against this contract unchanged. The gateway
 // trusts the UNION of the roots of both sets.
 //
@@ -97,7 +97,7 @@ contract PaidAccessSet {
     // identical roots, and pins the same JS goldens.
 
     uint256 public constant TREE_DEPTH = 20; // circom-rln RLN(20,16); matches lib/rln.mjs TREE_DEPTH
-    uint256 public constant GROUP_ID = 1;    // MUST equal the JS RGOE_RLN_IDENTIFIER (default 1)
+    uint256 public constant GROUP_ID = 1;    // MUST equal the JS SHADE_TREE_RLN_IDENTIFIER (default 1)
 
     /// The current membership Merkle root, in a fixed storage slot so a light client can prove
     /// it via `eth_getProof` (lib/root-provider.mjs LightClientRootProvider reads slot 3 of any

@@ -21,11 +21,11 @@ import {MockWithdrawVerifier} from "../contracts/MockWithdrawVerifier.sol";
 contract Deploy is Cheats {
     // Demo parameters (docs/NEXT-VERSION.md). Env-overridable so a testnet deploy can
     // use a smaller bond than the local-anvil default (testnet ETH is faucet-scarce):
-    //   RGOE_BOND_WEI, RGOE_UNBONDING, RGOE_MIN_UNBONDING.
+    //   SHADE_TREE_BOND_WEI, SHADE_TREE_UNBONDING, SHADE_TREE_MIN_UNBONDING.
     function run() external {
-        uint256 bond = vm.envOr("RGOE_BOND_WEI", uint256(0.01 ether));
-        uint256 unbonding = vm.envOr("RGOE_UNBONDING", uint256(300));
-        uint256 minUnbonding = vm.envOr("RGOE_MIN_UNBONDING", uint256(270)); // F+E+C lower bound
+        uint256 bond = vm.envOr("SHADE_TREE_BOND_WEI", uint256(0.01 ether));
+        uint256 unbonding = vm.envOr("SHADE_TREE_UNBONDING", uint256(300));
+        uint256 minUnbonding = vm.envOr("SHADE_TREE_MIN_UNBONDING", uint256(270)); // F+E+C lower bound
 
         vm.startBroadcast();
 
@@ -49,7 +49,7 @@ contract Deploy is Cheats {
 
         // Gateway operator stake (optional at the bootnode; deployed so the on-chain path exists).
         // Same bond/unbonding params; owner (slasher) defaults to the deployer/broadcaster.
-        address gwOwner = vm.envOr("RGOE_GATEWAY_OWNER", address(0));
+        address gwOwner = vm.envOr("SHADE_TREE_GATEWAY_OWNER", address(0));
         GatewayRegistry gwReg = new GatewayRegistry(bond, unbonding, minUnbonding, gwOwner);
 
         vm.stopBroadcast();
@@ -58,8 +58,8 @@ contract Deploy is Cheats {
     }
 
     function _writeDeployment(address set, address hasher, address verifier, address gwReg) internal {
-        // rpcUrl defaults to local anvil; override with RGOE_RPC_URL for a fork/testnet.
-        string memory rpcUrl = vm.envOr("RGOE_RPC_URL", string("http://127.0.0.1:8545"));
+        // rpcUrl defaults to local anvil; override with SHADE_TREE_RPC_URL for a fork/testnet.
+        string memory rpcUrl = vm.envOr("SHADE_TREE_RPC_URL", string("http://127.0.0.1:8545"));
         string memory json = string.concat(
             "{\n",
             '  "stakedReputationSet": "', vm.toString(set), '",\n',

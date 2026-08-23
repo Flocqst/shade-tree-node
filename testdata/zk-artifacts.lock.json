@@ -43,8 +43,8 @@
       "provenance": "dev-testnet-untrusted",
       "loadedBy": [
         "lib/rln.mjs proveForSlot (client)",
-        "rust/rgoe-rln/src/prover.rs (embedded, live binary)",
-        "rust/rgoe-rln/src/main.rs (probe)"
+        "rust/shade-tree-rln/src/prover.rs (embedded, live binary)",
+        "rust/shade-tree-rln/src/main.rs (probe)"
       ]
     },
     "circuits/rln/rln_final.zkey": {
@@ -55,7 +55,7 @@
       "provenance": "dev-testnet-untrusted",
       "loadedBy": [
         "lib/rln.mjs proveForSlot (client)",
-        "rust/rgoe-rln/src/prover.rs (embedded, live binary)"
+        "rust/shade-tree-rln/src/prover.rs (embedded, live binary)"
       ]
     },
     "circuits/rln/verification_key.json": {
@@ -66,8 +66,8 @@
       "provenance": "dev-testnet-untrusted",
       "loadedBy": [
         "lib/rln.mjs verifyEnvelope (gateway)",
-        "rust/rgoe-rln/src/prover.rs (embedded self-check)",
-        "rust/rgoe-rln/interop/verify-envelope.mjs"
+        "rust/shade-tree-rln/src/prover.rs (embedded self-check)",
+        "rust/shade-tree-rln/interop/verify-envelope.mjs"
       ]
     },
     "circuits/rln/Verifier.sol": {
@@ -136,7 +136,7 @@
     "testdata/withdraw-proof.json": {
       "circuit": "withdraw",
       "role": "exit-auth proof fixture bound to withdraw_verification_key.json (regenerate: node testdata/gen-withdraw-proof.mjs)",
-      "sha256": "f2f0859ca7bd8b1dc6188d178ed82d4b14651725be2b449f5f09d061960392fe",
+      "sha256": "9d6cfe034487bcf02c2edd7c5d94ec6f696214bf44579dab7b0587842fcc1a5b",
       "bytes": 3492,
       "provenance": "dev-testnet-untrusted",
       "loadedBy": [
