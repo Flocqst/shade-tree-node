@@ -9,9 +9,15 @@
 [![release][release-badge]][release-url]
 [![MIT][license-badge]][license-url]
 
-Shade Tree carries HTTPS tunnels from local software through access-gated
-[Tor onion services][tor]. Run the local proxy once, then place an agent—or any
-proxy-aware process—under it without changing the rest of the machine.
+Shade Tree has two ways to take part:
+
+- **Running an agent? Run the local proxy beside it.** Launch the agent through
+  that proxy to route only that process.
+- **Providing cover for agents? Run a Shade Tree node.** The node supplies the
+  destination-facing egress, so destinations see its public IP.
+
+The two sides meet through access-gated [Tor onion services][tor], one admitted
+HTTPS tunnel at a time.
 
 [Site][site] · [Research note][research-note] · [Docs](docs/README.md) ·
 [Run a node](docs/OPERATOR.md) · [Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
@@ -40,7 +46,7 @@ many application requests inside one admitted tunnel. See the
 [protocol](docs/PROTOCOL.md) and [threat model](docs/THREAT-MODEL.md) for the
 precise guarantees.
 
-## Put an agent under the tree
+## Run the proxy for an agent
 
 You need Node.js, a local Tor SOCKS port, a member secret, and either a gateway
 onion or a signed directory from an operator.
@@ -79,7 +85,7 @@ HTTP proxy setting pointed at `http://127.0.0.1:8888`. Every mapped
 configuration flag also has a `SHADE_TREE_*` environment-variable form. See [CLI](docs/CLI.md),
 [configuration](docs/CONFIG.md), and the [JavaScript SDK](docs/SDK.md).
 
-## Run a node
+## Provide cover: run a node
 
 A Shade Tree node is a Tor onion service plus a proof-gated HTTPS tunnel. Its
 public IP becomes the destination-facing egress IP, so abuse complaints and IP

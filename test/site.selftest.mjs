@@ -20,6 +20,7 @@ function check(name, condition) {
 
 const landing = read("index.html");
 const research = read("research/index.html");
+const readme = readFileSync(join(ROOT, "README.md"), "utf8");
 const loader = read("site.js");
 const grove = read("grove.js");
 const config = JSON.parse(read("vercel.json"));
@@ -29,6 +30,7 @@ check("landing remains a concise front door, not a copy of the research note", l
 check("landing has exactly one H1 and the canvas is decorative", (landing.match(/<h1\b/g) || []).length === 1 && /<canvas[^>]+aria-hidden="true"/.test(landing));
 check("full research article is preserved at /research", /id="references"/.test(research) && /id="further-reading"/.test(research));
 check("landing and research canonical URLs are distinct", /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/"/.test(landing) && /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/research\/"/.test(research));
+check("landing and README state both sides of the user story", /Run the proxy beside your agent/.test(landing) && /Run a Shade Tree node to provide cover for agents/.test(landing) && /Running an agent\? Run the local proxy beside it/.test(readme) && /Providing cover for agents\? Run a Shade Tree node/.test(readme));
 
 const researchImages = [...research.matchAll(/<img[^>]+src="([^"]+)"/g)].map((match) => match[1]);
 check("every research-note image uses its relocated relative path", researchImages.length === 6 && researchImages.every((src) => src.startsWith("../fig/")));

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Shade Tree gives local software an access-gated path through Tor onion services, one HTTPS tunnel at a time.">
+  <meta name="description" content="Run the proxy beside your agent. Run a Shade Tree node to provide destination-facing egress for agents.">
   <meta name="theme-color" content="#101712">
   <meta property="og:title" content="Shade Tree">
-  <meta property="og:description" content="A small grove for local AI.">
+  <meta property="og:description" content="Run the proxy for your agent. Run a node to provide cover for agents.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
@@ -31,7 +31,8 @@
       <span class="preview-label">Research preview</span>
       <div class="nav-links">
         <a href="/research/">Research</a>
-        <a href="#run">Run</a>
+        <a href="#run">Use</a>
+        <a href="#provide">Provide</a>
         <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
       </div>
     </nav>
@@ -42,12 +43,12 @@
     </div>
 
     <div class="hero-copy">
-      <p class="eyebrow">Local software · shared cover</p>
+      <p class="eyebrow">Use the proxy · provide a node</p>
       <h1 id="hero-title">A small grove for <em>local AI.</em></h1>
-      <p class="hero-lede">Shade Tree carries HTTPS tunnels from one local process through an access-gated Tor onion service. The destination sees the node, not a public Tor exit.</p>
+      <p class="hero-lede">Run the proxy beside your agent. Run a Shade Tree node to provide cover for agents. Each admitted HTTPS tunnel reaches the node through Tor; the destination sees the node’s public IP.</p>
       <div class="hero-actions">
-        <a class="primary-action" href="#run">Put a process under it <span aria-hidden="true">↓</span></a>
-        <a class="text-action" href="/research/">Read the research note <span aria-hidden="true">↗</span></a>
+        <a class="primary-action" href="#run">Use the proxy <span aria-hidden="true">↓</span></a>
+        <a class="text-action" href="#provide">Provide a node <span aria-hidden="true">↓</span></a>
       </div>
     </div>
 
@@ -61,14 +62,14 @@
   <main id="main">
     <section class="route-section page-grid" id="run" aria-labelledby="route-title">
       <div class="section-intro">
-        <p class="eyebrow dark">One tunnel at a time</p>
-        <h2 id="route-title">Cover only what you mean to.</h2>
-        <p>The local proxy passes standard proxy settings only to the child you launch. Loopback model servers and the rest of the machine stay outside the route.</p>
+        <p class="eyebrow dark">Running an agent</p>
+        <h2 id="route-title">Run the proxy.</h2>
+        <p>Launch Hermes—or another proxy-aware process—through the local proxy. It passes proxy settings only to that child; loopback model servers and the rest of the machine stay outside the route.</p>
         <div class="command" aria-label="Example command">
           <code><span>$</span> shade-tree run -- hermes</code>
           <button class="copy-command" type="button" data-copy="shade-tree run -- hermes" aria-label="Copy example command">copy</button>
         </div>
-        <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node#put-an-agent-under-the-tree">Install and run <span aria-hidden="true">↗</span></a>
+        <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node#run-the-proxy-for-an-agent">Install and run <span aria-hidden="true">↗</span></a>
       </div>
 
       <ol class="route" aria-label="Path of one Shade Tree tunnel">
@@ -121,13 +122,13 @@
       </div>
     </section>
 
-    <section class="operator-section page-grid" aria-labelledby="operator-title">
+    <section class="operator-section page-grid" id="provide" aria-labelledby="operator-title">
       <div>
-        <p class="eyebrow dark">Add a tree</p>
-        <h2 id="operator-title">Grow the grove.</h2>
+        <p class="eyebrow dark">Providing cover</p>
+        <h2 id="operator-title">Run a Shade Tree node.</h2>
       </div>
       <div class="operator-copy">
-        <p>A node is an onion service plus a proof-gated HTTPS tunnel. It can run near GPU workers, model servers, or an Ethereum validator; give egress a dedicated public IP when you can.</p>
+        <p>A node is a Tor onion service with a proof-gated CONNECT gateway. It provides destination-facing egress for admitted agents: destinations see the node’s public IP. It can run near GPU workers, model servers, or an Ethereum validator; give egress a dedicated public IP when you can.</p>
         <a class="underlined-link" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node <span aria-hidden="true">↗</span></a>
       </div>
     </section>

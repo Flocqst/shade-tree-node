@@ -1,7 +1,7 @@
 {
   "name": "shade-tree-node",
   "version": "0.3.0",
-  "description": "Shade Tree: proof-gated onion egress for HTTPS clients and local agents.",
+  "description": "Run a local proxy for an agent, or a node that provides proof-gated onion egress.",
   "type": "module",
   "private": true,
   "bin": {
