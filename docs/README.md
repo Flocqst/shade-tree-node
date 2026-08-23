@@ -89,7 +89,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 |-----|------------|
 | [`exit-blocking-benchmark.md`](exit-blocking-benchmark.md) | The benchmark: 51 exits, web and search destinations, block rates and reasons |
 | [`residential-proxies.md`](residential-proxies.md), [`residential-proxy-providers.md`](residential-proxy-providers.md) | What residential proxies do to your privacy; a provider taxonomy |
-| [`post/`](post/) | The published write-up ([`index.html`](post/index.html) + figures), plus [`JOIN.md`](post/JOIN.md) and [`RUN-A-GATEWAY.md`](post/RUN-A-GATEWAY.md) |
+| [`post/`](post/) | The published landing page ([`index.html`](post/index.html)), full [research note](post/research/index.html), figures, plus [`JOIN.md`](post/JOIN.md) and [`RUN-A-GATEWAY.md`](post/RUN-A-GATEWAY.md) |
 | [`SHIP-PLAN.md`](SHIP-PLAN.md), [`ROADMAP.md`](ROADMAP.md) | The shipping backlog and release gates; the forward roadmap |
 | [`ROADMAP-v1.md`](ROADMAP-v1.md), [`NEXT-VERSION.md`](NEXT-VERSION.md), [`RLN-MIGRATION.md`](RLN-MIGRATION.md) | Historical designs (milestones 1 to 5, next-version spec, RLN migration); what they specified is built |
 | [`REPORT.md`](REPORT.md), [`DEPLOY.md`](DEPLOY.md), [`DEPLOYMENT.md`](DEPLOYMENT.md), [`walkthrough.html`](walkthrough.html) | Historical: the June 2026 PoC report and deploy guide, the July fleet deployment record, the request walkthrough |

@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="description" content="The Shade Tree research note: access-gated onion egress for local AI." />
+  <meta name="theme-color" content="#f7f5ef" />
+  <meta property="og:title" content="Access-gated onion egress · Shade Tree" />
+  <meta property="og:description" content="The design, measurements, and open questions behind Shade Tree." />
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://shade-tree-node.vercel.app/research/" />
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp" />
+  <meta property="og:image:alt" content="A sparse grove casting a patch of shade" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="canonical" href="https://shade-tree-node.vercel.app/research/" />
+  <title>Access-gated onion egress · Shade Tree</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    :root {
+      --paper: #f7f5ef;
+      --ink: #191c17;
+      --moss: #59624f;
+      --rule: #d7dbcf;
+      --soft: #eceee7;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html {
+      color: var(--ink);
+      background: var(--paper);
+    }
+    body {
+      max-width: none;
+      margin: 0;
+      padding: 0 1.5rem 6rem;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font-size: 17px;
+      line-height: 1.65;
+    }
+    body > :not(.shade-hero) {
+      width: 100%;
+      max-width: 40rem;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    a,
+    a:visited {
+      color: var(--ink);
+      text-decoration-color: color-mix(in srgb, var(--moss) 64%, transparent);
+      text-underline-offset: 0.18em;
+      text-decoration-thickness: 0.08em;
+    }
+    a:hover {
+      color: var(--moss);
+    }
+    a:focus-visible {
+      outline: 2px solid var(--moss);
+      outline-offset: 4px;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--ink);
+      line-height: 1.15;
+      letter-spacing: -0.018em;
+      text-wrap: balance;
+    }
+    h2 {
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--rule);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.84em;
+    }
+    blockquote {
+      border-left-color: var(--moss);
+      color: #4f554b;
+    }
+    hr,
+    tbody,
+    th {
+      border-color: var(--rule);
+    }
+    .shade-hero {
+      position: relative;
+      width: min(72rem, calc(100vw - 3rem));
+      margin: 1.5rem auto 5rem;
+      border-bottom: 1px solid var(--rule);
+      text-align: left;
+    }
+    .shade-hero > img {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 3 / 1;
+      object-fit: cover;
+    }
+    .shade-lockup {
+      position: absolute;
+      top: 50%;
+      right: clamp(2rem, 7vw, 6rem);
+      width: min(25rem, 39%);
+      transform: translateY(-50%);
+    }
+    .shade-lockup h1 {
+      margin: 0.08em 0 0;
+      font-size: clamp(3rem, 6vw, 5.75rem);
+      font-weight: 500;
+      letter-spacing: -0.055em;
+    }
+    .shade-eyebrow,
+    .article-kicker,
+    .shade-links {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.4;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+    .shade-eyebrow {
+      display: inline-block;
+      margin: 0;
+      padding: 0.35rem 0.5rem 0.3rem;
+      color: #f8f7f1;
+      background: var(--moss);
+    }
+    .shade-tagline {
+      margin: 0.6rem 0 0;
+      font-size: clamp(1.05rem, 1.8vw, 1.35rem);
+      font-style: italic;
+    }
+    .shade-dek {
+      margin: 0.9rem 0 0;
+      max-width: 25rem;
+      font-size: 0.93rem;
+      line-height: 1.45;
+    }
+    .shade-links {
+      display: flex;
+      gap: 1rem;
+      margin: 1.3rem 0 0;
+      letter-spacing: 0.06em;
+    }
+    .article-kicker {
+      margin-bottom: 0.75rem;
+      color: var(--moss);
+    }
+    .article-title {
+      margin-top: 0;
+      font-size: clamp(2.25rem, 6vw, 3.7rem);
+      font-weight: 500;
+      letter-spacing: -0.045em;
+    }
+    .article-lede {
+      margin-bottom: 3rem;
+      color: #40463d;
+      font-size: 1.12rem;
+      line-height: 1.55;
+    }
+    .implementation-note {
+      margin-top: -1rem;
+      margin-bottom: 3rem;
+      padding: 1rem 1.1rem;
+      border-left: 3px solid var(--moss);
+      background: color-mix(in srgb, var(--soft) 62%, transparent);
+      color: #40463d;
+      font-size: 0.92rem;
+    }
+    #TOC {
+      margin-top: 3rem;
+      margin-bottom: 4rem;
+      padding: 1.1rem 1.25rem 1.25rem;
+      border: 1px solid var(--rule);
+      background: color-mix(in srgb, var(--soft) 55%, transparent);
+    }
+    #TOC > p {
+      margin-top: 0;
+    }
+    @media (max-width: 760px) {
+      body {
+        padding: 0 1rem 4rem;
+        font-size: 16px;
+      }
+      .shade-hero {
+        width: calc(100vw - 2rem);
+        margin: 1rem auto 3.5rem;
+      }
+      .shade-hero > img {
+        height: 14rem;
+        object-position: left center;
+      }
+      .shade-lockup {
+        position: static;
+        width: auto;
+        padding: 1.4rem 0 1.6rem;
+        transform: none;
+      }
+      .shade-lockup h1 {
+        font-size: clamp(3rem, 17vw, 4.4rem);
+      }
+      .shade-dek {
+        font-size: 0.9rem;
+      }
+    }
+    @media print {
+      .shade-hero {
+        break-after: avoid;
+      }
+      .shade-lockup {
+        position: static;
+        width: auto;
+        padding: 1rem 0;
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<header id="title-block-header" class="shade-hero">
+<img src="../fig/shade-tree-banner.webp" width="2172" height="724" alt="" />
+<div class="shade-lockup">
+<p class="shade-eyebrow">Research preview</p>
+<h1 class="title">Shade Tree</h1>
+<p class="shade-tagline">A small grove for local AI.</p>
+<p class="shade-dek">Access-gated HTTPS tunnels through Tor onion services.</p>
+<p class="shade-links"><a href="/">Home</a> <a href="https://github.com/dmarzzz/shade-tree-node">Source</a> <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node</a></p>
+</div>
+</header>
+<p class="article-kicker">Research note · August 2026</p>
+<h1 id="access-gated-onion-egress" class="article-title">Access-gated
+onion egress for local AI</h1>
+<p class="article-lede">Shade Tree is an experiment in carrying HTTPS
+tunnels through <a href="https://www.torproject.org/">Tor</a> onion
+services. A node admits each tunnel with a rate-limited proof of
+membership, without asking the client for an account or a stable
+identity. The design, measurements, and unresolved tradeoffs are
+documented below. Code at <a href="https://github.com/dmarzzz/shade-tree-node">dmarzzz/shade-tree-node</a>.</p>
+<p class="implementation-note"><strong>Implementation note.</strong> The
+research note below records the first prototype and its measurements. The
+current implementation speaks Shade Tree protocol v4 and adds signed fleet
+discovery plus optional onchain admission. For current wire behavior and
+security boundaries, use the <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PROTOCOL.md">protocol</a>
+and <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">threat
+model</a> in the repository.</p>
+<nav id="TOC" role="doc-toc">
+<p><strong>Table of contents</strong></p>
+<ul>
+<li><a href="#tor-exit-ips-are-a-public-blocklist">Tor exit IPs are a public blocklist</a></li>
+<li><a href="#gating-on-membership-not-identity">Gating on membership, not identity</a>
+<ul>
+<li><a href="#an-onion-service-instead-of-an-exit-node">An onion service instead of an exit node</a></li>
+<li><a href="#a-membership-proof-rate-limited-with-rln">A membership proof, rate-limited with RLN</a></li>
+<li><a href="#the-wire-protocol">The wire protocol</a></li>
+<li><a href="#deployment-and-results">Deployment and results</a></li>
+</ul></li>
+<li><a href="#discussion">Discussion</a>
+<ul>
+<li><a href="#the-design-space">The design space</a>
+<ul>
+<li><a href="#topology">Topology</a></li>
+<li><a href="#payment">Payment</a></li>
+</ul></li>
+<li><a href="#addendum-zk-payment-channels">Addendum: zk payment channels</a>
+<ul>
+<li><a href="#how-it-would-work">How it would work</a></li>
+<li><a href="#what-it-costs">What it costs</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#references">References</a></li>
+</ul>
+</nav>
+<p>In 2016 Cloudflare, the company whose machines stand between a large
+fraction of the web and anyone wishing to read it, published its
+accusation of Tor, titled “<a
+href="https://blog.cloudflare.com/the-trouble-with-tor/">The Trouble
+with Tor</a>”: 94 percent of what arrives from the Tor network is
+malicious. On that claim it put CAPTCHAs and challenges in front of Tor
+traffic by default, for every customer at once. The Tor Project answered
+in kind, “<a href="https://blog.torproject.org/trouble-cloudflare/">The
+Trouble with CloudFlare</a>”, and posed a modest empirical question, by
+what method was this 94 percent counted. A decade later it has no
+answer, and many still report getting blocked when going through
+Tor. In
+particular, those in the private agentic community report that while
+using <a href="https://github.com/searxng/searxng">SearXNG</a>, a
+metasearch engine with built-in Tor support, they still get blocked. The
+academic literature has a name for this condition, <a
+href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/do-you-see-what-i-see-differential-treatment-anonymous-users.pdf">fate
+sharing</a>: everyone behind a shared address inherits the penalty that
+any one of them earned.</p>
+<p>In this post we show a simple reproduction of an agent being blocked
+when using SearXNG over Tor. We then present the design and
+implementation of a candidate solution: an access-gated onion service
+that admits requests on a zk proof of membership, rate-limited with a <a
+href="https://rate-limiting-nullifier.github.io/rln-docs">rate-limiting
+nullifier</a> (RLN). The open problem underneath is pricing the burn of
+the shared IP when anonymity forbids attributing it to any member, which
+reduces to a spent set no single party is trusted to keep.</p>
+<h2 id="tor-exit-ips-are-a-public-blocklist">Tor exit IPs are a public
+blocklist</h2>
+<p>Blocking Tor exit nodes programmatically is easy, because Tor
+publishes the <a
+href="https://check.torproject.org/torbulkexitlist">full list of exit
+IPs</a> itself: the firewall and CDN vendors <a
+href="https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists/built-in-edls">ingest
+it as a live feed</a> that updates as exits rotate, so banning all of
+Tor is a checkbox. The folklore is easy to check directly. I fetched the
+same real pages over a Tor exit, a home IP, and a datacenter IP, same
+client and same request rate, and recorded the HTTP status each site
+returned, so the only variable was the address I arrived from. The <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md">Tor-arm
+method and scripts</a> are in the repo. At the request level, over the
+same 36 sites, the home IP was blocked 8.3 percent of the time, the
+datacenter IP 16.7 percent, and Tor 17.1 percent. Each non-Tor lane is
+one address on one day, so the datacenter number may partly be a
+DigitalOcean blocklist artifact. The experiment also separates two layers that can both
+block: the destination you are trying to reach, and the search engine
+you use to find it. The search engine sits a layer earlier, so Google
+can block you before you even know your destination. For a small sample
+size, 36 web destinations and 6,024 search queries over about 50 Tor
+exits, the web-destination result is mostly bimodal, with a thin middle
+tier between 4 and 27 percent. The sites that wall Tor at 90 to 100
+percent are mostly fronted by commercial anti-bot vendors, Cloudflare,
+Akamai, or DataDome, and the rest block almost none. The search-engine
+arm is messier, its 24 engines spread from fully open to Google’s 83
+percent.</p>
+<figure>
+<img src="../fig/shade-tree-blocking.png" alt="tor exit blocking distribution" />
+<figcaption aria-hidden="true">tor exit blocking
+distribution</figcaption>
+</figure>
+<p><em>nike, indeed, and g2 wall off 100 percent of tor traffic and
+google blocks 83; amazon, reddit, and the independent engines block
+none. a single “percent of tor blocked” number is just the mix of the
+two.</em></p>
+<p>Our methodology has one blind spot: a Tor exit is a single address
+carrying many users at once, and we cannot isolate whether someone else
+was hitting the same destination from the same exit during our run. An
+observed block could therefore be rate limiting of a busy address rather
+than a judgment of the address itself, and the status code tells the two
+apart. Call an IP’s <a
+href="https://blog.cloudflare.com/the-trouble-with-tor/">reputation</a>
+the subjective score a destination keeps for an address, built from
+everything that address has been seen doing before. A 429 says the
+address is sending too many requests right now and should slow down. A
+403, a CAPTCHA, or a JS challenge says its reputation is bad enough to
+refuse it outright, no matter how slowly it asks. The ambiguity weighs
+hardest on the search arm, where SearXNG sends every query to every
+engine, so each engine sees the exit’s whole query stream even though
+our own footprint was held to five jittered queries per exit. Classified
+by status code, search-engine blocks are roughly two-thirds reputation
+and one-third rate limit, against about 98 percent reputation for web
+destinations.</p>
+<figure>
+<img src="../fig/shade-tree-blockkind.png" alt="block by kind" />
+<figcaption aria-hidden="true">block by kind</figcaption>
+</figure>
+<p><em>every block, classified by kind and split by arm: reputation
+(403, captcha, js challenge) against rate limit (429). the sites an
+egress actually has to reach block almost purely on reputation.</em></p>
+<p>The literature defines this problem of sharing an IP’s reputation as
+the fate sharing problem. <a
+href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/do-you-see-what-i-see-differential-treatment-anonymous-users.pdf">Khattak
+and coauthors</a> named it in 2016: “Some blocks specifically target
+Tor, while others result from fate-sharing when abuse-based automated
+blockers trigger due to misbehaving Web sessions sharing the same exit
+node.” Unfortunately, at this point it may not even matter whether you
+actually share fate with malicious traffic over an exit node, since many
+operators block the traffic automatically through their CDNs. The point
+is proven further by <a
+href="https://www.usenix.org/conference/usenixsecurity17/technical-sessions/presentation/singh">Singh
+and coauthors</a>, who found that even conservative exit policies do not
+keep exit relays off the blacklists. The fate sharing problem may have
+created an irreversible sealed fate problem for Tor. The rest of this
+post outlines a mechanism that shrinks fate sharing from the whole Tor
+network to a membership set you can price, and shows what it still
+cannot attribute.</p>
+<h2 id="gating-on-membership-not-identity">Gating on membership, not
+identity</h2>
+<p>Today the cost of sybiling a Tor exit is close to zero: identities
+are free and requests are free, so one abuser, or one abuser wearing a
+thousand fresh identities, can poison a shared IP at no cost to
+themselves. There are a few ways to attach a cost:</p>
+<ul>
+<li>require members to stake, and to anonymously prove they have done
+so</li>
+<li>require members to pay for every request</li>
+<li>or both: stake for admission, pay per use</li>
+</ul>
+<p>For this proof of concept we take the first path. The goal is narrow:
+a live egress that plugs into the Tor network, reachable by routing
+through Tor, and passes traffic to the clearnet only for requests
+carrying a zero-knowledge proof of membership in a set, rate-limited per
+member with RLN. To get there we deliberately put off a pile of protocol
+design decisions. The membership set is hard coded rather than
+maintained by onchain staking, so admission stays an explicit trust
+root. There is no payment layer, though one would slot in as an extra
+per-tunnel check exactly where the rate limit sits today. We wanted a
+working system first, and the harder design questions it raises are the
+subject of the last section. Below we describe the two components of the
+design, then the results of deploying it.</p>
+<h3 id="an-onion-service-instead-of-an-exit-node">An onion service
+instead of an exit node</h3>
+<p>Modifying a Tor exit node to accept something like a zk proof is not
+possible within the Tor protocol as deployed, for two reasons:</p>
+<ol type="1">
+<li>The Tor protocol has no slot for a credential at the exit. A stream
+opens with a <a
+href="https://spec.torproject.org/tor-spec/opening-streams.html">cell
+carrying only an address and a port</a>, and an exit’s only admission
+control is its <a
+href="https://2019.www.torproject.org/docs/tor-manual.html.en">exit
+policy</a>, an accept or reject list of addresses and ports, so there is
+nowhere to demand a proof from the anonymous circuit that is
+asking.</li>
+<li>An exit only works if it is public. Clients pick exits from the <a
+href="https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/">published
+consensus</a>, so the moment a clean IP becomes an exit it joins the
+very blocklist we are trying to escape.</li>
+</ol>
+<p>Tor offers another, lesser known kind of node for almost this exact
+reason: the onion service.</p>
+<figure>
+<img src="../fig/shade-tree-exit-vs-onion.png" alt="exit node vs onion service" />
+<figcaption aria-hidden="true">exit node vs onion service</figcaption>
+</figure>
+<p><em>network flow diagram of a Tor exit relay versus a Tor onion
+service reaching the same clearnet destination.</em></p>
+<p>An onion service has no exit at all. Where a normal circuit is three
+hops ending at an exit relay that talks to the destination in the clear,
+an onion service is named by a public key, and the .onion address is
+that key. The client builds a three-hop circuit to a rendezvous relay,
+the service builds its own three-hop circuit to the same relay, and the
+rendezvous splices them together. That makes six hops in total, with no
+single relay seeing both ends and neither side ever learning the other’s
+IP. It is two parties meeting at a neutral spot that neither one picked.
+And because the service is a key rather than an address, it never
+appears in the directory consensus the way exits do, so there is no
+published IP to put on a blocklist.</p>
+<p>The gateway is a v3 onion service running on a box with a single
+clean IP. A member connects to the onion address over Tor, the gateway
+forwards the traffic to the clearnet from its own IP, and the
+destination sees one ordinary address that appears on no Tor list. The
+tunnel carries one TLS connection to port 443, end to end; the gateway
+learns the host and port, never the content. That IP stays clean for
+exactly as long as the members behind it keep it clean, which is what
+the gate, a zk membership proof described in the next subsection, is
+for.</p>
+<h3 id="a-membership-proof-rate-limited-with-rln">A membership proof,
+rate-limited with RLN</h3>
+<p>The gate has to do two things that sound contradictory: decide
+whether a request comes from an allowed member, and hold each member to
+a rate budget, all without learning which member it is talking to. The
+first half can be solved with a <a
+href="https://semaphore.pse.dev">Semaphore</a> group; ring signatures or
+a bespoke credential scheme could express the same membership claim, but
+Semaphore ships the proof and the nullifier we need in one audited,
+widely deployed package. The set of allowed users is a Merkle tree whose
+leaves are identity commitments; each member holds a secret, and their
+leaf is a hash of it. To pass the gate, a client proves in zero
+knowledge that it knows the secret behind some leaf of the tree, without
+revealing which leaf. Proof values are not literally identical: they
+carry a public root, nullifier, and signal commitment. Under the proof
+assumptions, those values hide which eligible leaf inside the revealed
+root was used.</p>
+<p>The second half comes from the public outputs of the RLN proof. A
+private message slot produces a nullifier scoped to the current epoch.
+Two properties follow:</p>
+<ol type="1">
+<li>Within an epoch a member can create distinct nullifiers only for the
+private slots allowed by its leaf. Reusing a slot for a different signal
+reveals enough public-share information to recover the slashable identity
+secret.</li>
+<li>Across epochs the nullifier inputs change. The proof transcript does
+not expose a stable member identifier, though network and application
+metadata may still correlate tunnels.</li>
+</ol>
+<p>Together the two halves resolve the contradiction the gate opened
+with: it admits only members and meters each one, without ever learning
+which member it is serving. This is the <a
+href="https://rate-limiting-nullifier.github.io/rln-docs">RLN</a> idea,
+or exactly its counting half: the Shamir-share slashing that completes
+RLN activates once there is a stake to slash.</p>
+<h3 id="the-wire-protocol">The wire protocol</h3>
+<p>With the proof defined, let’s look at how it travels. The client and
+gateway speak a small protocol of their own, no HTTP and no headers,
+where the proof is the entire identity layer. Every request opens with a
+single line of JSON we call the envelope:</p>
+<pre class="jsonc"><code>{
+  &quot;v&quot;: 1,
+  &quot;target&quot;: &quot;www.google.com:443&quot;,
+  &quot;proof&quot;: {
+    &quot;merkleTreeDepth&quot;: 3,           // size parameter of the tree, same for every member
+    &quot;merkleTreeRoot&quot;: &quot;18939…&quot;,     // commitment to the whole set, same for every member
+    &quot;message&quot;: &quot;1&quot;,
+    &quot;scope&quot;: &quot;20638&quot;,               // the current epoch number
+    &quot;nullifier&quot;: &quot;13974…&quot;,          // hash(secret, epoch): this member&#39;s pseudonym for the epoch
+    &quot;points&quot;: [&quot;632…&quot;, &quot;497…&quot;, &quot;…&quot;] // the zk proof itself, ~0.9 KB
+  }
+}</code></pre>
+<p>Nothing in the envelope narrows down who sent it. The root and the
+depth describe the set, not the member (depth 3 caps the set at 2^3 = 8
+members, a PoC toy; the Discussion treats depth as a privacy parameter);
+every member’s envelope carries the same values, and the root is simply
+what the gateway compares against its own copy. The one member-specific
+field is the nullifier, and it is a pseudonym that expires with the
+epoch.</p>
+<p>The whole exchange is three moves on one connection, the same shape
+as HTTP CONNECT: a short preamble before TLS begins, so TLS stays end to
+end, and the preamble is never visible on the network because it rides
+inside the Tor encryption.</p>
+<figure>
+<img src="../fig/shade-tree-protocol.png" alt="the gateway handshake" />
+<figcaption aria-hidden="true">the gateway handshake</figcaption>
+</figure>
+<p><em>sequence diagram of the gateway handshake between the client,
+gateway, and destination.</em></p>
+<p>To admit a request, the gateway runs five checks in order:</p>
+<ol type="1">
+<li>the proof verifies as a zero-knowledge proof</li>
+<li>its root equals the root the gateway loaded at boot, so the proof
+speaks for our set and not one the client invented</li>
+<li>its scope is the current epoch, with one epoch of clock skew
+allowed</li>
+<li>the target parses as host:443, the TLS-only policy that keeps the
+gateway a metadata-only tunnel</li>
+<li>the nullifier is still under its budget for the epoch, and the
+counter increments</li>
+</ol>
+<p>All five must pass; anything else gets an error verdict and a dropped
+connection, so the gate fails closed by default. The cost is lopsided on
+purpose. Generating a proof is the expensive step, but the client does
+it about once per epoch and caches the result, so every request in that
+epoch reuses one proof. The gateway pays only the verification, which is
+the cheap side of the asymmetry and is all that sits in the hot
+path.</p>
+<p>There are a few improvements to this protocol we would need to make
+to take it to production, but for the PoC they are not needed. These
+are:</p>
+<ul>
+<li>bind the proof’s <code>message</code> field to the target, so an
+envelope cannot be replayed for a different destination within its
+epoch. Today the proof commits to the set, epoch, and nullifier but not
+the target, and we lean on the Tor tunnel instead, since the envelope
+never exists outside it.</li>
+<li>shorten the epoch. It is a full day here so a demo session sits
+inside one window; a shorter epoch tightens how long a member’s
+nullifier stays linkable.</li>
+<li>maintain the membership set dynamically through onchain staking,
+rather than the hard-coded set the PoC ships with.</li>
+</ul>
+<h3 id="deployment-and-results">Deployment and results</h3>
+<p>We deployed the <a
+href="https://github.com/dmarzzz/shade-tree-node">full
+open-source system</a> on a single DigitalOcean server. It runs as two
+processes, which is just how a Tor onion service works, not a design
+choice of ours: a <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc">Tor
+daemon</a> that publishes the onion service and handles the rendezvous
+routing, and the <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs">gateway</a>
+itself, a small Node process that listens on localhost and does the
+proof checks. Tor maps the onion address onto that local port, and the
+gateway binds nothing public, so the box is reachable only through Tor.
+The onion name is registered nowhere. On first start the Tor daemon
+generates a v3 keypair and writes the <code>.onion</code> address, which
+is that public key encoded as text, to a file that persists across
+restarts. There is no DNS and no certificate authority, and nothing to
+enumerate, because the address exists only as long as we hold the
+key.</p>
+<p>To use it, a member runs a <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh">small
+client</a> that starts its own Tor and a local proxy, then sends
+ordinary traffic through it. Through that proxy we hit a whatismyip
+service, <a href="https://api.ipify.org">api.ipify.org</a>, and it
+reported back the gateway’s DigitalOcean address, not the client’s. The
+destination sees the gateway IP rather than the client source IP. It may
+still identify or link a member through accounts, cookies, application
+identifiers, or traffic correlation. A
+thousand-request load test to Google then returned 1000 of 1000 with
+none blocked, which makes sense: this is a presumably fresh IP with no
+bad history, though DigitalOcean could have recycled it from a prior
+tenant, so for now the destination sees an ordinary address and lets it
+through.</p>
+<p>Since the onion route doubles the hops, three from the client to the
+rendezvous and three from the gateway, so every request crosses six
+relays there and back instead of three, it is worth understanding how
+much worse the latency gets. People already report trouble browsing the
+regular internet over plain three-hop Tor, and this path is longer. We
+timed the same thousand requests to Google, and the median was 1.69
+seconds against a 0.15 second direct baseline, with a p99 near 8 seconds
+from ordinary Tor circuit variance, and a one-hour soak that forced a
+fresh circuit on every request still held 99.90 percent success across
+3903 requests. The gate itself is not the bottleneck: verifying a proof
+takes a median of 32.5 milliseconds on the gateway regardless of set
+size, a serialized ceiling of roughly 27 to 31 checks per second per
+core, and each proof is about 0.9 kilobytes on the wire.</p>
+<figure>
+<img src="../fig/shade-tree-latency.png" alt="latency of the gated path" />
+<figcaption aria-hidden="true">latency of the gated path</figcaption>
+</figure>
+<p><em>latency of the 1000-request load test to google, warm (reused
+circuit) versus cold (fresh rendezvous each request). the six-hop path’s
+1.69 second warm median is about four times the 0.43 second median we
+measured for a plain three-hop tor fetch (of a lightweight control page,
+not google), and about eleven times the 0.15 second direct
+baseline.</em></p>
+<h2 id="discussion">Discussion</h2>
+<p>The PoC proved out our two core concerns: live Tor network
+integration and latency. For Tor integration, the only path we found was
+to go with an onion service, and we are able to hit the egress by going
+through a rendezvous point in the live Tor network. The additional hops
+from this approach are three on the way there and three on the way back
+over the typical query-then-return path through a Tor exit node.</p>
+<p>Naturally, the next question after these results is: what
+modifications to this design do we need to make to deploy it to
+production? From a vibes level, we want something that roughly feels
+like Tor, latency and anonymity wise, but has a much lower block rate,
+ideally even zero outside of standard rate limits. Made precise, that
+vibe comes down to four properties, each stated against the adversary it
+actually holds against.</p>
+<ul>
+<li><strong>Proof unlinkability.</strong> The proof does not reveal which
+eligible leaf sent a tunnel or expose a stable identifier across slots.
+Gateways may still correlate traffic through timing, volume, or
+application metadata.</li>
+<li><strong>Distributed observation.</strong> Each serving gateway learns
+the destination for the tunnels it handles. Rotation can spread that
+view across independent operators; it does not make the destination
+invisible to the serving gateway or defeat a colluding/global observer.</li>
+<li><strong>Priced burn.</strong> Egress is priced to at least cover the
+reputation damage it is expected to cause, so a member who burns an
+address has already paid to replace it and the egress finances its own
+rotation.</li>
+<li><strong>Clean egress.</strong> Destinations treat the addresses as
+ordinary IPs and reputation blocks fall toward zero, which takes both
+priced burn and a residential supply that was never pre-scored.</li>
+</ul>
+<p>These are design goals for the system, not guarantees established by
+the research preview. You could name others, operator privacy, a fail-closed admission
+gate, data-minimization at the gateway, latency within a constant of
+Tor, but these four are the essentials this protocol stands or falls on.
+The first two are the anonymity Tor already gives; the last two are the
+reputation story it does not.</p>
+<h3 id="the-design-space">The design space</h3>
+<p>Two different sets matter. The membership anonymity set is the set of
+eligible leaves under the public root: its size and distribution govern
+how many members a valid proof could represent. Gateway diversity is a
+separate property: more independent operators spread destination and
+traffic observations, while a single or colluding operator can correlate
+the tunnels it serves. More gateways do not by themselves enlarge the
+membership set. Network-level correlation also depends on who can observe
+the Tor path and the egress. In particular, a well-known attack involves
+controlling entry and exit observations (<a
+href="https://dl.acm.org/doi/10.1145/2508859.2516651">Johnson et al.,
+<em>Users Get Routed</em>, CCS 2013</a>).</p>
+<p>Therefore, topology, membership, and payment choices affect different
+parts of the privacy story. Committees and payment rails may expose new
+links or shrink the eligible membership set, while operator diversity
+changes how concentrated destination observations are.
+Ultimately the desired privacy level, as well as the shape of the
+traffic expected to go through it, should dictate the answer to these
+questions. For instance, Tor is much better for async GET requests than
+streaming Netflix over websocket. Our PoC was one node and no payment: a
+single gateway in front of a hard-coded membership, enough to prove the
+gate works and to measure the path. One gateway is one IP, one burn away
+from dead, and one observer of every prototype tunnel, so
+production cannot stay that small. From here the design space branches
+two ways.</p>
+<ol type="1">
+<li><strong>Topology:</strong> how many independent gateways serve and
+observe requests, and how clients rotate among them.</li>
+<li><strong>Payment:</strong> what does a member pay and where is it
+counted, from a refundable stake that buys a base allowance, to a fee
+per tunnel, to both, and whether that budget is metered at each gateway
+or once across the whole fleet.</li>
+</ol>
+<p>So what’s the actual problem? An onion service is represented as a
+public key, and this public key is used to rendezvous with a specific
+gateway. The protocol or the users must coordinate some way of rotating
+the gateways they are sending requests through in order to maximize
+their privacy. The introduction of coordination across multiple gateways
+creates challenges for payments and resource allocation, and therefore
+more attack vectors for sybils, or more latency and complexity in the
+protocol. These two axes, topology and payment, are the design
+space.</p>
+<h4 id="topology">Topology</h4>
+<p>A gateway here is one onion key in front of one clean IP, so the
+topology question is how many onion keys a member can rendezvous with
+and whose membership set stands behind each one, with the anonymity set
+growing as you read down. Each shape has a live precedent: <a
+href="https://petsymposium.org/popets/2018/popets-2018-0026.php">Privacy
+Pass</a> runs the single-verifier corner in production, Tor’s own bridge
+distribution is a federation of distributors each rationing their own
+pool (<a
+href="https://petsymposium.org/popets/2023/popets-2023-0029.php">Lox</a>
+adds anonymous trust levels to exactly that shape), and <a
+href="https://arxiv.org/abs/2207.00117">WAKU-RLN-RELAY</a> runs a flat
+fleet of relays enforcing one shared RLN membership.</p>
+<ul>
+<li><strong>Single verifier.</strong> One gateway, one operator who sees
+everything, barely more than an account. This is the <a
+href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104">ZK
+API Usage Credits</a> corner: the provider keeps the spent set, trusted
+for delivery and never for privacy, and consistency is free because N is
+one. It stays off the table on purpose. It is the trusted-party design
+this PoC set out from, and collapsing N to one to buy easy consistency
+hands back the exact property the whole exercise exists to keep.</li>
+<li><strong>Federated hubs.</strong> Each member stakes into and pays
+whichever hub it picks. Nothing ever has to cross between operators,
+since every hub keeps its own spent set, and this is the easiest place
+to get slashing working. The cost is the crowd: capital fragments across
+hubs, each roster is a smaller, static, linkable set, and a member is
+legible within whichever hub it picks, so the anonymity set is capped at
+one hub’s roster.</li>
+<li><strong>Flat fleet.</strong> Every gateway serves one shared
+membership, so a member is never pinned to an operator and the crowd is
+the whole set. This is the largest anonymity set on offer, and its price
+is shared state: for a budget to mean anything fleet-wide, it has to be
+counted once across all N gateways.</li>
+</ul>
+<p>Of the three shapes, the flat fleet is the only one where adding an
+operator grows the crowd instead of splitting it, which is why the next
+version stays there. The cost is that a member’s budget now has to be
+counted across operators who do not trust each other, and that is the
+payment question.</p>
+<h4 id="payment">Payment</h4>
+<p>Payment is about what admission actually consumes, and on a flat
+fleet the accounting gets strictly heavier as you read down. The problem
+is older than it looks: <a
+href="https://link.springer.com/chapter/10.1007/0-387-34799-2_25">untraceable
+e-cash</a> was catching anonymous double-spenders in 1988, and <a
+href="https://eprint.iacr.org/2005/060">Compact E-Cash</a> and <a
+href="https://eprint.iacr.org/2006/454">periodic n-times anonymous
+authentication</a> refined that into the same per-epoch anonymous budget
+that RLN enforces today. What is new here is the venue: the counter has
+to survive N mutually distrusting gateways rather than one bank.</p>
+<ul>
+<li><strong>Stake only.</strong> A bond counted once at admission and
+never again. This is the PoC’s implicit choice, and it fails twice the
+moment a second gateway appears: the nullifier is scoped to (secret,
+epoch) rather than the gateway, so one member shows the same pseudonym
+everywhere and the fleet-wide budget is silently N times what any
+operator intended; and a budget caps what a member spends, not where, so
+the whole membership can converge on one gateway. A stake alone also
+never prices the burn.</li>
+<li><strong>Pay per tunnel.</strong> The target, and the hard one. A
+fee that counts once across the fleet is the distributed spent set: N
+mutually distrusting gateways agreeing on what an anonymous member has
+spent, without any one of them keeping the ledger. The largest crowd,
+bought at the price of that shared state.</li>
+<li><strong>Stake and pay.</strong> The full end state: a slashable bond
+that also opens the door to <a
+href="https://homes.luddy.indiana.edu/kapadia/papers/blac-tissec-preprint.pdf">anonymous
+blacklisting</a>, plus a fee that prices the burn, still riding on the
+distributed spent set.</li>
+</ul>
+<p>What the fleet still needs is the spent set no single party may own,
+and the adjacent literature says it is buildable: spending from your own
+budget <a href="https://arxiv.org/abs/1906.05574">needs less than
+consensus</a>, <a
+href="https://dl.acm.org/doi/abs/10.1145/3419614.3423249">FastPay</a>
+built real payments on exactly that observation, and <a
+href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot">Nym</a>
+already ships double-spend protection for anonymous credentials across
+its gateways. The next version starts there: a fee counted once across a
+small fleet of three gateways over one deposit-contract set, with the
+burn priced per member rather than per tunnel.</p>
+<h3 id="addendum-zk-payment-channels">Addendum: zk payment channels</h3>
+<p>The payment section above treats the distributed spent set as the
+price of the flat fleet. There is a design that refuses to pay it: a zk
+payment channel per member-gateway pair. The <a
+href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104">ZK
+API Usage Credits</a> construction is fundamentally such a channel bound
+to one recipient, and the shape has a name in the literature: it is <a
+href="https://acmccs.github.io/papers/p473-greenA.pdf">BOLT</a>, the
+anonymous payment channel Green and Miers built for exactly this
+asymmetry, with RLN’s slash standing in for BOLT’s revocation tokens and
+watchtowers. Open a channel with each gateway and every gateway keeps
+its own channel state; nothing crosses between operators, because
+nothing is shared.</p>
+<h4 id="how-it-would-work">How it would work</h4>
+<p>A channel is an escrowed deposit plus a state counter. To pay, the
+member proves in zero knowledge that it holds the current signed state
+with balance remaining, the gateway blindly signs the decremented state,
+and the payment proof rides the same envelope the membership proof rides
+today. The gateway learns that some member with an open channel paid,
+and cannot link the spend to the previous one. Double-spending an old
+state is punished rather than prevented: replaying a spent index leaks
+the member’s secret through the same Shamir-line algebra RLN already
+uses, and the deposit becomes slashable by anyone. Egress pricing is
+flat, so the refund machinery that dominates the LLM version of this
+construction, where costs vary by 100x, can be deleted whole.</p>
+<p>The channels would be opened in batch at enrollment, all of them at
+once, funded through something shielded, because the funding edge is
+where the anonymity dies otherwise. A member who opens channels lazily
+on first use leaks its gateway affinities in the timing, and one who
+funds from a bare wallet links its whole gateway set through exchange
+KYC trails. BOLT’s paper says this plainly: the guarantees hold only if
+channels are funded with anonymized capital.</p>
+<h4 id="what-it-costs">What it costs</h4>
+<p>We swept the literature behind this fork, BOLT and zkChannels, the
+TumbleBit-to-Accio payment-hub line, Chaumian ecash from Chaum through
+Fedimint and the IETF credit-token drafts, the channel
+capital-efficiency work, and the formal-verification record, and the
+channel path carries three costs for this fleet.</p>
+<ul>
+<li><strong>Capital fragments N ways.</strong> Each deposit is sized to
+worst-case spend at its gateway, and spreading a member’s traffic across
+N gateways divides the request rate each channel sees. The <a
+href="https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664">channel
+economics literature</a> puts a frequency threshold below which a
+channel never pays for its lockup; a roaming member on a large fleet is
+a machine for staying under it.</li>
+<li><strong>The anonymity set partitions, then shrinks.</strong> Payment
+anonymity at a gateway is capped by the members holding an open channel
+there, and the effective set is smaller than that: every channel and hub
+system in the literature settles on the same accounting, <a
+href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf">the
+payments that actually completed this epoch</a>, a set that shrinks when
+payments abort and erodes across epochs by intersection.</li>
+<li><strong>The gateway gets an abort lever.</strong> BOLT’s own authors
+documented that the paid counterparty can shrink the anonymity set by
+inducing aborts, and can link a member across a sequence of requests by
+aborting it mid-sequence. Our adversary is the gateway.</li>
+</ul>
+<p>The sweep also returned something better than a verdict: a
+simplification. With refunds deleted and every ticket priced flat, the
+credits construction collapses into the stack this post already runs.
+Prove membership, prove one counter inequality, spend index times price
+stays inside the deposit, and emit one more nullifier. The spent set
+that checks that nullifier needs no consensus, because RLN prices its
+inconsistency: a double-spend across two gateways is caught when they
+reconcile, the secret falls out of the algebra, and the deposit is
+slashed, so the async window is bounded by the deposit rather than
+trusted away. <a
+href="https://github.com/fedimint/fedimint">Fedimint</a> runs this shape
+today with a BFT spent list; <a
+href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot">Nym</a>
+runs it with deferred reconciliation across its gateways. For a fleet
+whose requests cost the same and whose adversary is the operator, the
+distributed spent set turns out to be the cheap path, and channels
+remain the right tool where they were invented: one counterparty,
+variable costs, no fleet to gossip. The open problems that actually gate
+the next version are narrower and better than before: the bound relating
+gossip lag to the maximum extractable double-spend, the self-slash race
+where a member burns its own deposit before the gateway sweeps earned
+balance, and the deposit-edge KYC leak.</p>
+<h2 id="references">References</h2>
+<ol type="1">
+<li>The Tor Project. <a href="https://www.torproject.org/"
+class="uri">https://www.torproject.org/</a></li>
+<li>dmarz, shade-tree-node. <a
+href="https://github.com/dmarzzz/shade-tree-node"
+class="uri">https://github.com/dmarzzz/shade-tree-node</a></li>
+<li>Prince, The Trouble with Tor, Cloudflare blog, 2016. <a
+href="https://blog.cloudflare.com/the-trouble-with-tor/"
+class="uri">https://blog.cloudflare.com/the-trouble-with-tor/</a></li>
+<li>Perry, The Trouble with CloudFlare, Tor Project blog, 2016. <a
+href="https://blog.torproject.org/trouble-cloudflare/"
+class="uri">https://blog.torproject.org/trouble-cloudflare/</a></li>
+<li>SearXNG metasearch engine. <a
+href="https://github.com/searxng/searxng"
+class="uri">https://github.com/searxng/searxng</a></li>
+<li>Khattak, Fifield, Afroz, Javed, Sundaresan, McCoy, Paxson, Murdoch,
+Do You See What I See? Differential Treatment of Anonymous Users, NDSS
+2016. <a
+href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/do-you-see-what-i-see-differential-treatment-anonymous-users.pdf"
+class="uri">https://www.ndss-symposium.org/wp-content/uploads/2017/09/do-you-see-what-i-see-differential-treatment-anonymous-users.pdf</a></li>
+<li>Rate-Limiting Nullifier (RLN) docs. <a
+href="https://rate-limiting-nullifier.github.io/rln-docs"
+class="uri">https://rate-limiting-nullifier.github.io/rln-docs</a></li>
+<li>The Tor Project, Bulk Tor Exit List. <a
+href="https://check.torproject.org/torbulkexitlist"
+class="uri">https://check.torproject.org/torbulkexitlist</a></li>
+<li>Palo Alto Networks, Built-in External Dynamic Lists (Tor exit IP
+addresses). <a
+href="https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists/built-in-edls"
+class="uri">https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists/built-in-edls</a></li>
+<li>dmarz, Tor exit-blocking benchmark: method and classifier. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/docs/exit-blocking-benchmark.md</a></li>
+<li>Singh, Nithyanand, Afroz, Pearce, Tschantz, Gill, Paxson,
+Characterizing the Nature and Dynamics of Tor Exit Blocking, USENIX
+Security 2017. <a
+href="https://www.usenix.org/conference/usenixsecurity17/technical-sessions/presentation/singh"
+class="uri">https://www.usenix.org/conference/usenixsecurity17/technical-sessions/presentation/singh</a></li>
+<li>The Tor Project, Tor protocol specification: opening streams. <a
+href="https://spec.torproject.org/tor-spec/opening-streams.html"
+class="uri">https://spec.torproject.org/tor-spec/opening-streams.html</a></li>
+<li>The Tor Project, Tor manual (exit policy). <a
+href="https://2019.www.torproject.org/docs/tor-manual.html.en"
+class="uri">https://2019.www.torproject.org/docs/tor-manual.html.en</a></li>
+<li>The Tor Project, Why is the list of Tor exit relays public? <a
+href="https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/"
+class="uri">https://support.torproject.org/about-tor/alt-design/hide-list-of-exits/</a></li>
+<li>Semaphore. <a href="https://semaphore.pse.dev"
+class="uri">https://semaphore.pse.dev</a></li>
+<li>dmarz, shade-tree-node: tor/torrc. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/tor/torrc</a></li>
+<li>dmarz, shade-tree-node: gateway/gateway.mjs. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/gateway/gateway.mjs</a></li>
+<li>dmarz, shade-tree-node: scripts/run-client.sh. <a
+href="https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh"
+class="uri">https://github.com/dmarzzz/shade-tree-node/blob/main/scripts/run-client.sh</a></li>
+<li>ipify, a public IP address API. <a href="https://api.ipify.org"
+class="uri">https://api.ipify.org</a></li>
+<li>Johnson, Wacek, Jansen, Sherr, Syverson, Users Get Routed: Traffic
+Correlation on Tor by Realistic Adversaries, CCS 2013. <a
+href="https://dl.acm.org/doi/10.1145/2508859.2516651"
+class="uri">https://dl.acm.org/doi/10.1145/2508859.2516651</a></li>
+<li>Davidson, Goldberg, Sullivan, Tankersley, Valsorda, Privacy Pass:
+Bypassing Internet Challenges Anonymously, PoPETs 2018. <a
+href="https://petsymposium.org/popets/2018/popets-2018-0026.php"
+class="uri">https://petsymposium.org/popets/2018/popets-2018-0026.php</a></li>
+<li>Tulloch, Goldberg, Lox: Protecting the Social Graph in Bridge
+Distribution, PoPETs 2023. <a
+href="https://petsymposium.org/popets/2023/popets-2023-0029.php"
+class="uri">https://petsymposium.org/popets/2023/popets-2023-0029.php</a></li>
+<li>Taheri-Boshrooyeh, Thoren, Whitehat, et al., WAKU-RLN-RELAY:
+Privacy-Preserving Peer-to-Peer Economic Spam Protection, arXiv 2022. <a
+href="https://arxiv.org/abs/2207.00117"
+class="uri">https://arxiv.org/abs/2207.00117</a></li>
+<li>Crapis, Buterin, ZK API Usage Credits: LLMs and Beyond,
+ethresear.ch. <a
+href="https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104"
+class="uri">https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104</a></li>
+<li>Chaum, Fiat, Naor, Untraceable Electronic Cash, CRYPTO 1988. <a
+href="https://link.springer.com/chapter/10.1007/0-387-34799-2_25"
+class="uri">https://link.springer.com/chapter/10.1007/0-387-34799-2_25</a></li>
+<li>Camenisch, Hohenberger, Lysyanskaya, Compact E-Cash, EUROCRYPT 2005.
+<a href="https://eprint.iacr.org/2005/060"
+class="uri">https://eprint.iacr.org/2005/060</a></li>
+<li>Camenisch, Hohenberger, Kohlweiss, Lysyanskaya, Meyerovich, How to
+Win the Clone Wars: Efficient Periodic n-Times Anonymous Authentication,
+CCS 2006. <a href="https://eprint.iacr.org/2006/454"
+class="uri">https://eprint.iacr.org/2006/454</a></li>
+<li>Tsang, Au, Kapadia, Smith, BLAC: Blacklistable Anonymous
+Credentials, ACM TISSEC 2010. <a
+href="https://homes.luddy.indiana.edu/kapadia/papers/blac-tissec-preprint.pdf"
+class="uri">https://homes.luddy.indiana.edu/kapadia/papers/blac-tissec-preprint.pdf</a></li>
+<li>Guerraoui, Kuznetsov, Monti, Pavlovic, Seredinschi, The Consensus
+Number of a Cryptocurrency, PODC 2019. <a
+href="https://arxiv.org/abs/1906.05574"
+class="uri">https://arxiv.org/abs/1906.05574</a></li>
+<li>Baudet, Danezis, Sonnino, FastPay: High-Performance Byzantine Fault
+Tolerant Settlement, AFT 2020. <a
+href="https://dl.acm.org/doi/abs/10.1145/3419614.3423249"
+class="uri">https://dl.acm.org/doi/abs/10.1145/3419614.3423249</a></li>
+<li>Nym, zk-nym double-spend protection. <a
+href="https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot"
+class="uri">https://nym.com/docs/network/cryptography/zk-nym/double-spend-prot</a></li>
+<li>Green, Miers, Bolt: Anonymous Payment Channels for Decentralized Currencies, CCS 2017. <a href="https://acmccs.github.io/papers/p473-greenA.pdf" class="uri">https://acmccs.github.io/papers/p473-greenA.pdf</a></li>
+<li>Guasoni, Huberman, Shikhelman, Lightning Network Economics: Channels, Management Science 70(6), 2024. <a href="https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664" class="uri">https://pubsonline.informs.org/doi/10.1287/mnsc.2022.01664</a></li>
+<li>Heilman, AlShenibr, Baldimtsi, Scafuro, Goldberg, TumbleBit: An Untrusted Bitcoin-Compatible Anonymous Payment Hub, NDSS 2017. <a href="https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf" class="uri">https://www.ndss-symposium.org/wp-content/uploads/2017/09/ndss201701-3HeilmanPaper.pdf</a></li>
+<li>Fedimint, federated Chaumian mint. <a href="https://github.com/fedimint/fedimint" class="uri">https://github.com/fedimint/fedimint</a></li>
+</ol>
+<h3 id="further-reading">Further reading</h3>
+<ol type="1">
+<li>Semaphore v4 (LeanIMT dynamic groups). <a
+href="https://github.com/semaphore-protocol/semaphore"
+class="uri">https://github.com/semaphore-protocol/semaphore</a></li>
+<li>Maleki, Sainz, Legarda, Santos-Grueiro, Scarcity Is Not Enough:
+Structural Limits of Linear Sybil Cost Under Parallelizable Resources,
+arXiv 2026 (preprint). <a href="https://arxiv.org/abs/2605.29651"
+class="uri">https://arxiv.org/abs/2605.29651</a></li>
+<li>Balegas, Duarte, Ferreira, Rodrigues, Preguica, Najafzadeh, Shapiro,
+Extending Eventually Consistent Cloud Databases for Enforcing Numeric
+Invariants, SRDS 2015. <a href="https://arxiv.org/pdf/1503.09052"
+class="uri">https://arxiv.org/pdf/1503.09052</a></li>
+<li>Anonymous Credit Tokens, draft-schlesinger-cfrg-act. <a
+href="https://datatracker.ietf.org/doc/draft-schlesinger-cfrg-act"
+class="uri">https://datatracker.ietf.org/doc/draft-schlesinger-cfrg-act</a></li>
+<li>The Tor Project, Proof of Work for onion service introduction
+(proposal 327). <a
+href="https://spec.torproject.org/proposals/327-pow-over-intro.html"
+class="uri">https://spec.torproject.org/proposals/327-pow-over-intro.html</a></li>
+<li>Laurie, Clayton, Proof-of-Work Proves Not to Work, WEIS 2004. <a
+href="https://www.cl.cam.ac.uk/~rnc1/proofwork.pdf"
+class="uri">https://www.cl.cam.ac.uk/~rnc1/proofwork.pdf</a></li>
+<li>Tsang, Kapadia, Cornelius, Smith, Nymble: Blocking Misbehaving Users
+in Anonymizing Networks, IEEE TDSC 2011. <a
+href="https://homes.luddy.indiana.edu/kapadia/papers/nymble-tdsc.pdf"
+class="uri">https://homes.luddy.indiana.edu/kapadia/papers/nymble-tdsc.pdf</a></li>
+<li>Douceur, The Sybil Attack, IPTPS 2002. <a
+href="https://www.freehaven.net/anonbib/cache/sybil.pdf"
+class="uri">https://www.freehaven.net/anonbib/cache/sybil.pdf</a></li>
+<li>barryWhiteHat, Semaphore RLN, rate limiting nullifier for spam
+prevention in anonymous p2p setting, ethresear.ch 2019. <a
+href="https://ethresear.ch/t/semaphore-rln-rate-limiting-nullifier-for-spam-prevention-in-anonymous-p2p-setting/5009"
+class="uri">https://ethresear.ch/t/semaphore-rln-rate-limiting-nullifier-for-spam-prevention-in-anonymous-p2p-setting/5009</a></li>
+<li>Decentralised Cloudflare using RLN and rich user identities,
+ethresear.ch. <a
+href="https://ethresear.ch/t/decentralised-cloudflare-using-rln-and-rich-user-identities/10774"
+class="uri">https://ethresear.ch/t/decentralised-cloudflare-using-rln-and-rich-user-identities/10774</a></li>
+<li>The Tor Project, Rendezvous Single Onion Services (proposal 260). <a
+href="https://spec.torproject.org/proposals/260-rend-single-onion.html"
+class="uri">https://spec.torproject.org/proposals/260-rend-single-onion.html</a></li>
+<li>IETF RFC 9576, The Privacy Pass Architecture. <a
+href="https://datatracker.ietf.org/doc/rfc9576/"
+class="uri">https://datatracker.ietf.org/doc/rfc9576/</a></li>
+<li>Apple, iCloud Private Relay Overview, 2021. <a
+href="https://www.apple.com/privacy/docs/iCloud_Private_Relay_Overview_Dec2021.PDF"
+class="uri">https://www.apple.com/privacy/docs/iCloud_Private_Relay_Overview_Dec2021.PDF</a></li>
+<li>The Tor Project, Res tokens: anonymous credentials for onion service
+DoS resilience (proposal 331). <a
+href="https://spec.torproject.org/proposals/331-res-tokens-for-anti-dos.html"
+class="uri">https://spec.torproject.org/proposals/331-res-tokens-for-anti-dos.html</a></li>
+<li>DigitalOcean, Reserved IPs pricing. <a
+href="https://docs.digitalocean.com/products/networking/reserved-ips/details/pricing/"
+class="uri">https://docs.digitalocean.com/products/networking/reserved-ips/details/pricing/</a></li>
+<li>Oxylabs, ISP proxy pricing. <a
+href="https://oxylabs.io/pricing/isp-proxies"
+class="uri">https://oxylabs.io/pricing/isp-proxies</a></li>
+<li>AIMultiple, Proxy server pricing comparison. <a
+href="https://aimultiple.com/proxy-pricing"
+class="uri">https://aimultiple.com/proxy-pricing</a></li>
+</ol>
+</body>
+</html>

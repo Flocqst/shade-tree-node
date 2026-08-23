@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Shade Tree</title>
+  <rect width="64" height="64" rx="8" fill="#101712"/>
+  <path d="M20 48V29M34 49V20M47 48V31" fill="none" stroke="#e8e4d8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M8 28c0-7 5-12 12-12 2-6 7-10 14-10 7 0 13 5 14 12 6 1 10 6 10 12 0 7-5 12-12 12H20C13 42 8 36 8 28Z" fill="#8f9e75"/>
+</svg>

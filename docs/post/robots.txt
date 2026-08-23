@@ -1,2 +1,3 @@
 User-agent: *
 Allow: /
+Sitemap: https://shade-tree-node.vercel.app/sitemap.xml

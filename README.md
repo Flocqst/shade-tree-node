@@ -13,8 +13,8 @@ Shade Tree carries HTTPS tunnels from local software through access-gated
 [Tor onion services][tor]. Run the local proxy once, then place an agent—or any
 proxy-aware process—under it without changing the rest of the machine.
 
-[Research note][site] · [Docs](docs/README.md) · [Run a node](docs/OPERATOR.md) ·
-[Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
+[Site][site] · [Research note][research-note] · [Docs](docs/README.md) ·
+[Run a node](docs/OPERATOR.md) · [Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
 
 > [!WARNING]
 > **Research preview.** The code has not been audited and the included ZK
@@ -152,4 +152,5 @@ Shade Tree is open source under the [MIT license](LICENSE).
 [license-badge]: https://img.shields.io/badge/license-MIT-59624f.svg
 [license-url]: LICENSE
 [site]: https://shade-tree-node.vercel.app
+[research-note]: https://shade-tree-node.vercel.app/research/
 [tor]: https://www.torproject.org/
