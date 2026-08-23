@@ -57,7 +57,7 @@ check("scene handles reduced motion, visibility, DPR, and context loss", /reduce
 
 const headingIds = [...research.matchAll(/<h[1-6][^>]+id="([^"]+)"/g)].map((match) => match[1]);
 check("legacy article bookmarks are forwarded", headingIds.length >= 15 && headingIds.every((id) => loader.includes(`"${id}"`)));
-check("non-heading article landmarks and malformed hashes are handled", loader.includes('"title-block-header"') && loader.includes('"TOC"') && /try\s*{[\s\S]*decodeURIComponent/.test(loader));
+check("non-heading, same-page, and malformed article bookmarks are handled", loader.includes('"title-block-header"') && loader.includes('"TOC"') && /try\s*{[\s\S]*decodeURIComponent/.test(loader) && /addEventListener\("hashchange", forwardArticleBookmark\)/.test(loader));
 check("clipboard fallback copies the command without its prompt", /helper\.value = command/.test(loader) && /execCommand\("copy"\)/.test(loader));
 
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));

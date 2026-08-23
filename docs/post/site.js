@@ -21,15 +21,21 @@ const ARTICLE_ANCHORS = new Set([
   "further-reading",
 ]);
 
-let articleAnchor = "";
-try {
-  articleAnchor = decodeURIComponent(window.location.hash.slice(1));
-} catch {
-  // A malformed escape sequence is not an article bookmark. Leave it alone.
+function forwardArticleBookmark() {
+  let articleAnchor = "";
+  try {
+    articleAnchor = decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    // A malformed escape sequence is not an article bookmark. Leave it alone.
+  }
+
+  if (ARTICLE_ANCHORS.has(articleAnchor)) {
+    window.location.replace(`/research/#${encodeURIComponent(articleAnchor)}`);
+  }
 }
-if (ARTICLE_ANCHORS.has(articleAnchor)) {
-  window.location.replace(`/research/#${encodeURIComponent(articleAnchor)}`);
-}
+
+forwardArticleBookmark();
+window.addEventListener("hashchange", forwardArticleBookmark);
 
 for (const button of document.querySelectorAll("[data-copy]")) {
   button.addEventListener("click", async () => {
