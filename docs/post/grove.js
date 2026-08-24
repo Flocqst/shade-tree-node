@@ -8,6 +8,7 @@ const BARK = 0x4a3d2f;
 const LEAF_COLORS = [0x40543a, 0x506244, 0x637452, 0x788564, 0x344634];
 const STREAM = 0xd1b66e;
 const UP = new THREE.Vector3(0, 1, 0);
+const NIGHT_COLOR = new THREE.Color(NIGHT);
 
 function seededRandom(seed) {
   let value = seed >>> 0;
@@ -32,22 +33,34 @@ function branchTransform(dummy, start, end, radius) {
 function buildTreeLayout(mobile) {
   const random = seededRandom(mobile ? 617 : 911);
   const rowCounts = mobile ? [5, 4, 5, 4] : [7, 6, 7, 6, 6];
-  const xMin = mobile ? -4.4 : -12.2;
-  const xMax = mobile ? 4.4 : 7.4;
-  const zMin = mobile ? -2.7 : -3.6;
-  const zStep = mobile ? 1.7 : 1.65;
+  const xMin = mobile ? -5.6 : -15.4;
+  const xMax = mobile ? 5.6 : 11.6;
+  const zMin = mobile ? -4.8 : -6.2;
+  const zStep = mobile ? 2.55 : 2.35;
   const trees = [];
 
   rowCounts.forEach((count, row) => {
+    const depth = row / (rowCounts.length - 1);
+    const routeX = xMin + (xMax - xMin) * depth;
     for (let index = 0; index < count; index += 1) {
       const progress = count === 1 ? 0.5 : index / (count - 1);
       const stagger = row % 2 === 0 ? 0 : (xMax - xMin) / count / 2;
-      const height = (mobile ? 2.35 : 2.55) + random() * (mobile ? 1.75 : 2.25);
+      const depthScale = 0.86 + depth * 0.2;
+      const height = ((mobile ? 2.05 : 2.2) + random() * (mobile ? 1.5 : 1.85)) * depthScale;
+      let x = xMin + (xMax - xMin) * progress + stagger + (random() - 0.5) * 0.66;
+      const routeDistance = x - routeX;
+
+      // Preserve a slim diagonal glade so the request path reads between trees.
+      if (Math.abs(routeDistance) < (mobile ? 0.9 : 1.3)) {
+        x += (routeDistance < 0 ? -1 : 1) * (mobile ? 1.15 : 1.7);
+      }
+
       trees.push({
-        x: xMin + (xMax - xMin) * progress + stagger + (random() - 0.5) * 0.38,
-        z: zMin + row * zStep + (random() - 0.5) * 0.38,
+        x,
+        z: zMin + row * zStep + (random() - 0.5) * 0.66,
         height,
-        crown: 0.72 + height * 0.2 + random() * 0.24,
+        crown: 0.62 + height * 0.17 + random() * 0.2,
+        haze: (1 - depth) * 0.28,
         seed: Math.floor(random() * 100_000),
       });
     }
@@ -93,7 +106,7 @@ function createGrove(scene, mobile) {
       branches.setMatrixAt(branchIndex++, dummy.matrix);
     }
 
-    const lobeCount = mobile ? 6 : 8;
+    const lobeCount = mobile ? 5 : 6;
     for (let index = 0; index < lobeCount; index += 1) {
       const angle = random() * Math.PI * 2;
       const radius = Math.sqrt(random()) * tree.crown;
@@ -108,6 +121,7 @@ function createGrove(scene, mobile) {
         rx: random() * Math.PI,
         ry: random() * Math.PI,
         color: LEAF_COLORS[Math.floor(random() * LEAF_COLORS.length)],
+        haze: tree.haze,
       });
     }
 
@@ -149,7 +163,7 @@ function createGrove(scene, mobile) {
     dummy.scale.set(lobe.sx, lobe.sy, lobe.sz);
     dummy.updateMatrix();
     canopy.setMatrixAt(index, dummy.matrix);
-    canopy.setColorAt(index, new THREE.Color(lobe.color));
+    canopy.setColorAt(index, new THREE.Color(lobe.color).lerp(NIGHT_COLOR, lobe.haze));
   }
   canopy.instanceMatrix.needsUpdate = true;
   if (canopy.instanceColor) canopy.instanceColor.needsUpdate = true;
@@ -166,28 +180,30 @@ function createGrove(scene, mobile) {
 
 function createDataStream(scene, mobile) {
   const knots = (mobile ? [
-    new THREE.Vector3(4.7, 0.55, 2.4),
-    new THREE.Vector3(2.9, 0.38, 0.5),
-    new THREE.Vector3(1.1, 0.72, -1.4),
-    new THREE.Vector3(-0.8, 0.45, 0.4),
-    new THREE.Vector3(-2.8, 0.65, 1.8),
-    new THREE.Vector3(-4.7, 0.42, -1.1),
+    new THREE.Vector3(6.5, 1.15, 3.55),
+    new THREE.Vector3(4.1, 0.88, 1.85),
+    new THREE.Vector3(2.2, 1.18, 0.55),
+    new THREE.Vector3(-0.3, 0.9, -0.55),
+    new THREE.Vector3(-2.1, 1.16, -2.05),
+    new THREE.Vector3(-4.2, 0.9, -3.45),
+    new THREE.Vector3(-6.45, 1.18, -5.3),
   ] : [
-    new THREE.Vector3(8.4, 0.58, 2.7),
-    new THREE.Vector3(5.2, 0.4, 0.2),
-    new THREE.Vector3(1.8, 0.75, -1.7),
-    new THREE.Vector3(-2.1, 0.42, 0.8),
-    new THREE.Vector3(-6.1, 0.68, 2.2),
-    new THREE.Vector3(-9.2, 0.38, -1.4),
-    new THREE.Vector3(-12.8, 0.6, 0.4),
+    new THREE.Vector3(13.3, 1.16, 4.7),
+    new THREE.Vector3(9.5, 0.9, 2.95),
+    new THREE.Vector3(6.0, 1.2, 1.45),
+    new THREE.Vector3(1.7, 0.92, -0.05),
+    new THREE.Vector3(-3.0, 1.18, -1.65),
+    new THREE.Vector3(-7.8, 0.92, -3.15),
+    new THREE.Vector3(-12.2, 1.18, -4.65),
+    new THREE.Vector3(-16.2, 1.0, -6.75),
   ]);
   const curve = new THREE.CatmullRomCurve3(knots, false, "centripetal");
   const pixelCount = mobile ? 54 : 92;
-  const pixelGeometry = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+  const pixelGeometry = new THREE.BoxGeometry(mobile ? 0.21 : 0.19, mobile ? 0.21 : 0.19, mobile ? 0.21 : 0.19);
   const pixelMaterial = new THREE.MeshBasicMaterial({
     color: STREAM,
     transparent: true,
-    opacity: 0.68,
+    opacity: 0.8,
     toneMapped: false,
   });
   const pixels = new THREE.InstancedMesh(pixelGeometry, pixelMaterial, pixelCount);
@@ -204,11 +220,32 @@ function createDataStream(scene, mobile) {
   pixels.instanceMatrix.needsUpdate = true;
   scene.add(pixels);
 
+  const threadGeometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(mobile ? 72 : 120));
+  const threadMaterial = new THREE.LineBasicMaterial({
+    color: STREAM,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  scene.add(new THREE.Line(threadGeometry, threadMaterial));
+
   const packetCount = mobile ? 2 : 4;
-  const packetGeometry = new THREE.BoxGeometry(0.28, 0.28, 0.28);
+  const packetGeometry = new THREE.BoxGeometry(mobile ? 0.36 : 0.33, mobile ? 0.36 : 0.33, mobile ? 0.36 : 0.33);
   const packetMaterial = new THREE.MeshBasicMaterial({ color: 0xf0d98b, toneMapped: false });
   const packets = new THREE.InstancedMesh(packetGeometry, packetMaterial, packetCount);
   scene.add(packets);
+
+  const haloGeometry = new THREE.BoxGeometry(mobile ? 0.58 : 0.52, mobile ? 0.58 : 0.52, mobile ? 0.58 : 0.52);
+  const haloMaterial = new THREE.MeshBasicMaterial({
+    color: STREAM,
+    transparent: true,
+    opacity: 0.13,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const halos = new THREE.InstancedMesh(haloGeometry, haloMaterial, packetCount);
+  scene.add(halos);
 
   return function updateDataStream(time) {
     for (let index = 0; index < packetCount; index += 1) {
@@ -218,8 +255,13 @@ function createDataStream(scene, mobile) {
       dummy.scale.setScalar(pulse);
       dummy.updateMatrix();
       packets.setMatrixAt(index, dummy.matrix);
+
+      dummy.scale.setScalar(pulse * 1.08);
+      dummy.updateMatrix();
+      halos.setMatrixAt(index, dummy.matrix);
     }
     packets.instanceMatrix.needsUpdate = true;
+    halos.instanceMatrix.needsUpdate = true;
   };
 }
 
@@ -236,19 +278,19 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !mobile;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(NIGHT);
-  scene.fog = new THREE.Fog(NIGHT, 15, 34);
+  scene.fog = new THREE.Fog(NIGHT, 22, 46);
 
-  const camera = new THREE.OrthographicCamera(-10, 10, 6, -6, 0.1, 70);
-  camera.position.set(mobile ? 7.6 : 12.5, mobile ? 7.4 : 8.7, mobile ? 15 : 19);
-  camera.lookAt(mobile ? -0.1 : -2.3, 2.1, 0);
+  const camera = new THREE.OrthographicCamera(-12, 12, 8, -8, 0.1, 90);
+  camera.position.set(mobile ? 10.4 : 17.2, mobile ? 11.6 : 13.4, mobile ? 21 : 27);
+  camera.lookAt(mobile ? 0 : -2.1, mobile ? 1.65 : 1.9, -1.1);
 
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(54, 34),
+    new THREE.PlaneGeometry(72, 48),
     new THREE.MeshStandardMaterial({ color: GROUND, roughness: 1, metalness: 0 }),
   );
   ground.rotation.x = -Math.PI / 2;
@@ -260,16 +302,16 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   scene.add(sky);
 
   const sun = new THREE.DirectionalLight(0xd1b66e, 4.2);
-  const sunBase = new THREE.Vector3(-5.5, 11, 7.5);
+  const sunBase = new THREE.Vector3(-7.5, 14, 9.5);
   sun.position.copy(sunBase);
-  sun.castShadow = true;
+  sun.castShadow = !mobile;
   sun.shadow.mapSize.set(mobile ? 512 : 1024, mobile ? 512 : 1024);
-  sun.shadow.camera.left = -15;
-  sun.shadow.camera.right = 15;
-  sun.shadow.camera.top = 13;
-  sun.shadow.camera.bottom = -5;
+  sun.shadow.camera.left = -20;
+  sun.shadow.camera.right = 20;
+  sun.shadow.camera.top = 17;
+  sun.shadow.camera.bottom = -8;
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 32;
+  sun.shadow.camera.far = 44;
   sun.shadow.bias = -0.0005;
   sun.shadow.normalBias = 0.025;
   sun.target.position.set(-2.2, 0, -0.2);
@@ -291,7 +333,8 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const width = Math.max(1, stage.clientWidth);
     const height = Math.max(1, stage.clientHeight);
     const aspect = width / height;
-    const viewHeight = mobile ? 11.6 : 12.4;
+    const narrowBoost = mobile ? Math.max(0, 0.78 - aspect) * 8 : 0;
+    const viewHeight = (mobile ? 16.8 : 16.4) + narrowBoost;
     camera.left = -(viewHeight * aspect) / 2;
     camera.right = (viewHeight * aspect) / 2;
     camera.top = viewHeight / 2;

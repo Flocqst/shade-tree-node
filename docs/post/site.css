@@ -186,7 +186,7 @@ img {
 
 .home-hero {
   position: relative;
-  min-height: calc(100svh - 1.5rem);
+  min-height: clamp(40rem, 78svh, 54rem);
   margin: 0.75rem;
   overflow: hidden;
   isolation: isolate;
@@ -398,7 +398,7 @@ img {
 
 .role-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1.45fr) minmax(20rem, 0.75fr);
 }
 
 .role {
@@ -424,6 +424,42 @@ img {
   max-width: 28rem;
   margin: 1rem 0 0;
   color: var(--muted);
+}
+
+.install-options {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.8fr) minmax(18rem, 1.2fr);
+  gap: 1px;
+  margin-top: 1.55rem;
+  overflow: hidden;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.install-option {
+  min-width: 0;
+  padding: 1rem;
+  background: rgba(7, 12, 9, 0.76);
+}
+
+.install-option h3 {
+  margin: 0;
+  color: var(--leaf);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.install-option .command {
+  width: 100%;
+  margin: 0.65rem 0 0;
+  background: rgba(17, 25, 19, 0.68);
+}
+
+.command-brief code {
+  font-size: 0.66rem;
+  line-height: 1.55;
 }
 
 .command {
@@ -557,15 +593,15 @@ img {
 
 .how-panel {
   display: grid;
-  grid-template-columns: minmax(17rem, 0.68fr) minmax(0, 1.55fr);
+  grid-template-columns: minmax(12rem, 0.42fr) minmax(0, 1fr);
   gap: clamp(1.5rem, 3vw, 3rem);
-  align-items: center;
+  align-items: start;
   padding: clamp(1.3rem, 3vw, 2.4rem);
   background: rgba(7, 12, 9, 0.5);
   border-top: 1px solid var(--line);
 }
 
-.how-copy h2 {
+.how-panel > h2 {
   margin: 0;
   font-family: var(--serif);
   font-size: clamp(2rem, 3.3vw, 3.3rem);
@@ -574,7 +610,33 @@ img {
   line-height: 1;
 }
 
-.how-copy p,
+.how-parts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.how-part {
+  min-width: 0;
+  padding: clamp(1rem, 2vw, 1.6rem);
+  background: rgba(7, 12, 9, 0.72);
+}
+
+.how-part + .how-part {
+  border-left: 1px solid var(--line);
+}
+
+.how-part h3 {
+  margin: 0;
+  color: var(--leaf);
+  font-family: var(--serif);
+  font-size: clamp(1.35rem, 2vw, 1.85rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+
+.how-part p,
 .boundary {
   margin: 1rem 0 0;
   color: var(--muted);
@@ -583,7 +645,7 @@ img {
 }
 
 .how-panel picture {
-  grid-row: span 2;
+  grid-column: 1 / -1;
 }
 
 .how-panel img {
@@ -592,7 +654,8 @@ img {
 }
 
 .boundary {
-  align-self: end;
+  grid-column: 1 / -1;
+  align-self: start;
   margin-top: 0;
 }
 
@@ -614,13 +677,19 @@ img {
   gap: 1.4rem;
 }
 
+@media (max-width: 1100px) {
+  .install-options {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 860px) {
   :root {
     --page: min(100% - 2rem, 46rem);
   }
 
   .home-hero {
-    min-height: 49rem;
+    min-height: 40rem;
     margin: 0.5rem;
   }
 
@@ -640,23 +709,28 @@ img {
 
   .home-copy {
     right: 1rem;
-    bottom: 6rem;
+    bottom: 4rem;
     left: 1rem;
     width: auto;
   }
 
   .home-copy h1 {
     max-width: 8ch;
-    font-size: clamp(4rem, 16vw, 6.5rem);
+    font-size: clamp(3.7rem, 13vw, 5.8rem);
   }
 
-  .role-grid,
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+
   .how-panel {
     grid-template-columns: 1fr;
   }
 
-  .how-panel picture {
-    grid-row: auto;
+  .how-parts,
+  .how-panel picture,
+  .boundary {
+    grid-column: auto;
   }
 
   .role + .role {
@@ -685,11 +759,11 @@ img {
   }
 
   .home-hero {
-    min-height: 43rem;
+    min-height: 37rem;
   }
 
   .home-copy h1 {
-    font-size: clamp(3.6rem, 18vw, 5.4rem);
+    font-size: clamp(3.45rem, 16vw, 4.8rem);
   }
 
   .hero-actions {
@@ -703,6 +777,16 @@ img {
 
   .role {
     padding: 2rem 1.25rem;
+  }
+
+  .install-options,
+  .how-parts {
+    grid-template-columns: 1fr;
+  }
+
+  .how-part + .how-part {
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .how-panel {

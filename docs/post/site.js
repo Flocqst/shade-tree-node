@@ -51,32 +51,61 @@ for (const button of copyButtons) {
 
     const idleLabel = button.textContent;
     let resetDelay = 1800;
+    let restoreCodeTabIndex = null;
     try {
       await navigator.clipboard.writeText(command);
       button.textContent = "copied";
       copyStatus.textContent = "Command copied to clipboard.";
     } catch {
+      const visibleCode = button.closest(".command")?.querySelector("code");
       const helper = document.createElement("textarea");
       helper.value = command;
       helper.readOnly = true;
       helper.style.position = "fixed";
       helper.style.left = "-9999px";
       document.body.append(helper);
-      helper.select();
+      let legacyCopied = false;
 
-      if (document.execCommand("copy")) {
+      try {
+        helper.focus();
+        helper.select();
+        legacyCopied = Boolean(document.execCommand?.("copy"));
+      } catch {
+        legacyCopied = false;
+      } finally {
         helper.remove();
+      }
+
+      if (legacyCopied) {
         button.textContent = "copied";
         copyStatus.textContent = "Command copied to clipboard.";
+      } else if (visibleCode) {
+        const previousTabIndex = visibleCode.getAttribute("tabindex");
+        visibleCode.setAttribute("tabindex", "-1");
+        visibleCode.focus();
+
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(visibleCode);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+
+        restoreCodeTabIndex = () => {
+          if (previousTabIndex === null) visibleCode.removeAttribute("tabindex");
+          else visibleCode.setAttribute("tabindex", previousTabIndex);
+        };
+        button.textContent = "selected";
+        copyStatus.textContent = "Command selected. Press Control+C or Command+C to copy.";
+        resetDelay = 6000;
       } else {
-        button.textContent = "press copy";
+        button.textContent = "copy manually";
         copyStatus.textContent = "Automatic copy failed. Select the command and copy it.";
-        resetDelay = 4000;
-        window.setTimeout(() => helper.remove(), resetDelay);
+        resetDelay = 6000;
       }
     }
 
     window.setTimeout(() => {
+      restoreCodeTabIndex?.();
       button.textContent = idleLabel;
       copyStatus.textContent = "";
     }, resetDelay);
