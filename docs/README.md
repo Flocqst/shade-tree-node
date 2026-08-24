@@ -35,9 +35,10 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 
 | Doc | What it is |
 |-----|------------|
-| [`OPERATOR.md`](OPERATOR.md) | Deploy a gateway + bootnode, join the fleet as a new operator, day-2 health and logs, keys, slash response, rotate or retire, config reference, what you admit and what you sell |
+| [`DEPLOYMENT-PLAN.md`](DEPLOYMENT-PLAN.md) | Current v4 topology, Elder Tree and node rollout gates, safe order, and health checks |
+| [`OPERATOR.md`](OPERATOR.md) | Shade Tree node and Elder Tree runbook, including current deployment blocks, day-2 health, keys, slash response, and retirement |
 | [`../bootnode/deploy/README.md`](../bootnode/deploy/README.md) | The one-command droplet bootstrap and every tunable it accepts |
-| [`BOOTNODE.md`](BOOTNODE.md) | Live discovery: announce, signed directory, per-gateway signed caps, the trust boundary |
+| [`BOOTNODE.md`](BOOTNODE.md) | Elder Tree discovery: announce, signed Canopy, per-node signed capabilities, and the trust boundary |
 | [`PUBLIC-GROVE.md`](PUBLIC-GROVE.md) | The read-only view of the old fleet: verified aggregate counts, bounded history, stale behavior, and fields that never leave the observer |
 | [`FLEET.md`](FLEET.md) | Per-tunnel gateway selection, weights, failover, fleet budget |
 | [`INCIDENT.md`](INCIDENT.md) | Incident playbook |

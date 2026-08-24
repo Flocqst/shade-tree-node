@@ -1,6 +1,14 @@
 # Operator runbook
 
-For running a gateway or a bootnode in production. Every command here exists in
+> [!CAUTION]
+> Public-host deployment is currently blocked. The default node egress policy
+> has an unresolved private-IP SSRF flaw
+> ([issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)), and the
+> bundled Groth16 artifacts use an untrusted development setup. Treat the
+> commands below as local research and future-rollout documentation. See the
+> current [deployment plan](DEPLOYMENT-PLAN.md).
+
+For running a Shade Tree node or Elder Tree. Every command here exists in
 `bin/shade-tree.mjs` or the deploy scripts. For the full config surface see
 [CONFIG.md](CONFIG.md); for the discovery design see [BOOTNODE.md](BOOTNODE.md).
 

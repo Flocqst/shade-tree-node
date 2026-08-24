@@ -1,7 +1,8 @@
 # Contributing
 
-A reference implementation of Shade Tree, live on testnet,
-unaudited (see [`SECURITY.md`](SECURITY.md)). Contributions are welcome; this
+A research-preview reference implementation of Shade Tree. The checked-in
+Sepolia fleet is retired pre-v4 history, not a current client profile. The code
+is unaudited (see [`SECURITY.md`](SECURITY.md)). Contributions are welcome; this
 page is how to run the tests and the house rules a change must hold to.
 
 ## Run the tests
@@ -52,12 +53,12 @@ need to, that is a design discussion, not a quiet edit. All are grounded in
 [`docs/AUDIT.md`](docs/AUDIT.md).
 
 - **The onion is never on chain.** On-chain state carries stake and membership,
-  never a gateway's `.onion`. Discovery is off-chain, through the bootnode.
-- **The bootnode is a cache, not a trust root.** It can omit an entry or briefly
-  list a lapsed one; it can never inject an onion it does not control, because
-  the client re-derives each onion's ed25519 key from the address and re-checks
-  stake itself. Do not add a path where the client trusts the bootnode for
-  something it can verify.
+  never a node's `.onion`. Discovery is off-chain, through the Elder Tree.
+- **The Elder Tree is a cache; its pinned Canopy signer is an authority.** The
+  Proxy re-derives each onion's ed25519 key and verifies onion-signed
+  capabilities when present. The signer can still omit, reorder, or add an
+  internally consistent entry. Live stake rechecking is opt-in. Do not expand
+  that authority or describe discovery as trustless.
 - **Fail closed on missing or hostile input.** A missing signer, an absent
   nonce, a malformed field, an unreachable RPC: reject with a precise reason and
   a nonzero exit, never fall through to an open or trusting default.
@@ -88,13 +89,11 @@ need to, that is a design discussion, not a quiet edit. All are grounded in
 
 The shipping backlog and priorities live in
 [`docs/SHIP-PLAN.md`](docs/SHIP-PLAN.md); the protocol-design milestones are in
-`docs/ROADMAP.md`. The three release gates (test hardening, Rust client, deploy)
-all passed on 2026-08-17 and the fleet is live on testnet
-(`docs/GO-LIVE-LOG-2026-08-17.md`), so a change today lands on a system that
-members use: keep wire formats and signed-caps additive
-(`docs/PROTOCOL-VERSIONING.md`), keep the golden vectors and the Rust
-conformance suite green, and read `docs/OPERATOR.md` before touching anything
-the fleet units run.
+`docs/ROADMAP.md`. The 2026-08-17 go-live log records the retired pre-v4
+research deployment. There is no repo-published current v4 fleet. Keep wire
+formats and signed capabilities versioned (`docs/PROTOCOL-VERSIONING.md`), keep
+the golden vectors and Rust conformance suite green, and read
+`docs/OPERATOR.md` before touching service code.
 
 Some actions are never taken autonomously and must be flagged for a human:
 rotating or replacing production onion or operator keys, spending real funds,

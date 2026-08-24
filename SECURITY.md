@@ -2,16 +2,17 @@
 
 ## Status
 
-This is a reference implementation, live on testnet since 2026-08-17 (two gateways
-behind one bootnode on Sepolia; invited, staked and paid admission; HTTP 402
-payments in x402 and MPP). It is **unaudited**, and its ZK artifacts
-(`circuits/rln/`) came from an **untrusted testnet phase-2 ceremony**
+This is a research-preview reference implementation. The Sepolia fleet deployed
+on 2026-08-17 is retired, incompatible pre-v4 history. The public Grove observes
+that old fleet read-only; this repository does not publish a current v4 client
+profile. The code is **unaudited**, and its ZK artifacts (`circuits/rln/`) came
+from an **untrusted testnet phase-2 ceremony**
 (`circuits/rln/ARTIFACTS.md`; the ceremony has not been run,
 [issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6),
-`docs/CEREMONY.md`). Everything on chain is Sepolia; the fleet is one operator on
-one provider. Do not put real funds or real anonymity needs on it yet. Treat
-everything here as testnet-only until an audit and a real trusted setup land
-(`docs/SHIP-PLAN.md` T-HARD-1).
+`docs/CEREMONY.md`). The default egress policy also has an unresolved private-IP
+SSRF flaw ([issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)). Do
+not deploy the node, put real funds on the contracts, or depend on this code for
+sensitive use until those blockers are fixed and independently reviewed.
 
 The full trust model, per-party threat model, and trust boundaries are in
 [`docs/AUDIT.md`](docs/AUDIT.md). Read it before reporting: several sharp edges
@@ -22,9 +23,9 @@ duplicate, not a finding.
 
 Reports that show a real defect in the shipped code, for example:
 
-- A break in a cryptographic guarantee from `docs/AUDIT.md`: client anonymity to
-  the gateway, membership soundness, per-request unlinkability, the onion-to-key
-  binding, or the slash-on-over-spend control flow.
+- A break in a cryptographic guarantee from `docs/AUDIT.md`: Proxy source-IP
+  concealment on the onion leg, membership soundness, tunnel unlinkability, the
+  onion-to-key binding, or the slash-on-over-spend control flow.
 - A signature or parser that accepts input it must reject (directory, announce,
   envelope, onion derivation, on-chain reads).
 - A way to poison the fleet view beyond the pinned signer's documented discovery

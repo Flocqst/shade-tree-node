@@ -1,84 +1,91 @@
 # you've been handed a key
 
-Someone added you to a private reputation set. That key lets you browse out through a clean IP
-on a server the operator runs, while proving you belong to the set and never telling the server
-who you are. No login, no account, and none of your own IP ever reaches it.
+Someone added you to a private reputation set. The key lets you prove membership to an egress
+node without sending the node your leaf identity. The node still sees the destination, timing,
+lifetime, and traffic volume.
 
-> **Current network status.** This checkout is envelope v4 only. Ask a v4 fleet operator for
-> its discovery pins and admission path, or run the local fleet in [QUICKSTART.md](QUICKSTART.md).
+Public docs call the local protocol client the **Proxy**, the egress gateway a **Shade Tree
+node**, and the discovery bootnode the **Elder Tree**. Source paths, environment variables,
+flags, and historical records retain `client`, `gateway`, and `bootnode` where compatibility
+matters.
+
+> **Current network status.** This checkout is envelope v4 only. Ask a v4 Grove operator for
+> its discovery pins and admission path, or run the local Grove in [QUICKSTART.md](QUICKSTART.md).
 > The checked-in Sepolia record and 2026-08-17 go-live log describe the incompatible pre-v4
 > research fleet. The public Grove observes that old fleet read-only; its count is not a v4
 > connection offer.
 
 The historical Sepolia and June PoC details remain below as experiment records. Do not use
-their onions, contracts, payment endpoint, or `sepolia` network preset with the current client.
+their onions, contracts, payment endpoint, or `sepolia` network preset with the current Proxy.
 
-## connect to an operator's v4 fleet: what you need
+## connect to an operator's v4 Grove: what you need
 
-- node 18 or newer, then `npm install` in this repo (`npm link` if you want `shade-tree` on PATH,
+- Node.js 18 or newer, then `npm install` in this repo (`npm link` if you want `shade-tree` on PATH,
   otherwise `node bin/shade-tree.mjs` everywhere)
 - tor installed locally (`brew install tor`, or `apt install tor`); `bash scripts/start-tor-client.sh`
   starts one on SOCKS 9260, or use a system tor with `SHADE_TREE_TOR_PORT=9050`
 - your secret (one `export SHADE_TREE_SECRET=...` line, sent to you privately)
-- either one v4 gateway onion, or the operator's v4 bootnode onion plus pinned directory signer
+- either one v4 node onion, or the operator's v4 Elder Tree onion plus pinned Canopy signer
 - for paid or staked admission, the registrar, chain, and contract values supplied by that operator
 
-## connect to an operator's v4 fleet: run it
+## connect to an operator's v4 Grove: run it
 
 ```bash
 npm install
 bash scripts/start-tor-client.sh                                  # laptop tor, SOCKS 9260
-SHADE_TREE_SECRET=<your-secret> SHADE_TREE_TOR_PORT=9260 shade-tree client \
-  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex>
-curl -x http://127.0.0.1:8888 https://api.ipify.org               # a fleet gateway's clean IP
+SHADE_TREE_SECRET=<your-secret> SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
+  --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex>
+curl -x http://127.0.0.1:8888 https://api.ipify.org               # the selected node's IP
 ```
 
-The bootnode onion and signer are one trust-pinned pair; get both from the same v4 operator.
-The client fetches that operator's signed directory over Tor and rotates across the nodes it
+The Elder Tree onion and signer are one trust-pinned pair; get both from the same v4 operator.
+The Proxy fetches that operator's signed Canopy over Tor and selects from the nodes it
 lists. The gate is fail-closed: without a valid membership proof every connection is dropped,
-and the address of the fleet buys nothing on its own. If the operator gives you one gateway
-instead, replace discovery with `--onion <v4-gateway.onion>`. Full member guide:
+and the Grove address buys nothing on its own. If the operator gives you one node instead,
+replace discovery with `--onion <v4-node.onion>`. Full member guide:
 [`docs/post/JOIN.md`](post/JOIN.md) / [`docs/QUICKSTART.md`](QUICKSTART.md).
 
 ## use it
 
-Point anything at the proxy on port 8888:
+Point a proxy-aware tool at the Proxy on port 8888:
 
 ```bash
-curl -x http://127.0.0.1:8888 https://api.ipify.org            # shows the gateway's clean IP
+curl -x http://127.0.0.1:8888 https://api.ipify.org            # shows the node's IP
 curl -x http://127.0.0.1:8888 "https://www.google.com/search?q=zk+proofs"
 ```
 
-Your traffic goes: your laptop, into Tor, to a rendezvous point, to the gateway's hidden service. The gateway checks your proof and then makes the request from its own clean IP. It never sees your IP. Google never sees Tor. Your search stays inside TLS the whole way, so the gateway sees only `www.google.com:443`, never the query.
+The Proxy opens a Tor onion connection to the node. The node application receives the Tor-side
+connection rather than your source IP, verifies the proof, and connects to the destination from
+its public IP. TLS continues to the destination, so the node does not see the plaintext URL path
+or query. It does see the hostname and port plus timing, lifetime, and traffic volume.
 
-Want the strongest guarantee? Add `--max-anon`: your client then uses only gateways that admit
-**invited** members and nobody else (no staked or paid population mixed in), and refuses to run at
-all if your own leaf is staked or paid — it tells you why. If no gateway on the fleet is
-invited-only you get a precise refusal naming each gateway's policy. That refusal is the correct
-outcome when an operator offers no invited-only node. Without
-`--max-anon` the client simply routes to whichever gateways admit your leaf source (`docs/CLIENTS.md`
+To restrict admission policy, add `--max-anon`. The Proxy then uses only nodes that admit
+**invited** members and no staked or paid population, and refuses to run if your own leaf is
+staked or paid. If no node in the Grove is invited-only, it refuses the connection. This is a
+policy filter, not a defense against timing or application-level correlation. Without
+`--max-anon` the Proxy routes to nodes that admit your leaf source (`docs/CLIENTS.md`
 "Leaf source"; `--leaf-source paid` pins the set if you hold more than one leaf).
 
 ## buy access, when the v4 operator offers it
 
-Paid admission is optional. Get the v4 bootnode, signer, registrar details, settle asset, and
+Paid admission is optional. Get the v4 Elder Tree onion, signer, registrar details, settle asset, and
 paid-set address from the operator. With an EIP-3009 rail you hold the settle asset but need no
 gas: you sign and the operator submits. Do not substitute values from the historical Sepolia
 record.
 
 ```bash
 shade-tree enroll                                     # your secret + your commitment, locally; keep the secret
-shade-tree pay --bootnode <v4-bootnode.onion> --limit 8 \
+shade-tree pay --bootnode <v4-elder.onion> --limit 8 \
   --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
-shade-tree client --secret <your-secret> --limit 8 --leaf-source paid \
-  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex> \
+shade-tree proxy --secret <your-secret> --limit 8 --leaf-source paid \
+  --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --paid-access-contract <v4-paid-set-address>
 ```
 
-A gateway PROVIDER chooses what it admits (`invited`, `staked`, `paid`) and what it sells (which
-402 rails); the operator's `/health` `pay.protocols` (or the gateway's `caps.pay` in the directory)
-lists the rails you can pay with — `shade-tree pay --protocol mpp` against an x402-only registrar tells
+A node operator chooses what it admits (`invited`, `staked`, `paid`) and what it sells (which
+402 rails); the operator's `/health` `pay.protocols` (or the node's `caps.pay` in the Canopy)
+lists the rails you can pay with. `shade-tree pay --protocol mpp` against an x402-only registrar tells
 you to retry with `--protocol x402`.
 
 `--dry-run` shows the operator's 402 challenge and the exact authorization you would sign, and
@@ -87,10 +94,10 @@ were exercised on the pre-v4 Sepolia research deployment on 2026-08-17; that is 
 evidence, not a claim that its registrar is compatible with v4.
 
 Read this before you pay: **the payment is public.** On chain, your wallet address pays the
-operator's address the tier's price, and the operator inserts your leaf right after. Nobody can
-tell which of your later requests are yours (the gateway sees a zero-knowledge proof, not your
-leaf, and every request has a fresh nullifier) but "this address bought access from this
-operator" is visible to anyone. If that matters to you, pay from a **fresh address** funded
+operator's address the tier's price, and the operator inserts your leaf right after. The proof
+does not expose the leaf or a stable identifier across private slots, but timing, destinations,
+accounts, cookies, and payment timing can still correlate activity. “This address bought access
+from this operator” is visible to anyone. If that matters to you, pay from a **fresh address** funded
 through a large shared pool (Railgun, Privacy Pools, a CEX withdrawal; your call, the protocol
 does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
 
@@ -100,23 +107,28 @@ does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
 shade-tree enroll --limit 8                                            # or --limit 32
 shade-tree register-member <commitment> --limit 8 \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
-shade-tree client --secret <your-secret> --limit 8 --leaf-source staked \
-  --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex> \
+shade-tree proxy --secret <your-secret> --limit 8 --leaf-source staked \
+  --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
 ```
 
-Over-spend your tier's budget in one epoch and the gateway reconstructs your secret and slashes
-the bond on chain; that is the deal (`docs/ONCHAIN.md`).
+Reuse a private slot on a different tunnel signal in one epoch and a node can reconstruct the RLN
+identity secret and attempt to slash the bond on chain. A failed slash submission is not a
+guaranteed slash (`docs/ONCHAIN.md`).
 
 ## what your key actually is
 
-It is a bearer credential. Whoever holds it can browse as a member until the set is rotated (or the leaf is slashed), so keep it to yourself. It is not tied to your name anywhere, but it is yours.
+It is a bearer credential. Whoever holds it can use the membership until the set is rotated or
+the leaf is slashed, so keep it local. The proof does not contain your name, but enrollment,
+payment, accounts, and traffic metadata can create links outside the proof.
 
-You get your own rate budget per epoch (your tier) and a tag (a nullifier) that lets the gateway count your requests without knowing they are yours. Across epochs that tag changes, so your requests do not link over time.
+Your tier sets a private message-slot budget per epoch. Each slot produces a different
+nullifier. Reusing one slot on a different tunnel signal in the same epoch repeats its nullifier, which
+a node can detect. One proof admits one CONNECT tunnel, not each HTTP request inside it.
 
 ## stop it
 
-Ctrl-C the client; `pkill -f torrc.client` if you started the laptop tor with `start-tor-client.sh`.
+Ctrl-C the Proxy; `pkill -f torrc.client` if you started the laptop Tor with `start-tor-client.sh`.
 
 Want to see exactly what happens to your bytes? Open `docs/walkthrough.html` in a browser and step through it (recorded on the June PoC; the request path is the same).
 
@@ -130,10 +142,9 @@ Want to see exactly what happens to your bytes? Open `docs/walkthrough.html` in 
 > Phase 1.1): the PoC gateway process was killed at go-live and, for a few hours, the PoC onion
 > mapped to the new gateway on the same box; then the "Box-1 tidy" stopped the PoC tor that
 > published that onion, so the PoC onion is dark (the PoC checkout and its HS keys were left in
-> place, not deleted). Your PoC secret is still good if its leaf is in the committed
-> `group/members.json` (the fleet admits that set): use the live-fleet path above. Some early
-> PoC secrets were never in the committed set; if yours is refused, ask the operator for a new
-> one, or buy/stake a leaf. `scripts/join.sh` and `scripts/run-client.sh` (code, unchanged)
+> place, not deleted). A PoC secret may identify a leaf in the historical
+> `group/members.json`, but that does not grant access to a current v4 Grove. Ask a current
+> operator for admission. `scripts/join.sh` and `scripts/run-client.sh` (code, unchanged)
 > still default to the PoC onion. Do not replace it with the pre-v4 Sepolia preset; use a v4
 > operator's explicit `--onion`, or `--bootnode` plus `--dir-signer`, instead. The rest of this
 > page is kept as a record.
@@ -145,7 +156,7 @@ Want to see exactly what happens to your bytes? Open `docs/walkthrough.html` in 
 - the bundle you were sent (`shade-tree-gateway-deploy.tgz`), unpacked
 - your secret: one `export SHADE_TREE_SECRET=...` line, sent to you privately
 
-## run it (legacy)
+## historical command (legacy)
 
 ```bash
 cd shade-tree-node
@@ -153,34 +164,29 @@ npm install
 bash scripts/join.sh <your-secret>
 ```
 
-The gateway address is already built in, so you only need your secret. For the
-record, the gateway onion is:
+This command no longer establishes a tunnel. It is retained to document the original bundle.
+For the record, its built-in gateway onion was:
 
 ```
 ezguggje6sbldhw4pl5nudwg2mrwkb5zzyu3a26qc4eka2ur24bv3eqd.onion
 ```
 
-(If the operator points you at a different box, pass it ahead of your secret:
-`bash scripts/join.sh <other-gateway>.onion <your-secret>`.) Knowing the address
-buys nothing on its own. The gate is fail-closed, so without a valid membership
-proof every connection is dropped. That command starts a local Tor and a small
-proxy, then runs a check that asserts your egress really comes out of the PoC
-gateway's clearnet IP: `join.sh` sets `SHADE_TREE_EXPECT_IP` to that IP (`204.48.28.220`)
-and `verify.sh` compares it to what `api.ipify.org` saw. The IP is printed here
-for exactly that reason — it is the receipt you compare against, not something
-you connect to. When it prints `PASS` next to that IP, you are out. (Different
-gateway? Set `SHADE_TREE_EXPECT_IP` to its IP, or unset it to skip the assertion.)
+Historically, `scripts/join.sh` started a local Tor process and Proxy, then compared the IP
+seen by `api.ipify.org` with `SHADE_TREE_EXPECT_IP`. The address and IP are experiment records,
+not current v4 connection values.
 
 ## use it (legacy)
 
-Point anything at the proxy on port 8888:
+The original Proxy accepted proxy-aware tools on port 8888:
 
 ```bash
-curl -x http://127.0.0.1:8888 https://api.ipify.org            # shows the gateway's clean IP
+curl -x http://127.0.0.1:8888 https://api.ipify.org            # historical node IP
 curl -x http://127.0.0.1:8888 "https://www.google.com/search?q=zk+proofs"
 ```
 
-Your traffic goes: your laptop, into Tor, to a rendezvous point, to the server's hidden service. The server checks your proof and then makes the request from its own clean IP. The server never sees your IP. Google never sees Tor. Your search stays inside TLS the whole way, so the server sees only `www.google.com:443`, never the query.
+In that design, the Proxy opened a Tor onion connection to the node. The node application saw
+the Tor-side connection, the target hostname and port, timing, lifetime, and traffic volume.
+TLS protected the plaintext path and query from the node.
 
 ## stop it (legacy)
 

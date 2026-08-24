@@ -6,6 +6,7 @@ const NIGHT = 0x070c09;
 const GROUND = 0x111913;
 const BARK = 0x4a3d2f;
 const LEAF_COLORS = [0x40543a, 0x506244, 0x637452, 0x788564, 0x344634];
+const STREAM = 0xd1b66e;
 const UP = new THREE.Vector3(0, 1, 0);
 
 function seededRandom(seed) {
@@ -28,18 +29,35 @@ function branchTransform(dummy, start, end, radius) {
   dummy.updateMatrix();
 }
 
+function buildTreeLayout(mobile) {
+  const random = seededRandom(mobile ? 617 : 911);
+  const rowCounts = mobile ? [5, 4, 5, 4] : [7, 6, 7, 6, 6];
+  const xMin = mobile ? -4.4 : -12.2;
+  const xMax = mobile ? 4.4 : 7.4;
+  const zMin = mobile ? -2.7 : -3.6;
+  const zStep = mobile ? 1.7 : 1.65;
+  const trees = [];
+
+  rowCounts.forEach((count, row) => {
+    for (let index = 0; index < count; index += 1) {
+      const progress = count === 1 ? 0.5 : index / (count - 1);
+      const stagger = row % 2 === 0 ? 0 : (xMax - xMin) / count / 2;
+      const height = (mobile ? 2.35 : 2.55) + random() * (mobile ? 1.75 : 2.25);
+      trees.push({
+        x: xMin + (xMax - xMin) * progress + stagger + (random() - 0.5) * 0.38,
+        z: zMin + row * zStep + (random() - 0.5) * 0.38,
+        height,
+        crown: 0.72 + height * 0.2 + random() * 0.24,
+        seed: Math.floor(random() * 100_000),
+      });
+    }
+  });
+
+  return trees;
+}
+
 function createGrove(scene, mobile) {
-  const trees = (mobile ? [
-    { x: -3.7, z: -0.8, height: 4.2, crown: 1.75, seed: 11 },
-    { x: -1.2, z: 0.45, height: 5.0, crown: 2.05, seed: 29 },
-    { x: 1.1, z: -1.0, height: 4.0, crown: 1.7, seed: 47 },
-  ] : [
-    { x: -5.2, z: -0.7, height: 4.1, crown: 1.75, seed: 11 },
-    { x: -3.1, z: 0.7, height: 5.15, crown: 2.15, seed: 29 },
-    { x: -0.7, z: -1.15, height: 4.55, crown: 1.95, seed: 47 },
-    { x: 1.2, z: 0.45, height: 3.8, crown: 1.65, seed: 71 },
-    { x: -6.8, z: 1.0, height: 3.45, crown: 1.45, seed: 97 },
-  ]);
+  const trees = buildTreeLayout(mobile);
 
   const branchCount = trees.length * 3;
   const branchGeometry = new THREE.CylinderGeometry(1, 1.24, 1, 5, 1, false);
@@ -49,7 +67,7 @@ function createGrove(scene, mobile) {
     roughness: 0.96,
   });
   const branches = new THREE.InstancedMesh(branchGeometry, branchMaterial, branchCount);
-  branches.castShadow = true;
+  branches.castShadow = !mobile;
   branches.receiveShadow = true;
 
   const dummy = new THREE.Object3D();
@@ -75,7 +93,7 @@ function createGrove(scene, mobile) {
       branches.setMatrixAt(branchIndex++, dummy.matrix);
     }
 
-    const lobeCount = mobile ? 9 : 11;
+    const lobeCount = mobile ? 6 : 8;
     for (let index = 0; index < lobeCount; index += 1) {
       const angle = random() * Math.PI * 2;
       const radius = Math.sqrt(random()) * tree.crown;
@@ -93,12 +111,12 @@ function createGrove(scene, mobile) {
       });
     }
 
-    for (let root = 0; root < 4; root += 1) {
+    for (let root = 0; root < 2; root += 1) {
       const angle = random() * Math.PI * 2;
-      const reach = 1.3 + random() * 1.55;
+      const reach = 0.7 + random() * 0.85;
       let previous = new THREE.Vector3(tree.x, 0.018, tree.z);
-      for (let segment = 1; segment <= 4; segment += 1) {
-        const progress = segment / 4;
+      for (let segment = 1; segment <= 3; segment += 1) {
+        const progress = segment / 3;
         const next = new THREE.Vector3(
           tree.x + Math.cos(angle) * reach * progress + (random() - 0.5) * 0.14,
           0.018,
@@ -113,7 +131,7 @@ function createGrove(scene, mobile) {
   branches.instanceMatrix.needsUpdate = true;
   scene.add(branches);
 
-  const canopyGeometry = new THREE.IcosahedronGeometry(1, 1);
+  const canopyGeometry = new THREE.IcosahedronGeometry(1, 0);
   const canopyMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     flatShading: true,
@@ -121,7 +139,7 @@ function createGrove(scene, mobile) {
     metalness: 0,
   });
   const canopy = new THREE.InstancedMesh(canopyGeometry, canopyMaterial, canopyRecords.length);
-  canopy.castShadow = true;
+  canopy.castShadow = !mobile;
   canopy.receiveShadow = true;
 
   for (let index = 0; index < canopyRecords.length; index += 1) {
@@ -141,9 +159,68 @@ function createGrove(scene, mobile) {
   const rootMaterial = new THREE.LineBasicMaterial({
     color: 0xd1b66e,
     transparent: true,
-    opacity: 0.28,
+    opacity: 0.14,
   });
   scene.add(new THREE.LineSegments(rootGeometry, rootMaterial));
+}
+
+function createDataStream(scene, mobile) {
+  const knots = (mobile ? [
+    new THREE.Vector3(4.7, 0.55, 2.4),
+    new THREE.Vector3(2.9, 0.38, 0.5),
+    new THREE.Vector3(1.1, 0.72, -1.4),
+    new THREE.Vector3(-0.8, 0.45, 0.4),
+    new THREE.Vector3(-2.8, 0.65, 1.8),
+    new THREE.Vector3(-4.7, 0.42, -1.1),
+  ] : [
+    new THREE.Vector3(8.4, 0.58, 2.7),
+    new THREE.Vector3(5.2, 0.4, 0.2),
+    new THREE.Vector3(1.8, 0.75, -1.7),
+    new THREE.Vector3(-2.1, 0.42, 0.8),
+    new THREE.Vector3(-6.1, 0.68, 2.2),
+    new THREE.Vector3(-9.2, 0.38, -1.4),
+    new THREE.Vector3(-12.8, 0.6, 0.4),
+  ]);
+  const curve = new THREE.CatmullRomCurve3(knots, false, "centripetal");
+  const pixelCount = mobile ? 54 : 92;
+  const pixelGeometry = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+  const pixelMaterial = new THREE.MeshBasicMaterial({
+    color: STREAM,
+    transparent: true,
+    opacity: 0.68,
+    toneMapped: false,
+  });
+  const pixels = new THREE.InstancedMesh(pixelGeometry, pixelMaterial, pixelCount);
+  const dummy = new THREE.Object3D();
+
+  for (let index = 0; index < pixelCount; index += 1) {
+    const point = curve.getPointAt(index / (pixelCount - 1));
+    const quiet = index % 7 === 0 ? 1.45 : 1;
+    dummy.position.copy(point);
+    dummy.scale.setScalar(quiet);
+    dummy.updateMatrix();
+    pixels.setMatrixAt(index, dummy.matrix);
+  }
+  pixels.instanceMatrix.needsUpdate = true;
+  scene.add(pixels);
+
+  const packetCount = mobile ? 2 : 4;
+  const packetGeometry = new THREE.BoxGeometry(0.28, 0.28, 0.28);
+  const packetMaterial = new THREE.MeshBasicMaterial({ color: 0xf0d98b, toneMapped: false });
+  const packets = new THREE.InstancedMesh(packetGeometry, packetMaterial, packetCount);
+  scene.add(packets);
+
+  return function updateDataStream(time) {
+    for (let index = 0; index < packetCount; index += 1) {
+      const progress = ((time * 0.000035) + index / packetCount) % 1;
+      dummy.position.copy(curve.getPointAt(progress));
+      const pulse = 0.82 + Math.sin(time * 0.004 + index) * 0.14;
+      dummy.scale.setScalar(pulse);
+      dummy.updateMatrix();
+      packets.setMatrixAt(index, dummy.matrix);
+    }
+    packets.instanceMatrix.needsUpdate = true;
+  };
 }
 
 export function mountGrove({ stage, canvas, reducedMotion }) {
@@ -164,14 +241,14 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(NIGHT);
-  scene.fog = new THREE.Fog(NIGHT, 13, 29);
+  scene.fog = new THREE.Fog(NIGHT, 15, 34);
 
-  const camera = new THREE.OrthographicCamera(-8, 8, 5, -5, 0.1, 60);
-  camera.position.set(8.8, 7.2, 14);
-  camera.lookAt(-1.7, 2.45, 0);
+  const camera = new THREE.OrthographicCamera(-10, 10, 6, -6, 0.1, 70);
+  camera.position.set(mobile ? 7.6 : 12.5, mobile ? 7.4 : 8.7, mobile ? 15 : 19);
+  camera.lookAt(mobile ? -0.1 : -2.3, 2.1, 0);
 
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(42, 30),
+    new THREE.PlaneGeometry(54, 34),
     new THREE.MeshStandardMaterial({ color: GROUND, roughness: 1, metalness: 0 }),
   );
   ground.rotation.x = -Math.PI / 2;
@@ -187,9 +264,9 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   sun.position.copy(sunBase);
   sun.castShadow = true;
   sun.shadow.mapSize.set(mobile ? 512 : 1024, mobile ? 512 : 1024);
-  sun.shadow.camera.left = -10;
-  sun.shadow.camera.right = 10;
-  sun.shadow.camera.top = 11;
+  sun.shadow.camera.left = -15;
+  sun.shadow.camera.right = 15;
+  sun.shadow.camera.top = 13;
   sun.shadow.camera.bottom = -5;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 32;
@@ -199,6 +276,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   scene.add(sun, sun.target);
 
   createGrove(scene, mobile);
+  const updateDataStream = createDataStream(scene, mobile);
 
   let stageVisible = true;
   let frameId = 0;
@@ -213,7 +291,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const width = Math.max(1, stage.clientWidth);
     const height = Math.max(1, stage.clientHeight);
     const aspect = width / height;
-    const viewHeight = mobile ? 10.5 : 10.2;
+    const viewHeight = mobile ? 11.6 : 12.4;
     camera.left = -(viewHeight * aspect) / 2;
     camera.right = (viewHeight * aspect) / 2;
     camera.top = viewHeight / 2;
@@ -229,6 +307,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const idle = reducedMotion ? 0 : Math.sin(time * 0.00018) * 0.55;
     sun.position.x = sunBase.x + smoothX * 2.6 + idle;
     sun.position.z = sunBase.z + smoothZ * 1.8;
+    updateDataStream(reducedMotion ? 0 : time);
     renderer.render(scene, camera);
   }
 

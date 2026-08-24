@@ -42,6 +42,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     const command = button.dataset.copy;
     if (!command) return;
 
+    const idleLabel = button.textContent;
     let resetDelay = 1800;
     try {
       await navigator.clipboard.writeText(command);
@@ -66,7 +67,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     }
 
     window.setTimeout(() => {
-      button.textContent = "copy";
+      button.textContent = idleLabel;
     }, resetDelay);
   });
 }

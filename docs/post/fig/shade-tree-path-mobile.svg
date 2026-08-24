@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="1710" viewBox="0 0 720 1710" role="img" aria-labelledby="title desc">
   <title id="title">Shade Tree discovery and traffic paths for small screens</title>
-  <desc id="desc">Two vertically stacked technical diagrams. In the discovery plane, a Shade Tree node sends a signed heartbeat to the Elder Tree bootnode, which returns a signed Canopy to the Proxy. In the traffic path, an Agent connects to the Proxy, crosses Tor, reaches a Shade Tree node, and then reaches the Destination. The Elder Tree is outside the traffic path, and the Destination sees the Shade Tree node IP.</desc>
+  <desc id="desc">Two vertically stacked technical diagrams. In the discovery plane, a Shade Tree node sends a signed heartbeat to the Elder Tree bootnode, which returns a signed Canopy to the Proxy. In the traffic path, an Agent connects to the Proxy, which sends a target-bound RLN proof and epoch-scoped nullifier across Tor to a Shade Tree node before the Destination. The Elder Tree is outside the traffic path, and the Destination sees the Shade Tree node IP.</desc>
 
   <defs>
     <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
@@ -132,6 +132,7 @@
   <text class="label" x="273" y="1062">Proxy</text>
 
   <path d="M153 1103v60" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <text class="route" x="205" y="1143">RLN proof + nullifier</text>
 
   <g transform="translate(153 1223)">
     <use href="#tor-icon"/>

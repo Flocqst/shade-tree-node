@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
   <title id="title">Shade Tree discovery and traffic paths</title>
-  <desc id="desc">Two-plane technical diagram. In the discovery plane, a Shade Tree node sends a signed heartbeat to the Elder Tree bootnode, which returns a signed Canopy to the Proxy. In the traffic path, an Agent connects to the Proxy, crosses Tor, reaches a Shade Tree node, and then reaches the Destination. The Elder Tree is outside the traffic path, and the Destination sees the Shade Tree node IP.</desc>
+  <desc id="desc">Two-plane technical diagram. In the discovery plane, a Shade Tree node sends a signed heartbeat to the Elder Tree bootnode, which returns a signed Canopy to the Proxy. In the traffic path, an Agent connects to the Proxy, which sends a target-bound RLN proof and epoch-scoped nullifier across Tor to a Shade Tree node before the Destination. The Elder Tree is outside the traffic path, and the Destination sees the Shade Tree node IP.</desc>
 
   <defs>
     <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
@@ -112,6 +112,7 @@
   <!-- Traffic plane -->
   <text class="plane" x="72" y="414">Traffic path</text>
   <text class="note" x="1488" y="414" text-anchor="end">Elder Tree stays out of this path</text>
+  <text class="route" x="756" y="465" text-anchor="middle">target-bound RLN proof + nullifier</text>
 
   <path d="M218 535h133" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
   <path d="M486 535h149" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>

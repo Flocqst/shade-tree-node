@@ -21,10 +21,49 @@ at a time.
 > development. The checked-in Sepolia records describe the retired pre-v4
 > research fleet. Do not rely on this preview for real funds or sensitive use.
 
+## Agent developers
+
+The npm package is not published yet. Install the Proxy from a checkout, then
+start Tor and an operator-supplied v4 profile:
+
+```bash
+git clone https://github.com/dmarzzz/shade-tree-node.git
+cd shade-tree-node
+npm ci && npm link
+bash scripts/start-tor-client.sh
+
+SHADE_TREE_SECRET=<admitted-member-secret> \
+SHADE_TREE_BOOTNODE_ONION=<v4-elder.onion> \
+SHADE_TREE_DIR_SIGNER=<pinned-canopy-signer> \
+  shade-tree proxy --tor-port 9260
+```
+
+In another terminal, route only the agent process:
+
+```bash
+shade-tree run -- your-agent
+```
+
+`shade-tree run` passes proxy variables only to its child and refuses to launch
+if the Proxy is down. Software that ignores proxy variables can use
+`http://127.0.0.1:8888` directly. Agents that own their networking can import
+[`ShadeTreeClient`](docs/SDK.md) from the checkout instead. There is no
+repo-maintained public v4 connection profile yet; obtain enrollment, the Elder
+onion, and its signer pin from the operator you intend to use.
+
+## How it works
+
 <picture>
   <source media="(max-width: 560px)" srcset="docs/post/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
-  <img src="docs/post/fig/shade-tree-path.svg" width="1600" height="760" alt="Shade Tree control plane and traffic path">
+  <img src="docs/post/fig/shade-tree-path.svg" width="1600" height="760" alt="Shade Tree discovery plane and proof-gated traffic path">
 </picture>
+
+Shade Tree is a Tor-based egress layer. Tor keeps the Proxy source IP out of the
+node application connection. Each CONNECT tunnel carries a Groth16 RLN proof
+that a rate-commitment leaf belongs to an admitted Merkle root without revealing
+which leaf. The proof binds the target-and-nonce signal to a private per-epoch
+message slot. The node verifies it before egress and uses epoch-scoped
+nullifiers to enforce its view of the member's tunnel limit.
 
 ## Roles
 
@@ -47,60 +86,21 @@ advertisement is present. Code and wire docs keep `client`, `gateway`,
 abuse controls][tor-captchas]. Shade Tree gates each tunnel and publishes no
 egress-IP list. Destinations still see and can block a node IP.
 
-## Run the proxy
-
-You need Node.js, a local Tor SOCKS port, a member secret, and either a node
-onion or a signed Canopy plus its signer pin from an operator.
-
-```bash
-git clone https://github.com/dmarzzz/shade-tree-node.git
-cd shade-tree-node
-npm ci
-npm link
-shade-tree doctor
-```
-
-Start Tor and the proxy:
-
-```bash
-bash scripts/start-tor-client.sh
-SHADE_TREE_SECRET=<hex> SHADE_TREE_ONION=<node.onion> \
-  shade-tree proxy --tor-port 9260
-```
-
-Route only the agent process:
-
-```bash
-shade-tree run -- hermes
-shade-tree run -- curl https://api.ipify.org
-```
-
-`shade-tree run` passes proxy variables only to the child process, leaves
-loopback services outside the route, and refuses to launch if the proxy is
-down. Software that ignores proxy environment variables can use
-`http://127.0.0.1:8888` directly. See the [CLI](docs/CLI.md),
-[configuration](docs/CONFIG.md), and [JavaScript SDK](docs/SDK.md).
-
 ## Run a node
 
 A Shade Tree node is a Tor onion service with a proof-gated CONNECT gateway.
 Its public IP becomes the destination-facing egress IP.
 
-For a fresh Ubuntu 24.04 host:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
-  | sudo bash
-```
-
-The bootstrap installs isolated services, creates onion identities, and prints
-the proxy configuration to share. Admission is invited-only unless the
-operator enables another set.
+Do not expose the current node on a public or private-network-connected host.
+[Issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73) leaves private
+and link-local destinations reachable through the default egress policy. Node
+deployment stays blocked until that guard and the other [deployment
+gates](docs/DEPLOYMENT-PLAN.md) are closed.
 
 A node can run near GPU workers, model servers, or an Ethereum validator. Give
 egress a dedicated public IP when possible. Keep validator keys and
 authenticated RPC endpoints out of the node. Read the [operator
-guide](docs/OPERATOR.md) and [deployment guide](docs/DEPLOYMENT.md).
+guide](docs/OPERATOR.md) and current [deployment plan](docs/DEPLOYMENT-PLAN.md).
 
 Interactive services grow one small ASCII tree when ready. Bootstrap installs
 use structured JSON logs and separate loopback metrics for each role. See the
@@ -115,6 +115,8 @@ use structured JSON logs and separate loopback metrics for each role. See the
 - Enrollment through staked or paid sets can create public onchain links.
 - A node can refuse, delay, truncate, or misroute a valid tunnel.
 - Co-located services keep separate trust boundaries only if the operator does.
+- Replay and rate accounting are strongest per node. The optional cross-node
+  tally is fail-open.
 
 One proof admits one CONNECT tunnel, not one HTTP request. HTTP/2 and keep-alive
 can carry many requests inside it. Read the [protocol](docs/PROTOCOL.md) and
@@ -127,7 +129,7 @@ can carry many requests inside it. Read the [protocol](docs/PROTOCOL.md) and
 | [`client/`](client/) | Local proxy, discovery, and node rotation |
 | [`gateway/`](gateway/) | Proof gate and destination tunnel |
 | [`bootnode/`](bootnode/) | Elder Tree discovery service and operator tools |
-| [`rust/`](rust/) | Rust proxy, protocol crate, and RLN prover |
+| [`rust/`](rust/) | Rust client, protocol crate, and RLN prover |
 | [`contracts/`](contracts/) | Optional Sepolia membership and operator sets |
 | [`network/`](network/) | Signed test-network records |
 
@@ -138,8 +140,9 @@ npm test
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the test layout. Report security
-issues through the private channel in [SECURITY.md](SECURITY.md). Shade Tree is
-open source under the [MIT license](LICENSE).
+issues through the private channel in [SECURITY.md](SECURITY.md). Ask questions
+in [Discussions](https://github.com/dmarzzz/shade-tree-node/discussions). Shade
+Tree is open source under the [MIT license](LICENSE).
 
 [ci-badge]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/ci.yml/badge.svg
 [ci-url]: https://github.com/dmarzzz/shade-tree-node/actions/workflows/ci.yml

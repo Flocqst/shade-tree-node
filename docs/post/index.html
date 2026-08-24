@@ -20,7 +20,7 @@
   <title>Shade Tree</title>
 </head>
 <body class="home-page">
-  <a class="skip-link" href="#roles">Skip to the roles</a>
+  <a class="skip-link" href="#roles">Skip to the overview</a>
 
   <header class="home-hero" aria-labelledby="home-title">
     <nav class="site-nav" aria-label="Primary navigation">
@@ -37,6 +37,7 @@
 
     <div class="grove-stage" id="grove-stage">
       <div class="forest-fallback" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
         <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
       </div>
       <canvas id="grove-canvas" aria-hidden="true"></canvas>
@@ -56,27 +57,31 @@
     <section class="role-grid" aria-label="Ways to use Shade Tree">
       <article id="proxy" class="role">
         <h2>Proxy</h2>
-        <p>Local route for proxy-aware agent traffic.</p>
-        <div class="command" aria-label="Example proxy command">
-          <code>shade-tree proxy</code>
-          <button class="copy-command" type="button" data-copy="shade-tree proxy" aria-label="Copy proxy command">copy</button>
+        <p>Run it beside an agent. Only that process takes the route.</p>
+        <div class="command" aria-label="Install the proxy from source">
+          <code>git clone https://github.com/dmarzzz/shade-tree-node.git<br>cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link</code>
+          <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git&#10;cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link" aria-label="Copy proxy installation commands">copy install</button>
         </div>
-        <a class="role-link" href="https://github.com/dmarzzz/shade-tree-node#run-the-proxy">Proxy guide ↗</a>
+        <a class="role-link" href="https://github.com/dmarzzz/shade-tree-node#agent-developers">Agent guide ↗</a>
       </article>
 
       <article id="node" class="role">
         <h2>Node</h2>
-        <p>Accepts proof-gated tunnels and makes the final connection.</p>
+        <p>Run it to provide proof-gated egress for agents.</p>
         <a class="solid-action compact" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Node guide ↗</a>
       </article>
     </section>
 
-    <section class="path-panel" aria-label="Shade Tree path and boundary">
+    <section class="how-panel" aria-labelledby="how-title">
+      <div class="how-copy">
+        <h2 id="how-title">How it works</h2>
+        <p>Each CONNECT tunnel carries a target-bound Groth16 RLN membership proof for a fresh epoch slot. A node verifies it before egress and uses epoch-scoped nullifiers to enforce its view of the member's tunnel limit. The Elder Tree serves the signed Canopy and never carries traffic.</p>
+      </div>
       <picture>
         <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
-        <img src="/fig/shade-tree-path.svg" width="1600" height="760" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends agent traffic through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
+        <img src="/fig/shade-tree-path.svg" width="1600" height="760" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
       </picture>
-      <p>Tor exit addresses are public, and shared traffic often trips abuse controls. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
+      <p class="boundary">Tor exit addresses are public, and shared traffic often trips abuse controls. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
     </section>
   </main>
 
@@ -84,6 +89,7 @@
     <span>Research preview</span>
     <nav aria-label="Project links">
       <a href="/research/">Research</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node/discussions">Discuss</a>
       <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">Threat model</a>
       <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
     </nav>

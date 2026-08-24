@@ -221,9 +221,23 @@ img {
 
 .forest-fallback {
   position: absolute;
-  inset: 18% 42% 8% 3%;
+  inset: 14% 34% 7% 1%;
   opacity: 0.68;
   transition: opacity 500ms ease;
+}
+
+.forest-fallback::after {
+  position: absolute;
+  right: -11%;
+  bottom: 19%;
+  left: 4%;
+  height: 3px;
+  content: "";
+  background: repeating-linear-gradient(90deg, var(--pulse) 0 8px, transparent 8px 15px);
+  filter: drop-shadow(0 0 7px rgba(209, 182, 110, 0.38));
+  opacity: 0.62;
+  transform: rotate(-8deg);
+  transform-origin: right;
 }
 
 .grove-stage.is-live .forest-fallback {
@@ -277,13 +291,20 @@ img {
   transform-origin: bottom;
 }
 
-.forest-fallback i:nth-child(1) { --tree-x: 3%; --tree-h: 42%; --crown: 3.4rem; --lean: -2deg; }
-.forest-fallback i:nth-child(2) { --tree-x: 18%; --tree-h: 67%; --crown: 4.8rem; --trunk: 0.85rem; --lean: 1deg; }
-.forest-fallback i:nth-child(3) { --tree-x: 36%; --tree-h: 53%; --crown: 4rem; --lean: -1deg; }
-.forest-fallback i:nth-child(4) { --tree-x: 51%; --tree-h: 76%; --crown: 5.4rem; --trunk: 0.95rem; }
-.forest-fallback i:nth-child(5) { --tree-x: 69%; --tree-h: 47%; --crown: 3.7rem; --lean: 2deg; }
-.forest-fallback i:nth-child(6) { --tree-x: 82%; --tree-h: 63%; --crown: 4.5rem; --lean: -1deg; }
-.forest-fallback i:nth-child(7) { --tree-x: 95%; --tree-h: 38%; --crown: 3rem; --lean: 2deg; }
+.forest-fallback i:nth-child(1) { --tree-x: 1%; --tree-h: 35%; --crown: 2.8rem; --lean: -2deg; }
+.forest-fallback i:nth-child(2) { --tree-x: 8%; --tree-h: 55%; --crown: 3.7rem; --trunk: 0.72rem; --lean: 1deg; }
+.forest-fallback i:nth-child(3) { --tree-x: 17%; --tree-h: 42%; --crown: 3.1rem; --lean: -1deg; }
+.forest-fallback i:nth-child(4) { --tree-x: 25%; --tree-h: 67%; --crown: 4.3rem; --trunk: 0.82rem; }
+.forest-fallback i:nth-child(5) { --tree-x: 34%; --tree-h: 38%; --crown: 2.9rem; --lean: 2deg; }
+.forest-fallback i:nth-child(6) { --tree-x: 42%; --tree-h: 58%; --crown: 3.8rem; --lean: -1deg; }
+.forest-fallback i:nth-child(7) { --tree-x: 50%; --tree-h: 32%; --crown: 2.6rem; --lean: 2deg; }
+.forest-fallback i:nth-child(8) { --tree-x: 58%; --tree-h: 49%; --crown: 3.4rem; --lean: -1deg; }
+.forest-fallback i:nth-child(9) { --tree-x: 66%; --tree-h: 64%; --crown: 4.2rem; --trunk: 0.8rem; --lean: 1deg; }
+.forest-fallback i:nth-child(10) { --tree-x: 73%; --tree-h: 40%; --crown: 3rem; }
+.forest-fallback i:nth-child(11) { --tree-x: 81%; --tree-h: 53%; --crown: 3.6rem; --lean: -2deg; }
+.forest-fallback i:nth-child(12) { --tree-x: 88%; --tree-h: 34%; --crown: 2.7rem; --lean: 1deg; }
+.forest-fallback i:nth-child(13) { --tree-x: 94%; --tree-h: 46%; --crown: 3.2rem; --lean: -1deg; }
+.forest-fallback i:nth-child(14) { --tree-x: 99%; --tree-h: 29%; --crown: 2.4rem; --lean: 2deg; }
 
 .home-copy {
   position: absolute;
@@ -396,7 +417,7 @@ img {
 
 .command {
   display: flex;
-  width: min(100%, 29rem);
+  width: min(100%, 37rem);
   align-items: center;
   justify-content: space-between;
   margin: 1.55rem 0 1rem;
@@ -409,7 +430,8 @@ img {
 .command code {
   padding: 0.8rem 0 0.8rem 0.9rem;
   overflow: hidden;
-  font-size: 0.78rem;
+  font-size: 0.7rem;
+  line-height: 1.7;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -435,26 +457,45 @@ img {
   font-size: 0.8rem;
 }
 
-.path-panel {
+.how-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(17rem, 0.75fr);
-  gap: clamp(1.5rem, 4vw, 4rem);
+  grid-template-columns: minmax(17rem, 0.68fr) minmax(0, 1.55fr);
+  gap: clamp(1.5rem, 3vw, 3rem);
   align-items: center;
   padding: clamp(1.3rem, 3vw, 2.4rem);
   background: rgba(7, 12, 9, 0.5);
   border-top: 1px solid var(--line);
 }
 
-.path-panel img {
+.how-copy h2 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(2rem, 3.3vw, 3.3rem);
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.how-copy p,
+.boundary {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
+.how-panel picture {
+  grid-row: span 2;
+}
+
+.how-panel img {
   width: 100%;
   border: 1px solid var(--line);
 }
 
-.path-panel p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.92rem;
-  line-height: 1.65;
+.boundary {
+  align-self: end;
+  margin-top: 0;
 }
 
 .site-footer {
@@ -512,8 +553,12 @@ img {
   }
 
   .role-grid,
-  .path-panel {
+  .how-panel {
     grid-template-columns: 1fr;
+  }
+
+  .how-panel picture {
+    grid-row: auto;
   }
 
   .role + .role {
@@ -525,8 +570,8 @@ img {
     min-height: 0;
   }
 
-  .path-panel p {
-    padding: 0.4rem 0.7rem 0.7rem;
+  .boundary {
+    margin-top: 0;
   }
 }
 
@@ -562,8 +607,18 @@ img {
     padding: 2rem 1.25rem;
   }
 
-  .path-panel {
+  .how-panel {
     padding: 0.75rem;
+  }
+
+  .command {
+    align-items: stretch;
+  }
+
+  .command code {
+    padding-left: 0.75rem;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .site-footer {

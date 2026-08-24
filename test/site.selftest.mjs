@@ -33,6 +33,7 @@ const landingCss = read("site.css");
 const research = read("research/index.html");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
 const protocol = readFileSync(join(ROOT, "docs", "PROTOCOL.md"), "utf8");
+const deploymentPlan = readFileSync(join(ROOT, "docs", "DEPLOYMENT-PLAN.md"), "utf8");
 const loader = read("site.js");
 const landingScene = read("grove.js");
 const grovePage = read("grove/index.html");
@@ -48,7 +49,7 @@ const grovePublicKey = readFileSync(join(ROOT, "network", "grove-signing-public.
 const config = JSON.parse(read("vercel.json"));
 const csp = config.headers[0].headers.find((header) => header.key === "Content-Security-Policy")?.value || "";
 
-check("landing is one-third-length copy", landing.length < 9_000 && visibleWords(landing) <= 105 && research.length > 40_000);
+check("landing stays compact beside the full research note", landing.length < 9_000 && visibleWords(landing) <= 165 && research.length > 40_000);
 check("Grove is one-third-length copy", grovePage.length < 6_000 && visibleWords(grovePage) <= 65);
 check("landing has one H1 and one decorative canvas", (landing.match(/<h1\b/g) || []).length === 1 && (landing.match(/<canvas[^>]+aria-hidden="true"/g) || []).length === 1);
 check("Grove has one H1, one main section, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<main[\s\S]*?<section\b/g) || []).length === 1 && /role="status" aria-live="polite"/.test(grovePage));
@@ -62,6 +63,11 @@ check("tree imagery remains behind every surface", /body::before/.test(landingCs
 
 check("landing and README state the Proxy and Node story", /Run the proxy beside an agent/.test(landing) && /Run a node to provide cover/.test(landing) && /Run the proxy beside an agent/.test(readme) && /Run a Shade Tree node to provide cover/.test(readme));
 check("landing exposes both direct actions", /href="#proxy">Run the proxy/.test(landing) && /href="#node">Run a node/.test(landing));
+check("landing has a scoped cryptographic explanation", /Groth16 RLN membership proof/.test(landing) && /fresh epoch slot/.test(landing) && /epoch-scoped nullifiers/.test(landing) && /its view of the member's tunnel limit/.test(landing));
+check("copy affordance installs the private npm CLI from source", /data-copy="git clone https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git&#10;cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link"/.test(landing) && /copy install/.test(landing) && !/npm install shade-tree-node/.test(landing));
+check("README gives agents an honest current integration path", /## Agent developers/.test(readme) && /npm package is not published yet/.test(readme) && /shade-tree run -- your-agent/.test(readme) && /no\s+repo-maintained public v4 connection profile/i.test(readme) && !/npm install shade-tree-node/.test(readme));
+check("deployment plan includes the Elder Tree and safety gates", /Elder Tree \(`bootnode` in source\)/.test(deploymentPlan) && /\[#73\]/.test(deploymentPlan) && /untrusted development Groth16 setup/.test(deploymentPlan) && /Add the actual Elder and node hosts to Ansible inventory/.test(deploymentPlan));
+check("existing Discussions provide lightweight support", /shade-tree-node\/discussions/.test(landing));
 check("landing and README embed responsive two-plane path graphics", /<picture>[\s\S]*?media="\(max-width: 560px\)"[\s\S]*?srcset="\/fig\/shade-tree-path-mobile\.svg"[^>]+width="720" height="1710"[\s\S]*?<img src="\/fig\/shade-tree-path\.svg"/.test(landing) && /<picture>[\s\S]*?srcset="docs\/post\/fig\/shade-tree-path-mobile\.svg"[\s\S]*?<img src="docs\/post\/fig\/shade-tree-path\.svg"/.test(readme));
 check("Tor boundary copy is precise and qualified", /Tor exit addresses are public/.test(landing) && /publishes no egress-IP list/.test(landing) && /Destinations still see and can block a node IP/.test(landing) && /Destinations still see and can block a node IP/.test(readme));
 check("public vocabulary stays paired with protocol names", /Elder Tree/.test(readme) && /bootnode/.test(readme) && /Canopy/.test(readme) && /discovery\s+authority/.test(readme) && /\| Proxy \| client \|/.test(protocol));
@@ -69,8 +75,8 @@ check("public vocabulary stays paired with protocol names", /Elder Tree/.test(re
 check("Grove names the research census pulse without claiming browser bootnode contact", /full pulse marks a newly signed research census verified over Tor/i.test(grovePage) && /Counts and rounded time remain\. Node records do not\./.test(grovePage) && !/browser.{0,30}(queries|contacts|fetches).{0,30}(bootnode|Elder)/i.test(grovePage));
 check("Grove links to the public data contract", /docs\/PUBLIC-GROVE\.md/.test(grovePage));
 
-check("path graphic has accessible text and separates the two planes", /<title[^>]*>[^<]+<\/title>/.test(pathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(pathGraphic) && /Discovery plane/i.test(pathGraphic) && /Traffic path/i.test(pathGraphic) && /stays out of this path/i.test(pathGraphic) && !/<script\b|\u2014/.test(pathGraphic));
-check("mobile path graphic is accessible, vertical, and complete", /<svg[^>]+width="720"[^>]+height="1710"[^>]+role="img"[^>]+aria-labelledby="title desc"/.test(mobilePathGraphic) && /<title[^>]*>[^<]+<\/title>/.test(mobilePathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(mobilePathGraphic) && /Discovery plane/i.test(mobilePathGraphic) && /Traffic path/i.test(mobilePathGraphic) && /signed heartbeat/.test(mobilePathGraphic) && /signed Canopy/.test(mobilePathGraphic) && /Elder Tree stays out of this path/.test(mobilePathGraphic) && /Destination[\s\S]*sees node IP/.test(mobilePathGraphic) && !/<script\b|\u2014/.test(mobilePathGraphic));
+check("path graphic has accessible text and separates the two planes", /<title[^>]*>[^<]+<\/title>/.test(pathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(pathGraphic) && /Discovery plane/i.test(pathGraphic) && /Traffic path/i.test(pathGraphic) && /target-bound RLN proof \+ nullifier/.test(pathGraphic) && /stays out of this path/i.test(pathGraphic) && !/<script\b|\u2014/.test(pathGraphic));
+check("mobile path graphic is accessible, vertical, and complete", /<svg[^>]+width="720"[^>]+height="1710"[^>]+role="img"[^>]+aria-labelledby="title desc"/.test(mobilePathGraphic) && /<title[^>]*>[^<]+<\/title>/.test(mobilePathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(mobilePathGraphic) && /Discovery plane/i.test(mobilePathGraphic) && /Traffic path/i.test(mobilePathGraphic) && /signed heartbeat/.test(mobilePathGraphic) && /signed Canopy/.test(mobilePathGraphic) && /RLN proof \+ nullifier/.test(mobilePathGraphic) && /Elder Tree stays out of this path/.test(mobilePathGraphic) && /Destination[\s\S]*sees node IP/.test(mobilePathGraphic) && !/<script\b|\u2014/.test(mobilePathGraphic));
 
 check("full research article is preserved at /research", /id="references"/.test(research) && /id="further-reading"/.test(research));
 check("landing and research canonical URLs are distinct", /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/"/.test(landing) && /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/research\/"/.test(research));
@@ -103,6 +109,7 @@ for (const asset of [
 
 check("Three.js is pinned locally with its license", /three-0\.185\.1\/three\.module\.min\.js/.test(landingScene) && /\.\.\/vendor\/three-0\.185\.1\/three\.module\.min\.js/.test(groveScene) && statSync(join(SITE, "vendor/three-0.185.1/LICENSE.txt")).size > 1000);
 check("home scene uses WebGL when available, including mobile", /connection\?\.saveData/.test(loader) && /getContext\("webgl2"/.test(loader) && /import\("\.\/grove\.js"\)/.test(loader) && !/compactOrCoarse/.test(loader));
+check("home scene is a broad grove with a bounded pixel route", /rowCounts = mobile \? \[5, 4, 5, 4\] : \[7, 6, 7, 6, 6\]/.test(landingScene) && /CatmullRomCurve3/.test(landingScene) && /pixelCount = mobile \? 54 : 92/.test(landingScene) && /new THREE\.InstancedMesh\(pixelGeometry/.test(landingScene) && /new THREE\.InstancedMesh\(packetGeometry/.test(landingScene) && /updateDataStream\(reducedMotion \? 0 : time\)/.test(landingScene));
 check("Grove lowers quality on mobile instead of disabling WebGL", /const lowQuality = window\.matchMedia/.test(groveLoader) && /quality: lowQuality \? "low" : "high"/.test(groveLoader) && /getContext\("webgl2"/.test(groveLoader) && /import\("\.\/scene\.js"\)/.test(groveLoader));
 check("both scenes handle reduced motion, visibility, DPR, and context loss", [landingScene, groveScene].every((scene) => /reducedMotion/.test(scene) && /IntersectionObserver/.test(scene) && /devicePixelRatio/.test(scene) && /webglcontextlost/.test(scene)));
 
