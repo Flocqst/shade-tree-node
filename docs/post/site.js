@@ -57,7 +57,10 @@ for (const button of copyButtons) {
       button.textContent = "copied";
       copyStatus.textContent = "Command copied to clipboard.";
     } catch {
-      const visibleCode = button.closest(".command")?.querySelector("code");
+      const copyTarget = button.dataset.copyTarget
+        ? document.getElementById(button.dataset.copyTarget)
+        : null;
+      const visibleCode = copyTarget || button.closest(".command")?.querySelector("code");
       const helper = document.createElement("textarea");
       helper.value = command;
       helper.readOnly = true;
@@ -80,6 +83,7 @@ for (const button of copyButtons) {
         button.textContent = "copied";
         copyStatus.textContent = "Command copied to clipboard.";
       } else if (visibleCode) {
+        visibleCode.closest("details")?.setAttribute("open", "");
         const previousTabIndex = visibleCode.getAttribute("tabindex");
         visibleCode.setAttribute("tabindex", "-1");
         visibleCode.focus();

@@ -38,7 +38,7 @@
   overflow: hidden;
   background:
     radial-gradient(circle at 62% 54%, rgba(209, 182, 110, 0.1), transparent 20%),
-    linear-gradient(180deg, #0c140e, #070c09 76%);
+    linear-gradient(180deg, #0c1811, #07100c 76%);
 }
 
 .network-stage::after {
