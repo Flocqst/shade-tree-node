@@ -52,7 +52,10 @@ node heartbeat
     -> signed directory fetched over Tor
     -> pinned signature + freshness verification
     -> aggregate-only snapshot signed by the observer
-    -> /grove/network.json
+    -> generated network-state snapshot
+    -> Vercel Grove API schema + signature verification
+    -> /api/grove
+    -> browser signature verification
 ```
 
 The scheduled observer runs every 15 minutes. It accepts a signed directory only
@@ -60,14 +63,31 @@ when its issue time is within the five-minute freshness and future-skew window.
 It then signs the canonical aggregate with a dedicated Ed25519 publication key.
 The browser pins the corresponding key from
 [`network/grove-signing-public.pem`](../network/grove-signing-public.pem) and
-refuses an unsigned, malformed, stale, future-dated, or incorrectly signed payload.
+refuses an unsigned, malformed, future-dated, or incorrectly signed payload.
+It accepts an older valid snapshot so the last verified count can remain visible,
+then labels that view stale as it ages.
 
 The read-only observer passes the signed JSON to a separate minimal publisher;
 the publisher checks out no code and receives repository write permission only
 for that step. It creates a one-file, parentless commit on the generated
-`network-state` branch, so the branch itself carries no old commit chain. Vercel
-serves that snapshot through the same-origin `/grove/network.json` path, so a
-Grove visitor never contacts the bootnode or GitHub directly from their browser.
+`network-state` branch, so the branch itself carries no old commit chain. A
+dependency-free Vercel Function reads that snapshot from a fixed URL, caps the
+response at 64 KiB, checks its exact schema and publication signature, and
+serves it as JSON from `/api/grove`. The earlier `/grove/network.json` path is
+an internal alias for compatibility. A Grove visitor never contacts the
+bootnode or GitHub directly from their browser.
+
+The API caches a successful response at Vercel's edge for five minutes and can
+serve it stale while revalidating for one hour. It gives the upstream read four
+seconds. A failed read, malformed envelope, or bad signature returns a
+non-cacheable 503. It never translates failure into a zero count. The page then
+uses its bundled signed reference and labels that view accordingly.
+
+The Vercel Function does not dial the Elder Tree. Its runtime has no Tor daemon.
+The scheduled, Tor-capable observer remains the only process that contacts the
+onion service, so visitor demand cannot create bootnode traffic. Combining the
+Tor read and public API in one process would require a managed container with a
+Tor sidecar, which adds infrastructure without improving this data contract.
 
 Operator Prometheus endpoints are a separate, loopback-only system. The Elder
 Tree, nodes, heartbeats, registrars, and Proxies do not upload those metrics to

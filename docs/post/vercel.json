@@ -1,10 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
+  "functions": {
+    "api/grove.mjs": {
+      "maxDuration": 5
+    }
+  },
   "rewrites": [
     {
       "source": "/grove/network.json",
-      "destination": "https://raw.githubusercontent.com/dmarzzz/shade-tree-node/network-state/grove.json"
+      "destination": "/api/grove"
     }
   ],
   "headers": [
@@ -30,15 +35,6 @@
         {
           "key": "X-Frame-Options",
           "value": "DENY"
-        }
-      ]
-    },
-    {
-      "source": "/grove/network.json",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, s-maxage=300, stale-while-revalidate=3600"
         }
       ]
     },

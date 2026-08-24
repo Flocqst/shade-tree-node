@@ -39,6 +39,8 @@ const grovePage = read("grove/index.html");
 const groveCss = read("grove/grove.css");
 const groveLoader = read("grove/network.js");
 const groveScene = read("grove/scene.js");
+const groveApi = read("api/grove.mjs");
+const groveApiContract = read("api/_grove-contract.mjs");
 const pathGraphic = read("fig/shade-tree-path.svg");
 const mobilePathGraphic = read("fig/shade-tree-path-mobile.svg");
 const fallbackSnapshot = JSON.parse(read("grove/network.fallback.json"));
@@ -94,6 +96,8 @@ for (const asset of [
   "grove/network.js",
   "grove/scene.js",
   "grove/network.fallback.json",
+  "api/grove.mjs",
+  "api/_grove-contract.mjs",
   "sitemap.xml",
 ]) check(`site asset exists: ${asset}`, existsSync(join(SITE, asset)));
 
@@ -115,9 +119,13 @@ check("clipboard fallback copies the command without its prompt", /helper\.value
 
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));
 check("CSP limits reads and closes objects and workers", csp.includes("connect-src 'self'") && csp.includes("object-src 'none'") && csp.includes("worker-src 'none'"));
-check("browser reads only the same-origin aggregate and bundled fallback", /const LIVE_URL = "\/grove\/network\.json"/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
+check("browser reads only the same-origin API and bundled fallback", /const LIVE_URL = "\/api\/grove"/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
+check("browser polling allows the API response to use edge caching", !/cache:\s*"no-store"/.test(groveLoader));
 check("browser verifies a pinned Ed25519 snapshot before rendering", /crypto\.subtle\.verify/.test(groveLoader) && /invalid public snapshot/.test(groveLoader) && groveLoader.includes(grovePublicKeyRawBase64(grovePublicKey)));
-check("Vercel rewrites only the aggregate route to generated state", config.rewrites?.length === 1 && config.rewrites[0].source === "/grove/network.json" && /\/network-state\/grove\.json$/.test(config.rewrites[0].destination));
+check("Vercel keeps the old aggregate path as an internal API alias", config.rewrites?.length === 1 && config.rewrites[0].source === "/grove/network.json" && config.rewrites[0].destination === "/api/grove");
+check("Vercel deploys a bounded Grove function instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
+check("Grove API validates a fixed, bounded, signed source", /GROVE_SNAPSHOT_URL = "https:\/\/raw\.githubusercontent\.com\/dmarzzz\/shade-tree-node\/network-state\/grove\.json"/.test(groveApiContract) && /GROVE_MAX_BYTES = 64 \* 1024/.test(groveApiContract) && /verifyBytes/.test(groveApiContract));
+check("Grove API controls success and failure caching without CORS", /Vercel-CDN-Cache-Control/.test(groveApi) && /"Cache-Control": "no-store"/.test(groveApi) && !/Access-Control-Allow-Origin/i.test(groveApi));
 
 check("bundled snapshot uses the public aggregate schema", fallbackSnapshot.schema === "shade-tree-public-grove-v1" && fallbackSnapshot.source?.directoryVerified === true && fallbackSnapshot.source?.definition === "announced-within-ttl");
 check("bundled snapshot top level is allowlisted", Object.keys(fallbackSnapshot).sort().join(",") === "attestation,growth,history,network,nodes,observedAt,privacy,schema,source");
@@ -128,7 +136,7 @@ check("tampering with the bundled count breaks its signature", !verifyPublicGrov
 const fallbackText = JSON.stringify(fallbackSnapshot);
 check("bundled snapshot contains no identity, place, activity, or pulse field", !/\.onion|pubkey|operator|wallet|address|region|country|coordinates?|asn|destination|tunnels?|bytes|requests?|queries|pulse/i.test(fallbackText));
 
-for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js"]) {
+for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
   const result = spawnSync(process.execPath, ["--check", join(SITE, script)], { encoding: "utf8" });
   check(`${script} parses as JavaScript`, result.status === 0);
 }

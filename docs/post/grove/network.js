@@ -1,6 +1,6 @@
 /* global atob, crypto, document, navigator, TextEncoder, window */
 
-const LIVE_URL = "/grove/network.json";
+const LIVE_URL = "/api/grove";
 const FALLBACK_URL = "/grove/network.fallback.json";
 const PUBLIC_KEY_RAW = "377fAP+xg5aKu7AzQa7yB3NMpFpquPSIgs3TcQtVSYI=";
 const KEY_ID = "grove-2026-08";
@@ -17,16 +17,21 @@ let lastLiveObservedAt = null;
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 const safeCount = (value) => Number.isInteger(value) && value >= 0 && value <= 100_000;
+const isoMillis = (value) => {
+  if (typeof value !== "string") return NaN;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : NaN;
+};
 
 function validSnapshot(value) {
-  const observedAt = Date.parse(value?.observedAt);
+  const observedAt = isoMillis(value?.observedAt);
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
     && history.length <= 96
     && history.every((sample, index) => {
-      const at = Date.parse(sample?.at);
-      const prior = index > 0 ? Date.parse(history[index - 1].at) : -Infinity;
+      const at = isoMillis(sample?.at);
+      const prior = index > 0 ? isoMillis(history[index - 1].at) : -Infinity;
       return exactKeys(sample, ["at", "announced"])
         && Number.isFinite(at)
         && at > prior
@@ -36,6 +41,7 @@ function validSnapshot(value) {
   return value
     && exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
     && value.schema === "shade-tree-public-grove-v1"
+    && typeof value.network === "string"
     && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value.network)
     && Number.isFinite(observedAt)
     && observedAt <= Date.now() + 5 * 60_000
@@ -58,7 +64,7 @@ function validSnapshot(value) {
     && value.privacy.stablePositions === false
     && value.privacy.futureSharedStatsMinReportingNodes === 5
     && historyValid
-    && Date.parse(history.at(-1).at) === observedAt
+    && isoMillis(history.at(-1).at) === observedAt
     && exactKeys(value.attestation, ["algorithm", "keyId", "signature"])
     && value.attestation.algorithm === "Ed25519"
     && value.attestation.keyId === KEY_ID
@@ -118,7 +124,7 @@ async function verifyAttestation(snapshot) {
 }
 
 async function fetchSnapshot(url) {
-  const response = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
   const value = await response.json();
   if (!validSnapshot(value) || !await verifyAttestation(value)) throw new Error("invalid public snapshot");
