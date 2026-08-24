@@ -48,6 +48,7 @@ function buildTreeLayout(mobile) {
   const radiusX = mobile ? 5.8 : 12.4;
   const radiusZ = mobile ? 9.4 : 8.1;
   const minDistance = mobile ? 1.55 : 1.65;
+  const treeScale = mobile ? 1.08 : 1.07;
   const trees = [];
 
   for (let attempt = 0; attempt < 900 && trees.length < targetCount - 1; attempt += 1) {
@@ -60,12 +61,12 @@ function buildTreeLayout(mobile) {
     const crowded = trees.some((tree) => Math.hypot(tree.x - x, tree.z - z) < minDistance);
     if (inCopyClearing || crowded) continue;
 
-    const height = 2.5 + random() * 1.8;
+    const height = (2.5 + random() * 1.8) * treeScale;
     trees.push({
       x,
       z,
       height,
-      crown: 1.05 + random() * 0.65,
+      crown: (1.05 + random() * 0.65) * treeScale,
       lean: (random() - 0.5) * 0.22,
       seed: Math.floor(random() * 100_000),
       selected: false,
@@ -75,8 +76,8 @@ function buildTreeLayout(mobile) {
   trees.push({
     x: mobile ? 0.2 : 13.2,
     z: mobile ? 9.2 : -4.6,
-    height: mobile ? 4.2 : 4.7,
-    crown: mobile ? 1.8 : 2.05,
+    height: (mobile ? 4.2 : 4.7) * treeScale,
+    crown: (mobile ? 1.8 : 2.05) * treeScale,
     lean: 0.04,
     seed: 41_203,
     selected: true,
@@ -108,13 +109,15 @@ function createShadePatch(scene, mobile) {
     }
   `;
   const beamFragmentShader = `
+    uniform float beamStrength;
+    uniform float coreStrength;
     varying vec2 vUv;
 
     void main() {
       float distanceFromCenter = abs(vUv.x - 0.5) * 2.0;
       float feather = 1.0 - smoothstep(0.12, 1.0, distanceFromCenter);
       float core = 1.0 - smoothstep(0.0, 0.13, distanceFromCenter);
-      gl_FragColor = vec4(vec3(0.886, 0.729, 0.353), feather * 0.055 + core * 0.018);
+      gl_FragColor = vec4(vec3(0.886, 0.729, 0.353), feather * beamStrength + core * coreStrength);
     }
   `;
 
@@ -131,35 +134,35 @@ function createShadePatch(scene, mobile) {
   patch.position.set(centerX, 0.012, centerZ);
   scene.add(patch);
 
-  const beam = new THREE.Mesh(
-    new THREE.PlaneGeometry(mobile ? 1.1 : 1.7, mobile ? 44 : 64),
-    new THREE.ShaderMaterial({
-      vertexShader,
-      fragmentShader: beamFragmentShader,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  beam.rotation.set(-Math.PI / 2, 0, mobile ? -0.08 : -0.26);
-  beam.position.set(centerX, 0.026, centerZ);
-  scene.add(beam);
+  const beamSpecs = mobile ? [
+    { width: 1.2, length: 48, angle: -0.08, x: centerX + 0.2, z: centerZ - 0.6, strength: 0.07, core: 0.022 },
+    { width: 0.86, length: 48, angle: 0.3, x: centerX - 2.8, z: centerZ + 1.2, strength: 0.045, core: 0.014 },
+    { width: 0.68, length: 46, angle: -0.45, x: centerX + 3.2, z: centerZ + 2.2, strength: 0.034, core: 0.01 },
+  ] : [
+    { width: 1.8, length: 66, angle: -0.26, x: centerX, z: centerZ, strength: 0.064, core: 0.021 },
+    { width: 1.15, length: 64, angle: 0.13, x: centerX + 3.8, z: centerZ - 0.9, strength: 0.041, core: 0.014 },
+    { width: 0.8, length: 60, angle: -0.51, x: centerX - 4.4, z: centerZ + 2.6, strength: 0.031, core: 0.01 },
+  ];
 
-  const glint = new THREE.Mesh(
-    new THREE.PlaneGeometry(mobile ? 0.12 : 0.16, mobile ? 44 : 64),
-    new THREE.MeshBasicMaterial({
-      color: STREAM,
-      toneMapped: false,
-      transparent: true,
-      opacity: mobile ? 0.035 : 0.05,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  glint.rotation.copy(beam.rotation);
-  glint.position.copy(beam.position);
-  glint.position.x += mobile ? -1.7 : -2.7;
-  scene.add(glint);
+  beamSpecs.forEach((spec, index) => {
+    const beam = new THREE.Mesh(
+      new THREE.PlaneGeometry(spec.width, spec.length),
+      new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader: beamFragmentShader,
+        uniforms: {
+          beamStrength: { value: spec.strength },
+          coreStrength: { value: spec.core },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    beam.rotation.set(-Math.PI / 2, 0, spec.angle);
+    beam.position.set(spec.x, 0.026 + index * 0.001, spec.z);
+    scene.add(beam);
+  });
 }
 
 function createGrove(scene, mobile) {
@@ -480,7 +483,8 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const width = Math.max(1, stage.clientWidth);
     const height = Math.max(1, stage.clientHeight);
     const aspect = width / height;
-    const viewHeight = mobile ? 28 : 22;
+    const desktopViewHeight = Math.min(35, Math.max(22, 35 / aspect));
+    const viewHeight = mobile ? 28 : desktopViewHeight;
     camera.left = -(viewHeight * aspect) / 2;
     camera.right = (viewHeight * aspect) / 2;
     camera.top = viewHeight / 2;
