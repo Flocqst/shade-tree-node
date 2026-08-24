@@ -5,8 +5,8 @@
 # (client/shade-tree-client.mjs) mints a REAL per-request RLN membership proof, dials the
 # gateway's published v3 `.onion` over the system Tor SOCKS port, and the REAL JS gateway
 # (gateway/gateway.mjs) ACCEPTS it and proxies the CONNECT to a LOCAL sink. We then assert
-# three independent facts: the client got an `ok` ack (ACCEPT), the gateway logged the
-# egress, and the sink actually received the tunneled connection.
+# three independent facts: the client got an `ok` ack (ACCEPT), the node's local pass
+# counter advanced, and the sink actually received the tunneled connection.
 #
 # This is the LOCAL de-risk of the container CI job (.github/workflows/real-tor-e2e.yml),
 # which runs the same client egress against the systemd-fleet onions bootstrap.sh publishes.
@@ -42,6 +42,7 @@ SECRET="${SHADE_TREE_SECRET:-12345678901234567890}"
 GW_PORT="${SHADE_TREE_GATEWAY_PORT:-8443}"
 SINK_PORT="${SHADE_TREE_SINK_PORT:-9443}"
 SOCKS_PORT="${SHADE_TREE_TOR_PORT:-9250}"
+METRICS_PORT="${SHADE_TREE_NODE_METRICS_PORT:-9101}"
 TARGET="127.0.0.1:${SINK_PORT}"
 HS_DIR="$WORK/hs"
 TOR_DATA="$WORK/tordata"
@@ -95,6 +96,7 @@ node "$INTEROP/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
 
 echo "== starting real JS gateway (127.0.0.1:${GW_PORT}) =="
 SHADE_TREE_EGRESS_ALLOW="$TARGET" \
+  SHADE_TREE_METRICS_PORT="$METRICS_PORT" \
   node "$REPO/gateway/gateway.mjs" > "$WORK/gw.log" 2>&1 &
 GW_PID=$! ; track "$GW_PID" ; disown "$GW_PID" 2>/dev/null || true
 node "$INTEROP/wait-log.mjs" "$WORK/gw.log" "gateway up on" 20000
@@ -140,15 +142,16 @@ done
 echo
 echo "--- gateway log ---"; cat "$WORK/gw.log"
 echo "--- sink log ---";    cat "$WORK/sink.log"
+echo "--- node pass metric ---"; curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" 2>/dev/null | grep 'shade_tree_gateway_tunnels_total' || true
 
 # Three independent assertions for a genuine over-Tor accept.
-GW_OK=0;   grep -q "egress target=${TARGET} " "$WORK/gw.log"   && GW_OK=1
+GW_OK=0;   curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" 2>/dev/null | grep -Eq '^shade_tree_gateway_tunnels_total\{result="pass"\} [1-9][0-9]*$' && GW_OK=1
 SINK_OK=0; grep -q "\[sink\] connection"        "$WORK/sink.log" && SINK_OK=1
 
 if [ "$ACCEPT" = "1" ] && [ "$GW_OK" = "1" ] && [ "$SINK_OK" = "1" ]; then
   echo
   echo "== T-TEST-1 OVER-TOR EGRESS OK: JS client -> published .onion -> JS gateway ACCEPT -> sink =="
-  echo "   (client ack=ACCEPT, gateway logged egress, sink received the tunneled connection)"
+  echo "   (client ack=ACCEPT, node pass counter advanced, sink received the tunneled connection)"
   exit 0
 fi
 
@@ -160,6 +163,6 @@ if [ "$ACCEPT" = "0" ]; then
   exit 0
 fi
 
-# Client reported ACCEPT but a corroborating log is missing — that IS a real inconsistency.
-echo "FAIL: client reported ACCEPT but gateway/sink evidence is missing (GW_OK=$GW_OK SINK_OK=$SINK_OK)"
+# Client reported ACCEPT but a corroborating signal is missing. That is a real inconsistency.
+echo "FAIL: client reported ACCEPT but node-metric/sink evidence is missing (GW_OK=$GW_OK SINK_OK=$SINK_OK)"
 exit 1

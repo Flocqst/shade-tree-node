@@ -13,13 +13,13 @@
 #   4. start a local :443 sink (matches the gateway's default *:443 egress policy),
 #   5. run the JS REFERENCE client (test/real-tor-e2e-client.mjs) INSIDE the container: it
 #      mints a real RLN proof and dials the gateway's .onion over the container's Tor SOCKS,
-#   6. assert the gateway ACCEPTED (client ok ack + journal egress line + the sink got the
+#   6. assert the gateway ACCEPTED (client ok ack + local pass metric + the sink got the
 #      tunneled connection).
 #
 # GATING (matches e2e-container.sh's over-Tor step): v3 HS descriptor propagation over the live
 # Tor network is slow + flaky, so the dial is RETRIED and a propagation timeout is a SOFT/NEUTRAL
 # outcome (exit 0), NOT a hard failure. A genuine ACCEPT, when observed, IS asserted (a client
-# that claims ACCEPT without the corroborating gateway+sink evidence is a HARD failure).
+# that claims ACCEPT without the corroborating metric and sink evidence is a HARD failure).
 #
 # Requires: docker + a kernel that runs systemd in a privileged container (GitHub Actions
 # ubuntu-latest, Docker Desktop / colima). The container is force-removed on exit.
@@ -136,21 +136,21 @@ for attempt in $(seq 1 "$RUN_ATTEMPTS"); do
 done
 
 echo "--- sink log ---"; cat /tmp/sink.log 2>/dev/null || true
-echo "--- gateway journal (egress lines) ---"; journalctl -u shade-tree-gateway --no-pager 2>/dev/null | grep -E "egress|gateway up on" | tail -20 || true
+echo "--- node pass metric ---"; curl -fsS http://127.0.0.1:9101/metrics 2>/dev/null | grep 'shade_tree_gateway_tunnels_total' || true
 kill "$SINK_PID" 2>/dev/null || true
 
-GW_OK=0;   journalctl -u shade-tree-gateway --no-pager 2>/dev/null | grep -q "egress target=127.0.0.1:${SINK_PORT} " && GW_OK=1
+GW_OK=0;   curl -fsS http://127.0.0.1:9101/metrics 2>/dev/null | grep -Eq '^shade_tree_gateway_tunnels_total\{result="pass"\} [1-9][0-9]*$' && GW_OK=1
 SINK_OK=0; grep -q "\[sink\] connection" /tmp/sink.log 2>/dev/null && SINK_OK=1
 
 if [ "$ACCEPT" = "1" ] && [ "$GW_OK" = "1" ] && [ "$SINK_OK" = "1" ]; then
-  echo "OVER-TOR ACCEPT OK (client ack + gateway egress + sink connection)"
+  echo "OVER-TOR ACCEPT OK (client ack + node pass metric + sink connection)"
   exit 0
 fi
 if [ "$ACCEPT" = "0" ]; then
   echo "SOFT: no over-Tor ACCEPT after ${RUN_ATTEMPTS} attempts (likely HS descriptor propagation). Non-fatal."
   exit 42   # sentinel: soft-skip
 fi
-echo "HARD-FAIL: client reported ACCEPT but gateway/sink evidence missing (GW_OK=$GW_OK SINK_OK=$SINK_OK)"
+echo "HARD-FAIL: client reported ACCEPT but node-metric/sink evidence missing (GW_OK=$GW_OK SINK_OK=$SINK_OK)"
 exit 1
 RUN
 rc=$?

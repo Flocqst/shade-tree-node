@@ -8,9 +8,9 @@ name: real-tor-e2e
 # CONNECT to a local sink.
 #
 # GATING: v3 HS descriptor propagation over the live Tor network is slow + flaky, so the runner
-# treats a propagation timeout as a SOFT/NEUTRAL outcome (the job still passes) — identical to how
-# bootstrap-e2e treats its over-Tor dial. A genuine ACCEPT is asserted (client ok ack + gateway
-# journal egress line + the sink actually receiving the tunneled connection); a client that claims
+# treats a propagation timeout as a SOFT/NEUTRAL outcome (the job still passes), identical to how
+# bootstrap-e2e treats its over-Tor dial. A genuine ACCEPT is asserted (client ok ack + the node's
+# loopback pass metric + the sink actually receiving the tunneled connection); a client that claims
 # ACCEPT without that corroborating evidence is a HARD failure. This job does NOT gate the existing
 # ci.yml suites — it is an additional, best-effort integration signal.
 
