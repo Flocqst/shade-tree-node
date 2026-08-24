@@ -4,7 +4,6 @@ import * as THREE from "./vendor/three-0.185.1/three.module.min.js";
 
 const NIGHT = 0x07100c;
 const GROUND = 0x16261c;
-const SHADE = 0x06100b;
 const BARK = 0x5b4632;
 const LEAF_COLORS = [0x294a37, 0x365b42, 0x456a4b, 0x55785a, 0x314f3b];
 const STREAM = 0xe2ba5a;
@@ -87,48 +86,80 @@ function buildTreeLayout(mobile) {
 }
 
 function createShadePatch(scene, mobile) {
-  const random = seededRandom(mobile ? 73 : 39);
   const centerX = mobile ? 0 : 5.1;
   const centerZ = mobile ? 2.1 : -0.7;
-  const radiusX = mobile ? 7 : 14.1;
-  const radiusZ = mobile ? 10.8 : 9.2;
-  const shape = new THREE.Shape();
+  const vertexShader = `
+    varying vec2 vUv;
 
-  for (let index = 0; index < 16; index += 1) {
-    const angle = (index / 16) * Math.PI * 2;
-    const wobble = 0.88 + random() * 0.2;
-    const x = centerX + Math.cos(angle) * radiusX * wobble;
-    const z = centerZ + Math.sin(angle) * radiusZ * wobble;
-    if (index === 0) shape.moveTo(x, -z);
-    else shape.lineTo(x, -z);
-  }
-  shape.closePath();
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  const shadeFragmentShader = `
+    varying vec2 vUv;
+
+    void main() {
+      vec2 point = (vUv - 0.5) * 2.0;
+      float angle = atan(point.y, point.x);
+      float edge = 0.055 * sin(angle * 3.0 + 0.8) + 0.03 * sin(angle * 7.0 - 1.4);
+      float mask = 1.0 - smoothstep(0.56 + edge, 0.99 + edge, length(point));
+      gl_FragColor = vec4(vec3(0.039, 0.094, 0.067), mask * 0.44);
+    }
+  `;
+  const beamFragmentShader = `
+    varying vec2 vUv;
+
+    void main() {
+      float distanceFromCenter = abs(vUv.x - 0.5) * 2.0;
+      float feather = 1.0 - smoothstep(0.12, 1.0, distanceFromCenter);
+      float core = 1.0 - smoothstep(0.0, 0.13, distanceFromCenter);
+      gl_FragColor = vec4(vec3(0.886, 0.729, 0.353), feather * 0.055 + core * 0.018);
+    }
+  `;
 
   const patch = new THREE.Mesh(
-    new THREE.ShapeGeometry(shape),
-    new THREE.MeshBasicMaterial({ color: SHADE, transparent: true, opacity: 0.78 }),
+    new THREE.PlaneGeometry(mobile ? 17 : 34, mobile ? 27 : 23),
+    new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader: shadeFragmentShader,
+      transparent: true,
+      depthWrite: false,
+    }),
   );
   patch.rotation.x = -Math.PI / 2;
-  patch.position.y = 0.018;
+  patch.position.set(centerX, 0.012, centerZ);
   scene.add(patch);
 
-  const rayMaterial = new THREE.MeshBasicMaterial({
-    color: STREAM,
-    transparent: true,
-    opacity: mobile ? 0.07 : 0.1,
-    depthWrite: false,
-  });
-  const rayCount = mobile ? 3 : 5;
-  for (let index = 0; index < rayCount; index += 1) {
-    const ray = new THREE.Mesh(new THREE.PlaneGeometry(0.055, mobile ? 8 : 12), rayMaterial);
-    ray.rotation.set(-Math.PI / 2, 0, mobile ? -0.08 : -0.26);
-    ray.position.set(
-      mobile ? -3.7 + index * 2.1 : -13.5 + index * 2.25,
-      0.026,
-      mobile ? -7.2 + index * 0.7 : 5.7 - index * 0.75,
-    );
-    scene.add(ray);
-  }
+  const beam = new THREE.Mesh(
+    new THREE.PlaneGeometry(mobile ? 1.1 : 1.7, mobile ? 44 : 64),
+    new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader: beamFragmentShader,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  beam.rotation.set(-Math.PI / 2, 0, mobile ? -0.08 : -0.26);
+  beam.position.set(centerX, 0.026, centerZ);
+  scene.add(beam);
+
+  const glint = new THREE.Mesh(
+    new THREE.PlaneGeometry(mobile ? 0.12 : 0.16, mobile ? 44 : 64),
+    new THREE.MeshBasicMaterial({
+      color: STREAM,
+      toneMapped: false,
+      transparent: true,
+      opacity: mobile ? 0.035 : 0.05,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  glint.rotation.copy(beam.rotation);
+  glint.position.copy(beam.position);
+  glint.position.x += mobile ? -1.7 : -2.7;
+  scene.add(glint);
 }
 
 function createGrove(scene, mobile) {
@@ -251,6 +282,7 @@ function createDataStream(scene, mobile) {
     new THREE.Vector3(1.0, 0.34, 2.0),
     new THREE.Vector3(1.2, 0.36, 5.2),
     new THREE.Vector3(0.2, 0.38, 9.2),
+    new THREE.Vector3(-0.7, 0.34, 13.5),
   ] : [
     new THREE.Vector3(-15.2, 0.34, 5.7),
     new THREE.Vector3(-10.4, 0.36, 4.3),
@@ -260,9 +292,10 @@ function createDataStream(scene, mobile) {
     new THREE.Vector3(7.8, 0.36, -1.8),
     new THREE.Vector3(10.7, 0.34, -3.1),
     new THREE.Vector3(13.2, 0.38, -4.6),
+    new THREE.Vector3(18.0, 0.34, -7.4),
   ];
   const curve = new THREE.CatmullRomCurve3(knots, false, "centripetal");
-  const segmentCount = mobile ? 30 : 44;
+  const segmentCount = mobile ? 36 : 52;
   const segmentSize = mobile ? 0.23 : 0.2;
   const segmentGeometry = new THREE.BoxGeometry(segmentSize, segmentSize, segmentSize);
   const segmentMaterial = new THREE.MeshBasicMaterial({
@@ -294,6 +327,15 @@ function createDataStream(scene, mobile) {
   portal.position.copy(knots[0]);
   portal.position.y = 0.08;
   scene.add(portal);
+
+  const destination = new THREE.Mesh(
+    new THREE.RingGeometry(0.32, 0.46, 4),
+    new THREE.MeshBasicMaterial({ color: TRAIL, transparent: true, opacity: 0.62, side: THREE.DoubleSide }),
+  );
+  destination.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
+  destination.position.copy(knots.at(-1));
+  destination.position.y = 0.08;
+  scene.add(destination);
 
   const head = new THREE.Mesh(
     new THREE.BoxGeometry(mobile ? 0.42 : 0.36, mobile ? 0.42 : 0.36, mobile ? 0.42 : 0.36),
@@ -396,7 +438,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.01;
-  ground.receiveShadow = true;
+  ground.receiveShadow = false;
   scene.add(ground);
 
   createShadePatch(scene, mobile);

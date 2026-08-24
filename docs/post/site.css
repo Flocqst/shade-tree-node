@@ -202,7 +202,7 @@ img {
   background:
     linear-gradient(90deg, rgba(7, 16, 12, 0.93) 0%, rgba(7, 16, 12, 0.7) 29%, rgba(7, 16, 12, 0.18) 52%, transparent 72%),
     linear-gradient(0deg, var(--understory) 0%, transparent 28%),
-    radial-gradient(circle at 73% 48%, transparent 0 28%, rgba(7, 16, 12, 0.2) 72%);
+    radial-gradient(circle at 73% 48%, transparent 0 28%, rgba(7, 16, 12, 0.1) 72%);
 }
 
 .grove-stage {
@@ -238,8 +238,7 @@ img {
   position: absolute;
   inset: 12% 2% 3% 6%;
   content: "";
-  background: radial-gradient(ellipse at center, rgba(3, 9, 6, 0.76), rgba(7, 16, 12, 0.16) 72%, transparent 73%);
-  border-radius: 48% 52% 44% 56%;
+  background: radial-gradient(ellipse at center, rgba(3, 9, 6, 0.68), rgba(7, 16, 12, 0.42) 44%, rgba(7, 16, 12, 0.14) 72%, transparent 100%);
   transform: rotate(-8deg);
 }
 
@@ -489,15 +488,11 @@ img {
 }
 
 .how-panel {
-  display: grid;
-  grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-  gap: 2.5rem clamp(2rem, 7vw, 7rem);
-  align-items: start;
-  margin: clamp(6rem, 10vw, 10rem) 0 clamp(4rem, 8vw, 7rem);
+  margin: clamp(4.5rem, 8vw, 7rem) 0 clamp(3.5rem, 6vw, 5rem);
 }
 
 .how-panel > h2 {
-  margin: 0;
+  margin: 0 0 clamp(2.5rem, 4.5vw, 4rem);
   font-family: var(--display);
   font-size: clamp(2.6rem, 4.4vw, 4.4rem);
   font-weight: 400;
@@ -505,43 +500,56 @@ img {
   line-height: 0.96;
 }
 
-.how-parts {
+.how-stack {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(2rem, 5vw, 4.5rem);
 }
 
-.how-part h3 {
+.how-mechanism {
+  padding: 0 0 clamp(3.5rem, 6vw, 5rem);
+}
+
+.how-mechanism + .how-mechanism {
+  padding-top: clamp(3.5rem, 6vw, 5rem);
+  border-top: 1px solid var(--line);
+}
+
+.how-copy {
+  max-width: 46rem;
+}
+
+.how-copy h3 {
   margin: 0;
   color: var(--lichen);
   font-family: var(--display);
-  font-size: clamp(1.5rem, 2vw, 2rem);
+  font-size: clamp(1.9rem, 3vw, 2.8rem);
   font-weight: 400;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
+  line-height: 1;
 }
 
-.how-part p,
+.how-copy p,
 .boundary {
-  margin: 0.85rem 0 0;
+  max-width: 62ch;
+  margin: 1rem 0 0;
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.72;
 }
 
-.network-figure {
-  grid-column: 1 / -1;
-  margin-top: 1.5rem;
+.how-visual {
+  display: block;
+  width: 100%;
+  margin-top: clamp(2rem, 4vw, 3.5rem);
 }
 
-.network-figure img {
+.how-visual img {
   width: 100%;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border: 0;
+  background: transparent;
 }
 
 .boundary {
-  grid-column: 2;
-  margin-top: -0.5rem;
+  margin-top: 1.25rem;
 }
 
 .solid-action,
@@ -677,8 +685,7 @@ img {
   .home-copy h1 { font-size: clamp(3.8rem, 11vw, 5.2rem); }
   .home-hero .hero-actions { margin-top: 1.8rem; }
 
-  .role,
-  .how-panel { grid-template-columns: 1fr; }
+  .role { grid-template-columns: 1fr; }
 
   .role { gap: 2rem; }
 
@@ -693,11 +700,6 @@ img {
     margin: 0 0 0.35rem 1rem;
   }
 
-  .how-parts,
-  .network-figure,
-  .boundary { grid-column: auto; }
-
-  .boundary { margin-top: 0; }
 }
 
 @media (max-width: 600px) {
@@ -759,16 +761,22 @@ img {
   .handoff .task-copy { width: 100%; }
 
   .how-panel {
-    gap: 2rem;
     margin-top: 5rem;
   }
 
-  .how-parts {
-    grid-template-columns: 1fr;
-    gap: 2.4rem;
+  .how-panel > h2 {
+    margin-bottom: 2.75rem;
   }
 
-  .network-figure { margin-top: 0.5rem; }
+  .how-mechanism {
+    padding-bottom: 3.5rem;
+  }
+
+  .how-mechanism + .how-mechanism {
+    padding-top: 3.5rem;
+  }
+
+  .how-visual { margin-top: 1.75rem; }
 
   .guide-main {
     width: min(100% - 1rem, 46rem);

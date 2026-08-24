@@ -92,21 +92,29 @@
 
     <section class="how-panel" aria-labelledby="how-title">
       <h2 id="how-title">How it works</h2>
-      <div class="how-parts">
-        <article class="how-part">
-          <h3>Reputation gate</h3>
-          <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
+      <div class="how-stack">
+        <article class="how-mechanism">
+          <div class="how-copy">
+            <h3>Reputation gate</h3>
+            <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
+          </div>
+          <picture class="how-visual reputation-figure">
+            <source media="(max-width: 560px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="1100">
+            <img src="/fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
+          </picture>
         </article>
-        <article class="how-part">
-          <h3>Network path</h3>
-          <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree never carries agent traffic.</p>
+        <article class="how-mechanism">
+          <div class="how-copy">
+            <h3>Network path</h3>
+            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree never carries agent traffic.</p>
+          </div>
+          <picture class="how-visual network-figure">
+            <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
+            <img src="/fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
+          </picture>
+          <p class="boundary">Tor exit addresses are public. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
         </article>
       </div>
-      <picture class="network-figure">
-        <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
-        <img src="/fig/shade-tree-path.svg" width="1600" height="760" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
-      </picture>
-      <p class="boundary">Tor exit addresses are public. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
     </section>
   </main>
 
