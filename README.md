@@ -9,7 +9,7 @@ Cover for local agents.
 [![release][release-badge]][release-url]
 [![MIT][license-badge]][license-url]
 
-Run the proxy beside an agent. Run a Shade Tree node to provide cover. The two
+Add Shade Tree to an agent. Run a Shade Tree node to provide cover. The two
 sides meet through a proof-gated Tor onion service, one admitted HTTPS tunnel
 at a time.
 
@@ -23,20 +23,32 @@ at a time.
 
 ## Agent developers
 
-The npm package is not published yet. Install the Proxy from a checkout, then
-start Tor and an operator-supplied v4 profile:
+Start with the practical [agent guide](docs/AGENT.md). Install the current agent
+CLI directly from GitHub:
 
 ```bash
-git clone https://github.com/dmarzzz/shade-tree-node.git
-cd shade-tree-node
-npm ci && npm link
-bash scripts/start-tor-client.sh
-
-SHADE_TREE_SECRET=<admitted-member-secret> \
-SHADE_TREE_BOOTNODE_ONION=<v4-elder.onion> \
-SHADE_TREE_DIR_SIGNER=<pinned-canopy-signer> \
-  shade-tree proxy --tor-port 9260
+npm install --global git+https://github.com/dmarzzz/shade-tree-node.git
 ```
+
+This is a Git install, not an npm registry release. Bring Tor and an
+operator-supplied v4 access profile. For invited access, that profile includes a
+member list:
+
+```bash
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+```
+
+Paste the bearer secret at the hidden prompt. Then start the Proxy:
+
+```bash
+SHADE_TREE_MEMBERS_FILE=./members.json \
+shade-tree proxy \
+  --bootnode <v4-elder.onion> \
+  --dir-signer <64-hex-canopy-signer> \
+  --tor-port 9050
+```
+
+The secret is not echoed or placed in the Proxy's process arguments.
 
 In another terminal, route only the agent process:
 
@@ -47,9 +59,9 @@ shade-tree run -- your-agent
 `shade-tree run` passes proxy variables only to its child and refuses to launch
 if the Proxy is down. Software that ignores proxy variables can use
 `http://127.0.0.1:8888` directly. Agents that own their networking can import
-[`ShadeTreeClient`](docs/SDK.md) from the checkout instead. There is no
-repo-maintained public v4 connection profile yet; obtain enrollment, the Elder
-onion, and its signer pin from the operator you intend to use.
+[`ShadeTreeClient`](docs/SDK.md). There is no repo-maintained public v4
+connection profile yet. Obtain enrollment, member-set inputs, the Elder onion,
+and its signer pin from the operator you intend to use.
 
 ## How it works
 
@@ -96,6 +108,16 @@ Do not expose the current node on a public or private-network-connected host.
 and link-local destinations reachable through the default egress policy. Node
 deployment stays blocked until that guard and the other [deployment
 gates](docs/DEPLOYMENT-PLAN.md) are closed.
+
+For a local research node, install the current CLI and let the guided command
+prepare its onion identity:
+
+```bash
+git clone https://github.com/dmarzzz/shade-tree-node.git
+cd shade-tree-node
+npm ci && npm link
+shade-tree join node
+```
 
 A node can run near GPU workers, model servers, or an Ethereum validator. Give
 egress a dedicated public IP when possible. Keep validator keys and

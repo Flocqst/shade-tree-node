@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Run the proxy beside an agent. Run a Shade Tree node to provide cover.">
+  <meta name="description" content="Add Shade Tree to an agent, or run a node to provide cover.">
   <meta name="theme-color" content="#070c09">
   <meta property="og:title" content="Shade Tree">
   <meta property="og:description" content="Cover for local agents.">
@@ -29,8 +29,9 @@
         <span>Shade Tree</span>
       </a>
       <div class="nav-links">
+        <a href="/agent/">Agents</a>
+        <a href="/operator/">Operators</a>
         <a href="/grove/">Grove</a>
-        <a href="/research/">Research</a>
         <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
       </div>
     </nav>
@@ -45,10 +46,10 @@
 
     <div class="home-copy">
       <h1 id="home-title">Cover for local agents.</h1>
-      <p>Run the proxy beside an agent. Run a node to provide cover.</p>
+      <p>Add Shade Tree to an agent, or run a node to provide cover.</p>
       <div class="hero-actions">
-        <a class="solid-action" href="#proxy">Run the proxy</a>
-        <a class="line-action" href="#node">Run a node</a>
+        <a class="solid-action" href="/agent/">Add to an agent</a>
+        <a class="line-action" href="/operator/">Run a node</a>
       </div>
     </div>
   </header>
@@ -56,19 +57,23 @@
   <main id="roles" class="role-shell">
     <section class="role-grid" aria-label="Ways to use Shade Tree">
       <article id="proxy" class="role">
-        <h2>Proxy</h2>
-        <p>Run it beside an agent. Only that process takes the route.</p>
-        <div class="command" aria-label="Install the proxy from source">
-          <code>git clone https://github.com/dmarzzz/shade-tree-node.git<br>cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link</code>
-          <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git&#10;cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link" aria-label="Copy proxy installation commands">copy install</button>
+        <h2>Add to an agent</h2>
+        <p>Install the current CLI from GitHub. Bring Tor and an access profile from a Grove operator.</p>
+        <div class="command" aria-label="Install Shade Tree for an agent">
+          <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
+          <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy agent installation command">copy</button>
         </div>
-        <a class="role-link" href="https://github.com/dmarzzz/shade-tree-node#agent-developers">Agent guide ↗</a>
+        <a class="solid-action compact" href="/agent/">Agent guide</a>
       </article>
 
       <article id="node" class="role">
-        <h2>Node</h2>
-        <p>Run it to provide proof-gated egress for agents.</p>
-        <a class="solid-action compact" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Node guide ↗</a>
+        <h2>Run a node</h2>
+        <p>Install from source, then prepare a local research node. Public deployment is blocked.</p>
+        <div class="command" aria-label="Install and prepare a Shade Tree node">
+          <code>git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node</code>
+          <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node" aria-label="Copy node operator installation commands">copy</button>
+        </div>
+        <a class="solid-action compact" href="/operator/">Operator guide</a>
       </article>
     </section>
 

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install and prepare a local Shade Tree research node.">
+  <meta name="theme-color" content="#070c09">
+  <meta property="og:title" content="Operator guide · Shade Tree">
+  <meta property="og:description" content="Prepare a Shade Tree node for the Grove.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shade-tree-node.vercel.app/operator/">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://shade-tree-node.vercel.app/operator/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script type="module" src="/site.js"></script>
+  <title>Operator guide · Shade Tree</title>
+</head>
+<body class="guide-page">
+  <a class="skip-link" href="#guide">Skip to the guide</a>
+
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a class="wordmark" href="/" aria-label="Shade Tree home">
+      <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Shade Tree</span>
+    </a>
+    <div class="nav-links">
+      <a href="/agent/">Agents</a>
+      <a href="/grove/">Grove</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
+    </div>
+  </nav>
+
+  <main id="guide" class="guide-main">
+    <header class="guide-intro">
+      <h1>Prepare a Shade Tree node.</h1>
+      <p>Run a node to provide proof-gated egress for agents in the Grove.</p>
+    </header>
+
+    <div class="guide-steps">
+      <section class="guide-step guide-note" aria-labelledby="operator-safety">
+        <h2 id="operator-safety">Local research only</h2>
+        <p>Do not place the current node on a public or private-network-connected host. Public rollout is blocked by the unresolved private-IP egress guard in <a href="https://github.com/dmarzzz/shade-tree-node/issues/73">issue #73</a> and the development Groth16 setup in <a href="https://github.com/dmarzzz/shade-tree-node/issues/6">issue #6</a>.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="operator-install">
+        <h2 id="operator-install">1. Install</h2>
+        <p>Requires Node.js 20 or newer, npm, and Tor.</p>
+        <div class="command" aria-label="Install the Shade Tree operator CLI">
+          <code>git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link</code>
+          <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link" aria-label="Copy operator installation command">copy</button>
+        </div>
+        <p>The checkout contains the Tor configuration, local-loop scripts, tests, and deployment assets used by the operator runbook.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="operator-prepare">
+        <h2 id="operator-prepare">2. Prepare the node</h2>
+        <div class="command" aria-label="Prepare a Shade Tree node identity">
+          <code>shade-tree join node</code>
+          <button class="copy-command" type="button" data-copy="shade-tree join node" aria-label="Copy node preparation command">copy</button>
+        </div>
+        <p>This creates a local onion identity and prints the node and heartbeat commands. It does not configure Tor. Keep <code>identity.local.json</code> private.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="operator-run">
+        <h2 id="operator-run">3. Run the local Grove</h2>
+        <p>The manual local quickstart uses the checkout to configure Tor, an Elder Tree, a node, its heartbeat, and a test Proxy. The full runbook covers logs, metrics, keys, incident response, and retirement.</p>
+        <div class="guide-links">
+          <a class="solid-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/QUICKSTART.md#path-b-the-local-loop-understand-the-pieces">Local quickstart</a>
+          <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Operator runbook</a>
+          <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/monitoring/README.md">Monitoring</a>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <span>Research preview</span>
+    <nav aria-label="Project links">
+      <a href="/">Home</a>
+      <a href="/agent/">Agent guide</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node/discussions">Discuss</a>
+    </nav>
+  </footer>
+</body>
+</html>

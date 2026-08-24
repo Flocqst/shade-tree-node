@@ -24,6 +24,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 
 | Doc | What it is |
 |-----|------------|
+| [`AGENT.md`](AGENT.md) | Install the agent CLI, add a current access profile, launch one process through Shade Tree, or use the SDK |
 | [`CLIENTS.md`](CLIENTS.md) | Client modes: the local proxy (shim) vs the library, and a planned no-tooling path; leaf source and admission filtering |
 | [`SDK.md`](SDK.md) | The `ShadeTreeClient` SDK surface (`package.json` exports) |
 | [`ADAPTERS.md`](ADAPTERS.md) | Routing tools and agents (curl, SearXNG, browsers, LLM agents) through the local proxy |

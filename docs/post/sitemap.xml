@@ -9,4 +9,10 @@
   <url>
     <loc>https://shade-tree-node.vercel.app/grove/</loc>
   </url>
+  <url>
+    <loc>https://shade-tree-node.vercel.app/agent/</loc>
+  </url>
+  <url>
+    <loc>https://shade-tree-node.vercel.app/operator/</loc>
+  </url>
 </urlset>

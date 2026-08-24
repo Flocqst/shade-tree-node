@@ -80,11 +80,11 @@ const FLAG_ENV = {
 // command -> { script, help }. `long` marks a durable service (just for the help hint).
 const COMMANDS = {
   run:               { help: "run an agent with process-scoped Shade Tree routing: shade-tree run [--proxy http://127.0.0.1:8888] -- <command> [args]" },
-  keygen:            { script: "bootnode/keygen.mjs",       help: "mint an onion identity (Tor HS key + announce-signing seed): shade-tree keygen <hsDir> [--label name]" },
+  keygen:            { script: "bootnode/keygen.mjs",       help: "mint an onion identity (refuses overwrite): shade-tree keygen <hsDir> [--label name] [--force]" },
   elder:             { script: "bootnode/server.mjs",       help: "run the Elder Tree, which signs the Grove's Canopy", long: true },
   bootnode:          { script: "bootnode/server.mjs",       help: "legacy alias for `elder`", long: true },
   heartbeat:         { script: "bootnode/heartbeat.mjs",    help: "keep this node announced to the Elder Tree", long: true },
-  join:              { script: "group/join.mjs",            help: "guided front door: `shade-tree join [member]` or `shade-tree join gateway`; make an identity + print the next commands" },
+  join:              { script: "group/join.mjs",            help: "guided front door: `shade-tree join [member]` or `shade-tree join node`; make an identity + print the next commands (`gateway` remains an alias)" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
   identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: shade-tree identity [--out <path>] [--secret-file <path>] (secret: --secret-file | SHADE_TREE_SECRET | ./.secret)" },
   "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: shade-tree register-member <commitment> [--limit N] (tier; default 8)" },

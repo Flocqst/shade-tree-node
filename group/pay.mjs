@@ -213,7 +213,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   console.log(`  leafIndex: ${r.leafIndex}`);
   console.log(`  root:      ${r.root}`);
   console.log(`  status:    /pay/status/${res.nonce}`);
-  console.log(`now:  ${o.limit !== K_SLOTS ? `SHADE_TREE_LIMIT=${o.limit} ` : ""}shade-tree client --secret <your secret> --bootnode ${o.bootnode || "<onion>"}   (proves membership in the paid set; the gateway trusts its root)`);
+  console.log("now:  load your member secret into SHADE_TREE_SECRET (do not pass it on argv), then:");
+  console.log(`      ${o.limit !== K_SLOTS ? `SHADE_TREE_LIMIT=${o.limit} ` : ""}shade-tree proxy --bootnode ${o.bootnode || "<onion>"}   (proves membership in the paid set; the node trusts its root)`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

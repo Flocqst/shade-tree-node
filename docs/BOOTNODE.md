@@ -247,8 +247,11 @@ scenario 7 replays the burst + slow-loris as attack narratives.
 
 ## Client side
 
+Load the member secret into `SHADE_TREE_SECRET` as shown in the
+[agent guide](AGENT.md), then run:
+
 ```bash
-shade-tree proxy --secret <hex> --bootnode <elder-onion> --dir-signer <directory-signer-pubkey>
+shade-tree proxy --bootnode <elder-onion> --dir-signer <directory-signer-pubkey>
 ```
 
 The client fetches `/directory` over Tor (`bootnode/fetch.mjs`), verifies it against the

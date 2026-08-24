@@ -44,7 +44,7 @@ recovery), `test/Eip3009Token.t.sol` (Foundry). Live receipts: `docs/GO-LIVE-LOG
    | 200  PAYMENT-RESPONSE (x402) / Payment-Receipt (MPP)                                    |
    |      {settleTx, insertTx, leafIndex, root}                                              |
    |<----------------------------------|                                                     |
-   | now: shade-tree client --secret …  (RLN proof against the paid root; the gateway sees a proof, not a leaf)
+   | now: shade-tree proxy …  (secret from env; RLN proof against the paid root; the gateway sees a proof, not a leaf)
 ```
 
 x402 uses `GET /pay/quote` for the challenge; MPP uses `POST /pay` *without* a credential for

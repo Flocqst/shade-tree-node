@@ -22,6 +22,7 @@ function check(name, condition) {
 function visibleWords(html) {
   const text = html
     .replace(/<head[\s\S]*?<\/head>/gi, " ")
+    .replace(/<(pre|code)\b[\s\S]*?<\/\1>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&[^;]+;/g, " ")
     .replace(/[·↗…]/g, " ");
@@ -30,10 +31,27 @@ function visibleWords(html) {
 
 const landing = read("index.html");
 const landingCss = read("site.css");
+const agentPage = read("agent/index.html");
+const operatorPage = read("operator/index.html");
 const research = read("research/index.html");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+const agentGuide = readFileSync(join(ROOT, "docs", "AGENT.md"), "utf8");
+const currentGuides = [
+  "ADAPTERS.md",
+  "BOOTNODE.md",
+  "CLI.md",
+  "CLIENTS.md",
+  "JOIN.md",
+  "OVERVIEW.md",
+  "QUICKSTART.md",
+].map((path) => readFileSync(join(ROOT, "docs", path), "utf8"));
+const currentGuideShellBlocks = currentGuides.flatMap((guide) =>
+  [...guide.matchAll(/```(?:bash)?\n([\s\S]*?)```/g)].map((match) => match[1]),
+);
+const payGuideOutput = readFileSync(join(ROOT, "group", "pay.mjs"), "utf8");
 const protocol = readFileSync(join(ROOT, "docs", "PROTOCOL.md"), "utf8");
 const deploymentPlan = readFileSync(join(ROOT, "docs", "DEPLOYMENT-PLAN.md"), "utf8");
+const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const loader = read("site.js");
 const landingScene = read("grove.js");
 const grovePage = read("grove/index.html");
@@ -54,18 +72,26 @@ check("Grove is one-third-length copy", grovePage.length < 6_000 && visibleWords
 check("landing has one H1 and one decorative canvas", (landing.match(/<h1\b/g) || []).length === 1 && (landing.match(/<canvas[^>]+aria-hidden="true"/g) || []).length === 1);
 check("Grove has one H1, one main section, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<main[\s\S]*?<section\b/g) || []).length === 1 && /role="status" aria-live="polite"/.test(grovePage));
 
-for (const [name, page] of [["landing", landing], ["Grove", grovePage]]) {
+for (const [name, page] of [["landing", landing], ["agent guide", agentPage], ["operator guide", operatorPage], ["Grove", grovePage]]) {
   check(`${name} has no eyebrow, tiny semantic text, or em dash`, !/eyebrow|preview-label|preview-note|<small\b|<sup\b|<sub\b|<figcaption\b|\u2014/.test(page));
 }
 
 check("both sites use the same nocturnal palette", /--understory:\s*#070c09/.test(landingCss) && /--wet-bark:\s*#111913/.test(landingCss) && /--pulse:\s*#d1b66e/.test(landingCss) && !/#f3f0e7|--paper\b/.test(landingCss) && /background:\s*var\(--understory\)/.test(groveCss));
 check("tree imagery remains behind every surface", /body::before/.test(landingCss) && /shade-tree-banner\.webp/.test(landingCss) && /forest-fallback/.test(landing) && /canopy-fallback/.test(grovePage));
 
-check("landing and README state the Proxy and Node story", /Run the proxy beside an agent/.test(landing) && /Run a node to provide cover/.test(landing) && /Run the proxy beside an agent/.test(readme) && /Run a Shade Tree node to provide cover/.test(readme));
-check("landing exposes both direct actions", /href="#proxy">Run the proxy/.test(landing) && /href="#node">Run a node/.test(landing));
+check("landing and README lead with the agent and operator outcomes", /Add Shade Tree to an agent/.test(landing) && /run a node to provide cover/i.test(landing) && /<h2>Add to an agent<\/h2>/.test(landing) && /<h2>Run a node<\/h2>/.test(landing) && /Add Shade Tree to an agent/.test(readme) && /Run a Shade Tree node to provide cover/.test(readme) && !/<h2>Proxy<\/h2>|>Run the proxy<\//.test(landing));
+check("landing exposes both role guides as direct actions", /class="solid-action" href="\/agent\/">Add to an agent/.test(landing) && /class="line-action" href="\/operator\/">Run a node/.test(landing));
 check("landing has a scoped cryptographic explanation", /Groth16 RLN membership proof/.test(landing) && /fresh epoch slot/.test(landing) && /epoch-scoped nullifiers/.test(landing) && /its view of the member's tunnel limit/.test(landing));
-check("copy affordance installs the private npm CLI from source", /data-copy="git clone https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git&#10;cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link"/.test(landing) && /copy install/.test(landing) && !/npm install shade-tree-node/.test(landing));
-check("README gives agents an honest current integration path", /## Agent developers/.test(readme) && /npm package is not published yet/.test(readme) && /shade-tree run -- your-agent/.test(readme) && /no\s+repo-maintained public v4 connection profile/i.test(readme) && !/npm install shade-tree-node/.test(readme));
+check("landing has role-specific copyable installs", (landing.match(/data-copy="npm install --global git\+https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git/g) || []).length === 1 && /data-copy="git clone https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node"/.test(landing) && /aria-label="Copy agent installation command"/.test(landing) && /aria-label="Copy node operator installation commands"/.test(landing) && !/npm install (?:--global )?shade-tree-node/.test(landing));
+check("agent page gives the complete shortest integration path", /npm install --global git\+https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git/.test(agentPage) && /read -s SHADE_TREE_SECRET/.test(agentPage) && /SHADE_TREE_MEMBERS_FILE=\.\/members\.json/.test(agentPage) && /shade-tree proxy/.test(agentPage) && !/--secret/.test(agentPage) && /shade-tree run -- your-agent/.test(agentPage) && /replace <code>your-agent<\/code> with <code>hermes<\/code>/.test(agentPage) && /There is no public v4 profile yet/.test(agentPage));
+const agentCopies = [...agentPage.matchAll(/data-copy="([^"]+)"/g)].map((match) => match[1]);
+const secretPromptCopy = agentCopies.find((command) => command.includes("read -s SHADE_TREE_SECRET")) || "";
+const proxyStartCopy = agentCopies.find((command) => command.includes("shade-tree proxy")) || "";
+check("secret prompt and Proxy launch are separate copy actions", secretPromptCopy === "read -s SHADE_TREE_SECRET &amp;&amp; export SHADE_TREE_SECRET" && !/read -s SHADE_TREE_SECRET/.test(proxyStartCopy) && /SHADE_TREE_MEMBERS_FILE/.test(proxyStartCopy));
+check("operator page is guided from a source checkout and keeps public deployment blocked", /git clone https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link/.test(operatorPage) && !/npm install --global/.test(operatorPage) && /shade-tree join node/.test(operatorPage) && /Local research only/.test(operatorPage) && /issues\/73/.test(operatorPage) && /issues\/6/.test(operatorPage) && /It does not configure Tor/.test(operatorPage) && /manual local quickstart uses the checkout/.test(operatorPage));
+check("README and canonical agent doc give an honest current integration path", /## Agent developers/.test(readme) && /docs\/AGENT\.md/.test(readme) && /Git install, not an npm registry release/.test(readme) && /read -s SHADE_TREE_SECRET/.test(readme) && !/shade-tree proxy[^\n]*--secret/.test(readme) && /shade-tree run -- your-agent/.test(readme) && /no repo-maintained public v4\s+connection profile yet/i.test(readme) && /npm install --global git\+https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git/.test(agentGuide) && /There is no repo-maintained public v4 access profile/.test(agentGuide) && /read -s SHADE_TREE_SECRET/.test(agentGuide) && !/shade-tree proxy[^\n]*--secret/.test(agentGuide) && /SHADE_TREE_MEMBERS_FILE=\.\/members\.json/.test(agentGuide) && /shade-tree run -- hermes/.test(agentGuide));
+check("current guidance keeps bearer secrets out of Proxy argv", [...currentGuides, payGuideOutput].every((guide) => !/shade-tree (?:proxy|client|shim)[^\n]*--secret(?!-file)\b/.test(guide)) && currentGuideShellBlocks.every((block) => !/shade-tree (?:proxy|client|shim)[\s\S]{0,120}--secret(?!-file)\b/.test(block)) && /do not pass it on argv/.test(payGuideOutput));
+check("Git install payload carries every routed CLI runtime", ["bin/", "bootnode/", "client/", "gateway/", "group/", "lib/", "network/", "payments/", "scripts/", "circuits/", "contracts/"].every((path) => packageJson.files.includes(path)));
 check("deployment plan includes the Elder Tree and safety gates", /Elder Tree \(`bootnode` in source\)/.test(deploymentPlan) && /\[#73\]/.test(deploymentPlan) && /untrusted development Groth16 setup/.test(deploymentPlan) && /Add the actual Elder and node hosts to Ansible inventory/.test(deploymentPlan));
 check("existing Discussions provide lightweight support", /shade-tree-node\/discussions/.test(landing));
 check("landing and README embed responsive two-plane path graphics", /<picture>[\s\S]*?media="\(max-width: 560px\)"[\s\S]*?srcset="\/fig\/shade-tree-path-mobile\.svg"[^>]+width="720" height="1710"[\s\S]*?<img src="\/fig\/shade-tree-path\.svg"/.test(landing) && /<picture>[\s\S]*?srcset="docs\/post\/fig\/shade-tree-path-mobile\.svg"[\s\S]*?<img src="docs\/post\/fig\/shade-tree-path\.svg"/.test(readme));
@@ -104,6 +130,8 @@ for (const asset of [
   "grove/network.fallback.json",
   "api/grove.mjs",
   "api/_grove-contract.mjs",
+  "agent/index.html",
+  "operator/index.html",
   "sitemap.xml",
 ]) check(`site asset exists: ${asset}`, existsSync(join(SITE, asset)));
 
@@ -124,6 +152,8 @@ const headingIds = [...research.matchAll(/<h[1-6][^>]+id="([^"]+)"/g)].map((matc
 check("legacy article bookmarks are forwarded", headingIds.length >= 15 && headingIds.every((id) => loader.includes(`"${id}"`)));
 check("malformed and same-page article bookmarks remain safe", loader.includes('"title-block-header"') && loader.includes('"TOC"') && /try\s*\{[\s\S]*decodeURIComponent/.test(loader) && /addEventListener\("hashchange", forwardArticleBookmark\)/.test(loader));
 check("clipboard fallback copies the command without its prompt", /helper\.value = command/.test(loader) && /execCommand\("copy"\)/.test(loader));
+check("copy feedback is announced", /setAttribute\("aria-live", "polite"\)/.test(loader) && /Command copied to clipboard/.test(loader));
+check("copyable commands remain inspectable", /\.command code\s*\{[\s\S]*?overflow-wrap:\s*anywhere/.test(landingCss) && !/\.command code\s*\{[\s\S]*?text-overflow:\s*ellipsis/.test(landingCss));
 
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));
 check("CSP limits reads and closes objects and workers", csp.includes("connect-src 'self'") && csp.includes("object-src 'none'") && csp.includes("worker-src 'none'"));
@@ -150,6 +180,6 @@ for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js
 }
 
 check("robots advertises the sitemap", /Sitemap: https:\/\/shade-tree-node\.vercel\.app\/sitemap\.xml/.test(read("robots.txt")));
-check("sitemap contains all public pages", /<loc>https:\/\/shade-tree-node\.vercel\.app\/<\/loc>/.test(read("sitemap.xml")) && /<loc>https:\/\/shade-tree-node\.vercel\.app\/research\/<\/loc>/.test(read("sitemap.xml")) && /<loc>https:\/\/shade-tree-node\.vercel\.app\/grove\/<\/loc>/.test(read("sitemap.xml")));
+check("sitemap contains all public pages", ["/", "/research/", "/grove/", "/agent/", "/operator/"].every((path) => read("sitemap.xml").includes(`<loc>https://shade-tree-node.vercel.app${path}</loc>`)));
 
 console.log(`PASS: site selftest (${checks.length} checks)`);

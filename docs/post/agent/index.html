@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install Shade Tree and route one local agent through the Grove.">
+  <meta name="theme-color" content="#070c09">
+  <meta property="og:title" content="Agent guide · Shade Tree">
+  <meta property="og:description" content="Add Shade Tree to one local agent.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shade-tree-node.vercel.app/agent/">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://shade-tree-node.vercel.app/agent/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script type="module" src="/site.js"></script>
+  <title>Agent guide · Shade Tree</title>
+</head>
+<body class="guide-page">
+  <a class="skip-link" href="#guide">Skip to the guide</a>
+
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a class="wordmark" href="/" aria-label="Shade Tree home">
+      <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Shade Tree</span>
+    </a>
+    <div class="nav-links">
+      <a href="/operator/">Operators</a>
+      <a href="/grove/">Grove</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
+    </div>
+  </nav>
+
+  <main id="guide" class="guide-main">
+    <header class="guide-intro">
+      <h1>Add Shade Tree to an agent.</h1>
+      <p>Run one local Proxy, then give its route to one agent process.</p>
+    </header>
+
+    <div class="guide-steps">
+      <section class="guide-step" aria-labelledby="agent-install">
+        <h2 id="agent-install">1. Install</h2>
+        <p>Requires Node.js 20 or newer, npm, and a local Tor SOCKS port.</p>
+        <div class="command" aria-label="Install the Shade Tree agent CLI">
+          <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
+          <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy agent installation command">copy</button>
+        </div>
+        <p>This installs the current research preview from GitHub. It is not an npm registry release.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="agent-profile">
+        <h2 id="agent-profile">2. Get an access profile</h2>
+        <p>A Grove operator supplies the current member secret or enrollment path, the Elder Tree onion, its raw 64-hex Canopy signer, your tier, and the member-set input for your admission path. There is no public v4 profile yet.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="agent-start">
+        <h2 id="agent-start">3. Start the local route</h2>
+        <p>First load the bearer secret into this shell. Paste it after running the command, then press Enter:</p>
+        <div class="command" aria-label="Load the Shade Tree member secret">
+          <code>read -s SHADE_TREE_SECRET &amp;&amp; export SHADE_TREE_SECRET</code>
+          <button class="copy-command" type="button" data-copy="read -s SHADE_TREE_SECRET &amp;&amp; export SHADE_TREE_SECRET" aria-label="Copy secret prompt command">copy</button>
+        </div>
+        <p>The secret is not echoed or placed in the Proxy's process arguments. For invited access, save the operator's member list as <code>members.json</code>, then start the Proxy with system Tor on port 9050:</p>
+        <div class="command" aria-label="Start the local Shade Tree Proxy">
+          <code>SHADE_TREE_MEMBERS_FILE=./members.json \<br>shade-tree proxy \<br>&nbsp;&nbsp;--bootnode &lt;elder.onion&gt; \<br>&nbsp;&nbsp;--dir-signer &lt;64-hex-canopy-signer&gt; \<br>&nbsp;&nbsp;--tor-port 9050</code>
+          <button class="copy-command" type="button" data-copy="SHADE_TREE_MEMBERS_FILE=./members.json \&#10;shade-tree proxy \&#10;  --bootnode &lt;elder.onion&gt; \&#10;  --dir-signer &lt;64-hex-canopy-signer&gt; \&#10;  --tor-port 9050" aria-label="Copy Proxy start command">copy</button>
+        </div>
+        <p>Tor Browser usually listens on 9150. Staked and paid profiles use the contract and RPC values supplied by the same operator.</p>
+      </section>
+
+      <section class="guide-step" aria-labelledby="agent-run">
+        <h2 id="agent-run">4. Launch the agent</h2>
+        <div class="command" aria-label="Run one agent with Shade Tree routing">
+          <code>shade-tree run -- your-agent</code>
+          <button class="copy-command" type="button" data-copy="shade-tree run -- your-agent" aria-label="Copy agent launch command">copy</button>
+        </div>
+        <p>The wrapper gives proxy variables only to its child. For Hermes, replace <code>your-agent</code> with <code>hermes</code>. Software that ignores proxy variables can use <code>http://127.0.0.1:8888</code> directly.</p>
+      </section>
+
+      <section class="guide-step guide-note" aria-labelledby="agent-boundary">
+        <h2 id="agent-boundary">Current boundary</h2>
+        <p>The Proxy accepts HTTP CONNECT and the node permits target port 443. TLS stays between the agent and destination. The serving node still sees the target hostname, timing, lifetime, and traffic volume.</p>
+        <div class="guide-links">
+          <a class="solid-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md">Full agent guide</a>
+          <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/ADAPTERS.md">Adapters</a>
+          <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/SDK.md">JavaScript SDK</a>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <span>Research preview</span>
+    <nav aria-label="Project links">
+      <a href="/">Home</a>
+      <a href="/operator/">Operator guide</a>
+      <a href="https://github.com/dmarzzz/shade-tree-node/discussions">Discuss</a>
+    </nav>
+  </footer>
+</body>
+</html>

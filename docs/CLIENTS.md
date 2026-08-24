@@ -84,10 +84,10 @@ the `PaidAccessSet` (**paid**). Each gateway advertises which of those it admits
 - Events: a live Elder refresh emits the local `canopy` phase with `query`, then `verified`, `cache`, or `error`. It contains only the signed issue time and node count when available. No event is sent to another service. Selection then emits `select` as before.
 
 ```bash
-shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> \
+shade-tree proxy --bootnode <v4-elder.onion> \
   --dir-signer <v4-directory-signer-hex> --max-anon
 
-shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> \
+shade-tree proxy --bootnode <v4-elder.onion> \
   --dir-signer <v4-directory-signer-hex> --leaf-source paid --limit 32 \
   --paid-access-contract <v4-paid-set-address>
 ```
@@ -96,10 +96,11 @@ shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> \
 
 Use this when the client is a **stock tool** you can't change (browser, curl, any
 `http_proxy`-aware app). The shim is now a thin HTTP-CONNECT front-end over the same
-`ShadeTreeClient`:
+`ShadeTreeClient`. Load `SHADE_TREE_SECRET` with the hidden prompt in the
+[agent guide](AGENT.md), then run:
 
 ```bash
-SHADE_TREE_SECRET=0x… SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
+SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
   --bootnode <v4-elder.onion> --dir-signer <v4-directory-signer-hex>
 # then: curl -x http://127.0.0.1:8888 https://api.ipify.org
 ```

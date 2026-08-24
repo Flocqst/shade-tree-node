@@ -24,7 +24,7 @@ their onions, contracts, payment endpoint, or `sepolia` network preset with the 
   otherwise `node bin/shade-tree.mjs` everywhere)
 - tor installed locally (`brew install tor`, or `apt install tor`); `bash scripts/start-tor-client.sh`
   starts one on SOCKS 9260, or use a system tor with `SHADE_TREE_TOR_PORT=9050`
-- your secret (one `export SHADE_TREE_SECRET=...` line, sent to you privately)
+- your secret, sent to you privately and loaded through a hidden shell read
 - either one v4 node onion, or the operator's v4 Elder Tree onion plus pinned Canopy signer
 - for paid or staked admission, the registrar, chain, and contract values supplied by that operator
 
@@ -33,7 +33,18 @@ their onions, contracts, payment endpoint, or `sepolia` network preset with the 
 ```bash
 npm install
 bash scripts/start-tor-client.sh                                  # laptop tor, SOCKS 9260
-SHADE_TREE_SECRET=<your-secret> SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
+```
+
+Load the secret without putting it in shell history or process arguments:
+
+```bash
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+```
+
+Paste the secret at the hidden prompt, then run:
+
+```bash
+SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex>
 curl -x http://127.0.0.1:8888 https://api.ipify.org               # the selected node's IP
 ```
@@ -73,12 +84,15 @@ paid-set address from the operator. With an EIP-3009 rail you hold the settle as
 gas: you sign and the operator submits. Do not substitute values from the historical Sepolia
 record.
 
+Before each Proxy command below, load the matching member secret into
+`SHADE_TREE_SECRET` with the hidden read shown above.
+
 ```bash
 shade-tree enroll                                     # your secret + your commitment, locally; keep the secret
 shade-tree pay --bootnode <v4-elder.onion> --limit 8 \
   --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
-shade-tree proxy --secret <your-secret> --limit 8 --leaf-source paid \
+shade-tree proxy --limit 8 --leaf-source paid \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --paid-access-contract <v4-paid-set-address>
 ```
@@ -107,7 +121,7 @@ does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
 shade-tree enroll --limit 8                                            # or --limit 32
 shade-tree register-member <commitment> --limit 8 \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
-shade-tree proxy --secret <your-secret> --limit 8 --leaf-source staked \
+shade-tree proxy --limit 8 --leaf-source staked \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
 ```

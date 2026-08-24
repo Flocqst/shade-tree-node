@@ -14,7 +14,8 @@ For running a Shade Tree node or Elder Tree. Every command here exists in
 
 Two ways to invoke the CLI:
 
-- Workstation with the repo: `npm link` once, then `shade-tree <cmd>`.
+- Workstation with the repo: run `npm ci && npm link` once, then `shade-tree <cmd>`. Use this
+  path for the full local Grove, tests, code changes, and any future deployment work.
 - On a bootstrapped droplet (repo at `/opt/shade-tree`, not linked): run it explicitly,
   e.g. `sudo -u shade-tree node /opt/shade-tree/bin/shade-tree.mjs <cmd>`.
 
@@ -123,7 +124,7 @@ the operator is already staked.
 ### c. Run the gateway and heartbeat
 
 ```bash
-shade-tree gateway                                    # the egress; verifies proofs, tunnels :443
+shade-tree node                                       # the egress; verifies proofs, tunnels :443
 
 shade-tree heartbeat \
   --bootnode <bootnode-onion> \

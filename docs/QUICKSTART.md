@@ -24,6 +24,8 @@ shade-tree doctor        # checks node, tor, deps, keys
 ```
 
 Each `--flag` maps to an `SHADE_TREE_*` env var (see [CONFIG.md](CONFIG.md)); either works.
+Agent developers who do not need the repository can use the shorter
+[agent install](AGENT.md#1-install-the-agent-cli).
 
 ## Path A: connect to an operator's v4 Grove
 
@@ -116,7 +118,13 @@ shade-tree enroll                 # prints SHADE_TREE_SECRET (a member of the se
 Then run the Proxy, pointed at the Elder Tree and pinning its signer:
 
 ```bash
-shade-tree proxy --secret <member-hex> \
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+```
+
+Paste the member secret at the hidden prompt, then run:
+
+```bash
+shade-tree proxy \
   --bootnode <elder-onion> \
   --dir-signer <elder-signer-pubkey>
 ```

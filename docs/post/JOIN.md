@@ -43,8 +43,13 @@ over Tor, verifies it against the pinned signer, mints a fresh RLN proof per CON
 and selects a node for that tunnel.
 
 ```bash
-export SHADE_TREE_SECRET=<your-secret-hex>
-shade-tree proxy --secret $SHADE_TREE_SECRET \
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+```
+
+Paste the member secret at the hidden prompt, then run:
+
+```bash
+shade-tree proxy \
   --bootnode <elder-onion> \
   --dir-signer <canopy-signer-pubkey>
 ```

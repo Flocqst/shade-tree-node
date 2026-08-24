@@ -10,6 +10,18 @@ Public docs call the local protocol client the **Proxy**, the egress gateway a *
 node**, and the discovery bootnode the **Elder Tree**. Source paths, environment variables,
 and flags retain `client`, `gateway`, and `bootnode` where compatibility matters.
 
+## Install for an agent
+
+Install the current CLI directly from GitHub:
+
+```bash
+npm install --global git+https://github.com/dmarzzz/shade-tree-node.git
+```
+
+This is not an npm registry release. You still need Tor and a current access
+profile from a v4 Grove operator. Start with the short [agent guide](AGENT.md).
+Use a repository checkout for SDK development or the bundled Tor helper.
+
 Stand up a Grove first ([`QUICKSTART.md`](QUICKSTART.md)): an Elder Tree, at least one Shade
 Tree node, and a local Tor SOCKS port. Then pick a style.
 
@@ -43,8 +55,13 @@ Static-file discovery (`SHADE_TREE_DIRECTORY` + `SHADE_TREE_DIR_SIGNER`, no Elde
 Run the Proxy. It binds `127.0.0.1:8888` (override with `SHADE_TREE_SHIM_PORT`):
 
 ```bash
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+```
+
+Paste the member secret at the hidden prompt, then run:
+
+```bash
 shade-tree proxy \
-  --secret <member-hex> \
   --bootnode <elder-onion> \
   --dir-signer <elder-signer-pubkey>
 ```

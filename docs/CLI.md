@@ -36,8 +36,8 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 | Command | Script | What it does | Example |
 |---|---|---|---|
 | `run` | built into the CLI | Run one proxy-aware child with process-scoped Shade Tree routing. Refuses to spawn if the local proxy is unavailable. | `shade-tree run -- hermes` |
-| `join` | `group/join.mjs` | Guided front door. `shade-tree join [member] [label]` self-enrolls a member (secret on stderr, commitment + next commands on stdout); `shade-tree join gateway [hsDir]` mints an onion identity and prints the operator's next commands. Composes `enroll` / `keygen`; never reimplements crypto. | `shade-tree join` / `shade-tree join gateway tor/hs` |
-| `keygen` | `bootnode/keygen.mjs` | Mint an onion identity: a Tor v3 hidden-service key plus the announce-signing seed. Writes `hs_ed25519_secret_key`, `hs_ed25519_public_key`, `hostname`, and `identity.local.json` into `<hsDir>`. | `shade-tree keygen tor/hs --label gw1` |
+| `join` | `group/join.mjs` | Guided front door. `shade-tree join [member] [label]` self-enrolls a member (secret on stderr, commitment + next commands on stdout); `shade-tree join node [hsDir]` mints an onion identity and prints the operator's next commands. `gateway` remains an input alias. Composes `enroll` / `keygen`; never reimplements crypto. | `shade-tree join` / `shade-tree join node tor/hs` |
+| `keygen` | `bootnode/keygen.mjs` | Mint an onion identity: a Tor v3 hidden-service key plus the announce-signing seed. Writes `hs_ed25519_secret_key`, `hs_ed25519_public_key`, `hostname`, and `identity.local.json` into `<hsDir>`. Refuses to overwrite any identity file; `--force` is only for intentional rotation. | `shade-tree keygen tor/hs --label node-1` |
 | `elder` | `bootnode/server.mjs` | Run the Elder Tree as an onion service. It verifies node announcements and serves the signed Canopy. Long-running. | `shade-tree elder --port 8877 --admission stake --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `bootnode` | `bootnode/server.mjs` | Legacy alias for `elder`. | `shade-tree bootnode --port 8877` |
 | `heartbeat` | `bootnode/heartbeat.mjs` | Keep this node announced to the Elder. Long-running. | `shade-tree heartbeat --bootnode <onion> --operator-key 0xKEY` |
@@ -53,21 +53,24 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 | `sign-directory` | `group/sign-directory.mjs` | Sign a static fleet directory for offline discovery; with no args mints example keys + file. | `shade-tree sign-directory unsigned.json` |
 | `node` | `gateway/gateway.mjs` | Run an access-gated egress node (Tor onion, `:443` metadata-only tunnel). Long-running. `--admit invited[,staked][,paid]` selects accepted membership paths. The default is `invited`. | `shade-tree node --admit invited,staked,paid --group-contract 0xSet --paid-access-contract 0xPaid --rpc-url https://rpc.example` |
 | `gateway` | `gateway/gateway.mjs` | Legacy alias for `node`. | `shade-tree gateway --admit invited` |
-| `proxy` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy. Long-running. It finds the set holding your leaf, creates proofs, and selects nodes whose signed policy admits that leaf source. | `shade-tree proxy --secret <hex> --bootnode <v4-elder.onion> --dir-signer <v4-signer-hex>` |
-| `client` | `client/shim.mjs` | Legacy alias for `proxy`. | `shade-tree client --secret <hex> --onion <onion>` |
-| `shim` | `client/shim.mjs` | Legacy alias for `proxy`. | `shade-tree shim --secret <hex> --onion <onion>` |
+| `proxy` | `client/shim.mjs` | Run the local HTTP-CONNECT proxy. Long-running. It finds the set holding your leaf, creates proofs, and selects nodes whose signed policy admits that leaf source. Load the bearer secret through `SHADE_TREE_SECRET`, not argv. | `shade-tree proxy --bootnode <v4-elder.onion> --dir-signer <v4-signer-hex>` |
+| `client` | `client/shim.mjs` | Legacy alias for `proxy`. | `shade-tree client --onion <onion>` |
+| `shim` | `client/shim.mjs` | Legacy alias for `proxy`. | `shade-tree shim --onion <onion>` |
 | `doctor` | `scripts/doctor.mjs` | Check the local setup (node, tor, keys, deps). | `shade-tree doctor` |
 | `record-deploy` | `scripts/record-deploy.mjs` | Record a broadcast contract deploy (address + tx + block) into `network/<name>/contracts.json` from Foundry's `run-latest.json` or explicit flags; never touches a chain. | `shade-tree record-deploy --network <current-v4-network> --from-broadcast broadcast/DeployRegistry.s.sol/<chain-id>/run-latest.json` |
 | `backup` | `scripts/backup.mjs backup` | Encrypt and back up secret key material (onion seeds + signer key) from a directory into one file. Passphrase only via `SHADE_TREE_BACKUP_PASSPHRASE` (never argv). See `docs/BACKUP.md`. | `SHADE_TREE_BACKUP_PASSPHRASE=… shade-tree backup deploy-state keys.shade-tree-backup` |
 | `restore` | `scripts/backup.mjs restore` | Restore an encrypted key backup into a directory (`--force` to overwrite). Passphrase via `SHADE_TREE_BACKUP_PASSPHRASE`. | `SHADE_TREE_BACKUP_PASSPHRASE=… shade-tree restore keys.shade-tree-backup deploy-state --force` |
 
-`keygen` takes a positional `<hsDir>` and an own `--label`; `join` takes an optional role (`member` | `gateway`) and a label / `<hsDir>`; `register-member` takes a positional `<commitment>` (`--limit` is env-mapped to `SHADE_TREE_LIMIT`, which it reads); `sign-directory` takes an optional positional unsigned-list path; `backup` / `restore` take `<src> <dest>` positionals. All other positionals are forwarded to the child module.
+`keygen` takes a positional `<hsDir>` plus `--label` and an intentional-rotation `--force`; `join` takes an optional role (`member` | `node`, with `gateway` as an alias) and a label / `<hsDir>`; `register-member` takes a positional `<commitment>` (`--limit` is env-mapped to `SHADE_TREE_LIMIT`, which it reads); `sign-directory` takes an optional positional unsigned-list path; `backup` / `restore` take `<src> <dest>` positionals. All other positionals are forwarded to the child module.
 
-Module-parsed flags (passed through, not env-mapped): `identity --out --secret-file`; `leaves --contract --out --from-block`; `exit-gateway` / `withdraw-gateway` / `gateway-status` `--dry-run --recipient --key-file --account --keystore` (`--operator`, `--rpc-url`, `--gateway-registry`, `--register-key` are env-mapped as usual); `restore --force`; `keygen --label`; `enroll --commitment-only`. `--limit` is env-mapped (`SHADE_TREE_LIMIT`) for every command since T-FEAT-7 (`identity`, `register-member`, `client` all read it).
+Module-parsed flags (passed through, not env-mapped): `identity --out --secret-file`; `leaves --contract --out --from-block`; `exit-gateway` / `withdraw-gateway` / `gateway-status` `--dry-run --recipient --key-file --account --keystore` (`--operator`, `--rpc-url`, `--gateway-registry`, `--register-key` are env-mapped as usual); `restore --force`; `keygen --label --force`; `join node --force`; `enroll --commitment-only`. `--limit` is env-mapped (`SHADE_TREE_LIMIT`) for every command since T-FEAT-7 (`identity`, `register-member`, `client` all read it).
 
 ## Flags
 
 Every `--flag` sets exactly one `SHADE_TREE_*` env var (from `FLAG_ENV` in `bin/shade-tree.mjs`). Flags override the environment.
+`--secret` remains a compatibility flag but exposes the bearer value in process
+arguments. Prefer a hidden shell read into `SHADE_TREE_SECRET` as shown in the
+[agent guide](AGENT.md).
 
 | Flag | Env var | Group |
 |---|---|---|

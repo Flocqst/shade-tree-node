@@ -12,11 +12,17 @@
     "./client": "./client/shade-tree-client.mjs",
     "./package.json": "./package.json"
   },
-  "//files": "Conservative publish allowlist. Publishing is GATED (private:true stays until Gate 1+2 clear); this documents the intended npm payload only. The Rust client ships separately as a crate (T-RUST-4).",
+  "//files": "Git installs use this runtime allowlist today. Publishing stays gated by private:true until Gate 1+2 clear. The Rust client ships separately as a crate (T-RUST-4).",
   "files": [
     "bin/",
+    "bootnode/",
     "client/",
+    "gateway/",
+    "group/",
     "lib/",
+    "network/",
+    "payments/",
+    "scripts/",
     "circuits/",
     "contracts/",
     "README.md",

@@ -37,7 +37,14 @@ function forwardArticleBookmark() {
 forwardArticleBookmark();
 window.addEventListener("hashchange", forwardArticleBookmark);
 
-for (const button of document.querySelectorAll("[data-copy]")) {
+const copyButtons = [...document.querySelectorAll("[data-copy]")];
+const copyStatus = document.createElement("span");
+copyStatus.className = "sr-only";
+copyStatus.setAttribute("role", "status");
+copyStatus.setAttribute("aria-live", "polite");
+if (copyButtons.length) document.body.append(copyStatus);
+
+for (const button of copyButtons) {
   button.addEventListener("click", async () => {
     const command = button.dataset.copy;
     if (!command) return;
@@ -47,6 +54,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     try {
       await navigator.clipboard.writeText(command);
       button.textContent = "copied";
+      copyStatus.textContent = "Command copied to clipboard.";
     } catch {
       const helper = document.createElement("textarea");
       helper.value = command;
@@ -59,8 +67,10 @@ for (const button of document.querySelectorAll("[data-copy]")) {
       if (document.execCommand("copy")) {
         helper.remove();
         button.textContent = "copied";
+        copyStatus.textContent = "Command copied to clipboard.";
       } else {
         button.textContent = "press copy";
+        copyStatus.textContent = "Automatic copy failed. Select the command and copy it.";
         resetDelay = 4000;
         window.setTimeout(() => helper.remove(), resetDelay);
       }
@@ -68,6 +78,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 
     window.setTimeout(() => {
       button.textContent = idleLabel;
+      copyStatus.textContent = "";
     }, resetDelay);
   });
 }

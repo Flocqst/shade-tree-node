@@ -103,7 +103,7 @@ shade-tree bootnode --admission open        # discovery bootnode (its own onion 
 shade-tree gateway                          # an access-gated node (SHADE_TREE_ADMIT=invited)
 shade-tree heartbeat --bootnode <onion>     # keep the gateway announced
 shade-tree enroll                           # a member identity (prints SHADE_TREE_SECRET)
-shade-tree client --secret <hex> --bootnode <onion> --dir-signer <signer-pubkey>
+shade-tree proxy --bootnode <onion> --dir-signer <signer-pubkey> # reads SHADE_TREE_SECRET
 ```
 
 Watch the gate drop non-members with `node scripts/probe.mjs {noproof|garbage|wronggroup}`.

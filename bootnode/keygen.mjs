@@ -10,19 +10,20 @@
 // the seed to sign with — one identity, published by Tor and signable by us.
 //
 // Usage:
-//   node bootnode/keygen.mjs <hsDir> [--label name]
+//   node bootnode/keygen.mjs <hsDir> [--label name] [--force]
 //     writes into <hsDir>:  hs_ed25519_secret_key  hs_ed25519_public_key  hostname
 //     writes alongside:     identity.local.json  { onion, pub, seed }   (gitignored; the
 //                           announce-signing secret — never ship it)
 //     Point Tor's HiddenServiceDir at <hsDir> and it publishes exactly this onion.
 
 import { createHash, randomBytes, createPublicKey } from "node:crypto";
-import { writeFile, mkdir, chmod } from "node:fs/promises";
+import { access, writeFile, mkdir, chmod } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { ed25519PrivateKey, pubkeyToOnion } from "../lib/directory.mjs";
 
 const TAG_SECRET = "== ed25519v1-secret: type0 =="; // 29 bytes, NUL-padded to 32 in the file
 const TAG_PUBLIC = "== ed25519v1-public: type0 ==";
+const IDENTITY_FILES = ["hs_ed25519_secret_key", "hs_ed25519_public_key", "hostname", "identity.local.json"];
 
 function tag32(s) {
   const b = Buffer.alloc(32);
@@ -47,8 +48,19 @@ function expandedSecret(seed) {
   return Buffer.concat([a, h.subarray(32, 64)]);
 }
 
-export async function generateOnionIdentity(hsDir, { label = "" } = {}) {
+export async function generateOnionIdentity(hsDir, { label = "", force = false } = {}) {
   const dir = resolve(hsDir);
+  const existing = [];
+  for (const file of IDENTITY_FILES) {
+    try { await access(join(dir, file)); existing.push(file); } catch {}
+  }
+  if (existing.length && !force) {
+    throw new Error(
+      `refusing to overwrite onion identity in ${dir} (${existing.join(", ")}); ` +
+      "reuse it, choose another directory, or pass --force only for an intentional rotation",
+    );
+  }
+
   const seed = randomBytes(32);
   const seedHex = seed.toString("hex");
   const pub = pubFromSeed(seedHex);
@@ -59,7 +71,7 @@ export async function generateOnionIdentity(hsDir, { label = "" } = {}) {
 
   await mkdir(dir, { recursive: true });
   await chmod(dir, 0o700).catch(() => {}); // Tor refuses a group/other-accessible HS dir
-  await writeFile(join(dir, "hs_ed25519_secret_key"), secretFile, { mode: 0o600 });
+  await writeFile(join(dir, "hs_ed25519_secret_key"), secretFile, { mode: 0o600, flag: force ? "w" : "wx" });
   await writeFile(join(dir, "hs_ed25519_public_key"), publicFile, { mode: 0o600 });
   await writeFile(join(dir, "hostname"), onion + "\n");
   await writeFile(
@@ -76,13 +88,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const hsDir = args.find((a) => !a.startsWith("--"));
   const li = args.indexOf("--label");
   const label = li !== -1 ? args[li + 1] : "";
+  const force = args.includes("--force");
   if (!hsDir) {
-    console.error("usage: node bootnode/keygen.mjs <hsDir> [--label name]");
+    console.error("usage: node bootnode/keygen.mjs <hsDir> [--label name] [--force]");
     process.exit(1);
   }
-  const id = await generateOnionIdentity(hsDir, { label });
-  console.log(`minted onion identity${label ? ` (${label})` : ""}:`);
-  console.log(`  onion:    ${id.onion}`);
-  console.log(`  hsDir:    ${id.dir}   (point Tor's HiddenServiceDir here)`);
-  console.log(`  secret:   ${join(id.dir, "identity.local.json")}   (announce-signing seed; keep secret)`);
+  try {
+    const id = await generateOnionIdentity(hsDir, { label, force });
+    console.log(`minted onion identity${label ? ` (${label})` : ""}:`);
+    console.log(`  onion:    ${id.onion}`);
+    console.log(`  hsDir:    ${id.dir}   (point Tor's HiddenServiceDir here)`);
+    console.log(`  secret:   ${join(id.dir, "identity.local.json")}   (announce-signing seed; keep secret)`);
+  } catch (error) {
+    console.error(`keygen: ${error.message}`);
+    process.exit(1);
+  }
 }
