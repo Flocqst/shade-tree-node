@@ -224,7 +224,7 @@ function createDataStream(scene, mobile) {
 }
 
 export function mountGrove({ stage, canvas, reducedMotion }) {
-  const mobile = window.matchMedia("(max-width: 640px)").matches;
+  const mobile = window.matchMedia("(max-width: 860px)").matches;
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: false,
