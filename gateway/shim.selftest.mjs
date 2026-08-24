@@ -101,7 +101,7 @@ register(pathToFileURL(join(work, "loader.mjs")).href, {
 // ---- import Track 3 modules against the mocked lib --------------------------
 
 const { makeSpentSet } = await import("../gateway/gateway.mjs");
-const { makeSlotPool, buildEnvelope } = await import("../client/shim.mjs");
+const { makeSlotPool, buildEnvelope, proxyFailureLabel } = await import("../client/shim.mjs");
 
 let failures = 0;
 function ok(name) { console.log("  PASS  " + name); }
@@ -164,6 +164,14 @@ await test("distinct signal on a DIFFERENT nullifier does not slash (independent
 // ---- shim: slot pool rotation + request-bound share -------------------------
 
 console.log("shim slot pool:");
+
+await test("proxy failure metrics use bounded labels", async () => {
+  const localClosed = new Error("a peer-controlled message that must not become a label");
+  localClosed.code = "SHADE_TREE_LOCAL_CLIENT_CLOSED";
+  assert.equal(proxyFailureLabel(localClosed), "client-closed");
+  assert.equal(proxyFailureLabel(new Error("SOCKS connection refused at abc.onion")), "tor-dial-failed");
+  assert.equal(proxyFailureLabel(new Error("unclassified attacker text")), "internal");
+});
 
 const noGroup = async () => ({ group: null });
 function mockProve(calls) {

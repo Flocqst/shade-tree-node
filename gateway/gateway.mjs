@@ -1,6 +1,7 @@
 // The gateway: a Shade Tree proxy, published as a Tor onion service.
 //
-// It listens on 127.0.0.1:8443 (Tor maps <addr>.onion:80 -> here). For each
+// It listens on 127.0.0.1:SHADE_TREE_GATEWAY_PORT (8443 by default; Tor maps
+// <addr>.onion:80 -> here). For each
 // incoming connection it:
 //   1. reads a single newline-terminated v4 JSON envelope
 //      { v:4, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
@@ -41,13 +42,15 @@ import { makeRootProvider, configuredContracts } from "../lib/root-provider.mjs"
 import { ADMIT_ORDER, DEFAULT_ADMIT, parseAdmit, admitsFromRoots, describeAdmits } from "../lib/admission.mjs";
 import { buildReceipt } from "../lib/receipt.mjs";
 import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
-import { registry as metrics, makeMetricsServer } from "../lib/metrics.mjs";
-import { log } from "../lib/log.mjs";
+import { registry as metrics, installRuntimeMetrics, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
+import { createLogger } from "../lib/log.mjs";
+import { printOperatorBanner } from "../lib/operator-ui.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LISTEN_HOST = "127.0.0.1";
-const LISTEN_PORT = 8443;
+const LISTEN_PORT = Number(process.env.SHADE_TREE_GATEWAY_PORT || 8443);
 const MAX_ENVELOPE = 64 * 1024;
+const log = createLogger("node");
 
 // ---- metrics (T-MON-2) ------------------------------------------------------
 // Registered against the process-wide registry at import time: this only fills in-memory
@@ -59,18 +62,48 @@ const M = {
   tunnels: metrics.counter("shade_tree_gateway_tunnels_total", "Tunnels by result=pass|drop (+ reason on drop)."),
   slashes: metrics.counter("shade_tree_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
   verify: metrics.histogram("shade_tree_gateway_verify_seconds", "verifyEnvelope() latency in seconds (cheap-first checks + Groth16)."),
+  upstreamConnect: metrics.histogram("shade_tree_gateway_upstream_connect_seconds", "Node-to-destination TCP connect latency in seconds. No destination labels are recorded."),
   // Established tunnels closed by the gateway itself (not by either peer), by reason. Kept
   // SEPARATE from tunnels_total: a tunnel that idles out already counted as result=pass, so
   // counting it again as a drop would double-count the tunnel (T-HARD-4).
   tunnelCloses: metrics.counter("shade_tree_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
   // T-FEAT-7: trusted roots per source (source=static|staked|paid, contract=address|members.json)
   // and the paid set's live leaf count (its anonymity set; the floor is SHADE_TREE_PAID_MIN_LEAVES).
-  rootsBySource: metrics.gauge("shade_tree_gateway_trusted_roots", "Trusted admission roots right now, by source (static members.json / staked contract / paid contract)."),
+  rootsBySource: metrics.gauge("shade_tree_gateway_trusted_roots", "Trusted admission roots right now, by bounded source=invited|staked|paid."),
   // 1 while a root SOURCE could not be read on its last refresh (the gateway keeps serving with the
   // sources it has: last-known-good roots + members.json), 0 once it reads again. Alert on it.
-  rootDegraded: metrics.gauge("shade_tree_gateway_root_source_degraded", "1 = this root source failed its last refresh (serving without it / on its last-known-good); 0 = healthy."),
-  paidLeaves: metrics.gauge("shade_tree_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet (anonymity set of paid members); compare with the SHADE_TREE_PAID_MIN_LEAVES floor."),
+  rootDegraded: metrics.gauge("shade_tree_gateway_root_source_degraded", "1 = this bounded root source failed its last refresh; 0 = healthy."),
+  paidLeaves: metrics.gauge("shade_tree_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet; no contract label is exposed."),
 };
+
+const DROP_LABELS = new Set([
+  "too-many-connections", "envelope-timeout", "envelope-too-large", "bad-envelope",
+  "bad-version", "unsupported-version", "wrong-group-root", "root-not-recent",
+  "invalid-proof", "bad-share", "bad-signal", "bad-external-nullifier", "bad-nullifier",
+  "artifact-unknown", "artifact-retired", "bad-artifact", "bad-target", "bad-target-policy",
+  "replayed-envelope", "rate-slashed", "over-spend-slashed", "nullifier-conn-limit",
+  "upstream-timeout", "upstream-refused", "upstream-unreachable", "upstream-reset",
+  "upstream-error", "internal-error",
+]);
+
+export function gatewayDropLabel(reason) {
+  const raw = String(reason || "internal-error").toLowerCase();
+  const base = raw.split(":", 1)[0];
+  if (DROP_LABELS.has(base)) return base;
+  if (base.includes("artifact")) return "bad-artifact";
+  if (base.includes("version")) return "bad-version";
+  if (base.includes("root")) return "root-not-recent";
+  if (base.includes("proof")) return "invalid-proof";
+  return "internal-error";
+}
+
+function upstreamDropLabel(code) {
+  if (["ECONNREFUSED"].includes(code)) return "upstream-refused";
+  if (["ENETUNREACH", "EHOSTUNREACH", "ENETDOWN"].includes(code)) return "upstream-unreachable";
+  if (["ECONNRESET", "EPIPE"].includes(code)) return "upstream-reset";
+  if (["ETIMEDOUT"].includes(code)) return "upstream-timeout";
+  return "upstream-error";
+}
 
 // ---- endpoint hardening knobs (T-HARD-4) -----------------------------------
 // Every lever an unauthenticated peer could pull BEFORE it has proven anything (or after it has
@@ -290,11 +323,13 @@ export async function initRoots({
     if (want.static && staticRoot) union.add(String(staticRoot));
     for (const r of chainRoots) union.add(String(r));
     recentRoots = union;
-    if (want.static) M.rootsBySource.set(staticRoot ? 1 : 0, { source: "static", contract: "members.json" });
-    for (const p of perSource) {
-      M.rootsBySource.set(p.roots.length, { source: kindOf(p.contract), contract: p.contract || "?" });
+    if (want.static) M.rootsBySource.set(staticRoot ? 1 : 0, { source: "invited" });
+    for (const source of ["staked", "paid"]) {
+      const rows = perSource.filter((p) => kindOf(p.contract) === source);
+      if (rows.length) M.rootsBySource.set(new Set(rows.flatMap((p) => p.roots.map(String))).size, { source });
+      const configured = contracts.filter((c) => c.kind === source);
+      if (configured.length) M.rootDegraded.set(configured.some((c) => degraded.has(c.address.toLowerCase())) ? 1 : 0, { source });
     }
-    if (want.onchain) for (const c of contracts) M.rootDegraded.set(degraded.has(c.address.toLowerCase()) ? 1 : 0, { source: c.kind, contract: c.address });
   };
 
   // Static members.json: root + leaves (leaves feed the local slash-tier resolution).
@@ -322,7 +357,7 @@ export async function initRoots({
       const src = perSource.find((p) => String(p.contract || "").toLowerCase() === c.address.toLowerCase());
       const n = (await readLeafCount(c.address, rpcUrl)) ?? (src && src.leafCount != null ? src.leafCount : null);
       if (n == null) { if (first) log.warn("paid-access anonymity set: leafCount() unreadable", { contract: c.address }); continue; }
-      M.paidLeaves.set(n, { contract: c.address });
+      M.paidLeaves.set(n);
       const line = `paid-access anonymity set: ${n} leaves (floor K=${PAID_MIN_LEAVES})`;
       if (n < PAID_MIN_LEAVES) {
         if (first || !paidWarned) log.warn(line + " — BELOW the floor: paid members are thinly hidden among each other (still admitted; the floor is a warning, not a gate)", { contract: c.address, leaves: n, floor: PAID_MIN_LEAVES });
@@ -338,11 +373,24 @@ export async function initRoots({
     const refresh = async () => {
       const r = await loadGroupOnchain(provider);
       chainRoots = r.recentRoots || [];
-      perSource = r.perSource || [{ contract: provider.contract || contracts[0].address, roots: chainRoots.slice(), leafCount: r.leafCount ?? null }];
+      perSource = r.perSource || [{
+        contract: provider.contract || contracts[0].address,
+        roots: chainRoots.slice(),
+        leafCount: r.leafCount ?? null,
+        stale: !!r.stale,
+        ...(r.error ? { error: r.error } : {}),
+      }];
       degraded.clear();
-      for (const e of r.errors || []) degraded.add(String(e.contract || "").toLowerCase());
+      const failures = new Map();
+      for (const e of r.errors || []) failures.set(String(e.contract || "").toLowerCase(), e.error);
+      for (const source of perSource) {
+        if (source.stale || source.error) {
+          failures.set(String(source.contract || "").toLowerCase(), source.error || "serving last-known-good roots");
+        }
+      }
+      for (const [contract] of failures) degraded.add(contract);
       recompute();
-      for (const e of r.errors || []) log.warn("root source failed this refresh; keeping its last-known-good", { contract: e.contract, err: e.error });
+      for (const [contract, error] of failures) log.warn("root source failed this refresh; keeping its last-known-good", { contract, err: error });
     };
     try {
       await refresh();
@@ -458,10 +506,7 @@ export function makeSpentSet({
       // an unreachable/throwing tally returns false and we fall through to the local admit, so
       // a tally outage degrades to the per-gateway defense, never denies a legitimate member.
       if (sharedTally && sharedTally.has(nullifier, opts.epoch)) {
-        log.warn("replayed-envelope rejected (fleet tally)", {
-          nullifier: String(nullifier).slice(0, 10) + "..",
-          scope: "fleet",
-        });
+        log.debug("replayed envelope rejected", { scope: "fleet" });
         return { ok: false, action: "replayed-envelope", reason: "replayed-envelope", scope: "fleet" };
       }
       const t = now();
@@ -481,8 +526,7 @@ export function makeSpentSet({
         return { ok: true, action: "replay" }; // idempotent honest retry (dropped-conn resend)
       }
       // Out-of-window, or a fingerprint we never recorded (same share.x, foreign nonce): drop.
-      log.warn("replayed-envelope rejected", {
-        nullifier: String(nullifier).slice(0, 10) + "..",
+      log.debug("replayed envelope rejected", {
         ageMs: firstAt != null ? now() - firstAt : null,
         windowMs: replayWindowMs,
       });
@@ -501,7 +545,9 @@ export function makeSpentSet({
       commitment = tier.commitment;               // rateCommitment leaf
       if (slash) await slash(commitment, secret, tier);
     } catch (err) {
-      log.error("slash failed", { nullifier: String(nullifier).slice(0, 10) + "..", err: err.message });
+      // Provider errors may echo transaction calldata, which contains the reconstructed secret.
+      // The outcome is actionable; the provider's raw message is not safe log material.
+      log.error("slash failed", { reason: "slash-submit-failed", errorType: err?.name || "Error" });
     }
     return { ok: false, action: "slash", reason: "over-spend-slashed", commitment };
   }
@@ -976,7 +1022,7 @@ async function makeReceiptSigner() {
     log.warn("receipts requested (SHADE_TREE_RECEIPTS=1) but identity unavailable; receipts DISABLED", { err: e.message });
     return null;
   }
-  log.info("egress receipts: ON — signing success receipts with onion-control key", { onion: id.onion.slice(0, 16) + "..onion" });
+  log.info("egress receipts enabled", { signer: "onion-control-key" });
   return () => buildReceipt({ onion: id.onion, epoch: currentEpoch(), onionSeedHex: id.seed });
 }
 
@@ -993,6 +1039,8 @@ export function makeHandler(spentSet, {
   envelopeTimeoutMs = HARDENING.envelopeTimeoutMs,
   idleTimeoutMs = HARDENING.idleTimeoutMs,
   limiter = makeConnLimiter(),
+  onTunnelOpen = () => {},
+  onTunnelClose = () => {},
 } = {}) {
   return async function handle(socket) {
     socket.setNoDelay(true);
@@ -1035,8 +1083,9 @@ export function makeHandler(spentSet, {
       // an accepted version still flows through verifyEnvelope's checks below unchanged.
       const vv = acceptEnvelopeVersion(env.v);
       if (!vv.ok) {
-        log.warn("drop", { reason: vv.reason, target: env.target });
-        M.tunnels.inc({ result: "drop", reason: vv.label });
+        const reason = gatewayDropLabel(vv.label ?? vv.reason);
+        log.debug("tunnel rejected", { reason });
+        M.tunnels.inc({ result: "drop", reason });
         reply(socket, { ok: false, err: vv.reason, proto: vv.proto });
         return socket.destroy();
       }
@@ -1048,11 +1097,12 @@ export function makeHandler(spentSet, {
       const v = await verify(env, recentRoots);
       M.verify.observe((performance.now() - t0) / 1000);
       if (!v.ok) {
-        log.warn("drop", { reason: v.reason, target: env.target });
+        const reason = gatewayDropLabel(v.label ?? v.reason);
+        log.debug("tunnel rejected", { reason });
         // Metrics use the bounded `label` when the lib supplies one (the T-HARD-8 artifact
         // rejections carry the offending id in `reason`; the label is the coarse key), else the
         // reason itself as before.
-        M.tunnels.inc({ result: "drop", reason: v.label ?? v.reason });
+        M.tunnels.inc({ result: "drop", reason });
         // An artifact rejection advertises the accepted ids back (like `proto` on a version
         // reject) so the client can re-select a mutual artifact set or fail closed precisely.
         reply(socket, v.artifacts ? { ok: false, err: "gate:" + v.reason, artifacts: v.artifacts } : { ok: false, err: "gate:" + v.reason });
@@ -1074,8 +1124,9 @@ export function makeHandler(spentSet, {
       // key the same nullifier into the same epoch bucket.
       const res = await spentSet.admit(v.nullifier, v.share, { nonce: env.nonce, epoch: v.externalNullifier });
       if (!res.ok) {
-        log.warn("drop", { reason: res.reason, nullifier: String(v.nullifier).slice(0, 10) + ".." });
-        M.tunnels.inc({ result: "drop", reason: res.reason });
+        const reason = gatewayDropLabel(res.reason);
+        log.debug("tunnel rejected", { reason });
+        M.tunnels.inc({ result: "drop", reason });
         reply(socket, { ok: false, err: res.reason });
         return socket.destroy();
       }
@@ -1086,18 +1137,57 @@ export function makeHandler(spentSet, {
       // honest-retry window is still admitted — it just cannot pin more than maxPerNullifier
       // tunnels open at once. Released on close of THIS socket only.
       if (!limiter.acquireNullifier(v.nullifier)) {
-        log.warn("drop", { reason: "nullifier-conn-limit", nullifier: String(v.nullifier).slice(0, 10) + "..", open: limiter.nullifierCount(v.nullifier) });
+        log.debug("tunnel rejected", { reason: "nullifier-conn-limit", open: limiter.nullifierCount(v.nullifier) });
         M.tunnels.inc({ result: "drop", reason: "nullifier-conn-limit" });
         reply(socket, { ok: false, err: "nullifier-conn-limit" });
         return socket.destroy();
       }
-      socket.once("close", () => limiter.releaseNullifier(v.nullifier));
+      let nullifierSlotHeld = true;
+      const releaseNullifierSlot = () => {
+        if (!nullifierSlotHeld) return;
+        nullifierSlotHeld = false;
+        limiter.releaseNullifier(v.nullifier);
+      };
+      // Verification and the spent-set lookup are asynchronous. A client may disappear while
+      // either is pending, before this close listener exists. Do not retain its per-nullifier
+      // slot or start an upstream connection after its socket has already closed.
+      if (socket.destroyed) {
+        releaseNullifierSlot();
+        return;
+      }
+      socket.once("close", releaseNullifierSlot);
 
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
       let established = false;
-      const upstream = connect(tgt.port, tgt.host, () => {
+      let tunnelOpened = false;
+      let upstream = null;
+      const closeTunnel = () => {
+        if (tunnelOpened) {
+          tunnelOpened = false;
+          onTunnelClose();
+        }
+        upstream?.destroy();
+      };
+      // Attach cleanup before dialing. If the client closes while DNS/TCP connect is pending,
+      // the pending upstream is destroyed and a late connect callback cannot create an orphan.
+      socket.once("close", closeTunnel);
+      const upstreamStarted = performance.now();
+      let upstreamConnectObserved = false;
+      const observeUpstreamConnect = () => {
+        if (upstreamConnectObserved) return;
+        upstreamConnectObserved = true;
+        M.upstreamConnect.observe((performance.now() - upstreamStarted) / 1000);
+      };
+      upstream = connect(tgt.port, tgt.host, () => {
+        if (socket.destroyed) {
+          upstream.destroy();
+          return;
+        }
         established = true;
-        log.info("egress", { target: `${tgt.host}:${tgt.port}`, nullifier: String(v.nullifier).slice(0, 10) + "..", externalNullifier: String(v.externalNullifier).slice(0, 10) + ".." });
+        tunnelOpened = true;
+        observeUpstreamConnect();
+        onTunnelOpen();
+        log.debug("tunnel established", { port: tgt.port });
         M.tunnels.inc({ result: "pass" });
         // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
         // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
@@ -1108,6 +1198,13 @@ export function makeHandler(spentSet, {
       });
       upstream.setNoDelay(true);
       upstream.on("error", (e) => {
+        const reason = upstreamDropLabel(e.code);
+        if (established) M.tunnelCloses.inc({ reason: "upstream-error" });
+        else {
+          observeUpstreamConnect();
+          M.tunnels.inc({ result: "drop", reason });
+        }
+        log.debug("upstream connection closed", { reason, established });
         reply(socket, { ok: false, err: "upstream:" + e.code });
         socket.destroy();
       });
@@ -1123,8 +1220,9 @@ export function makeHandler(spentSet, {
         const onIdle = () => {
           if (established) {
             M.tunnelCloses.inc({ reason: "idle-timeout" });
-            log.info("tunnel closed: idle-timeout", { target: `${tgt.host}:${tgt.port}`, idleMs: idleTimeoutMs });
+            log.debug("tunnel closed", { reason: "idle-timeout", idleMs: idleTimeoutMs });
           } else {
+            observeUpstreamConnect();
             M.tunnels.inc({ result: "drop", reason: "upstream-timeout" });
             reply(socket, { ok: false, err: "upstream:ETIMEDOUT" });
           }
@@ -1135,7 +1233,10 @@ export function makeHandler(spentSet, {
         socket.setTimeout(idleTimeoutMs, onIdle);
       }
     } catch (e) {
-      log.error("gateway-error", { err: e.message, target: env.target });
+      // Request-path exceptions may contain peer-controlled values. Keep the default event useful
+      // without copying arbitrary traffic metadata into logs.
+      log.error("tunnel handler failed", { reason: "internal-error", errorType: e?.name || "Error" });
+      M.tunnels.inc({ result: "drop", reason: "internal-error" });
       reply(socket, { ok: false, err: "gateway-error" });
       return socket.destroy();
     }
@@ -1198,6 +1299,8 @@ function initArtifacts() {
 }
 
 async function main() {
+  const pkg = JSON.parse(await readFile(join(HERE, "..", "package.json"), "utf8"));
+  installRuntimeMetrics(metrics, { role: "node", version: pkg.version });
   initArtifacts();
   const roots = await initRoots();
   const slash = await makeSlasher({ rootContracts: roots.contracts });
@@ -1212,42 +1315,57 @@ async function main() {
   const makeReceipt = await makeReceiptSigner();
 
   const limiter = makeConnLimiter();
-  const server = net.createServer(makeHandler(spentSet, { makeReceipt, limiter }));
+  let activeTunnels = 0;
+  const server = net.createServer(makeHandler(spentSet, {
+    makeReceipt,
+    limiter,
+    onTunnelOpen: () => { activeTunnels += 1; },
+    onTunnelClose: () => { activeTunnels = Math.max(0, activeTunnels - 1); },
+  }));
 
   // Track live tunnels for draining (add/delete only — no per-byte work).
   const openSockets = new Set();
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
 
   // Active-tunnels gauge reads openSockets.size at scrape time (the same set draining uses).
-  metrics.gauge("shade_tree_gateway_active_tunnels", "Open egress tunnels right now.").setCollect(() => openSockets.size);
+  metrics.gauge("shade_tree_gateway_active_tunnels", "Established egress tunnels open right now.").setCollect(() => activeTunnels);
+  metrics.gauge("shade_tree_gateway_connections", "Accepted client connections, including pre-verification sockets.").setCollect(() => openSockets.size);
 
-  // Loopback /metrics on a SEPARATE http server, ONLY when SHADE_TREE_METRICS_PORT is set.
-  // Default OFF keeps the gateway a pure TCP server (existing behavior + tests unchanged).
-  const metricsPort = Number(process.env.SHADE_TREE_METRICS_PORT || 0);
+  // Local operator metrics never share the onion listener and can only bind loopback.
+  const metricsPort = safeMetricsPort(process.env.SHADE_TREE_METRICS_PORT, [["node backend", LISTEN_PORT]]);
   let metricsServer = null;
   if (metricsPort > 0) {
-    const metricsHost = process.env.SHADE_TREE_METRICS_HOST || "127.0.0.1";
-    metricsServer = makeMetricsServer(metrics);
-    metricsServer.listen(metricsPort, metricsHost, () => log.info("metrics endpoint up", { url: `http://${metricsHost}:${metricsPort}/metrics`, scope: "loopback" }));
+    metricsServer = listenMetrics({ port: metricsPort, reg: metrics, host: "127.0.0.1", ready: () => server.listening });
+    await new Promise((resolve, reject) => {
+      metricsServer.once("listening", resolve);
+      metricsServer.once("error", reject);
+    });
+    log.info("operator metrics ready", { event: "metrics.ready", listen: `127.0.0.1:${metricsPort}` });
   }
 
   server.listen(LISTEN_PORT, LISTEN_HOST, () => {
     // "gateway up on <host>:<port>" substring preserved for scripts/integration-sepolia.mjs.
-    log.info(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}`, { epoch: currentEpoch(), epochSeconds: EPOCH_SECONDS });
+    printOperatorBanner({ role: "node", rows: [
+      ["listen", `${LISTEN_HOST}:${LISTEN_PORT}`],
+      ["admission", roots.admits?.join(",") || process.env.SHADE_TREE_ADMIT || "invited"],
+      ["egress", process.env.SHADE_TREE_EGRESS_ALLOW || "*:443"],
+      ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
+      ["logs", `${process.env.SHADE_TREE_LOG_LEVEL || "info"} / ${process.env.SHADE_TREE_LOG_FORMAT || "auto"}`],
+    ] });
+    log.info(`gateway up on ${LISTEN_HOST}:${LISTEN_PORT}`, { event: "service.ready", epoch: currentEpoch(), epochSeconds: EPOCH_SECONDS, metricsPort });
     const allowDesc = process.env.SHADE_TREE_EGRESS_ALLOW || "*:443";
     const denyDesc = process.env.SHADE_TREE_EGRESS_DENY || "";
     const dflt = allowDesc === "*:443" && !denyDesc;
-    log.info(`egress policy: allow=[${allowDesc}] deny=[${denyDesc}]${dflt ? " (:443 only, metadata-only TLS tunnel)" : " (WIDENED — gateway may see plaintext; NOT metadata-only)"}`);
-    log.info("rate: RLN degree-1 per nullifier; 2nd distinct signal on a nullifier => reconstruct + slash");
-    log.info(`tiers: per-leaf userMessageLimit (private to the proof); default K=${K_SLOTS}; slash-leaf candidates SHADE_TREE_TIERS=[${TIERS.join(",")}]`);
+    log.info("egress policy ready", { allow: allowDesc, deny: denyDesc || "(none)", metadataOnly: dflt });
+    log.debug("rate policy", { scheme: "rln-degree-1", defaultSlots: K_SLOTS, slashTiers: TIERS });
     const replayWindowMs = Number(process.env.SHADE_TREE_REPLAY_WINDOW_MS) || 5000;
-    log.info(`replay defense: per-gateway seen-envelope cache; exact replay >${replayWindowMs}ms => reject replayed-envelope (honest retry within window still idempotent)`);
+    log.debug("replay defense ready", { replayWindowMs });
     if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");
-    log.info("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
+    log.debug("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
   });
 
   const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);
-  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "gateway" });
+  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "node", log: (message) => log.info(message, { event: "service.shutdown" }) });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
@@ -1256,5 +1374,5 @@ async function main() {
 // exported makeSpentSet / makeGracefulShutdown control flow with mocks and installs
 // NO signal handlers (only main() does, below).
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+  main().catch((e) => { log.error("node failed", { event: "service.failed", err: e }); process.exit(1); });
 }

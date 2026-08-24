@@ -3,14 +3,18 @@
 // The property (from the threat model): the gateway, bootnode, heartbeat, and client MUST NOT
 // log secret material — a member's SHADE_TREE_SECRET / identitySecret, an onion identity SEED (the
 // 32-byte hex in identity.local.json), or an operator private key. They MAY freely log public
-// values: onion addresses, nullifiers, commitments, operator ADDRESSES, roots, tx hashes.
+// values: commitments, operator ADDRESSES, roots, and tx hashes. Even though onion addresses
+// and nullifiers are not secrets by themselves, routine traffic metadata is kept out of the
+// default operator log stream and is checked dynamically below.
 //
 // It would FAIL if someone added `console.log(seed)` or logged a raw secret. Two layers:
 //
-//   1. STATIC scan. For every source file that logs, extract each console.log/error/warn/info/
-//      debug and process.stdout/stderr.write call, and check whether it interpolates a variable
+//   1. STATIC scan. For every source file that logs, extract each console.*, structured
+//      log.debug/info/warn/error, and process.stdout/stderr.write call, and check whether it
+//      interpolates a variable
 //      whose NAME suggests a secret (seed, secret, identitySecret, priv/privKey, SHADE_TREE_SECRET,
-//      SHADE_TREE_SLASH_KEY, SHADE_TREE_GW_OPERATOR_KEY, SHADE_TREE_REGISTER_KEY) UNTRUNCATED. Every listed file
+//      SHADE_TREE_SLASH_KEY, SHADE_TREE_GW_OPERATOR_KEY, SHADE_TREE_REGISTER_KEY,
+//      SHADE_TREE_REGISTRAR_KEY) UNTRUNCATED. Every listed file
 //      except group/enroll.mjs must have ZERO such interpolations. (A `.slice(...)`-truncated
 //      reference, e.g. gateway's `secret=${String(secret).slice(0,10)}..`, is NOT a full leak
 //      and is allowed by this test's definition.)
@@ -41,7 +45,7 @@ import { dirname, join } from "node:path";
 import { generateOnionIdentity } from "../bootnode/keygen.mjs";
 import { buildAnnounce } from "../bootnode/announce.mjs";
 import { makeRegistry, makeServer, loadOrMintSigner } from "../bootnode/server.mjs";
-import { makeSpentSet } from "../gateway/gateway.mjs";
+import { initRoots, makeSpentSet, _setRecentRoots } from "../gateway/gateway.mjs";
 import { MockStakeVerifier } from "../lib/gateway-registry.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -54,16 +58,21 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 // Static scanner
 // ---------------------------------------------------------------------------
 
-const SINKS = [
+const STATIC_SINKS = [
   "console.log", "console.error", "console.warn", "console.info", "console.debug",
+  "log.debug", "log.info", "log.warn", "log.error",
+  "logger.debug", "logger.info", "logger.warn", "logger.error",
   "process.stdout.write", "process.stderr.write",
 ];
-const STDERR_SINKS = new Set(["console.error", "console.warn", "process.stderr.write"]);
+const STDERR_SINKS = new Set([
+  "console.error", "console.warn", "log.warn", "log.error", "logger.warn", "logger.error",
+  "process.stderr.write",
+]);
 
 // A reference whose NAME suggests secret material. \b-anchored so `secretFile`, `seenNonce`,
 // `SecretKeeper` do NOT match; `secret`, `identitySecret`, `signer.priv`, `id.seed`, and the
-// four SHADE_TREE_*_KEY env names do.
-const SECRET = /\b(identitySecret|secret|seedHex|seed|privKey|priv|SHADE_TREE_SECRET|SHADE_TREE_SLASH_KEY|SHADE_TREE_GW_OPERATOR_KEY|SHADE_TREE_REGISTER_KEY)\b/;
+// SHADE_TREE_*_KEY env names do.
+const SECRET = /\b(identitySecret|secret|seedHex|seed|privKey|priv|SHADE_TREE_SECRET|SHADE_TREE_SLASH_KEY|SHADE_TREE_GW_OPERATOR_KEY|SHADE_TREE_REGISTER_KEY|SHADE_TREE_REGISTRAR_KEY)\b/;
 // A reference is "truncated" (partial, not a full leak) if it is sliced or measured.
 const TRUNC = /\.(slice|substr|substring)\s*\(|\.length\b/;
 
@@ -88,9 +97,22 @@ function readBalanced(src, openIdx) {
 }
 
 // Every sink call in the source, with its raw argument text.
+function sinkNames(src) {
+  const sinks = new Set(STATIC_SINKS);
+  // Service loggers are often named for their role (heartbeatLog, clientLog). Discover every
+  // local identifier bound directly to createLogger() so renaming one cannot silently remove it
+  // from this hygiene check.
+  const declarations = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*createLogger\s*\(/g;
+  let match;
+  while ((match = declarations.exec(src))) {
+    for (const level of ["debug", "info", "warn", "error"]) sinks.add(`${match[1]}.${level}`);
+  }
+  return [...sinks];
+}
+
 function extractCalls(src) {
   const calls = [];
-  for (const sink of SINKS) {
+  for (const sink of sinkNames(src)) {
     let idx = 0;
     for (;;) {
       const at = src.indexOf(sink + "(", idx);
@@ -98,7 +120,7 @@ function extractCalls(src) {
       const before = src[at - 1];
       if (before && /[A-Za-z0-9_$.]/.test(before)) { idx = at + 1; continue; } // not a standalone sink
       const { args, end } = readBalanced(src, at + sink.length);
-      calls.push({ sink, args, index: at, line: lineOf(src, at), stderr: STDERR_SINKS.has(sink) });
+      calls.push({ sink, args, index: at, line: lineOf(src, at), stderr: STDERR_SINKS.has(sink) || /\.(warn|error)$/.test(sink) });
       idx = end;
     }
   }
@@ -158,8 +180,7 @@ function residueLeaks(residue) {
 }
 
 // Every sink call that writes an UNTRUNCATED secret, for one file.
-function scanFile(rel) {
-  const src = readFileSync(join(ROOT, rel), "utf8");
+function scanSource(src) {
   const leaks = [];
   for (const call of extractCalls(src)) {
     const viaTemplate = templateInterps(call.args).some(exprLeaks);
@@ -167,6 +188,10 @@ function scanFile(rel) {
     if (viaTemplate || viaConcat) leaks.push(call);
   }
   return leaks;
+}
+
+function scanFile(rel) {
+  return scanSource(readFileSync(join(ROOT, rel), "utf8"));
 }
 
 // Files that both LOG and touch secret material. announce.mjs and shade-tree-client.mjs have no sinks
@@ -178,6 +203,9 @@ const FILES = [
   "bootnode/announce.mjs",
   "client/shade-tree-client.mjs",
   "client/shim.mjs",
+  "client/selection.mjs",
+  "payments/registrar.mjs",
+  "gateway/fleet-tally.mjs",
   "group/register-gateway.mjs",
   "group/register-onchain.mjs",
 ];
@@ -218,9 +246,11 @@ async function get(base, path) {
 async function main() {
   // === 1. STATIC: no file (except enroll) writes an untruncated secret to any log sink ===
   console.log("static scan — no secret interpolated into any log sink:");
+  const canary = scanSource('const unusualRoleLog = createLogger("canary"); const secret = "sentinel"; unusualRoleLog.info("bad", { secret });');
+  ok(canary.length === 1 && canary[0].sink === "unusualRoleLog.info", "scanner discovers named createLogger sinks and catches a synthetic secret leak");
   for (const rel of FILES) {
     const leaks = scanFile(rel);
-    ok(leaks.length === 0, `${rel}: no untruncated secret in console/stdout/stderr`);
+    ok(leaks.length === 0, `${rel}: no untruncated secret in any recognized log sink`);
     for (const l of leaks) {
       // A real leak: name it precisely so it can be fixed at the source.
       console.log(`       LEAK ${rel}:${l.line}  ${l.sink}(...)  ->  ${l.args.trim().slice(0, 90)}`);
@@ -285,11 +315,42 @@ async function main() {
     ok(announceOk, "honest announce accepted (real announce->verify->store path exercised)");
     ok(g1.seed.length === 64 && /^[0-9a-f]+$/.test(g1.seed), "the drive used a real 32-byte onion seed");
     ok(!captured.includes(g1.seed), "onion SEED never appears in captured bootnode stdout/stderr");
+    ok(!captured.includes(g1.onion), "routine announce handling does not put the gateway onion in default logs");
     ok(!dirText.includes(g1.seed), "onion SEED never appears in the served /directory (not on the wire)");
     ok(!gwText.includes(g1.seed), "onion SEED never appears in the stored /gateway/<onion> announce");
     ok(dirText.includes(g1.onion), "control: the PUBLIC onion address IS served (only the seed is withheld)");
 
-    // === 2b. DYNAMIC gateway spent-set: a reconstructed identitySecret never hits a log ===
+    // === 2b. DYNAMIC gateway startup: an RPC URL path key in a provider error is scrubbed ===
+    console.log("\ngateway root startup error: RPC path key never logged:");
+    const RPC_PATH_KEY = "RPC_PATH_KEY_SENTINEL_7f31c9";
+    const rpcFailure = `eth_getLogs failed at https://rpc.example/v3/${RPC_PATH_KEY}`;
+    const capturedRpcFailure = await withCapture(async () => {
+      _setRecentRoots([]);
+      const provider = {
+        contract: "0xA",
+        currentRoots: async () => { throw new Error(rpcFailure); },
+        onChange: () => () => {},
+        describe: () => ({ provider: "node", contract: "0xA" }),
+      };
+      await initRoots({
+        contracts: [{ address: "0xA", kind: "staked" }],
+        want: { static: true, onchain: true, admits: ["invited", "staked"] },
+        rpcUrl: `https://rpc.example/v3/${RPC_PATH_KEY}`,
+        loadStatic: async () => ({ root: "424242", count: 1, leaves: ["1"] }),
+        makeProvider: () => provider,
+        watchFile: () => {},
+        quiet: true,
+      });
+      _setRecentRoots([]);
+    });
+    ok(capturedRpcFailure.includes("root source UNAVAILABLE at startup"),
+      "control: the gateway emitted its recoverable root-source startup error");
+    ok(capturedRpcFailure.includes("https://rpc.example/[redacted]"),
+      "gateway logs retain the RPC origin and mark its path as redacted");
+    ok(!capturedRpcFailure.includes(RPC_PATH_KEY) && !capturedRpcFailure.includes("/v3/"),
+      "the RPC path-key sentinel does not reach the gateway default log stream");
+
+    // === 2c. DYNAMIC gateway spent-set: a reconstructed identitySecret never hits a log ===
     console.log("\ngateway spent-set in-process — reconstructed identitySecret never logged:");
     const KNOWN_SECRET = "0x" + "de".repeat(32) + "SENTINELSECRET";
 
@@ -304,6 +365,7 @@ async function main() {
       await ss.admit("nullifier-A", { x: "2" });   // 2nd distinct signal -> reconstruct+slash
     });
     ok(!capSlash.includes(KNOWN_SECRET), "identitySecret not logged on the slash path");
+    ok(!capSlash.includes("nullifier-A"), "spent-set nullifier not logged on the slash path");
 
     // Over-spend where slash THROWS: exercises the `slash failed ...` catch-path log.
     const capThrow = await withCapture(async () => {
@@ -317,12 +379,13 @@ async function main() {
     });
     ok(capThrow.includes("slash failed"), "control: the slash-failed catch path did log (so absence below is real)");
     ok(!capThrow.includes(KNOWN_SECRET), "identitySecret not logged on the slash-FAILED catch path");
+    ok(!capThrow.includes("nullifier-B"), "spent-set nullifier not logged on the slash-FAILED catch path");
   } finally {
     await rm(work, { recursive: true, force: true });
   }
 
   // === Coverage note for processes not driven in-process ===
-  console.log("\ncoverage: heartbeat, shim, client (shade-tree-client), register-* are STATIC-only");
+  console.log("\ncoverage: heartbeat, shim, client/selection, registrar, fleet-tally, register-* are STATIC-only");
   console.log("  (they need Tor / a live chain / a listening proxy to run; their log sinks are");
   console.log("   fully covered by the static scan above — none interpolates a secret).");
 

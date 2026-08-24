@@ -193,7 +193,7 @@ async function main() {
     ok(new RegExp(`roots: members\\.json \\+ staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "startup log: `roots: members.json + staked(0x..) + paid(0x..)`");
     ok(/paid-access anonymity set: 1 leaves \(floor K=8\)/.test(gw.out) && /BELOW the floor/.test(gw.out), "startup log WARNs the paid anonymity set (1 leaf) is below the floor K=8 (and keeps running)");
     ok(new RegExp(`slash: routing over staked\\(${staked}\\) \\+ paid\\(${paid}\\)`).test(gw.out), "slasher routes over staked + paid");
-    ok(/trustedRoots=3/.test(gw.out), "three roots trusted at once (trustedRoots=3)");
+    ok(/(?:trustedRoots=3|"trustedRoots":3(?:[,}]))/.test(gw.out), "three roots trusted at once (trustedRoots=3)");
 
     // ---- 4. client leaf discovery + egress for all three ---------------------------------------
     const contracts = [{ address: staked, kind: "staked" }, { address: paid, kind: "paid" }];
@@ -235,7 +235,7 @@ async function main() {
     ok(a1.ok === true && a2.ok === false && a2.err === "over-spend-slashed", `P's second distinct signal on slot 5 is dropped over-spend-slashed (${JSON.stringify(a1)} then ${JSON.stringify(a2)})`);
     const slashed = await waitFor(async () => (gw.out.match(/SLASH mined block (\d+)/) ? true : null), 180000, 1000);
     ok(!!slashed, "gateway submitted the on-chain slash");
-    ok(new RegExp(`slash: routed to paid\\(${paid}\\)`).test(gw.out) && new RegExp(`SLASH tx .*via=${paid}`).test(gw.out), "the slash was ROUTED to the paid contract (limitOf found the leaf there)");
+    ok(new RegExp(`slash: routed to paid\\(${paid}\\)`).test(gw.out) && new RegExp(`SLASH tx .*?(?:via=${paid}|"via":"${paid}")`).test(gw.out), "the slash was ROUTED to the paid contract (limitOf found the leaf there)");
     ok((await paidC.limitOf(P.leaf)) === 0n && (await paidC.leafCount()) === 1n, "paid: P's leaf zeroed (limitOf == 0; leafCount stays 1 — the slot is never reused)");
     const gZ = groupFromIdentities([{ identity: P.identity, limit: 32 }]); gZ.removeMember(0);
     const paidRootAfter = (await paidC.currentRoot()).toString();
@@ -251,7 +251,10 @@ async function main() {
     gw = startGateway({ ...noPolicy, SHADE_TREE_ADMIT: "" }, gwLog); // "" = unset for the resolver (contracts STILL configured)
     await gw.ready;
     ok(/admits: invited(?!\+)/.test(gw.out) && /SHADE_TREE_ADMIT is unset: admitting invited ONLY/.test(gw.out) && new RegExp(`set SHADE_TREE_ADMIT=invited,staked,paid`).test(gw.out), "default (SHADE_TREE_ADMIT unset, contracts configured): `admits: invited` + a WARN naming the exact SHADE_TREE_ADMIT that would trust the configured sets");
-    ok(/roots: members\.json\b/.test(gw.out) && !new RegExp(`staked\\(${staked}\\)`).test(gw.out.split("roots:")[1] || "") && /trustedRoots=1/.test(gw.out), "…roots: members.json alone (trustedRoots=1): the configured staked + paid sets are NOT root sources");
+    {
+      const rootsLine = gw.out.split("\n").find((line) => line.includes("roots: members.json")) || "";
+      ok(rootsLine && !rootsLine.includes(`staked(${staked})`) && /(?:trustedRoots=1|"trustedRoots":1(?:[,}]))/.test(rootsLine), "…roots: members.json alone (trustedRoots=1): the configured staked + paid sets are NOT root sources");
+    }
     ok(!/slash: routing over/.test(gw.out), "…and the slasher does not route over the un-admitted contracts");
     const envS7 = await buildEnvelope({ secret: S.seed, target: targetList[0], pool: pools.S });
     ok((await sendEnvelope(envS7.envelope)).ok === true, "invited member S egresses on the invited-only gateway");
@@ -263,10 +266,10 @@ async function main() {
     gw = startGateway({ ...noPolicy, SHADE_TREE_ADMIT: "invited,staked" }, gwLog);
     await gw.ready;
     {
-      const rootsLine = gw.out.split("\n").find((l) => l.startsWith("roots:")) || "";
-      const slashLines = gw.out.split("\n").filter((l) => /^slash: (routing over|on-chain)/.test(l)).join("\n");
+      const rootsLine = gw.out.split("\n").find((l) => l.includes("roots: members.json")) || "";
+      const slashLines = gw.out.split("\n").filter((l) => /(?:^|"msg":")slash: (?:routing over|on-chain)/.test(l)).join("\n");
       // ONE admitted contract => the plain single-contract slasher (`slash: on-chain … via=<staked>`), not the router.
-      ok(/admits: invited\+staked(?!\+)/.test(gw.out) && rootsLine.startsWith(`roots: members.json + staked(${staked}) `) && !rootsLine.includes("paid(") && new RegExp(`slash: on-chain .*via=${staked}`).test(slashLines) && !slashLines.includes(paid), "SHADE_TREE_ADMIT=invited,staked: `admits: invited+staked`, roots = members.json + staked only, the slasher targets the staked set only (paid excluded)");
+      ok(/admits: invited\+staked(?!\+)/.test(gw.out) && rootsLine.includes(`roots: members.json + staked(${staked})`) && !rootsLine.includes("paid(") && new RegExp(`slash: on-chain.*?(?:via=${staked}|"via":"${staked}")`).test(slashLines) && !slashLines.includes(paid), "SHADE_TREE_ADMIT=invited,staked: `admits: invited+staked`, roots = members.json + staked only, the slasher targets the staked set only (paid excluded)");
     }
     const envA7b = await buildEnvelope({ secret: A.seed, target: targetList[0], pool: pools.A });
     ok((await sendEnvelope(envA7b.envelope)).ok === true, "staked member A egresses again once the policy admits staked (fresh slot)");

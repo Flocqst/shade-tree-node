@@ -137,9 +137,9 @@ async function main() {
     let prov = flaky(1, ["777"]);
     let r = await initRoots({ contracts: [A], want: { static: true, onchain: true }, loadStatic, makeProvider: () => prov, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
     ok(r.degraded.join() === "0xa" && _getRecentRoots().has(staticRoot) && _getRecentRoots().size === 1, "chain source down at boot + members.json root -> starts DEGRADED serving the static root only");
-    ok(/shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 1/.test(scrape()), "shade_tree_gateway_root_source_degraded{contract=\"0xA\"} 1");
+    ok(/shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 1/.test(scrape()), "shade_tree_gateway_root_source_degraded{source=\"staked\"} 1");
     await prov.poll(); // the provider's own poll recovers -> refresh merges the chain root
-    ok(_getRecentRoots().has("777") && _getRecentRoots().has(staticRoot) && /shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "next successful read -> chain root unioned in, degraded back to 0 (no restart needed)");
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has(staticRoot) && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "next successful read -> chain root unioned in, degraded back to 0 (no restart needed)");
 
     // fail-closed: no static root at all -> throws (main() exits nonzero; systemd restarts = the retry)
     _setRecentRoots([]);
@@ -161,7 +161,37 @@ async function main() {
     r = await initRoots({ contracts: [A, P], want: { static: false, onchain: true }, loadStatic, makeProvider: () => comp, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
     ok(r.degraded.join() === "0xa" && _getRecentRoots().has("999") && !_getRecentRoots().has("777"), "one of two chain sources down at boot -> serve the other, that one degraded (composite errors[])");
     await badChild.poll();
-    ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /shade_tree_gateway_root_source_degraded\{[^}]*contract="0xA"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
+    ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
+
+    // A provider with an established LKG returns that root with stale:true instead of throwing.
+    // The gateway must retain the root while making the bounded source gauge reflect the outage,
+    // then clear the gauge after the next fresh read.
+    let stale = false;
+    let stalePoll = null;
+    const cached = {
+      contract: "0xA",
+      currentRoots: async () => ({
+        roots: ["1234"],
+        observedAtBlock: 8,
+        finalized: true,
+        leafCount: 1,
+        stale,
+        ...(stale ? { error: "RPC path sentinel should stay out of metrics" } : {}),
+      }),
+      onChange: (fn) => { stalePoll = fn; return () => {}; },
+      describe: () => ({ provider: "node", contract: "0xA" }),
+    };
+    _setRecentRoots([]);
+    await initRoots({ contracts: [A], want: { static: false, onchain: true }, loadStatic, makeProvider: () => cached, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
+    ok(_getRecentRoots().has("1234") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "fresh provider read -> cached root trusted, degraded gauge 0");
+    stale = true;
+    await stalePoll();
+    const staleScrape = scrape();
+    ok(_getRecentRoots().has("1234") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 1/.test(staleScrape), "later provider outage -> keep LKG root and set bounded degraded gauge 1");
+    ok(!/0xa|sentinel|rpc path/i.test(staleScrape), "degraded metrics expose neither contract addresses nor provider errors");
+    stale = false;
+    await stalePoll();
+    ok(_getRecentRoots().has("1234") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "provider recovery -> keep root and clear degraded gauge");
     _setRecentRoots([]);
   }
 

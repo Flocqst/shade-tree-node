@@ -31,6 +31,10 @@ const FLAG_ENV = {
   "tor-host": "SHADE_TREE_TOR_HOST",
   "tor-port": "SHADE_TREE_TOR_PORT",
   "epoch-seconds": "SHADE_TREE_EPOCH_SECONDS",
+  "log-level": "SHADE_TREE_LOG_LEVEL",
+  "log-format": "SHADE_TREE_LOG_FORMAT",
+  "metrics-port": "SHADE_TREE_METRICS_PORT",
+  "heartbeat-metrics-port": "SHADE_TREE_HEARTBEAT_METRICS_PORT",
   // bootnode
   port: "SHADE_TREE_BOOTNODE_PORT",
   admission: "SHADE_TREE_BOOTNODE_ADMISSION",
@@ -40,6 +44,7 @@ const FLAG_ENV = {
   "gateway-registry": "SHADE_TREE_GATEWAY_REGISTRY",
   "stake-allowlist": "SHADE_TREE_STAKE_ALLOWLIST",
   // gateway
+  "gateway-port": "SHADE_TREE_GATEWAY_PORT",
   "group-contract": "SHADE_TREE_GROUP_CONTRACT",
   "root-provider": "SHADE_TREE_ROOT_PROVIDER",
   "slash-key": "SHADE_TREE_SLASH_KEY",
@@ -146,6 +151,7 @@ function topHelp() {
   const order = ["run", "proxy", "node", "elder", "join", "keygen", "heartbeat", "enroll", "identity", "register-member", "pay", "leaves", "register-gateway", "exit-gateway", "withdraw-gateway", "gateway-status", "sign-directory", "doctor", "backup", "restore", "record-deploy", "client", "shim", "gateway", "bootnode"];
   for (const name of order) console.log(`  ${name.padEnd(18)}${COMMANDS[name].help}`);
   console.log(`\ncommon flags: --bootnode <onion> --secret <hex> --port N --admission open|stake --stake-mode onchain|mock`);
+  console.log(`operator output: --log-level debug|info|warn|error|off --log-format auto|pretty|text|json --metrics-port N --banner|--no-banner --quiet`);
   console.log(`admission (T-FEAT-9): node --admit invited[,staked][,paid] (default invited); proxy --leaf-source auto|invited|staked|paid, --max-anon`);
   console.log(`every --flag maps to an SHADE_TREE_* env var (see docs/CLI.md); flags override the environment.`);
   console.log(`--network <name> (SHADE_TREE_NETWORK) fills unset discovery/contract vars from network/<name>/{bootnode,contracts}.json.`);
@@ -311,8 +317,24 @@ async function main() {
 
   const env = { ...process.env };
   const passthrough = []; // flags the module parses itself (e.g. keygen --label)
+  if (Object.hasOwn(flags, "quiet")) {
+    if (!Object.hasOwn(flags, "log-level")) env.SHADE_TREE_LOG_LEVEL = "warn";
+    delete flags.quiet;
+  }
+  if (Object.hasOwn(flags, "banner")) {
+    env.SHADE_TREE_BANNER = flags.banner === "true" ? "always" : flags.banner;
+    delete flags.banner;
+  }
+  if (Object.hasOwn(flags, "no-banner")) {
+    env.SHADE_TREE_BANNER = "never";
+    delete flags["no-banner"];
+  }
   for (const [flag, val] of Object.entries(flags)) {
-    const envKey = FLAG_ENV[flag];
+    // Heartbeat owns a dedicated metrics variable because it runs beside the node. Keep the
+    // common --metrics-port interface useful by routing it to that variable for this command.
+    const envKey = cmd === "heartbeat" && flag === "metrics-port"
+      ? "SHADE_TREE_HEARTBEAT_METRICS_PORT"
+      : FLAG_ENV[flag];
     if (envKey) env[envKey] = val;
     else { passthrough.push(`--${flag}`); if (val !== "true") passthrough.push(val); }
   }

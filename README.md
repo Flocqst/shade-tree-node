@@ -102,6 +102,10 @@ egress a dedicated public IP when possible. Keep validator keys and
 authenticated RPC endpoints out of the node. Read the [operator
 guide](docs/OPERATOR.md) and [deployment guide](docs/DEPLOYMENT.md).
 
+Interactive services grow one small ASCII tree when ready. Bootstrap installs
+use structured JSON logs and separate loopback metrics for each role. See the
+[monitoring guide](monitoring/README.md).
+
 ## Boundaries
 
 - The destination sees the node IP and can share or block it.

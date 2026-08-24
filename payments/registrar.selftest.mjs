@@ -164,7 +164,8 @@ async function main() {
     const chP = parseWwwAuthenticate(qp.headers["www-authenticate"])[0];
     ok(qp.status === 402 && chP && chP.params.digest === contentDigest(Buffer.from(bodyA)), "POST /pay without payment header -> 402 with the MPP challenge digest-bound to the body (RFC 9530)");
     const h = await http(base, "GET", "/health");
-    ok(h.status === 200 && h.json.pay.asset === tokenAddr && h.json.leafCount === 0 && h.json.root === rootBefore, "/health advertises the offer + leafCount/root");
+    ok(h.status === 200 && h.json.pay.asset === tokenAddr && h.json.leafCount === 0 && h.json.root === rootBefore && !("orders" in h.json), "/health advertises public chain state without private order volume");
+    ok((await http(base, "GET", "/metrics")).status === 404, "the onion-facing registrar listener does not expose operator metrics");
 
     // ---- 2. x402 purchase via shade-tree pay
     console.log("2. x402 purchase (shade-tree pay --protocol x402):");

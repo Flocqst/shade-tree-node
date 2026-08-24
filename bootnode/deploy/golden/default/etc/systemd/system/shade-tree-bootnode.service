@@ -9,6 +9,11 @@ Environment=SHADE_TREE_BOOTNODE_PORT=8877
 Environment=SHADE_TREE_BOOTNODE_ADMISSION=open
 Environment=SHADE_TREE_BOOTNODE_SIGNER_KEY=/opt/shade-tree/deploy-state/bootnode-signer.key
 Environment=SHADE_TREE_BOOTNODE_STORE=/opt/shade-tree/deploy-state/bootnode-state.json
+Environment=SHADE_TREE_METRICS_PORT=9100
+Environment=SHADE_TREE_LOG_LEVEL=info
+Environment=SHADE_TREE_LOG_FORMAT=json
+Environment=SHADE_TREE_BANNER=never
+SyslogIdentifier=shade-tree-elder
 ExecStart=/usr/bin/node /opt/shade-tree/bootnode/server.mjs
 Restart=always
 RestartSec=3

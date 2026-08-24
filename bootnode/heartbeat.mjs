@@ -54,8 +54,27 @@ import { parseAdmit, admitsFromRoots } from "../lib/admission.mjs";
 import { payAdvertFromEnv } from "./server.mjs";
 import { isPrivHex, isEthAddress } from "../lib/config.mjs";
 import { applyNetworkEnv } from "../lib/network-record.mjs";
+import { createLogger } from "../lib/log.mjs";
+import { makeRegistry, installRuntimeMetrics, isLoopbackMetricsHost, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
+import { printOperatorBanner } from "../lib/operator-ui.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const heartbeatLog = createLogger("heartbeat");
+// Heartbeat imports the Node and Elder modules for shared protocol helpers. Keep its scrape
+// registry private so those modules' metrics never appear as misleading zero-value series here.
+const metrics = makeRegistry();
+
+const M = {
+  attempts: metrics.counter("shade_tree_heartbeat_attempts_total", "Heartbeat cycles by bounded outcome=accepted|rejected|egress-unhealthy|transport-error."),
+  lastSuccess: metrics.gauge("shade_tree_heartbeat_last_success_timestamp_seconds", "Unix timestamp of the last accepted heartbeat."),
+  egressUp: metrics.gauge("shade_tree_heartbeat_egress_check_up", "1 when the latest local egress check succeeded, 0 when it failed."),
+};
+M.lastSuccess.set(0);
+
+function writeLog(logger, level, message, fields, legacyMessage = message) {
+  if (typeof logger === "function") return logger(legacyMessage);
+  return logger?.[level]?.(message, fields);
+}
 
 // Every piece of the CLI path below takes its env + I/O as injectable arguments (defaulting to
 // process.env / real fs / real ethers / real Tor) so bootnode/heartbeat.selftest.mjs can drive
@@ -232,11 +251,14 @@ export function egressCheckEnabled(env = process.env) {
   return String(env.SHADE_TREE_EGRESS_CHECK ?? "1") !== "0";
 }
 
-export async function announceIfHealthy({ announce, egress, enabled = egressCheckEnabled(), log = console.log }) {
+export async function announceIfHealthy({ announce, egress, enabled = egressCheckEnabled(), log = heartbeatLog }) {
   if (!enabled) return announce(); // check disabled: announce unconditionally (current behavior)
-  const r = await egress();
+  let r;
+  try { r = await egress(); }
+  catch (error) { M.egressUp.set(0); throw error; }
+  M.egressUp.set(r.healthy ? 1 : 0);
   if (!r.healthy) {
-    log(`egress DOWN (${r.target} ${r.reason}); SKIP announce — gateway ages out of the bootnode via TTL`);
+    writeLog(log, "warn", "egress check failed; skipping heartbeat", { reason: "egress-unhealthy" }, `egress DOWN (${r.target} ${r.reason}); SKIP announce; gateway ages out of the bootnode via TTL`);
     return { skipped: true, egress: r };
   }
   return announce();
@@ -267,19 +289,28 @@ export function heartbeatConfig(env = process.env) {
 //   { failed: true, err }            transport failure (unreachable bootnode, bad HTTP, bad JSON)
 // The bootnode reply is treated as UNTRUSTED input: anything that is not a plain object is a
 // rejection ("malformed response"), never a TypeError out of the tick.
-export function makeBeat({ announce, egress, enabled = egressCheckEnabled(), log = console.log }) {
+export function makeBeat({ announce, egress, enabled = egressCheckEnabled(), log = heartbeatLog, now = () => Date.now() } = {}) {
   return async () => {
     try {
       const r = await announceIfHealthy({ announce, egress, enabled, log });
-      if (r && r.skipped) return r; // egress DOWN: announce already logged + skipped
+      if (r && r.skipped) { M.attempts.inc({ outcome: "egress-unhealthy" }); return r; }
       if (!r || typeof r !== "object" || Array.isArray(r)) {
-        log("announce rejected: malformed response from bootnode (will retry next interval)");
+        M.attempts.inc({ outcome: "rejected" });
+        writeLog(log, "warn", "heartbeat rejected", { reason: "malformed-response" }, "announce rejected: malformed response from bootnode (will retry next interval)");
         return { ok: false, err: "malformed response" };
       }
-      log(r.ok === true ? `announced (staked=${r.staked ?? false}, ttl=${r.ttl}s)` : `announce rejected: ${r.err}`);
+      if (r.ok === true) {
+        M.attempts.inc({ outcome: "accepted" });
+        M.lastSuccess.set(now() / 1000);
+        writeLog(log, "info", "heartbeat accepted", { staked: Boolean(r.staked), ttlSec: Number(r.ttl) || 0 }, `announced (staked=${r.staked ?? false}, ttl=${r.ttl}s)`);
+      } else {
+        M.attempts.inc({ outcome: "rejected" });
+        writeLog(log, "warn", "heartbeat rejected", { reason: "elder-rejected" }, `announce rejected: ${r.err}`);
+      }
       return r.ok === true ? r : { ok: false, err: r.err };
     } catch (e) {
-      log(`announce failed: ${e.message} (will retry next interval)`);
+      M.attempts.inc({ outcome: "transport-error" });
+      writeLog(log, "warn", "heartbeat transport failed; will retry", { reason: "transport-error" }, `announce failed: ${e.message} (will retry next interval)`);
       return { failed: true, err: e.message };
     }
   };
@@ -289,7 +320,7 @@ export function makeBeat({ announce, egress, enabled = egressCheckEnabled(), log
 // fakes for env, identity/operator resolution, announce transport, egress probe, scheduler, log.
 export async function runHeartbeat({
   env = process.env,
-  log = console.log,
+  log = heartbeatLog,
   schedule = setInterval,
   announce = announceOnce,
   egress = checkEgress,
@@ -299,18 +330,18 @@ export async function runHeartbeat({
   const { bootnode, intervalSec, weight, torHost, torPort } = heartbeatConfig(env);
   const id = identity ?? await loadIdentity(env);
   const op = operator ?? await resolveOperator(id.onion, env);
-  log(`heartbeat: ${id.onion.slice(0, 16)}..onion -> ${bootnode.slice(0, 16)}..onion every ${intervalSec}s${op.operator ? ` (operator ${op.operator.slice(0, 10)}..)` : " (onion-only)"}`);
+  writeLog(log, "info", "heartbeat configured", { intervalSec, authMode: op.operator ? "staked-operator" : "onion-only" }, `heartbeat: ${id.onion.slice(0, 16)}..onion -> ${bootnode.slice(0, 16)}..onion every ${intervalSec}s${op.operator ? ` (operator ${op.operator.slice(0, 10)}..)` : " (onion-only)"}`);
   const enabled = egressCheckEnabled(env);
-  log(enabled
+  writeLog(log, "info", "egress self-check configured", { enabled, target: enabled ? EGRESS_CHECK_TARGET : "disabled" }, enabled
     ? `egress self-check: ON (metadata-only TCP connect to ${EGRESS_CHECK_TARGET} before each announce; SKIP announce if DOWN). Disable with SHADE_TREE_EGRESS_CHECK=0`
     : "egress self-check: OFF (SHADE_TREE_EGRESS_CHECK=0) — announcing unconditionally");
   const caps = buildGatewayCaps(env, { gatewayOnion: id.onion });
-  log(caps
+  writeLog(log, "debug", "signed capabilities prepared", { advertised: Boolean(caps), admits: caps?.admits || [], paid: Boolean(caps?.pay) }, caps
     ? `capabilities advertised (signed): ${JSON.stringify(caps)}`
     : "capabilities: none (unconfigured — announce is byte-identical to a legacy gateway; set SHADE_TREE_EGRESS_ALLOW, SHADE_TREE_GATEWAY_REGION, SHADE_TREE_ZK_ARTIFACTS, SHADE_TREE_ADMIT and/or SHADE_TREE_REGISTRAR_ADVERTISE to advertise)");
-  if (caps && caps.admits) log(`admission policy advertised: admits=${caps.admits.join(",")} (SHADE_TREE_ADMIT; must match the gateway unit's)`);
-  else log("admission policy: NOT advertised (SHADE_TREE_ADMIT unset here) — clients assume this gateway may admit any leaf source; set SHADE_TREE_ADMIT to the gateway's policy");
-  if (caps && caps.pay) log(`payment advert: protocols=${caps.pay.protocols.join(",")} port=${caps.pay.port}${caps.pay.onion ? " onion=" + caps.pay.onion.slice(0, 16) + ".." : " (this onion)"}`);
+  if (caps?.admits) writeLog(log, "debug", "admission policy advertised", { admits: caps.admits }, `admission policy advertised: admits=${caps.admits.join(",")} (SHADE_TREE_ADMIT; must match the gateway unit's)`);
+  else writeLog(log, "warn", "admission policy is not advertised", { reason: "SHADE_TREE_ADMIT-unset" }, "admission policy: NOT advertised (SHADE_TREE_ADMIT unset here); clients assume this gateway may admit any leaf source; set SHADE_TREE_ADMIT to the gateway's policy");
+  if (caps?.pay) writeLog(log, "debug", "payment offer advertised", { protocols: caps.pay.protocols, port: caps.pay.port }, `payment advert: protocols=${caps.pay.protocols.join(",")} port=${caps.pay.port}${caps.pay.onion ? " onion=" + caps.pay.onion.slice(0, 16) + ".." : " (this onion)"}`);
 
   const beat = makeBeat({
     announce: () => announce({ id, bootnode, op, weight, torHost, torPort, caps }),
@@ -324,14 +355,34 @@ export async function runHeartbeat({
 }
 
 async function main() {
+  const pkg = JSON.parse(await readFile(join(HERE, "..", "package.json"), "utf8"));
+  installRuntimeMetrics(metrics, { role: "heartbeat", version: pkg.version });
+  let config;
   try {
-    heartbeatConfig();
+    config = heartbeatConfig();
   } catch (e) {
-    console.error(e.message); process.exit(1);
+    heartbeatLog.error("heartbeat configuration invalid", { err: e }); process.exit(1);
   }
-  await runHeartbeat();
+  let ready = false;
+  const metricsPort = safeMetricsPort(process.env.SHADE_TREE_HEARTBEAT_METRICS_PORT, isLoopbackMetricsHost(config.torHost) ? [["Tor SOCKS", config.torPort]] : []);
+  let metricsServer = null;
+  if (metricsPort > 0) {
+    metricsServer = listenMetrics({ port: metricsPort, reg: metrics, host: "127.0.0.1", ready: () => ready });
+    await new Promise((resolve, reject) => {
+      metricsServer.once("listening", resolve);
+      metricsServer.once("error", reject);
+    });
+  }
+  const running = await runHeartbeat({ log: heartbeatLog });
+  ready = true;
+  printOperatorBanner({ role: "heartbeat", rows: [
+    ["interval", `${heartbeatConfig().intervalSec}s`],
+    ["egress", egressCheckEnabled() ? "checked" : "unchecked"],
+    ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
+  ] });
+  heartbeatLog.info("heartbeat ready", { event: "service.ready", first: running.first?.ok === true ? "accepted" : running.first?.skipped ? "skipped" : "retrying", metricsPort });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+  main().catch((e) => { heartbeatLog.error("heartbeat failed", { event: "service.failed", err: e }); process.exit(1); });
 }

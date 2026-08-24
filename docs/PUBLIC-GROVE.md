@@ -69,6 +69,10 @@ for that step. It creates a one-file, parentless commit on the generated
 serves that snapshot through the same-origin `/grove/network.json` path, so a
 Grove visitor never contacts the bootnode or GitHub directly from their browser.
 
+Operator Prometheus endpoints are a separate, loopback-only system. The Elder
+Tree, nodes, heartbeats, registrars, and Proxies do not upload those metrics to
+the observer. The Grove publication path cannot read or publish them.
+
 ## What a pulse means
 
 The animation has two pulse strengths:
@@ -141,7 +145,8 @@ announcement. The minimum contract is:
 - reassess differencing attacks across repeated snapshots before release.
 
 Until those conditions have an implementation and a separate review, the Grove
-collects no per-node usage metrics. Small groves stay quiet.
+collects no per-node usage metrics. Local operator metrics do not change this
+contract. Small groves stay quiet.
 
 ## Reproduce the aggregate
 

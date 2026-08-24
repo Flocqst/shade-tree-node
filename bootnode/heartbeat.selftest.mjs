@@ -317,11 +317,13 @@ async function main() {
     // default log sink (console.log) is what production uses — exercised here under capture
   });
   const keyBare = opKey.slice(2);
-  ok(captured.length > 0 && captured.includes("heartbeat: ") && captured.includes("announced ("), "control: the heartbeat DID log through the real console sinks");
+  ok(captured.length > 0 && captured.includes('"msg":"heartbeat configured"') && captured.includes('"msg":"heartbeat accepted"'), "control: structured heartbeat events reach the real console sinks");
+  const configuredLog = captured.split("\n").filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).find((record) => record?.msg === "heartbeat configured");
+  ok(configuredLog?.authMode === "staked-operator", "heartbeat configuration keeps its bounded auth mode visible");
   ok(!captured.includes(gw.seed), "onion SEED hex never appears in captured logs");
   ok(!captured.includes(keyBare) && !captured.includes(opKey), "operator KEY hex (with or without 0x) never appears in captured logs");
-  ok(captured.includes(gw.onion.slice(0, 16)) && captured.includes(a0.op.operator.slice(0, 10)), "control: the PUBLIC onion prefix + operator ADDRESS prefix are logged");
-  ok(!captured.includes(a0.op.operator), "the full operator address is not logged either (only a 10-char prefix)");
+  ok(!captured.includes(gw.onion.slice(0, 16)) && !captured.includes(a0.op.operator.slice(0, 10)), "onion and operator identifiers are absent from default logs");
+  ok(!captured.includes(a0.op.operator), "the full operator address is not logged");
   // Every operator-resolution error path under capture: message must not carry the key/seed.
   const badEnvs = [
     { SHADE_TREE_GW_OPERATOR_KEY: opKey + "5" }, { SHADE_TREE_GW_OPERATOR_KEY: opKey.slice(0, -1) }, { SHADE_TREE_GW_OPERATOR_KEY: "0x" + "ff".repeat(32) },

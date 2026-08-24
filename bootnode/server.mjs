@@ -75,11 +75,13 @@ import { signDirectory } from "../lib/directory.mjs";
 import { parsePayProtocols } from "../lib/admission.mjs";
 import { verifyAnnounce } from "./announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
-import { registry as metrics } from "../lib/metrics.mjs";
-import { log } from "../lib/log.mjs";
+import { registry as metrics, installRuntimeMetrics, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
+import { createLogger } from "../lib/log.mjs";
+import { printOperatorBanner } from "../lib/operator-ui.mjs";
 import { makeFederation, parsePeers } from "./federation.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const log = createLogger("elder");
 
 // ---- metrics (T-MON-2) ------------------------------------------------------
 // Registered against the process-wide registry at import time; this only populates
@@ -89,6 +91,17 @@ const M = {
   directoryFetches: metrics.counter("shade_tree_bootnode_directory_fetches_total", "Signed directory (Canopy) requests served by the Elder Tree."),
   deltaFetches: metrics.counter("shade_tree_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
 };
+
+const ANNOUNCE_REASON_LABELS = new Set([
+  "rate-limited", "global-rate-limited", "registry-full", "no-announce", "bad-version",
+  "no-onion", "bad-onion", "stale-ts", "replayed-nonce", "bad-onion-sig", "bad-caps-sig",
+  "bad-operator-sig", "stake-check-failed", "not-staked",
+]);
+
+export function announceReasonLabel(reason) {
+  const base = String(reason || "other").toLowerCase().split(":", 1)[0];
+  return ANNOUNCE_REASON_LABELS.has(base) ? base : "other";
+}
 
 // Public presentation names. These headers are informational only. They are not signed and
 // clients must continue to verify the directory body against the pinned signer.
@@ -666,13 +679,9 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
         // `pay` (T-FEAT-7): present only when the operator advertises a registrar (see payAdvertFromEnv).
         return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub, ...(pay ? { pay } : {}) }, ELDER_ROLE_HEADERS);
       }
-      // Loopback Prometheus exposition. The bootnode already binds 127.0.0.1 only, so
-      // /metrics inherits that loopback scope (no separate port needed).
-      if (req.method === "GET" && url.pathname === "/metrics") {
-        const body = metrics.render();
-        res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
-        return res.end(body);
-      }
+      // Operator metrics intentionally do not live on this server. Tor maps this entire
+      // listener into the Elder onion, so exposing /metrics here would publish exact fleet
+      // activity. main() starts a separate loopback-only listener when configured.
       // GET /directory/delta?since=<etag> -> only what CHANGED since the client's last view
       // (T-FEAT-6). Additive to /directory: the response carries the current signer + signature
       // + gateway order so the client reconstructs the new directory from its cached base + the
@@ -723,7 +732,7 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
         try { rec = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { ok: false, err: "bad-json:" + e.message }); }
         const r = await registry.announce(rec);
         if (r.ok) M.announces.inc({ result: "accepted" });
-        else M.announces.inc({ result: "rejected", reason: r.reason });
+        else M.announces.inc({ result: "rejected", reason: announceReasonLabel(r.reason) });
         // The GLOBAL bucket (T-HARD-4) answers 429 + Retry-After (a heartbeat should simply retry
         // at its next beat); every other rejection keeps its 400 exactly as before.
         if (!r.ok && r.reason === "global-rate-limited") return send(res, 429, { ok: false, err: r.reason }, { "retry-after": String(r.retryAfterSec || 1) });
@@ -777,6 +786,8 @@ export function makeGracefulShutdown(server, {
 
 // ---- main -------------------------------------------------------------------
 async function main() {
+  const pkg = JSON.parse(await readFile(join(HERE, "..", "package.json"), "utf8"));
+  installRuntimeMetrics(metrics, { role: "elder", version: pkg.version });
   const port = Number(process.env.SHADE_TREE_BOOTNODE_PORT || 8877);
   const admission = process.env.SHADE_TREE_BOOTNODE_ADMISSION || "open";
   const ttlSec = Number(process.env.SHADE_TREE_BOOTNODE_TTL || 900);
@@ -826,19 +837,39 @@ async function main() {
   // Track live connections for draining (add/delete only — no per-request work).
   const openSockets = new Set();
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
+  metrics.gauge("shade_tree_bootnode_connections", "Open Elder Tree transport connections.").setCollect(() => openSockets.size);
+
+  // The Elder onion maps the discovery listener wholesale. Metrics therefore use a distinct
+  // loopback-only port and are disabled unless the operator opts in (the reference deploy does).
+  const metricsPort = safeMetricsPort(process.env.SHADE_TREE_METRICS_PORT, [["Elder Tree backend", port]]);
+  let metricsServer = null;
+  if (metricsPort > 0) {
+    metricsServer = listenMetrics({ port: metricsPort, reg: metrics, host: "127.0.0.1", ready: () => server.listening });
+    await new Promise((resolve, reject) => {
+      metricsServer.once("listening", resolve);
+      metricsServer.once("error", reject);
+    });
+    log.info("operator metrics ready", { event: "metrics.ready", listen: `127.0.0.1:${metricsPort}` });
+  }
 
   server.listen(port, "127.0.0.1", () => {
     // "bootnode up on <host>:<port>" substring preserved for any startup-readiness grep.
-    log.info(`bootnode up on 127.0.0.1:${port}`, { admission, stake: stake.mode, ttlSec });
-    log.info("pinned signer pubkey (clients set SHADE_TREE_DIR_SIGNER to this):");
-    log.info(`  ${signer.pub}`);
-    log.info("endpoints: POST /announce  GET /directory  GET /directory/delta?since=<etag>  GET /gateway/<onion>  GET /health");
+    printOperatorBanner({ role: "elder", rows: [
+      ["listen", `127.0.0.1:${port}`],
+      ["admission", admission],
+      ["canopy", `${registry.size()} trees`],
+      ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
+      ["logs", `${process.env.SHADE_TREE_LOG_LEVEL || "info"} / ${process.env.SHADE_TREE_LOG_FORMAT || "auto"}`],
+    ] });
+    log.info(`bootnode up on 127.0.0.1:${port}`, { event: "service.ready", admission, stake: stake.mode, ttlSec, metricsPort });
+    log.info("Canopy signer ready", { signer: signer.pub });
+    log.debug("discovery endpoints ready", { endpoints: ["POST /announce", "GET /directory", "GET /directory/delta", "GET /gateway/<onion>", "GET /health"] });
     const b = registry.announceBucket;
-    log.info("endpoint hardening", { announceRatePerSec: Number(b.rate.toFixed(2)), announceBurst: b.burst, ...server.limits });
+    log.debug("endpoint hardening", { announceRatePerSec: Number(b.rate.toFixed(2)), announceBurst: b.burst, ...server.limits });
   });
 
   const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);
-  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "bootnode" });
+  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "elder", log: (message) => log.info(message, { event: "service.shutdown" }) });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
@@ -847,5 +878,5 @@ async function main() {
 // selftest) pulls the exported makeRegistry / makeServer / makeGracefulShutdown with
 // mocks and installs NONE.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+  main().catch((e) => { log.error("Elder Tree failed", { event: "service.failed", err: e }); process.exit(1); });
 }

@@ -243,8 +243,10 @@ Containment: `Environment=SHADE_TREE_FROM_BLOCK=<deploy block>` in the gateway d
 Prevention (shipped right after): the scan is paged + halved on a range/size refusal
 (`SHADE_TREE_LOGS_CHUNK`), starts at each contract's record deploy block (`SHADE_TREE_FROM_BLOCKS`), and an
 unreadable chain source at boot no longer kills a gateway that has a static root — it starts
-degraded (`shade_tree_gateway_root_source_degraded{contract=…} 1`, log `root source UNAVAILABLE at
-startup`) and heals on the next read. Full write-up: `docs/GO-LIVE-LOG-2026-08-17.md`
+degraded (`shade_tree_gateway_root_source_degraded{source="staked"} 1` or
+`shade_tree_gateway_root_source_degraded{source="paid"} 1`, log
+`root source UNAVAILABLE at startup`) and heals on the next read.
+Full write-up: `docs/GO-LIVE-LOG-2026-08-17.md`
 "(payments, later)"; knobs: `docs/OPERATOR.md` "Public RPC log-range caps".
 
 ---

@@ -24,8 +24,10 @@ import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
 import { applyNetworkEnv } from "../lib/network-record.mjs";
+import { createLogger } from "../lib/log.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const clientLog = createLogger("proxy");
 
 // SHADE_TREE_NETWORK=<name>: fill discovery inputs (SHADE_TREE_BOOTNODE_ONION / SHADE_TREE_DIR_SIGNER, or the static
 // SHADE_TREE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
@@ -514,7 +516,7 @@ async function filterReverified(gateways) {
       if (!g.operator) return g;
       const v = await reverifyGateway(g);
       if (v.ok) return g;
-      console.log(`directory: dropping ${g.onion.slice(0, 12)}.. — stake re-verification failed (${v.reason})`);
+      clientLog.debug("Canopy entry dropped after stake re-verification", { reason: String(v.reason || "failed").split(":", 1)[0] });
       return null;
     })
   );
@@ -660,14 +662,14 @@ async function ensureLoaded(onEvent) {
       emitCanopy(onEvent, "verified", canopyFields(next.dir));
     }
     if (next.source === "cache") {
-      console.log("directory: using last-known-good cache (fresh canopy unavailable or invalid)");
+      clientLog.warn("using last-known-good Canopy", { reason: "fresh-unavailable-or-invalid" });
     }
   } catch (e) {
     if (BOOTNODE_ONION && !e.canopyEventEmitted) {
       emitCanopy(onEvent, "error", { reason: "unavailable-or-invalid" });
     }
     if (loaded) {
-      console.log(`directory refresh failed (${e.message}); keeping in-memory fleet`);
+      clientLog.warn("Canopy refresh failed; keeping in-memory fleet", { reason: "unavailable-or-invalid" });
     } else {
       throw e; // no fleet at all is fatal for directory mode
     }
@@ -755,7 +757,7 @@ export function admissionActive(adm) {
 }
 let _legacyAdmitsWarned = false;
 export function _resetLegacyAdmitsWarning() { _legacyAdmitsWarned = false; }
-export function filterByAdmission(gateways, adm, { log = console.error } = {}) {
+export function filterByAdmission(gateways, adm, { log = (message) => clientLog.warn(message) } = {}) {
   if (!admissionActive(adm)) return gateways;
   const src = adm.leafSource && adm.leafSource !== "auto" ? adm.leafSource : null;
   let legacy = 0;

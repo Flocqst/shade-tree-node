@@ -1,72 +1,120 @@
-# Monitoring: dashboards + alerts (T-MON-3)
+# Monitoring
 
-Grafana dashboard and Prometheus alert rules for the Shade Tree fleet. Both are
-built ONLY on the metrics that `lib/metrics.mjs` renders and that `bootnode/server.mjs` and
-`gateway/gateway.mjs` register (T-MON-2). No metric here is aspirational; every PromQL expression
-references a series the code actually emits.
+Local Prometheus metrics, a Grafana dashboard, and alert rules for Shade Tree
+operators. The dashboard and alerts use series emitted by the Elder Tree and
+Shade Tree node. The Proxy, heartbeat, and registrar expose their own local
+signals for operators who run those roles.
 
 Files:
 
-- `grafana-dashboard.json` -- importable Grafana dashboard (`$datasource` / `$job` / `$instance`
+- `grafana-dashboard.json` is an importable Grafana dashboard (`$datasource` / `$job` / `$instance`
   template vars).
-- `alerts.yml` -- Prometheus alerting rules grounded in `docs/SLO.md`.
-- `uptime/` -- scheduler bundle for the external uptime probe (systemd timer+service, crontab
+- `alerts.yml` contains Prometheus alerting rules grounded in `docs/SLO.md`.
+- `uptime/` contains the external uptime probe scheduler bundle (systemd timer and service, crontab
   line, env template) + `.github/workflows/uptime-probe.yml`; see `UPTIME.md`.
-- this README -- how to scrape, import, and load the rules.
+- This README explains how to scrape, import, and load the rules.
 
-## The metrics these are built on
+## Metrics
 
 | Metric | Type | Labels | Source |
 |---|---|---|---|
 | `shade_tree_bootnode_announces_total` | counter | `result` (accepted\|rejected), `reason` (on reject) | `bootnode/server.mjs` |
-| `shade_tree_bootnode_directory_fetches_total` | counter | -- | `bootnode/server.mjs` |
-| `shade_tree_bootnode_live_gateways` | gauge | -- | `bootnode/server.mjs` |
+| `shade_tree_bootnode_directory_fetches_total` | counter | none | `bootnode/server.mjs` |
+| `shade_tree_bootnode_directory_delta_fetches_total` | counter | `result` | `bootnode/server.mjs` |
+| `shade_tree_bootnode_live_gateways` | gauge | none | `bootnode/server.mjs` |
+| `shade_tree_bootnode_connections` | gauge | none | `bootnode/server.mjs` |
 | `shade_tree_gateway_tunnels_total` | counter | `result` (pass\|drop), `reason` (on drop) | `gateway/gateway.mjs` |
-| `shade_tree_gateway_slashes_total` | counter | -- | `gateway/gateway.mjs` |
+| `shade_tree_gateway_slashes_total` | counter | none | `gateway/gateway.mjs` |
 | `shade_tree_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout) | `gateway/gateway.mjs` (T-HARD-4; separate from `tunnels_total` so an idled-out tunnel is not double-counted as a drop) |
-| `shade_tree_gateway_active_tunnels` | gauge | -- | `gateway/gateway.mjs` |
+| `shade_tree_gateway_active_tunnels` | gauge | none | `gateway/gateway.mjs` |
+| `shade_tree_gateway_connections` | gauge | none | `gateway/gateway.mjs` |
 | `shade_tree_gateway_verify_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
+| `shade_tree_gateway_upstream_connect_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
+| `shade_tree_gateway_trusted_roots` | gauge | `source` (invited\|staked\|paid) | `gateway/gateway.mjs` |
+| `shade_tree_gateway_root_source_degraded` | gauge | `source` | `gateway/gateway.mjs` |
+| `shade_tree_gateway_paid_access_leaves` | gauge | none | `gateway/gateway.mjs` |
+| `shade_tree_proxy_tunnels_total` | counter | `result`, bounded `reason` | `client/shim.mjs` |
+| `shade_tree_proxy_active_tunnels` | gauge | none | `client/shim.mjs` |
+| `shade_tree_proxy_connect_seconds` | histogram | `le` (on `_bucket`) | `client/shim.mjs` |
+| `shade_tree_proxy_proof_seconds` | histogram | `le` (on `_bucket`) | `client/shim.mjs` |
+| `shade_tree_proxy_tor_dial_seconds` | histogram | `le` (on `_bucket`) | `client/shim.mjs` |
+| `shade_tree_proxy_failovers_total` | counter | none | `client/shim.mjs` |
+| `shade_tree_proxy_canopy_refresh_total` | counter | `result` (query\|verified\|cache\|error) | `client/shim.mjs` |
+| `shade_tree_proxy_candidates` | gauge | none | `client/shim.mjs` |
+| `shade_tree_heartbeat_attempts_total` | counter | `outcome` (accepted\|rejected\|egress-unhealthy\|transport-error) | `bootnode/heartbeat.mjs` |
+| `shade_tree_heartbeat_last_success_timestamp_seconds` | gauge | none | `bootnode/heartbeat.mjs` |
+| `shade_tree_heartbeat_egress_check_up` | gauge | none | `bootnode/heartbeat.mjs` |
+| `shade_tree_registrar_payments_total` | counter | `protocol` (unknown\|x402\|mpp), `result` (challenged\|inserted\|replayed\|rejected\|failed), bounded `reason` on non-success outcomes | `payments/registrar.mjs` |
+| `shade_tree_registrar_quotes_total` | counter | `route` (quote\|pay) | `payments/registrar.mjs` |
+| `shade_tree_registrar_txs_total` | counter | `kind` (settle\|insert), `result` (ok\|failed) | `payments/registrar.mjs` |
+| `shade_tree_registrar_orders` / `shade_tree_registrar_inflight` | gauge | none | `payments/registrar.mjs` |
+| `shade_tree_build_info` | gauge | `role`, `version` | every long-running role |
+| `shade_tree_process_start_time_seconds` | gauge | none | every long-running role |
+| `shade_tree_process_uptime_seconds` | gauge | none | every long-running role |
+| `shade_tree_process_resident_memory_bytes` | gauge | none | every long-running role |
 
-The histogram exposes `shade_tree_gateway_verify_seconds_bucket{le=...}`, `_sum`, and `_count`, in SECONDS
-(Prometheus base-unit convention; buckets are `DEFAULT_LATENCY_BUCKETS` in `lib/metrics.mjs`).
+Histograms expose `_bucket`, `_sum`, and `_count` series in seconds. Buckets are
+`DEFAULT_LATENCY_BUCKETS` in `lib/metrics.mjs`. Node metrics keep the
+`shade_tree_gateway_*` prefix for dashboard compatibility.
 
-## Where the /metrics endpoints live (and why they need a tunnel)
+`shade_tree_registrar_payments_total` increments once for every completed
+`POST /pay`, including the headerless 402 challenge and early HTTP rejects.
+Requests rejected before a payment rail is selected use `protocol="unknown"`.
+The reason vocabulary is closed in `payments/registrar.mjs`; unexpected library
+or payer-controlled strings collapse to `reason="other"`.
 
-Both endpoints are **loopback-only by design**. They are never meant to be exposed publicly, and the
-scrape config must reach them over the local host, an SSH tunnel, or a node-exporter-style sidecar on
-the box, NOT over the onion or a public interface.
+`shade_tree_bootnode_live_gateways` means announced within the Elder Tree TTL.
+It is not an independent reachability count unless active probing is enabled.
+`shade_tree_gateway_active_tunnels` counts established egress tunnels;
+`shade_tree_gateway_connections` also includes pre-verification sockets.
 
-- **Bootnode**: `/metrics` is served on the SAME loopback HTTP server as the bootnode transport,
-  bound to `127.0.0.1` on `SHADE_TREE_BOOTNODE_PORT` (default `8877`). Tor maps the onion to this loopback
-  port; the `/metrics` route inherits that loopback scope. So the scrape target is
-  `127.0.0.1:8877/metrics` on the bootnode host. There is no separate metrics port for the bootnode.
+## Local endpoints
 
-- **Gateway**: `/metrics` is served on a SEPARATE http server that starts ONLY when
-  `SHADE_TREE_METRICS_PORT` is set (off by default). It binds `SHADE_TREE_METRICS_HOST` (default `127.0.0.1`).
-  The gateway's egress transport is a raw TCP server with no HTTP listener of its own, so this
-  dedicated loopback server is how it exposes metrics. Set e.g. `SHADE_TREE_METRICS_PORT=9101` on each
-  gateway; the scrape target is `127.0.0.1:9101/metrics` on that gateway host.
+Every metrics listener is separate from the role's protocol listener and is
+hard-bound to loopback. It serves only `GET /metrics`, `GET /livez`, and
+`GET /readyz`. Metrics are not available through an Elder Tree, node, or
+registrar onion. The HTTP listener also rejects non-loopback `Host` values and
+does not enable browser CORS access.
 
-Because both bind loopback, Prometheus (running elsewhere) reaches them one of two ways:
+| Role | Runtime variable | Bootstrap port |
+|---|---|---:|
+| Elder Tree | `SHADE_TREE_METRICS_PORT` | 9100 |
+| Shade Tree node | `SHADE_TREE_METRICS_PORT` | 9101 |
+| Registrar | `SHADE_TREE_METRICS_PORT` | 9102 |
+| Heartbeat | `SHADE_TREE_HEARTBEAT_METRICS_PORT` | 9103 |
+| Proxy | `SHADE_TREE_METRICS_PORT` | choose a free local port |
 
-1. **Prometheus on the same box** -- scrape `127.0.0.1:<port>` directly. Simplest for a single-box
+The listeners are off when their port is `0` or unset in a direct invocation.
+`bootstrap.sh` enables the four service ports shown above. Set a Proxy port
+explicitly, especially when it shares a host with another role.
+
+Because they bind loopback, Prometheus running elsewhere reaches them one of two ways:
+
+1. **Prometheus on the same box**: scrape `127.0.0.1:<port>` directly. This is simplest for a single-box
    reference deploy.
-2. **SSH tunnel** -- forward each remote loopback port to a distinct local port on the Prometheus
+2. **SSH tunnel**: forward each remote loopback port to a distinct local port on the Prometheus
    host, then scrape the forwarded ports. Example:
 
    ```sh
-   # bootnode 8877 -> local 18877 ; gateway metrics 9101 -> local 19101
-   ssh -N -L 18877:127.0.0.1:8877 operator@bootnode-host &
+   # Elder Tree metrics 9100 -> local 19100; node metrics 9101 -> local 19101
+   ssh -N -L 19100:127.0.0.1:9100 operator@bootnode-host &
    ssh -N -L 19101:127.0.0.1:9101 operator@gateway-1-host &
    ```
 
-Do NOT open `SHADE_TREE_METRICS_PORT` or `SHADE_TREE_BOOTNODE_PORT` on a public interface to make scraping easier.
-The metrics carry fleet-shape and traffic signal; keep them loopback and tunnel.
+Do not proxy these listeners through Tor, publish them, or bind them to a public
+interface. They carry fleet shape, health, and coarse traffic signal.
+
+Operator metrics stay on the machine. Nodes do not send them to the Elder Tree,
+and the public Grove does not ingest them. Labels are bounded and exclude
+destinations, onion addresses, nullifiers, operator addresses, contract
+addresses, and request identifiers. Treat stored Prometheus data as sensitive
+operational data anyway. Keep retention short enough for your needs and limit
+access to the monitoring system.
 
 ## Prometheus scrape config
 
 Add to `prometheus.yml`. The `job` names here (`shade-tree-bootnode`, `shade-tree-gateway`) are what `alerts.yml`
-matches on -- keep them in sync if you rename. Targets shown for the SSH-tunnel case; swap for the
+matches on, so keep them in sync if you rename. Targets shown for the SSH-tunnel case; swap for the
 real `127.0.0.1:<port>` if Prometheus runs on the box.
 
 ```yaml
@@ -76,9 +124,9 @@ scrape_configs:
     scheme: http
     scrape_interval: 15s
     static_configs:
-      # tunnel:  ssh -L 18877:127.0.0.1:8877 operator@bootnode-host
-      # on-box:  replace with 127.0.0.1:8877
-      - targets: ["127.0.0.1:18877"]
+      # tunnel:  ssh -L 19100:127.0.0.1:9100 operator@bootnode-host
+      # on-box:  replace with 127.0.0.1:9100
+      - targets: ["127.0.0.1:19100"]
         labels:
           instance: bootnode-1
 
@@ -87,7 +135,7 @@ scrape_configs:
     scheme: http
     scrape_interval: 15s
     static_configs:
-      # each gateway runs with SHADE_TREE_METRICS_PORT set; tunnel each loopback port to a distinct local one
+      # Tunnel each node's loopback listener to a distinct local port.
       - targets: ["127.0.0.1:19101"]
         labels:
           instance: gateway-1
@@ -95,12 +143,22 @@ scrape_configs:
         labels:
           instance: gateway-2
 
+  - job_name: shade-tree-heartbeat
+    metrics_path: /metrics
+    scheme: http
+    scrape_interval: 15s
+    static_configs:
+      # On-box target. Tunnel 9103 to a distinct local port when Prometheus is remote.
+      - targets: ["127.0.0.1:9103"]
+        labels:
+          instance: gateway-1-heartbeat
+
 rule_files:
   - /etc/prometheus/rules/shade-tree-alerts.yml   # this repo's monitoring/alerts.yml
 ```
 
-`up{job="shade-tree-bootnode"}` and `up{job="shade-tree-gateway"}` are synthesized by Prometheus from the scrape
-outcome, which is what `BootnodeDown` / `GatewayDown` alert on -- no extra instrumentation needed.
+The `up` series for the bootnode, gateway, and heartbeat jobs are synthesized by
+Prometheus from each scrape outcome. The matching down alerts use those series.
 
 ## Import the dashboard
 
@@ -127,7 +185,7 @@ curl -X POST http://localhost:9090/-/reload   # if --web.enable-lifecycle is set
 ```
 
 Route them through Alertmanager as you see fit; every rule carries a `severity` label
-(`critical`/`warning`) and a `component` label (`bootnode`/`gateway`/`fleet`) to route on.
+(`critical`/`warning`) and a `component` label (`bootnode`/`gateway`/`heartbeat`/`fleet`) to route on.
 
 ## What each alert means operationally
 
@@ -140,10 +198,14 @@ Grounded in `docs/SLO.md` and cross-referenced to the runbooks in `docs/INCIDENT
 | `FleetEmpty` | critical | `< 1` live gateway. No member can egress. Never cleared by weakening admission. | SLO 2.3, section 5; INCIDENT.md #3 |
 | `AnnounceRejectionSpike` | warning | >80% of announces rejected with real volume. Rejections are the gate working; a sustained spike = forged announces / misconfig / full registry. Not an outage. | SLO section 1 |
 | `GatewayDown` | warning | One gateway unscrapable. Individual gateway uptime is explicitly NOT an SLO; the fleet routes around it. Escalates only if it drives `FleetTooSmall`. | SLO section 4; INCIDENT.md #3 |
+| `RootSourceDegraded` | warning | A staked or paid root source is on last-known-good state or unavailable. Check its provider and start-block configuration. | INCIDENT.md #6 |
 | `SlashSpike` | warning | Elevated `shade_tree_gateway_slashes_total` rate. A slash is the RLN rate limit working (over-spend caught), never error budget; but a spike warrants a look (broken client / prober). | SLO sections 3-4; INCIDENT.md #7 |
 | `HighDropRate` | warning | >50% of tunnel attempts dropped. Gate DROPs are correct rejections -> read the reason mix. `root-not-recent` spike = config mismatch (align epoch/slots/identifier/root, widen freshness); dial/upstream drops = capacity, add gateways. | SLO 2.1, section 3; INCIDENT.md #6 |
 | `VerifyLatencyP95High` | warning | `verifyEnvelope` p95 > 50ms. Server-side verify CPU only (Tor RTT excluded by design). Near the ~30 verify/s/core ceiling: add cores/gateways, never skip a verify check. | SLO 2.4, section 5 |
 | `VerifyLatencyP99High` | warning | `verifyEnvelope` p99 > 100ms. Tail verify latency climbing; check jitter / saturation, add capacity. | SLO 2.4, section 3 |
+| `HeartbeatStale` | critical | The process is up but no announce has been accepted for 15 minutes. The node will age out of the Canopy. | INCIDENT.md #3 |
+| `HeartbeatNeverAccepted` | critical | The heartbeat has run for 15 minutes without one accepted announce. Check startup configuration and Tor reachability. | INCIDENT.md #3 |
+| `HeartbeatDown` | warning | The heartbeat metrics process is not scrapeable. Confirm the service and local port before fleet membership expires. | INCIDENT.md #3 |
 
 The hard line from `docs/SLO.md` section 5 applies to every response here: no alert is ever cleared by
 weakening the gate, admitting an unverified gateway, serving an unverifiable directory, narrowing the

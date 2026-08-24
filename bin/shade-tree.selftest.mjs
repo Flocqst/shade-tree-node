@@ -80,6 +80,8 @@ async function main() {
   ok(ehelp.code === 0 && /initiateExit|unbonding/i.test(ehelp.out), "`shade-tree exit-gateway --help` exits 0 (no RPC touched)");
   const ihelp = shadeTreeCli(["identity", "--help"], { timeout: 10_000 });
   ok(ihelp.code === 0 && /--out/.test(ihelp.out), "`shade-tree identity --help` exits 0 and names --out");
+  const heartbeatMetrics = shadeTreeCli(["heartbeat", "--metrics-port", "70000"], { timeout: 10_000 });
+  ok(heartbeatMetrics.code !== 0 && /SHADE_TREE_HEARTBEAT_METRICS_PORT/.test(heartbeatMetrics.out) && !/SHADE_TREE_METRICS_PORT:/.test(heartbeatMetrics.out), "heartbeat remaps common --metrics-port to its dedicated metrics listener");
 
   // --- live flag plumbing: keygen mints an onion into a positional dir --------
   // Proves BOTH positional passthrough (<hsDir>) and the module-parsed --label flag (which is
@@ -116,12 +118,19 @@ async function main() {
     ["directory", "SHADE_TREE_DIRECTORY"],
     ["dir-signer", "SHADE_TREE_DIR_SIGNER"],
     ["network", "SHADE_TREE_NETWORK"],
+    ["log-level", "SHADE_TREE_LOG_LEVEL"],
+    ["log-format", "SHADE_TREE_LOG_FORMAT"],
+    ["metrics-port", "SHADE_TREE_METRICS_PORT"],
+    ["heartbeat-metrics-port", "SHADE_TREE_HEARTBEAT_METRICS_PORT"],
+    ["gateway-port", "SHADE_TREE_GATEWAY_PORT"],
   ];
   for (const [flag, env] of pairs) {
     // matches:  port: "SHADE_TREE_BOOTNODE_PORT"   or   "shim-port": "SHADE_TREE_SHIM_PORT"
     const re = new RegExp(`(?:"${flag}"|\\b${flag})\\s*:\\s*"${env}"`);
     ok(re.test(src), `FLAG_ENV maps --${flag} -> ${env}`);
   }
+  ok(/flags, "quiet"[\s\S]*SHADE_TREE_LOG_LEVEL = "warn"/.test(src), "--quiet lowers routine output to warn unless a level is explicit");
+  ok(/flags, "no-banner"[\s\S]*SHADE_TREE_BANNER = "never"/.test(src), "--no-banner suppresses terminal art");
 
   // --- --network / SHADE_TREE_NETWORK (lib/network-record.mjs) --------------------------------------
   // `record-deploy` has no config role and its --dry-run writes nothing, so it is the safe live

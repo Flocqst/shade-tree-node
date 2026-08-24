@@ -381,8 +381,15 @@ protocol:"x402"|"mpp", protocols:[<enabled>], detail }` before any parsing. Wire
 | POST | `/pay` + `PAYMENT-SIGNATURE: <b64 PaymentPayload>` | `200 { ok:true, protocol:"x402", state:"inserted", asset, payer, nonce, commitment, limit, settleTx, insertTx, leafIndex, root, replayed }` + `PAYMENT-RESPONSE: <b64 { success:true, transaction:<settleTx>, network, payer }>` | body `{ commitment:<decimal field element>, limit:<tier> }`; `limit` must equal the tier `accepted.amount` prices |
 | POST | `/pay` + `Authorization: Payment <b64url credential>` | `200 { …same…, protocol:"mpp" }` + `Payment-Receipt: <b64url { status:"success", method:"evm", challengeId, reference:<settleTx>, timestamp, chainId }>` | credential `payload.type` MUST be `"authorization"` (EIP-3009); `nonce == keccak256(id ‖ realm)`; body must match the challenge `digest` |
 | GET | `/pay/status/<nonce>` | `200 { ok:true, orders:[{ state, asset, payer, nonce, commitment, limit, settleTx, insertTx, leafIndex, root }] }` | `state` ∈ `settling|settled|inserted|failed`; `404 not-found`; `400 bad-nonce` |
-| GET | `/health` | `200 { ok:true, pay:{…offer…}, paidAccessSet, leafCount, root, orders }` | |
-| GET | `/metrics` | Prometheus text | `shade_tree_registrar_quotes_total{route}`, `shade_tree_registrar_payments_total{protocol,result,reason}`, `shade_tree_registrar_txs_total{kind,result}`, `shade_tree_registrar_orders`, `shade_tree_registrar_inflight` |
+| GET | `/health` | `200 { ok:true, pay:{…offer…}, paidAccessSet, leafCount, root }` | Private order volume is omitted. |
+
+`/metrics` is deliberately absent from the onion-facing registrar listener. Optional
+operator metrics use a separate loopback-only listener on `SHADE_TREE_METRICS_PORT`.
+`shade_tree_registrar_payments_total` counts each completed `POST /pay` exactly
+once. Its `protocol` is `unknown|x402|mpp`, its `result` is
+`challenged|inserted|replayed|rejected|failed`, and non-success reasons come from
+a closed registrar-owned vocabulary. Early rejects before rail selection use
+`protocol="unknown"`; unexpected dependency values collapse to `reason="other"`.
 
 Errors (`payments/registrar.mjs` `makeServer` / `makeEngine`):
 

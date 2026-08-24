@@ -273,7 +273,7 @@ export async function runTierIntegration(opts) {
     }, 180000, 1000);
     txs.slash = slashed;
     check(!!slashed, `gateway submitted the on-chain slash (tx ${slashed ? slashed.hash.slice(0, 12) + ".." : "none"} block ${slashed && slashed.block})`);
-    check(/SLASH tx .*\blimit=32\b/.test(gw.out), "the slash named tier 32 (resolved via limitOf on chain, not the default tier)");
+    check(/SLASH tx .*?(?:\blimit=32\b|"limit":32(?:[,}]))/.test(gw.out), "the slash named tier 32 (resolved via limitOf on chain, not the default tier)");
 
     // 6. outcomes: BOB's tier-32 bond burned to the receiver, ALICE intact, root updated
     const [mA2, mB2, active2] = await Promise.all([c.members(A.leaf), c.members(B.leaf), c.activeCount()]);

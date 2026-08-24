@@ -21,6 +21,8 @@
 //     `nullifier-conn-limit`; other nullifiers unaffected; released on close; and the
 //     spent-set still SEES the over-limit share (admit is called before the cap)
 //   - clients that vanish before/while sending release their slot (no leak)
+//   - clients that vanish during verification or upstream connect leave no nullifier slot,
+//     active-tunnel count, or orphan upstream socket behind
 //   - HARDENING defaults are the documented values; makeConnLimiter 0 == unlimited
 //
 // Run:  node gateway/hardening.selftest.mjs
@@ -45,7 +47,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function metricValue(name, labels) {
   // lib/metrics.mjs renders labels sorted by name.
   const lab = Object.entries(labels).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}="${v}"`).join(",");
-  const line = `${name}{${lab}} `;
+  const line = lab ? `${name}{${lab}} ` : `${name} `;
   const hit = metrics.render().split("\n").find((l) => l.startsWith(line));
   return hit ? Number(hit.slice(line.length)) : 0;
 }
@@ -192,6 +194,68 @@ await test("makeConnLimiter: caps, release, per-nullifier isolation, 0 == unlimi
   await closeServer(gw); await closeServer(echo);
 }
 
+// ---- disconnect races across async verification / upstream connect ----------
+await test("a client that closes during verification never dials or leaks a per-nullifier slot", async () => {
+  let finishVerify;
+  let verifyStarted = false;
+  const delayedVerify = () => {
+    verifyStarted = true;
+    return new Promise((resolve) => { finishVerify = resolve; });
+  };
+  let dials = 0;
+  const limiter = makeConnLimiter({ maxConns: 0, maxPerNullifier: 1 });
+  const gw = await startGateway(makeHandler(makeAdmitAll(), {
+    verify: delayedVerify,
+    connect: () => { dials++; return new net.Socket(); },
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter,
+  }));
+  const c = await dial(gw.address().port);
+  c.sock.write(envelopeFor("verify-race", 443));
+  await waitFor(() => verifyStarted, 2000, "verification to start");
+  c.sock.destroy();
+  await waitFor(() => c.closed, 2000, "client close during verification");
+  finishVerify({ ok: true, nullifier: "verify-race", externalNullifier: "1", share: { x: "1", y: "2" } });
+  await waitFor(() => limiter.total() === 0 && limiter.trackedNullifiers() === 0, 2000, "all connection slots to release");
+  assert.equal(dials, 0, "no upstream dial starts for an already-closed client");
+  await closeServer(gw);
+});
+
+await test("a client that closes during upstream connect destroys it and a late callback cannot open a tunnel", async () => {
+  let pendingCallback = null;
+  let pendingUpstream = null;
+  let opened = 0;
+  let closed = 0;
+  const limiter = makeConnLimiter({ maxConns: 0, maxPerNullifier: 1 });
+  const delayedConnect = (_port, _host, callback) => {
+    pendingCallback = callback;
+    pendingUpstream = new net.Socket();
+    return pendingUpstream;
+  };
+  const gw = await startGateway(makeHandler(makeAdmitAll(), {
+    verify: stubVerify,
+    connect: delayedConnect,
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter,
+    onTunnelOpen: () => { opened++; },
+    onTunnelClose: () => { closed++; },
+  }));
+  const c = await dial(gw.address().port);
+  c.sock.write(envelopeFor("connect-race", 443));
+  await waitFor(() => pendingUpstream !== null, 2000, "upstream connect to be pending");
+  c.sock.destroy();
+  await waitFor(() => pendingUpstream.destroyed, 2000, "pending upstream to be destroyed");
+  await waitFor(() => limiter.total() === 0 && limiter.trackedNullifiers() === 0, 2000, "all connection slots to release");
+  pendingCallback();
+  await sleep(10);
+  assert.equal(opened, 0, "late upstream callback did not increment active tunnels");
+  assert.equal(closed, 0, "no close decrement was needed for a tunnel that never opened");
+  assert.equal(pendingUpstream.destroyed, true, "late callback kept the orphan upstream closed");
+  await closeServer(gw);
+});
+
 // ---- idle timeout on the established relay ----------------------------------
 {
   const IDLE_MS = 300;
@@ -234,11 +298,15 @@ await test("makeConnLimiter: caps, release, per-nullifier isolation, 0 == unlimi
     const admit2 = makeAdmitAll();
     const gw2 = await startGateway(makeHandler(admit2, { verify: stubVerify, connect: blackHole, envelopeTimeoutMs: 5000, idleTimeoutMs: IDLE_MS, limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }) }));
     const before = metricValue("shade_tree_gateway_tunnels_total", { result: "drop", reason: "upstream-timeout" });
+    const connectCountBefore = metricValue("shade_tree_gateway_upstream_connect_seconds_count", {});
+    const connectSumBefore = metricValue("shade_tree_gateway_upstream_connect_seconds_sum", {});
     const c = await dial(gw2.address().port);
     c.sock.write(envelopeFor("bh-1", 1));
     await waitFor(() => c.closed, IDLE_MS * 10, "black-holed tunnel to be cut");
     assert.equal(lastJson(c).err, "upstream:ETIMEDOUT");
     assert.equal(metricValue("shade_tree_gateway_tunnels_total", { result: "drop", reason: "upstream-timeout" }), before + 1);
+    assert.equal(metricValue("shade_tree_gateway_upstream_connect_seconds_count", {}), connectCountBefore + 1, "timed-out connect is observed exactly once");
+    assert.ok(metricValue("shade_tree_gateway_upstream_connect_seconds_sum", {}) > connectSumBefore, "timed-out connect contributes its wait to the latency sum");
     await closeServer(gw2);
   });
 

@@ -66,8 +66,9 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ethers } from "ethers";
-import { log } from "../lib/log.mjs";
-import { registry as metrics } from "../lib/metrics.mjs";
+import { createLogger } from "../lib/log.mjs";
+import { makeRegistry, installRuntimeMetrics, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
+import { printOperatorBanner } from "../lib/operator-ui.mjs";
 import { networkDefault } from "../lib/network-record.mjs";
 import { parsePayProtocols } from "../lib/admission.mjs";
 import { makeAnnounceBucket, makeGracefulShutdown } from "../bootnode/server.mjs";
@@ -79,6 +80,9 @@ import {
 } from "./wire.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const log = createLogger("registrar");
+// Registrar imports an Elder helper, but its local scrape must expose registrar signals only.
+const metrics = makeRegistry();
 
 // BN254 scalar field: a commitment (Poseidon output) is a field element.
 const FIELD_P = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -97,11 +101,41 @@ export const PAID_ACCESS_SET_ABI = Object.freeze([
 ]);
 
 // ---- metrics ------------------------------------------------------------------------------
+const QUOTES_HELP = "402 quotes served, labeled route=quote|pay.";
+const PAYMENTS_HELP = "Completed POST /pay requests, labeled by bounded protocol=unknown|x402|mpp, result=challenged|inserted|replayed|rejected|failed, and reason on non-success outcomes.";
 const M = {
-  quotes: metrics.counter("shade_tree_registrar_quotes_total", "402 quotes served, labeled route=quote|pay."),
-  payments: metrics.counter("shade_tree_registrar_payments_total", "POST /pay outcomes, labeled protocol=x402|mpp result=inserted|replayed|rejected|failed (+ reason)."),
   settleTxs: metrics.counter("shade_tree_registrar_txs_total", "Operator transactions sent, labeled kind=settle|insert result=ok|failed."),
 };
+
+const PAYMENT_PROTOCOLS = new Set(["unknown", "x402", "mpp"]);
+const PAYMENT_RESULTS = new Set(["challenged", "inserted", "replayed", "rejected", "failed"]);
+// Every entry is registrar-controlled. Anything new or injected by a dependency collapses to
+// `other`, so a payer can never create a Prometheus series with a header/body/error string.
+const PAYMENT_REASONS = new Set([
+  "payment-required", "body-too-large", "bad-json", "bad-body", "unknown-limit",
+  "rate-limited", "credential-too-large", "protocol-disabled", "limit-mismatch",
+  "invalid_payment_payload", "invalid_x402_version", "invalid_payment_requirements",
+  "invalid_scheme", "invalid_network", "invalid_exact_evm_payload_asset",
+  "invalid_exact_evm_payload_recipient_mismatch",
+  "invalid_exact_evm_payload_authorization_value_mismatch",
+  "invalid_exact_evm_payload_authorization", "invalid_exact_evm_payload_signature",
+  "malformed-credential", "method-unsupported", "invalid-challenge", "payment-expired",
+  "verification-failed", "bad-commitment", "nonce-used", "in-progress", "insert-failed",
+  "busy", "not-yet-valid", "expired", "bad-signature", "rpc-error", "insufficient_funds",
+  "already-member", "settle-failed", "internal-error", "other",
+]);
+
+export function paymentMetricLabels({ protocol = "unknown", result = "failed", reason = null } = {}) {
+  const safeResult = PAYMENT_RESULTS.has(result) ? result : "failed";
+  const labels = {
+    protocol: PAYMENT_PROTOCOLS.has(protocol) ? protocol : "unknown",
+    result: safeResult,
+  };
+  if (safeResult !== "inserted" && safeResult !== "replayed") {
+    labels.reason = PAYMENT_REASONS.has(reason) ? reason : "other";
+  }
+  return labels;
+}
 
 function envInt(name, dflt) {
   const raw = process.env[name];
@@ -247,7 +281,7 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     order.root = root || (await set.currentRoot()).toString();
     order.state = "inserted";
     store.put(order);
-    log.info("registrar: leaf inserted", { commitment: order.commitment, limit: order.limit, leafIndex, insertTx: tx.hash, root: order.root, protocol: order.protocol });
+    log.debug("registrar: leaf inserted", { limit: order.limit, protocol: order.protocol });
     return order;
   }
 
@@ -261,7 +295,7 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     order.settleTx = tx.hash;
     order.state = "settling";
     store.put(order);
-    log.info("registrar: settle tx sent", { payer: auth.from, value: auth.value, settleTx: tx.hash, protocol: order.protocol });
+    log.debug("registrar: settlement sent", { protocol: order.protocol });
     const rcpt = await tx.wait(confirmations);
     if (!rcpt || rcpt.status !== 1) { order.state = "failed"; order.error = "settle-reverted"; store.put(order); M.settleTxs.inc({ kind: "settle", result: "failed" }); throw new Error("settle tx reverted"); }
     M.settleTxs.inc({ kind: "settle", result: "ok" });
@@ -347,7 +381,7 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
         if (order.state === "settled") { await insertLeaf(order); resumed++; }
       } catch (e) {
         failed++;
-        log.error("registrar: recovery failed for an order", { from: order.from, nonce: order.nonce, err: e.shortMessage || e.message });
+        log.error("registrar: recovery failed for an order", { reason: "recovery-failed", errorType: e?.name || "Error" });
       }
     }
     return { resumed, failed };
@@ -402,21 +436,25 @@ export function offerSummary(offer) {
   };
 }
 
-// `limits` overrides HTTP_LIMITS (tests); `now` injectable.
-export function makeServer(engine, { offer, store, set, limits = {}, now = () => Date.now() } = {}) {
+// `limits` overrides HTTP_LIMITS (tests); `now` and `metricRegistry` are injectable.
+export function makeServer(engine, { offer, store, set, limits = {}, now = () => Date.now(), metricRegistry = metrics } = {}) {
   const lim = { ...HTTP_LIMITS, ...limits };
   if (lim.requestTimeout > 0 && lim.headersTimeout > lim.requestTimeout) lim.headersTimeout = lim.requestTimeout;
   const payBucket = makeAnnounceBucket({ rate: envInt("SHADE_TREE_REGISTRAR_PAY_RATE", 1), burst: envInt("SHADE_TREE_REGISTRAR_PAY_BURST", 10), now: () => Math.floor(now() / 1000) });
   const quoteBucket = makeAnnounceBucket({ rate: envInt("SHADE_TREE_REGISTRAR_QUOTE_RATE", 20), burst: envInt("SHADE_TREE_REGISTRAR_QUOTE_BURST", 100), now: () => Math.floor(now() / 1000) });
-  metrics.gauge("shade_tree_registrar_orders", "Orders in the registrar store.").setCollect(() => store.size());
-  metrics.gauge("shade_tree_registrar_inflight", "Settlements currently in flight.").setCollect(() => engine.inflight());
+  const httpMetrics = {
+    quotes: metricRegistry.counter("shade_tree_registrar_quotes_total", QUOTES_HELP),
+    payments: metricRegistry.counter("shade_tree_registrar_payments_total", PAYMENTS_HELP),
+  };
+  metricRegistry.gauge("shade_tree_registrar_orders", "Orders in the registrar store.").setCollect(() => store.size());
+  metricRegistry.gauge("shade_tree_registrar_inflight", "Settlements currently in flight.").setCollect(() => engine.inflight());
 
   const x402On = offerServes(offer, "x402"), mppOn = offerServes(offer, "mpp");
   const wantHeader = [x402On ? "PAYMENT-SIGNATURE" : null, mppOn ? "Authorization: Payment" : null].filter(Boolean).join(" or ");
   // Every 402 carries the challenge(s) of the ENABLED rails for the tiers in `limits`
   // (SHADE_TREE_PAY_PROTOCOLS, T-FEAT-9: a disabled rail gets NO challenge), plus the JSON offer as body.
   function send402(res, limitsToOffer, { digest = "", error = null, problem = null, x402Response = null, route = "quote" } = {}) {
-    M.quotes.inc({ route });
+    httpMetrics.quotes.inc({ route });
     const headers = {};
     if (x402On) {
       const pr = x402PaymentRequired(offer, limitsToOffer, { error: error || `${wantHeader} header is required` });
@@ -436,17 +474,18 @@ export function makeServer(engine, { offer, store, set, limits = {}, now = () =>
     headersTimeout: lim.headersTimeout, requestTimeout: lim.requestTimeout, keepAliveTimeout: lim.keepAliveTimeout,
     maxHeaderSize: lim.maxHeaderSize, connectionsCheckingInterval: lim.connectionsCheckingInterval,
   }, async (req, res) => {
+    let paymentOutcome = null;
+    let paymentProtocol = "unknown";
+    const markPayment = (protocol, result, reason = null) => {
+      paymentProtocol = PAYMENT_PROTOCOLS.has(protocol) ? protocol : "unknown";
+      paymentOutcome = paymentMetricLabels({ protocol: paymentProtocol, result, reason });
+    };
     try {
       const url = new URL(req.url, "http://registrar");
       if (req.method === "GET" && url.pathname === "/health") {
         let leafCount = null, root = null;
         try { leafCount = Number(await set.leafCount()); root = (await set.currentRoot()).toString(); } catch { /* chain unreachable: still answer */ }
-        return send(res, 200, { ok: true, pay: offerSummary(offer), paidAccessSet: set.target, leafCount, root, orders: store.size() });
-      }
-      if (req.method === "GET" && url.pathname === "/metrics") {
-        const body = metrics.render();
-        res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "content-length": Buffer.byteLength(body) });
-        return res.end(body);
+        return send(res, 200, { ok: true, pay: offerSummary(offer), paidAccessSet: set.target, leafCount, root });
       }
       if (req.method === "GET" && url.pathname === "/pay/quote") {
         if (!quoteBucket.take()) return send(res, 429, { ok: false, err: "rate-limited" }, { "retry-after": String(quoteBucket.retryAfterSec()) });
@@ -462,67 +501,75 @@ export function makeServer(engine, { offer, store, set, limits = {}, now = () =>
         return orders.length ? send(res, 200, { ok: true, orders }) : send(res, 404, { ok: false, err: "not-found" });
       }
       if (req.method === "POST" && url.pathname === "/pay") {
+        // One listener, one increment. Every branch below only selects the terminal label set;
+        // `finish` records the completed response and makes accidental double-counting impossible.
+        markPayment("unknown", "failed", "internal-error");
+        res.once("finish", () => httpMetrics.payments.inc(paymentOutcome));
         let raw;
-        try { raw = await readBody(req); } catch { res.once("finish", () => { try { req.socket.destroy(); } catch {} }); return send(res, 413, { ok: false, err: "body too large" }); }
+        try { raw = await readBody(req); } catch { markPayment("unknown", "rejected", "body-too-large"); res.once("finish", () => { try { req.socket.destroy(); } catch {} }); return send(res, 413, { ok: false, err: "body too large" }); }
         let body = null;
-        if (raw.length) { try { body = JSON.parse(raw.toString("utf8")); } catch { return send(res, 400, { ok: false, err: "bad-json" }); } }
-        if (body !== null && (typeof body !== "object" || Array.isArray(body))) return send(res, 400, { ok: false, err: "bad-json" });
+        if (raw.length) { try { body = JSON.parse(raw.toString("utf8")); } catch { markPayment("unknown", "rejected", "bad-json"); return send(res, 400, { ok: false, err: "bad-json" }); } }
+        if (body !== null && (typeof body !== "object" || Array.isArray(body))) { markPayment("unknown", "rejected", "bad-json"); return send(res, 400, { ok: false, err: "bad-json" }); }
         const x402Header = req.headers["payment-signature"];
         const authHeader = req.headers["authorization"];
         const bodyLimit = body && body.limit != null ? String(body.limit) : null;
         const limits = bodyLimit == null ? tierList(offer) : (priceOf(offer, bodyLimit) ? [Number(bodyLimit)] : null);
-        if (!limits) return send(res, 400, { ok: false, err: "unknown-limit", tiers: tierList(offer) });
+        if (!limits) { markPayment("unknown", "rejected", "unknown-limit"); return send(res, 400, { ok: false, err: "unknown-limit", tiers: tierList(offer) }); }
         // No payment header: this is the challenge step of a bodied request -> 402 with the MPP
         // challenge bound to the body digest (RFC 9530) and the x402 requirements.
-        if (!x402Header && !authHeader) return send402(res, limits, { digest: raw.length ? contentDigest(raw) : "", route: "pay" });
-        if (!payBucket.take()) return send(res, 429, { ok: false, err: "rate-limited" }, { "retry-after": String(payBucket.retryAfterSec()) });
-        if (!body || !isCommitment(body.commitment) || bodyLimit == null) return send(res, 400, { ok: false, err: "bad-body", want: "{commitment: <decimal field element>, limit: <tier>}" });
+        if (!x402Header && !authHeader) { markPayment("unknown", "challenged", "payment-required"); return send402(res, limits, { digest: raw.length ? contentDigest(raw) : "", route: "pay" }); }
+        if (!payBucket.take()) { markPayment("unknown", "rejected", "rate-limited"); return send(res, 429, { ok: false, err: "rate-limited" }, { "retry-after": String(payBucket.retryAfterSec()) }); }
+        if (!body || !isCommitment(body.commitment) || bodyLimit == null) { markPayment("unknown", "rejected", "bad-body"); return send(res, 400, { ok: false, err: "bad-body", want: "{commitment: <decimal field element>, limit: <tier>}" }); }
         // A payload for a rail this provider does not serve (SHADE_TREE_PAY_PROTOCOLS, T-FEAT-9) is refused
         // up front with the enabled list -- never parsed, never a challenge for the disabled rail.
-        if (x402Header && !x402On) { M.payments.inc({ protocol: "x402", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "x402", protocols: offerProtocols(offer), detail: `this registrar does not serve x402 (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
-        if (!x402Header && authHeader && !mppOn) { M.payments.inc({ protocol: "mpp", result: "rejected", reason: "protocol-disabled" }); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "mpp", protocols: offerProtocols(offer), detail: `this registrar does not serve MPP (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
+        if (x402Header && !x402On) { markPayment("x402", "rejected", "protocol-disabled"); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "x402", protocols: offerProtocols(offer), detail: `this registrar does not serve x402 (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
+        if (!x402Header && authHeader && !mppOn) { markPayment("mpp", "rejected", "protocol-disabled"); return send(res, 400, { ok: false, err: "protocol-disabled", protocol: "mpp", protocols: offerProtocols(offer), detail: `this registrar does not serve MPP (SHADE_TREE_PAY_PROTOCOLS=${offerProtocols(offer).join(",")}); use ${offerProtocols(offer).join(" or ")}` }); }
 
         // ---- x402 -----------------------------------------------------------------
         if (x402Header) {
-          if (Array.isArray(x402Header) || x402Header.length > 8192) return send(res, 400, { ok: false, err: "invalid_payment_payload" });
+          paymentProtocol = "x402";
+          if (Array.isArray(x402Header) || x402Header.length > 8192) { markPayment("x402", "rejected", "credential-too-large"); return send(res, 400, { ok: false, err: "invalid_payment_payload" }); }
           const parsed = parseX402Payment(x402Header, offer);
           const settlementFail = (reason, payer) => x402Settlement({ success: false, errorReason: reason, network: caip2(offer.chainId), payer });
-          if (!parsed.ok) { M.payments.inc({ protocol: "x402", result: "rejected", reason: parsed.reason }); return send402(res, limits, { route: "pay", error: parsed.reason, x402Response: settlementFail(parsed.reason) }); }
-          if (parsed.limit !== Number(bodyLimit)) { M.payments.inc({ protocol: "x402", result: "rejected", reason: "limit-mismatch" }); return send402(res, limits, { route: "pay", error: "limit-mismatch", x402Response: settlementFail("invalid_exact_evm_payload_authorization_value_mismatch", parsed.authorization.from) }); }
+          if (!parsed.ok) { markPayment("x402", "rejected", parsed.reason); return send402(res, limits, { route: "pay", error: parsed.reason, x402Response: settlementFail(parsed.reason) }); }
+          if (parsed.limit !== Number(bodyLimit)) { markPayment("x402", "rejected", "limit-mismatch"); return send402(res, limits, { route: "pay", error: "limit-mismatch", x402Response: settlementFail("invalid_exact_evm_payload_authorization_value_mismatch", parsed.authorization.from) }); }
           const r = await engine.verifyAndSettle({ protocol: "x402", limit: parsed.limit, commitment: body.commitment, authorization: parsed.authorization, signature: parsed.signature });
           if (!r.ok) {
-            M.payments.inc({ protocol: "x402", result: r.status >= 500 ? "failed" : "rejected", reason: r.reason });
+            markPayment("x402", r.status >= 500 ? "failed" : "rejected", r.reason);
             if (r.status === 402) return send402(res, limits, { route: "pay", error: `${r.reason}: ${r.detail}`, x402Response: settlementFail(r.reason, parsed.authorization.from) });
             return send(res, r.status, { ok: false, err: r.reason, detail: r.detail }, r.status === 503 ? { "retry-after": "5" } : null);
           }
-          M.payments.inc({ protocol: "x402", result: r.replayed ? "replayed" : "inserted" });
+          markPayment("x402", r.replayed ? "replayed" : "inserted");
           const settlement = x402Settlement({ success: true, transaction: r.order.settleTx || "", network: caip2(offer.chainId), payer: r.order.from });
           return send(res, 200, { ok: true, protocol: "x402", ...publicOrder(r.order), replayed: r.replayed }, { "payment-response": encodeX402Header(settlement), "cache-control": "private, no-store" });
         }
         // ---- MPP ------------------------------------------------------------------
-        if (Array.isArray(authHeader) || authHeader.length > 8192) return send402(res, limits, { route: "pay", problem: mppProblem("malformed-credential", "one Authorization header of at most 8 KiB") });
+        paymentProtocol = "mpp";
+        if (Array.isArray(authHeader) || authHeader.length > 8192) { markPayment("mpp", "rejected", "credential-too-large"); return send402(res, limits, { route: "pay", problem: mppProblem("malformed-credential", "one Authorization header of at most 8 KiB") }); }
         const parsed = parseMppCredential(authHeader, store.mppSecret(), offer, { bodyDigest: contentDigest(raw), nowMs: now() });
         if (!parsed.ok) {
-          M.payments.inc({ protocol: "mpp", result: "rejected", reason: parsed.reason });
+          markPayment("mpp", "rejected", parsed.reason);
           const status = parsed.reason === "method-unsupported" ? 400 : 402;
           if (status !== 402) return send(res, status, mppProblem(parsed.reason, parsed.detail, status), null, "application/problem+json");
           return send402(res, limits, { route: "pay", digest: contentDigest(raw), problem: mppProblem(parsed.reason, parsed.detail) });
         }
-        if (parsed.limit !== Number(bodyLimit)) { M.payments.inc({ protocol: "mpp", result: "rejected", reason: "limit-mismatch" }); return send402(res, limits, { route: "pay", digest: contentDigest(raw), problem: mppProblem("verification-failed", "body.limit does not match the challenge's tier") }); }
+        if (parsed.limit !== Number(bodyLimit)) { markPayment("mpp", "rejected", "limit-mismatch"); return send402(res, limits, { route: "pay", digest: contentDigest(raw), problem: mppProblem("verification-failed", "body.limit does not match the challenge's tier") }); }
         const r = await engine.verifyAndSettle({ protocol: "mpp", limit: parsed.limit, commitment: body.commitment, authorization: parsed.authorization, signature: parsed.signature, meta: { challengeId: parsed.challenge.id } });
         if (!r.ok) {
-          M.payments.inc({ protocol: "mpp", result: r.status >= 500 ? "failed" : "rejected", reason: r.reason });
+          markPayment("mpp", r.status >= 500 ? "failed" : "rejected", r.reason);
           const code = r.reason === "expired" ? "payment-expired" : r.reason === "insufficient_funds" ? "payment-insufficient" : "verification-failed";
           if (r.status === 402) return send402(res, limits, { route: "pay", digest: contentDigest(raw), problem: mppProblem(code, `${r.reason}: ${r.detail}`) });
           return send(res, r.status, { ...mppProblem(code, `${r.reason}: ${r.detail}`, r.status), err: r.reason }, r.status === 503 ? { "retry-after": "5" } : null, "application/problem+json");
         }
-        M.payments.inc({ protocol: "mpp", result: r.replayed ? "replayed" : "inserted" });
+        markPayment("mpp", r.replayed ? "replayed" : "inserted");
         const { header } = mppReceipt({ challengeId: parsed.challenge.id, txHash: r.order.settleTx || "", chainId: offer.chainId, nowMs: now() });
         return send(res, 200, { ok: true, protocol: "mpp", ...publicOrder(r.order), replayed: r.replayed }, { "payment-receipt": header, "cache-control": "private, no-store" });
       }
       return send(res, 404, { ok: false, err: "no-route" });
     } catch (e) {
-      log.error("registrar: request failed", { err: e.message });
+      // Never place a payer-supplied header or body fragment in the default log stream.
+      log.error("registrar: request failed", { reason: "internal-error", errorType: e?.name || "Error" });
+      if (paymentOutcome) markPayment(paymentProtocol, "failed", "internal-error");
       return send(res, 500, { ok: false, err: "registrar-error" });
     }
   });
@@ -536,12 +583,14 @@ function publicOrder(o) {
 
 // ---- main ---------------------------------------------------------------------------------
 async function main() {
+  const pkg = JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8"));
+  installRuntimeMetrics(metrics, { role: "registrar", version: pkg.version });
   const key = process.env.SHADE_TREE_REGISTRAR_KEY;
-  if (!key || !/^(0x)?[0-9a-fA-F]{64}$/.test(key)) { console.error("SHADE_TREE_REGISTRAR_KEY (operator hot key, 32-byte hex) is required"); process.exit(1); }
+  if (!key || !/^(0x)?[0-9a-fA-F]{64}$/.test(key)) { log.error("SHADE_TREE_REGISTRAR_KEY (operator hot key, 32-byte hex) is required"); process.exit(1); }
   const rpcUrl = process.env.SHADE_TREE_RPC_URL || networkDefault("SHADE_TREE_RPC_URL");
-  if (!rpcUrl) { console.error("SHADE_TREE_RPC_URL is required (or SHADE_TREE_NETWORK with a contracts.json rpcUrl)"); process.exit(1); }
+  if (!rpcUrl) { log.error("SHADE_TREE_RPC_URL is required (or SHADE_TREE_NETWORK with a contracts.json rpcUrl)"); process.exit(1); }
   const setAddr = process.env.SHADE_TREE_PAID_ACCESS_CONTRACT || networkDefault("SHADE_TREE_PAID_ACCESS_CONTRACT");
-  if (!isAddress(setAddr || "")) { console.error("SHADE_TREE_PAID_ACCESS_CONTRACT (PaidAccessSet address) is required"); process.exit(1); }
+  if (!isAddress(setAddr || "")) { log.error("SHADE_TREE_PAID_ACCESS_CONTRACT (PaidAccessSet address) is required"); process.exit(1); }
   const offer = makeOffer(process.env);
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
@@ -554,8 +603,8 @@ async function main() {
   try {
     const allowed = (await set.allowedLimits()).map((n) => Number(n));
     const missing = tierList(offer).filter((l) => !allowed.includes(l));
-    if (missing.length) { console.error(`SHADE_TREE_PAY_PRICES sells tiers ${missing.join(",")} that PaidAccessSet ${setAddr} does not admit (allowedLimits=${allowed.join(",")})`); process.exit(1); }
-  } catch (e) { console.error(`PaidAccessSet ${setAddr} unreachable or has no allowedLimits(): ${e.shortMessage || e.message}`); process.exit(1); }
+    if (missing.length) { log.error(`SHADE_TREE_PAY_PRICES sells tiers ${missing.join(",")} that PaidAccessSet ${setAddr} does not admit (allowedLimits=${allowed.join(",")})`); process.exit(1); }
+  } catch (e) { log.error("PaidAccessSet unreachable or has no allowedLimits()", { contract: setAddr, err: e.shortMessage || e.message }); process.exit(1); }
   const storePath = process.env.SHADE_TREE_REGISTRAR_STORE || join(HERE, "registrar-state.local.json");
   const store = makeStore(storePath);
   const engine = makeEngine({ offer, token, set, wallet, provider, store, confirmations: envInt("SHADE_TREE_PAY_CONFIRMATIONS", 1), maxInflight: envInt("SHADE_TREE_REGISTRAR_MAX_INFLIGHT", 8) });
@@ -565,16 +614,37 @@ async function main() {
   const server = makeServer(engine, { offer, store, set });
   const openSockets = new Set();
   server.on("connection", (s) => { openSockets.add(s); s.on("close", () => openSockets.delete(s)); });
+  const metricsPort = safeMetricsPort(process.env.SHADE_TREE_METRICS_PORT, [["registrar backend", offer.port]]);
+  let metricsServer = null;
+  if (metricsPort > 0) {
+    metricsServer = listenMetrics({ port: metricsPort, reg: metrics, host: "127.0.0.1", ready: () => server.listening });
+    await new Promise((resolve, reject) => {
+      metricsServer.once("listening", resolve);
+      metricsServer.once("error", reject);
+    });
+    log.info("operator metrics ready", { event: "metrics.ready", listen: `127.0.0.1:${metricsPort}` });
+  }
   server.listen(offer.port, "127.0.0.1", () => {
-    log.info(`registrar up on 127.0.0.1:${offer.port}`, { operator: wallet.address, payTo: offer.payTo, asset: offer.asset, assetName: offer.assetName, chain: caip2(offer.chainId), tiers: offer.tiers, paidAccessSet: setAddr, store: storePath });
-    log.info(`endpoints: GET /pay/quote?limit=N  POST /pay  GET /pay/status/<nonce>  GET /health  GET /metrics  (protocols: ${offer.protocols.map((p) => (p === "x402" ? "x402 v2" : "MPP evm/charge type=authorization")).join(" + ")}; SHADE_TREE_PAY_PROTOCOLS=${offer.protocols.join(",")})`);
-    log.info("endpoint hardening", { ...server.limits, maxBody: MAX_BODY });
+    printOperatorBanner({ role: "registrar", rows: [
+      ["listen", `127.0.0.1:${offer.port}`],
+      ["protocols", offer.protocols.join(",")],
+      ["tiers", Object.keys(offer.tiers).join(",")],
+      ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
+    ] });
+    log.info(`registrar up on 127.0.0.1:${offer.port}`, { event: "service.ready", chain: caip2(offer.chainId), tiers: Object.keys(offer.tiers), protocols: offer.protocols, metricsPort });
+    log.debug("registrar endpoints ready", { endpoints: ["GET /pay/quote", "POST /pay", "GET /pay/status/<nonce>", "GET /health"] });
+    log.debug("endpoint hardening", { ...server.limits, maxBody: MAX_BODY });
   });
-  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs: Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000), label: "registrar" });
+  const shutdown = makeGracefulShutdown(server, {
+    openSockets,
+    timeoutMs: Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000),
+    label: "registrar",
+    log: (message) => log.info(message, { event: "service.shutdown" }),
+  });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error("registrar failed:", e.shortMessage || e.message); process.exit(1); });
+  main().catch((e) => { log.error("registrar failed", { event: "service.failed", err: e.shortMessage || e.message }); process.exit(1); });
 }

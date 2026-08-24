@@ -76,7 +76,12 @@ Every `--flag` sets exactly one `SHADE_TREE_*` env var (from `FLAG_ENV` in `bin/
 | `--tor-host` | `SHADE_TREE_TOR_HOST` | global |
 | `--tor-port` | `SHADE_TREE_TOR_PORT` | global |
 | `--epoch-seconds` | `SHADE_TREE_EPOCH_SECONDS` | global |
+| `--log-level` | `SHADE_TREE_LOG_LEVEL` | operator output (`debug\|info\|warn\|error\|off`) |
+| `--log-format` | `SHADE_TREE_LOG_FORMAT` | operator output (`auto\|pretty\|text\|json`) |
+| `--metrics-port` | `SHADE_TREE_METRICS_PORT` | local metrics for a long-running role; heartbeat remaps this to its dedicated variable |
+| `--heartbeat-metrics-port` | `SHADE_TREE_HEARTBEAT_METRICS_PORT` | local heartbeat metrics |
 | `--port` | `SHADE_TREE_BOOTNODE_PORT` | bootnode |
+| `--gateway-port` | `SHADE_TREE_GATEWAY_PORT` | node backend mapped by Tor |
 | `--admission` | `SHADE_TREE_BOOTNODE_ADMISSION` | bootnode |
 | `--ttl` | `SHADE_TREE_BOOTNODE_TTL` | bootnode |
 | `--signer-key` | `SHADE_TREE_BOOTNODE_SIGNER_KEY` | bootnode |
@@ -108,5 +113,11 @@ Every `--flag` sets exactly one `SHADE_TREE_*` env var (from `FLAG_ENV` in `bin/
 | `--operator-sig` | `SHADE_TREE_GW_OPERATOR_SIG` | gateway announce / heartbeat |
 | `--register-key` | `SHADE_TREE_REGISTER_KEY` | gateway announce / heartbeat |
 | `--bond` | `SHADE_TREE_BOND` | gateway announce / heartbeat |
+
+Operator shortcuts are handled before command dispatch: `--quiet` sets the log
+level to `warn` unless `--log-level` is explicit, `--banner` sets
+`SHADE_TREE_BANNER=always`, and `--no-banner` sets it to `never`. A banner is
+never mixed into JSON logs. `auto` output uses pretty logs and one ASCII tree on
+an interactive TTY, then JSON with no tree in systemd, CI, pipes, and files.
 
 Some env vars have no flag and must be set in the environment directly: `SHADE_TREE_SLASH_RECEIVER`, `SHADE_TREE_MEMBERS_FILE`, `SHADE_TREE_PAID_MIN_LEAVES`, `SHADE_TREE_CONFIRMATIONS`, `SHADE_TREE_STAKE_CACHE_MS`, `SHADE_TREE_FRESHNESS_ROOTS`, `SHADE_TREE_FROM_BLOCK`, `SHADE_TREE_FROM_BLOCKS`, `SHADE_TREE_LOGS_CHUNK`, `SHADE_TREE_DIRECTORY_CACHE`, `SHADE_TREE_DIRECTORY_REFRESH_MS`, `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and the demo/test vars. See `docs/CONFIG.md`.

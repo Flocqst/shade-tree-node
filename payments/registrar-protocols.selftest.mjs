@@ -14,10 +14,13 @@
 
 import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { makeStore, makeServer, makeOffer, offerSummary, offerProtocols } from "./registrar.mjs";
+import { makeStore, makeServer, makeOffer, offerSummary, offerProtocols, paymentMetricLabels } from "./registrar.mjs";
 import { parsePayProtocols } from "../lib/admission.mjs";
+import { makeRegistry } from "../lib/metrics.mjs";
 
 let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
@@ -25,6 +28,17 @@ const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { conso
 const ASSET = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
 const BASE_ENV = { SHADE_TREE_PAY_ASSET: ASSET, SHADE_TREE_PAY_PRICES: "8=100000,32=400000", SHADE_TREE_REGISTRAR_PORT: "0" };
 const COMMITMENT = "12345678901234567890";
+const PAYMENT_METRIC = "shade_tree_registrar_payments_total";
+let registrarSeq = 0;
+
+function metricValue(registry, labels) {
+  const suffix = "{" + Object.entries(labels).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}="${v}"`).join(",") + "}";
+  const line = registry.render().split("\n").find((row) => row.startsWith(PAYMENT_METRIC + suffix + " "));
+  return line ? Number(line.slice(line.lastIndexOf(" ") + 1)) : 0;
+}
+function paymentTotal(registry) {
+  return registry.render().split("\n").filter((row) => row.startsWith(PAYMENT_METRIC + "{")).reduce((sum, row) => sum + Number(row.slice(row.lastIndexOf(" ") + 1)), 0);
+}
 
 function request(port, { method = "GET", path = "/", headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
@@ -45,17 +59,38 @@ async function startRegistrar(work, protocolsSpec) {
   if (protocolsSpec !== undefined) env.SHADE_TREE_PAY_PROTOCOLS = protocolsSpec;
   const offer = makeOffer(env);
   Object.assign(offer, { chainId: 11155111, assetName: "Test USD", assetVersion: "1", decimals: 6, payTo: "0x000000000000000000000000000000000000dEaD" });
-  const store = makeStore(join(work, `store-${String(protocolsSpec).replace(/[^a-z0-9]/gi, "_")}.json`));
+  const store = makeStore(join(work, `store-${registrarSeq++}-${String(protocolsSpec).replace(/[^a-z0-9]/gi, "_")}.json`));
   const calls = [];
   const engine = { verifyAndSettle: async (args) => { calls.push(args); return { ok: false, status: 402, reason: "bad-signature", detail: "fake engine" }; }, inflight: () => 0 };
   const set = { target: "0x1111111111111111111111111111111111111111", leafCount: async () => 3n, currentRoot: async () => 42n };
-  const server = makeServer(engine, { offer, store, set, limits: { headersTimeout: 1500, requestTimeout: 3000, connectionsCheckingInterval: 200 } });
+  const metricRegistry = makeRegistry();
+  const server = makeServer(engine, { offer, store, set, limits: { headersTimeout: 1500, requestTimeout: 3000, maxHeaderSize: 32768, connectionsCheckingInterval: 200 }, metricRegistry });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  return { offer, calls, server, port: server.address().port, stop: () => new Promise((r) => server.close(r)) };
+  return { offer, calls, metricRegistry, server, port: server.address().port, stop: () => new Promise((r) => server.close(r)) };
 }
 
 async function main() {
-  console.log("SHADE_TREE_PAY_PROTOCOLS -> offer.protocols:");
+  console.log("registrar startup errors use the structured logger:");
+  {
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL("./registrar.mjs", import.meta.url))], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        SHADE_TREE_LOG_LEVEL: "info",
+        SHADE_TREE_LOG_FORMAT: "json",
+        SHADE_TREE_REGISTRAR_KEY: "",
+      },
+    });
+    let record = null;
+    try { record = JSON.parse(run.stderr.trim().split("\n").filter(Boolean).at(-1)); } catch {}
+    ok(run.status === 1, "missing operator key still fails fast with exit status 1");
+    ok(record?.level === "error" && record?.component === "registrar"
+      && /SHADE_TREE_REGISTRAR_KEY/.test(record?.msg || ""),
+      "the startup failure is a structured registrar error instead of raw console output");
+  }
+
+  console.log("\nSHADE_TREE_PAY_PROTOCOLS -> offer.protocols:");
   {
     ok(JSON.stringify(makeOffer(BASE_ENV).protocols) === '["x402","mpp"]', "unset -> both (default when the registrar is enabled)");
     ok(JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: "mpp" }).protocols) === '["mpp"]' && JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: " X402 " }).protocols) === '["x402"]' && JSON.stringify(makeOffer({ ...BASE_ENV, SHADE_TREE_PAY_PROTOCOLS: "mpp,x402" }).protocols) === '["x402","mpp"]', "subsets, case/space tolerant, canonical order x402,mpp");
@@ -71,6 +106,72 @@ async function main() {
     const both = await startRegistrar(work, undefined), x402Only = await startRegistrar(work, "x402"), mppOnly = await startRegistrar(work, "mpp");
     regs.push(both, x402Only, mppOnly);
     const bodyLimit8 = JSON.stringify({ commitment: COMMITMENT, limit: 8 });
+
+    console.log("\npublic and operator surface separation:");
+    const boundaryHealth = await request(both.port, { path: "/health" });
+    ok(boundaryHealth.status === 200 && !("orders" in JSON.parse(boundaryHealth.body)), "/health omits private order volume");
+    ok((await request(both.port, { path: "/metrics" })).status === 404, "the onion-facing registrar listener has no /metrics route");
+
+    console.log("\nPOST /pay metrics count every completed request exactly once with bounded labels:");
+    {
+      const observed = await startRegistrar(work, undefined);
+      regs.push(observed);
+      const reg = observed.metricRegistry;
+      const expectOutcome = async (requestOptions, status, labels, message) => {
+        const beforeTotal = paymentTotal(reg), beforeSeries = metricValue(reg, labels);
+        const response = await request(observed.port, requestOptions);
+        ok(response.status === status && paymentTotal(reg) === beforeTotal + 1 && metricValue(reg, labels) === beforeSeries + 1, message);
+      };
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "content-type": "application/json" }, body: bodyLimit8 },
+        402, { protocol: "unknown", reason: "payment-required", result: "challenged" },
+        "a headerless payment challenge increments unknown/challenged/payment-required once",
+      );
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "payment-signature": "zz" }, body: "{" },
+        400, { protocol: "unknown", reason: "bad-json", result: "rejected" },
+        "malformed JSON increments unknown/rejected/bad-json once",
+      );
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "content-type": "application/json", "payment-signature": "zz" }, body: JSON.stringify({ limit: 8 }) },
+        400, { protocol: "unknown", reason: "bad-body", result: "rejected" },
+        "an invalid body increments unknown/rejected/bad-body once",
+      );
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "content-type": "application/json", "payment-signature": "zz" }, body: JSON.stringify({ commitment: COMMITMENT, limit: 16 }) },
+        400, { protocol: "unknown", reason: "unknown-limit", result: "rejected" },
+        "an unknown tier increments unknown/rejected/unknown-limit once",
+      );
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "content-type": "application/json", "payment-signature": "A".repeat(9000) }, body: bodyLimit8 },
+        400, { protocol: "x402", reason: "credential-too-large", result: "rejected" },
+        "an oversized x402 credential increments x402/rejected/credential-too-large once",
+      );
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "content-type": "application/json", authorization: "Payment " + "A".repeat(9000) }, body: bodyLimit8 },
+        402, { protocol: "mpp", reason: "credential-too-large", result: "rejected" },
+        "an oversized MPP credential increments mpp/rejected/credential-too-large once",
+      );
+
+      const beforeRateTotal = paymentTotal(reg), beforeRateSeries = metricValue(reg, { protocol: "unknown", reason: "rate-limited", result: "rejected" });
+      let attempts = 0, limited = null;
+      while (attempts < 20 && !limited) {
+        attempts++;
+        const response = await request(observed.port, { method: "POST", path: "/pay", headers: { "content-type": "application/json", "payment-signature": "zz" }, body: bodyLimit8 });
+        if (response.status === 429) limited = response;
+      }
+      ok(limited?.status === 429 && paymentTotal(reg) === beforeRateTotal + attempts && metricValue(reg, { protocol: "unknown", reason: "rate-limited", result: "rejected" }) === beforeRateSeries + 1, "the pay bucket's 429 is counted once and every preceding parsed rejection is counted once");
+
+      await expectOutcome(
+        { method: "POST", path: "/pay", headers: { "payment-signature": "zz" }, body: "x".repeat(5000) },
+        413, { protocol: "unknown", reason: "body-too-large", result: "rejected" },
+        "an oversized body increments unknown/rejected/body-too-large once",
+      );
+
+      const sentinel = "payer-controlled-credential-value";
+      const safe = paymentMetricLabels({ protocol: sentinel, result: sentinel, reason: sentinel });
+      ok(JSON.stringify(safe) === '{"protocol":"unknown","result":"failed","reason":"other"}' && !JSON.stringify(safe).includes(sentinel), "unknown protocol/result/reason values collapse to closed labels without attacker text");
+    }
 
     console.log("\n402 challenges carry ONLY the enabled rails:");
     for (const [name, r, wantX402, wantMpp] of [["both", both, true, true], ["x402-only", x402Only, true, false], ["mpp-only", mppOnly, false, true]]) {

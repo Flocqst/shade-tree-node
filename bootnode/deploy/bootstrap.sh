@@ -18,6 +18,12 @@
 #   SHADE_TREE_DIR         install dir        (default: /opt/shade-tree)
 #   SHADE_TREE_ADMISSION   open | stake       (default: open)
 #   SHADE_TREE_BOOTNODE_PORT / SHADE_TREE_GATEWAY_PORT   loopback backends (default 8877 / 8443)
+#   SHADE_TREE_ELDER_METRICS_PORT / SHADE_TREE_NODE_METRICS_PORT   local Prometheus endpoints
+#                    (default 9100 / 9101). Registrar and heartbeat use 9102 / 9103. All four
+#                    stay on loopback and must be distinct from each other and active service ports.
+#   SHADE_TREE_LOG_LEVEL   debug | info | warn | error | off   (default: info)
+#   SHADE_TREE_LOG_FORMAT  auto | pretty | text | json          (default: json under systemd)
+#   SHADE_TREE_BANNER      auto | always | never                 (default: never under systemd)
 #   SHADE_TREE_ENABLE_POW  1 | 0              (default: 0) onion PoW DoS defense
 #                    (HiddenServicePoWDefensesEnabled) on every HS block this box publishes.
 #                    Default OFF: a client tor built without the pow module (e.g. the Homebrew
@@ -149,6 +155,13 @@ SHADE_TREE_REGISTRAR_PORT="${SHADE_TREE_REGISTRAR_PORT:-8878}"
 SHADE_TREE_PAY_CHAIN_ID="${SHADE_TREE_PAY_CHAIN_ID:-11155111}"
 SHADE_TREE_FROM_BLOCK="${SHADE_TREE_FROM_BLOCK:-}"
 SHADE_TREE_FROM_BLOCKS="${SHADE_TREE_FROM_BLOCKS:-}"
+SHADE_TREE_LOG_LEVEL="${SHADE_TREE_LOG_LEVEL:-info}"
+SHADE_TREE_LOG_FORMAT="${SHADE_TREE_LOG_FORMAT:-json}"
+SHADE_TREE_BANNER="${SHADE_TREE_BANNER:-never}"
+SHADE_TREE_ELDER_METRICS_PORT="${SHADE_TREE_ELDER_METRICS_PORT:-9100}"
+SHADE_TREE_NODE_METRICS_PORT="${SHADE_TREE_NODE_METRICS_PORT:-9101}"
+SHADE_TREE_REGISTRAR_METRICS_PORT="${SHADE_TREE_REGISTRAR_METRICS_PORT:-9102}"
+SHADE_TREE_HEARTBEAT_METRICS_PORT="${SHADE_TREE_HEARTBEAT_METRICS_PORT:-9103}"
 # Pinned sha256 of the a16z/helios 0.11.1 release tarballs (github.com/a16z/helios/releases/tag/0.11.1),
 # computed 2026-08-17 from the downloaded assets. Another SHADE_TREE_HELIOS_VERSION must bring its own
 # SHADE_TREE_HELIOS_SHA256 (no unpinned download, ever).
@@ -170,6 +183,20 @@ case "$SHADE_TREE_ENABLE_POW" in
   *) die "SHADE_TREE_ENABLE_POW must be 1 or 0 (got '$SHADE_TREE_ENABLE_POW')" ;;
 esac
 case "$SHADE_TREE_ADMISSION" in open|stake) ;; *) die "SHADE_TREE_ADMISSION must be open or stake (got '$SHADE_TREE_ADMISSION')" ;; esac
+case "$SHADE_TREE_LOG_LEVEL" in debug|info|warn|error|off) ;; *) die "SHADE_TREE_LOG_LEVEL must be debug, info, warn, error, or off" ;; esac
+case "$SHADE_TREE_LOG_FORMAT" in auto|pretty|text|json) ;; *) die "SHADE_TREE_LOG_FORMAT must be auto, pretty, text, or json" ;; esac
+case "$SHADE_TREE_BANNER" in auto|always|never|on|off|true|false|1|0) ;; *) die "SHADE_TREE_BANNER must be auto, always, or never" ;; esac
+for service_port in "$SHADE_TREE_BOOTNODE_PORT" "$SHADE_TREE_GATEWAY_PORT"; do
+  { [[ "$service_port" =~ ^[0-9]{4,5}$ ]] && [ "$service_port" -ge 1024 ] && [ "$service_port" -le 65535 ]; } \
+    || die "bootnode and gateway ports must be in 1024..65535 (got '$service_port')"
+done
+metrics_ports_seen=""
+for metrics_port in "$SHADE_TREE_ELDER_METRICS_PORT" "$SHADE_TREE_NODE_METRICS_PORT" "$SHADE_TREE_REGISTRAR_METRICS_PORT" "$SHADE_TREE_HEARTBEAT_METRICS_PORT"; do
+  { [[ "$metrics_port" =~ ^[0-9]{4,5}$ ]] && [ "$metrics_port" -ge 1024 ] && [ "$metrics_port" -le 65535 ]; } \
+    || die "operator metrics ports must be in 1024..65535 (got '$metrics_port')"
+  case " $metrics_ports_seen " in *" $metrics_port "*) die "operator metrics ports must be distinct (duplicate '$metrics_port')" ;; esac
+  metrics_ports_seen="$metrics_ports_seen $metrics_port"
+done
 # Mode: WITH_BOOTNODE=1 -> this box runs bootnode + gateway (default, unchanged behaviour);
 #       WITH_BOOTNODE=0 -> gateway-only, heartbeat -> the remote SHADE_TREE_BOOTNODE_ONION.
 WITH_BOOTNODE=1
@@ -265,6 +292,32 @@ if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then
   { [[ "$SHADE_TREE_REGISTRAR_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$SHADE_TREE_REGISTRAR_PORT" -ge 1024 ] && [ "$SHADE_TREE_REGISTRAR_PORT" -le 65535 ]; } \
     || die "SHADE_TREE_REGISTRAR_PORT must be a port in 1024..65535 (got '$SHADE_TREE_REGISTRAR_PORT')"
   [[ "$SHADE_TREE_PAY_CHAIN_ID" =~ ^[1-9][0-9]{0,15}$ ]] || die "SHADE_TREE_PAY_CHAIN_ID must be a positive integer"
+fi
+
+# Every active local listener must have its own port. A metrics listener sharing a Tor-mapped
+# backend can otherwise win the bind race, accidentally putting /metrics behind an onion while
+# the intended service crash-loops. Tor's local SOCKS port is reserved here for the same reason.
+runtime_ports_seen=""
+reserve_runtime_port() { # $1 = label, $2 = port
+  case " $runtime_ports_seen " in
+    *" $2 "*) die "active local service ports must be distinct; $1 reuses port $2" ;;
+  esac
+  runtime_ports_seen="$runtime_ports_seen $2"
+}
+reserve_runtime_port "Tor SOCKS" "9050"
+reserve_runtime_port "gateway backend" "$SHADE_TREE_GATEWAY_PORT"
+reserve_runtime_port "node metrics" "$SHADE_TREE_NODE_METRICS_PORT"
+reserve_runtime_port "heartbeat metrics" "$SHADE_TREE_HEARTBEAT_METRICS_PORT"
+if [ "$WITH_BOOTNODE" = "1" ]; then
+  reserve_runtime_port "bootnode backend" "$SHADE_TREE_BOOTNODE_PORT"
+  reserve_runtime_port "Elder metrics" "$SHADE_TREE_ELDER_METRICS_PORT"
+fi
+if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then
+  reserve_runtime_port "registrar backend" "$SHADE_TREE_REGISTRAR_PORT"
+  reserve_runtime_port "registrar metrics" "$SHADE_TREE_REGISTRAR_METRICS_PORT"
+fi
+if [ "$SHADE_TREE_HELIOS" = "1" ]; then
+  reserve_runtime_port "Helios RPC" "$SHADE_TREE_HELIOS_PORT"
 fi
 
 # eth_getLogs start blocks (gateway on-chain roots): a bare block, or <0xaddr>=<block> pairs. Both
@@ -374,6 +427,11 @@ Environment=SHADE_TREE_BOOTNODE_PORT=${SHADE_TREE_BOOTNODE_PORT}
 Environment=SHADE_TREE_BOOTNODE_ADMISSION=${SHADE_TREE_ADMISSION}
 Environment=SHADE_TREE_BOOTNODE_SIGNER_KEY=${SHADE_TREE_DIR}/deploy-state/bootnode-signer.key
 Environment=SHADE_TREE_BOOTNODE_STORE=${SHADE_TREE_DIR}/deploy-state/bootnode-state.json
+Environment=SHADE_TREE_METRICS_PORT=${SHADE_TREE_ELDER_METRICS_PORT}
+Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
+Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
+Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
+SyslogIdentifier=shade-tree-elder
 EOF
     if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then
       # Advertise the registrar in GET /health (`pay: {port, protocols, asset, chain, tiers}`).
@@ -416,6 +474,11 @@ Environment=SHADE_TREE_PAY_ASSET=${SHADE_TREE_PAY_ASSET}
 Environment=SHADE_TREE_PAY_PRICES=${SHADE_TREE_PAY_PRICES}
 Environment=SHADE_TREE_PAY_PROTOCOLS=${SHADE_TREE_PAY_PROTOCOLS}
 Environment=SHADE_TREE_RPC_URL=${SHADE_TREE_RPC_URL}
+Environment=SHADE_TREE_METRICS_PORT=${SHADE_TREE_REGISTRAR_METRICS_PORT}
+Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
+Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
+Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
+SyslogIdentifier=shade-tree-registrar
 EOF
     [ -z "$SHADE_TREE_PAY_TO" ] || echo "Environment=SHADE_TREE_PAY_TO=${SHADE_TREE_PAY_TO}"
     cat <<EOF
@@ -447,6 +510,12 @@ render_gateway_unit() {  # $1 = output file
 User=${RUN_USER}
 WorkingDirectory=${SHADE_TREE_DIR}
 Environment=SHADE_TREE_ADMIT=${SHADE_TREE_ADMIT}
+Environment=SHADE_TREE_GATEWAY_PORT=${SHADE_TREE_GATEWAY_PORT}
+Environment=SHADE_TREE_METRICS_PORT=${SHADE_TREE_NODE_METRICS_PORT}
+Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
+Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
+Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
+SyslogIdentifier=shade-tree-node
 EOF
     # Admission policy companions (T-FEAT-9): the contracts + RPC behind each admitted on-chain
     # path (SHADE_TREE_HELIOS=1 implies staked). Only rendered when the policy needs them.
@@ -528,6 +597,11 @@ Environment=SHADE_TREE_BOOTNODE_ONION=${BN_ONION}
 Environment=SHADE_TREE_GW_IDENTITY=${GW_HS}/identity.local.json
 Environment=SHADE_TREE_TOR_PORT=9050
 Environment=SHADE_TREE_ADMIT=${SHADE_TREE_ADMIT}
+Environment=SHADE_TREE_HEARTBEAT_METRICS_PORT=${SHADE_TREE_HEARTBEAT_METRICS_PORT}
+Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
+Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
+Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
+SyslogIdentifier=shade-tree-heartbeat
 EOF
     [ -z "$SHADE_TREE_GATEWAY_REGION" ] || echo "Environment=SHADE_TREE_GATEWAY_REGION=${SHADE_TREE_GATEWAY_REGION}"
     if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then

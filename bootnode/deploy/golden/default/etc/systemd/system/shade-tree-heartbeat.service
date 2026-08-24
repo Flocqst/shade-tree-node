@@ -8,6 +8,11 @@ Environment=SHADE_TREE_BOOTNODE_ONION=bootnodeplaceholderplaceholderplaceholderp
 Environment=SHADE_TREE_GW_IDENTITY=/opt/shade-tree/deploy-state/gateway-hs/identity.local.json
 Environment=SHADE_TREE_TOR_PORT=9050
 Environment=SHADE_TREE_ADMIT=invited
+Environment=SHADE_TREE_HEARTBEAT_METRICS_PORT=9103
+Environment=SHADE_TREE_LOG_LEVEL=info
+Environment=SHADE_TREE_LOG_FORMAT=json
+Environment=SHADE_TREE_BANNER=never
+SyslogIdentifier=shade-tree-heartbeat
 ExecStart=/usr/bin/node /opt/shade-tree/bootnode/heartbeat.mjs
 Restart=always
 RestartSec=10

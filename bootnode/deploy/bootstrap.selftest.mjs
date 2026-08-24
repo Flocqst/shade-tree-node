@@ -135,6 +135,11 @@ async function main() {
     const hbDef = got.get("etc/systemd/system/shade-tree-heartbeat.service");
     ok(unitEnv(hbDef, "SHADE_TREE_BOOTNODE_ONION")?.endsWith(".onion") && /^After=shade-tree-bootnode\.service tor\.service$/m.test(hbDef), "default heartbeat -> LOCAL bootnode, ordered after shade-tree-bootnode.service");
     ok(unitEnv(hbDef, "SHADE_TREE_GATEWAY_REGION") === null, "default heartbeat advertises no region");
+    const elderDef = got.get("etc/systemd/system/shade-tree-bootnode.service");
+    const nodeDef = got.get("etc/systemd/system/shade-tree-gateway.service");
+    ok(unitEnv(nodeDef, "SHADE_TREE_GATEWAY_PORT") === "8443", "gateway unit and Tor backend share the default node port");
+    ok(unitEnv(elderDef, "SHADE_TREE_METRICS_PORT") === "9100" && unitEnv(nodeDef, "SHADE_TREE_METRICS_PORT") === "9101" && unitEnv(hbDef, "SHADE_TREE_HEARTBEAT_METRICS_PORT") === "9103", "default operator metrics use distinct loopback ports for Elder, Node, and heartbeat");
+    ok([elderDef, nodeDef, hbDef].every((u) => unitEnv(u, "SHADE_TREE_LOG_LEVEL") === "info" && unitEnv(u, "SHADE_TREE_LOG_FORMAT") === "json" && unitEnv(u, "SHADE_TREE_BANNER") === "never"), "systemd defaults to structured info logs without terminal art");
     for (const f of got.keys()) if (f.endsWith(".service")) {
       const u = got.get(f);
       ok(/^NoNewPrivileges=true$/m.test(u) && /^ProtectSystem=strict$/m.test(u) && /^CapabilityBoundingSet=$/m.test(u) && /^SystemCallFilter=@system-service$/m.test(u), `${f}: sandbox lines present (T-DEPLOY-4)`);
@@ -282,6 +287,7 @@ async function main() {
     const ru = regFiles.get("etc/systemd/system/shade-tree-registrar.service");
     ok(/^ExecStart=\/usr\/bin\/node \/opt\/shade-tree\/payments\/registrar\.mjs$/m.test(ru) && unitEnv(ru, "SHADE_TREE_REGISTRAR_PORT") === "8878" && unitEnv(ru, "SHADE_TREE_PAID_ACCESS_CONTRACT") === REG.SHADE_TREE_PAID_ACCESS_CONTRACT && unitEnv(ru, "SHADE_TREE_PAY_ASSET") === REG.SHADE_TREE_PAY_ASSET && unitEnv(ru, "SHADE_TREE_PAY_PRICES") === REG.SHADE_TREE_PAY_PRICES && unitEnv(ru, "SHADE_TREE_RPC_URL") === REG.SHADE_TREE_RPC_URL && unitEnv(ru, "SHADE_TREE_REGISTRAR_STORE") === "/opt/shade-tree/deploy-state/registrar-state.json" && unitEnv(ru, "SHADE_TREE_REGISTRAR_ONION")?.endsWith(".onion"), "registrar unit: ExecStart payments/registrar.mjs + port/contract/asset/prices/rpc/store/onion env");
     ok(unitEnv(ru, "SHADE_TREE_REGISTRAR_KEY") === null && !/SHADE_TREE_REGISTRAR_KEY/.test(ru) && unitEnv(ru, "SHADE_TREE_PAY_TO") === null, "operator key NOT rendered (drop-in only); no SHADE_TREE_PAY_TO unless given");
+    ok(unitEnv(ru, "SHADE_TREE_METRICS_PORT") === "9102" && unitEnv(ru, "SHADE_TREE_LOG_FORMAT") === "json" && unitEnv(ru, "SHADE_TREE_BANNER") === "never", "registrar operator metrics and structured logging use isolated defaults");
     ok(/^User=shade-tree$/m.test(ru) && /^NoNewPrivileges=true$/m.test(ru) && /^ProtectSystem=strict$/m.test(ru) && /^CapabilityBoundingSet=$/m.test(ru) && /^SystemCallFilter=@system-service$/m.test(ru) && /^Restart=always$/m.test(ru) && !/MemoryDenyWriteExecute/.test(ru), "registrar unit: same sandbox as the other Node units (no W^X: V8 JIT)");
     const bnR = regFiles.get("etc/systemd/system/shade-tree-bootnode.service");
     ok(unitEnv(bnR, "SHADE_TREE_REGISTRAR_ADVERTISE") === "1" && unitEnv(bnR, "SHADE_TREE_REGISTRAR_PORT") === "8878" && unitEnv(bnR, "SHADE_TREE_PAY_ASSET") === REG.SHADE_TREE_PAY_ASSET && unitEnv(bnR, "SHADE_TREE_PAY_PRICES") === REG.SHADE_TREE_PAY_PRICES && unitEnv(bnR, "SHADE_TREE_PAY_CHAIN_ID") === "11155111", "bootnode unit advertises the offer (SHADE_TREE_REGISTRAR_ADVERTISE=1 + port/asset/prices/chain)");
@@ -419,6 +425,31 @@ async function main() {
     ok(adm.status !== 0 && /SHADE_TREE_ADMISSION must be open or stake/.test(adm.stderr), "SHADE_TREE_ADMISSION=vip rejected");
     const admStake = render(work, "adm-stake", { SHADE_TREE_ADMISSION: "stake" });
     ok(admStake.status === 0 && unitEnv(await readFile(join(admStake.out, "etc/systemd/system/shade-tree-bootnode.service"), "utf8"), "SHADE_TREE_BOOTNODE_ADMISSION") === "stake", "SHADE_TREE_ADMISSION=stake lands in the bootnode unit");
+    const metricsLow = render(work, "metrics-low", { SHADE_TREE_ELDER_METRICS_PORT: "80" });
+    ok(metricsLow.status !== 0 && /operator metrics ports must be in 1024\.\.65535/.test(metricsLow.stderr), "privileged or malformed operator metrics ports are rejected");
+    const metricsCollision = render(work, "metrics-collision", { SHADE_TREE_ELDER_METRICS_PORT: "9101" });
+    ok(metricsCollision.status !== 0 && /operator metrics ports must be distinct/.test(metricsCollision.stderr), "operator metrics port collisions are rejected before install");
+    const badBackend = render(work, "backend-port-bad", { SHADE_TREE_GATEWAY_PORT: "abc" });
+    ok(badBackend.status !== 0 && /bootnode and gateway ports must be in 1024\.\.65535/.test(badBackend.stderr), "malformed gateway backend ports are rejected before install");
+    const sameBackends = render(work, "backend-port-collision", { SHADE_TREE_GATEWAY_PORT: "8877" });
+    ok(sameBackends.status !== 0 && /active local service ports must be distinct/.test(sameBackends.stderr), "bootnode and gateway cannot share a local backend port");
+    for (const [name, env] of [
+      ["elder-metrics-vs-bootnode", { SHADE_TREE_ELDER_METRICS_PORT: "8877" }],
+      ["elder-metrics-vs-gateway", { SHADE_TREE_ELDER_METRICS_PORT: "8443" }],
+      ["node-metrics-vs-gateway", { SHADE_TREE_NODE_METRICS_PORT: "8443" }],
+      ["heartbeat-metrics-vs-tor", { SHADE_TREE_HEARTBEAT_METRICS_PORT: "9050" }],
+      ["registrar-metrics-vs-backend", { ...REG, SHADE_TREE_REGISTRAR_METRICS_PORT: "8878" }],
+      ["node-metrics-vs-helios", { ...HEL, SHADE_TREE_NODE_METRICS_PORT: "8546" }],
+    ]) {
+      const collision = render(work, name, env);
+      ok(collision.status !== 0 && /active local service ports must be distinct/.test(collision.stderr), `${name} collision is rejected before install`);
+    }
+    const customGatewayPort = render(work, "gateway-port-custom", { SHADE_TREE_GATEWAY_PORT: "9443" });
+    const customGatewayFiles = await readAll(customGatewayPort.out);
+    const customGatewayBlocks = hsBlocks(customGatewayFiles.get("etc/tor/torrc.d-shade-tree"));
+    ok(customGatewayPort.status === 0 && customGatewayBlocks[1].lines[0] === "HiddenServicePort 80 127.0.0.1:9443" && unitEnv(customGatewayFiles.get("etc/systemd/system/shade-tree-gateway.service"), "SHADE_TREE_GATEWAY_PORT") === "9443", "custom gateway port stays in sync across Tor and the node process");
+    const logBad = render(work, "log-bad", { SHADE_TREE_LOG_LEVEL: "verbose" });
+    ok(logBad.status !== 0 && /SHADE_TREE_LOG_LEVEL must be/.test(logBad.stderr), "unknown logging levels are rejected before install");
     const only = await listFiles(work);
     ok(only.every((f) => f.startsWith("etc/") || /^[^/]+\/etc\//.test(f)), "render mode writes only under <dir>/etc/ (no stray files)");
     ok(!/apt-get|systemctl|useradd/.test(def.stdout + def.stderr + gw.stdout + gw.stderr), "render mode never mentions apt/systemctl/useradd (nothing executed on the host)");

@@ -72,7 +72,7 @@ existing bootnode:
 ssh root@<new-droplet-ip>
 SHADE_TREE_BOOTNODE_ONION=<bootnode-onion> SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> \
   bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh)
-journalctl -u shade-tree-heartbeat -f      # 'announced (...)' once the descriptors propagate
+journalctl -u shade-tree-heartbeat -f -o cat  # msg="heartbeat accepted" once Tor is ready
 ```
 
 `SHADE_TREE_BOOTNODE_SIGNER` is only echoed into the printed client command (the heartbeat does
@@ -158,38 +158,82 @@ shade-tree doctor
 `shade-tree doctor` is read-only; it flags a missing Tor daemon, missing deps, missing onion
 identity, and whether on-chain mode is configured.
 
-### Logs
+### Operator output
 
 ```bash
-journalctl -u shade-tree-gateway   -f
-journalctl -u shade-tree-bootnode  -f
-journalctl -u shade-tree-heartbeat -f
+journalctl -u shade-tree-gateway   -f -o cat
+journalctl -u shade-tree-bootnode  -f -o cat
+journalctl -u shade-tree-heartbeat -f -o cat
 ```
 
-### Normal log lines
+The bootstrap writes newline-delimited JSON and disables decorative output for
+systemd. Each record has `ts`, `level`, `component`, and `msg`, plus bounded
+fields relevant to the event. Send those records directly to journald, Loki, or
+another JSON-aware collector.
 
-Gateway on startup:
+Direct terminal runs default to compact, colored output. Once a role is ready,
+it grows one small ASCII Shade Tree and prints its local listen and metrics
+details. The tree appears only on an interactive TTY. It never appears in JSON,
+CI, a pipe, or a service log.
 
+```bash
+# Interactive operator view with the startup tree.
+shade-tree node --log-level debug --log-format pretty --banner --metrics-port 9101
+
+# One JSON object per line, with no tree.
+shade-tree node --log-format json --no-banner
+
+# Warnings and errors only.
+shade-tree node --quiet
 ```
-gateway up on 127.0.0.1:8443  (epoch <n>, 120s)
-egress policy: :443 only (metadata-only TLS tunnel)
-root source: members.json (PoC fallback), <n> members     # or "on-chain RootProvider ..."
-roots: members.json + staked(0x…) + paid(0x…)  trustedRoots=3   # T-FEAT-7: every source unioned
-paid-access anonymity set: 12 leaves (floor K=8)                 # WARN when below the floor
-slash: routing over primary(0x…) + staked(0x…) + paid(0x…)      # with several slash targets
+
+Levels have a narrow purpose:
+
+- `debug` covers bounded tunnel outcomes, selection, and routing details.
+- `info` covers startup, readiness, configuration state, and state changes.
+- `warn` covers recoverable degradation that needs operator attention.
+- `error` covers a failed role or operation.
+
+Per-tunnel and payment logs do not include destinations, selected onion
+addresses, nullifiers, external nullifiers, member secrets, or payment
+authorizations. Debug logs keep the same traffic-metadata boundary. Service
+configuration can still name public contract addresses or the role's own onion.
+Known secret fields and credentials in URLs are redacted as a second line of
+defense. Do not add raw request objects to log fields.
+
+Configure this with `SHADE_TREE_LOG_LEVEL=debug|info|warn|error|off`,
+`SHADE_TREE_LOG_FORMAT=auto|pretty|text|json`, and
+`SHADE_TREE_BANNER=auto|always|never`. `auto` uses pretty logs and the tree on a
+TTY, then JSON everywhere else. `--banner` forces the tree for non-JSON output;
+`--no-banner` suppresses it. The tree follows the `info` threshold, so
+`--quiet` suppresses it too.
+
+### Local metrics
+
+The bootstrap gives each role a separate loopback-only Prometheus listener:
+
+| Role | Local endpoint |
+|---|---|
+| Elder Tree | `http://127.0.0.1:9100/metrics` |
+| Shade Tree node | `http://127.0.0.1:9101/metrics` |
+| Registrar, when enabled | `http://127.0.0.1:9102/metrics` |
+| Heartbeat | `http://127.0.0.1:9103/metrics` |
+
+```bash
+curl --fail http://127.0.0.1:9101/readyz
+curl --fail http://127.0.0.1:9101/metrics
 ```
 
-A served request (PASS) and a rejected one (DROP):
+Direct invocations leave metrics off unless a port is set. Use
+`--metrics-port` for the Elder Tree, node, registrar, or Proxy. The heartbeat
+uses `--heartbeat-metrics-port`. Every listener is hard-bound to loopback and is
+separate from the onion-mapped protocol port. Never publish or Tor-map it.
 
-```
-PASS  egress->api.ipify.org:443  null=0x1234abcd.. extNull=0x5678ef01..
-DROP  root-not-recent  target=example.com:443
-DROP  rate-slashed  null=0x1234abcd..
-```
-
-`PASS` = proof verified, tunnel opened. `DROP` = the request was rejected; the reason
-token (`root-not-recent`, `bad-target`, `rate-slashed`, `over-spend-slashed`, ...) says
-why. Heartbeat lines look like `announced (staked=false, ttl=900s)`.
+The metrics expose process health, bounded outcomes, and latency without
+destination, onion, nullifier, operator, contract-address, or request-ID
+labels. They stay on the operator machine and are never sent to the Elder Tree
+or public Grove. See [monitoring/README.md](../monitoring/README.md) for the full
+series list, scrape config, dashboard, alerts, and retention guidance.
 
 ---
 
@@ -240,21 +284,22 @@ nullifier with distinct evaluation points. The gateway detects it cryptographica
 slashes automatically. No operator action is required for the slash itself; your job is
 to confirm it landed.
 
-What the gateway logs on the offending request:
+What the node logs for the slash lifecycle:
 
 ```
-DROP  over-spend-slashed  null=0x1234abcd..
 SLASH tx 0x<hash> commitment=0x0123456789abcd.. (waiting)
 SLASH mined block <n> commitment=0x0123456789abcd..
 ```
 
-Subsequent requests on that nullifier log `DROP  rate-slashed  null=...`.
+At `debug`, the rejected tunnel has the bounded reason
+`over-spend-slashed`. Subsequent attempts use `rate-slashed`. The node does not
+log the nullifier or destination.
 
 If slashing is not configured you instead see a dry-run and **no on-chain tx**:
 
 ```
 slash: DRY-RUN (set SHADE_TREE_SLASH_KEY + deployed.local.json/SHADE_TREE_GROUP_CONTRACT to submit on chain)
-SLASH (dry-run) commitment=0x0123456789abcd.. secret=0x89abcdef..
+SLASH (dry-run) commitment=0x0123456789abcd..
 ```
 
 To slash for real, the gateway needs `SHADE_TREE_SLASH_KEY` (a hot key, separate from any
@@ -439,6 +484,10 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_HELIOS_CHAIN_ID` | (none) | Decimal chain id Helios must report; unset = must equal the RPC's `eth_chainId`. Mismatch ⇒ refuses to start reading roots. |
 | `SHADE_TREE_FROM_BLOCK` / `SHADE_TREE_FROM_BLOCKS` / `SHADE_TREE_LOGS_CHUNK` | (none) | `node` root provider + client leaf discovery: where the `eth_getLogs` event scan starts (one block for all sets / `<0xaddr>=<block>,…` per set; default = each set's deploy block from the network record) and how many blocks per call (default 10000, halved automatically when the RPC refuses a window). See "Public RPC log-range caps" below. |
 | `SHADE_TREE_TOR_HOST` / `SHADE_TREE_TOR_PORT` | `--tor-host` / `--tor-port` | Local Tor SOCKS (droplet 9050, local dev 9250). |
+| `SHADE_TREE_LOG_LEVEL` / `SHADE_TREE_LOG_FORMAT` | `--log-level` / `--log-format` | Operator output level and format. Defaults to `info` / `auto`; bootstrap uses `info` / `json`. |
+| `SHADE_TREE_BANNER` | `--banner` / `--no-banner` | Show the one-time ASCII tree. `auto` shows it only on an interactive, non-JSON terminal. |
+| `SHADE_TREE_METRICS_PORT` | `--metrics-port` | Separate loopback metrics listener for the Elder Tree, node, registrar, or Proxy. Unset or `0` is off for direct runs. |
+| `SHADE_TREE_HEARTBEAT_METRICS_PORT` | `--heartbeat-metrics-port` | Separate loopback heartbeat metrics listener. Unset or `0` is off for direct runs. |
 | `SHADE_TREE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
 | `SHADE_TREE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
 | `SHADE_TREE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
@@ -481,8 +530,9 @@ Since that night the gateway does three things on its own (`lib/root-provider.mj
   (`bootstrap.sh` passes both into the gateway unit when given).
 - **Fails soft at startup.** If every chain source is unreadable at boot but `members.json` gives
   a root, the gateway STARTS with that root, logs `root source UNAVAILABLE at startup …` (with the
-  fix hint), gauges `shade_tree_gateway_root_source_degraded{contract=…} 1`, and picks the chain roots up
-  on the next successful poll (no restart). With no root at all it still refuses to start (an
+  fix hint), gauges `shade_tree_gateway_root_source_degraded{source="staked"} 1` or
+  `shade_tree_gateway_root_source_degraded{source="paid"} 1`, and picks the chain roots up on the
+  next successful poll (no restart). With no root at all it still refuses to start (an
   empty admission set is not a gateway; systemd's restart is the retry). Alert on the gauge.
 
 If you see the error anyway: check `SHADE_TREE_RPC_URL` is the RPC you think, lower `SHADE_TREE_LOGS_CHUNK`
@@ -651,11 +701,17 @@ computed EIP-712 domain or if `PaidAccessSet.allowedLimits()` lacks a sold tier.
 
 Day 2:
 
-- `GET /health` on `:8878` = the offer + `leafCount` + `root`; `/metrics` =
+- `GET /health` on `:8878` = the public offer + `leafCount` + `root`. Local
+  `127.0.0.1:9102/metrics` =
   `shade_tree_registrar_payments_total{protocol,result,reason}`, `shade_tree_registrar_txs_total{kind,result}`,
   `shade_tree_registrar_orders`, `shade_tree_registrar_inflight`.
-- Log lines: `registrar: settle tx sent payer=… value=… settleTx=…` → `registrar: leaf inserted
-  commitment=… limit=… leafIndex=… insertTx=… root=…`. Never a key, never a signature.
+  The payment counter records each completed `POST /pay` once. `protocol` is
+  `unknown`, `x402`, or `mpp`; early rejects use `unknown`. `result` is
+  `challenged`, `inserted`, `replayed`, `rejected`, or `failed`. Reasons are a
+  fixed vocabulary, with unexpected values folded into `other`.
+- At `debug`, settlement and insertion events include only bounded protocol and
+  tier fields. They omit the payer, authorization, commitment, nonce, and
+  transaction identifier.
 - A crash between settle and insert is repaired on the next boot (`registrar: recovery
   resumed=1`) or by the buyer re-POSTing the same authorization (idempotent, no second charge).
   `GET /pay/status/<nonce>` shows any order's public state.
@@ -722,7 +778,7 @@ should not need to touch them unless you run an unusually large or slow fleet.
 - **Envelope deadline** — the newline-terminated envelope must arrive within
   `SHADE_TREE_ENVELOPE_TIMEOUT_MS` (30 s) *of connect*. The deadline is absolute (dribbling one byte
   at a time does not extend it). Cut connections show as `drop reason=envelope-timeout` in the
-  metrics (`shade_tree_gateway_requests_total{result="drop",reason="envelope-timeout"}`).
+  metrics (`shade_tree_gateway_tunnels_total{result="drop",reason="envelope-timeout"}`).
 - **Relay idle timeout** — an established tunnel with no bytes in either direction for
   `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
   (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
