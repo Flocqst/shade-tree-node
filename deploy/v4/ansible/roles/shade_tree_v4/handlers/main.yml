@@ -1,0 +1,19 @@
+---
+- name: Restart Shade Tree node
+  ansible.builtin.systemd_service:
+    name: shade-tree-gateway
+    state: restarted
+    daemon_reload: true
+
+- name: Restart Shade Tree heartbeat
+  ansible.builtin.systemd_service:
+    name: shade-tree-heartbeat
+    state: restarted
+    daemon_reload: true
+
+- name: Restart Elder Tree
+  ansible.builtin.systemd_service:
+    name: shade-tree-bootnode
+    state: restarted
+    daemon_reload: true
+  when: shade_tree_target_mode == 'elder-and-node'

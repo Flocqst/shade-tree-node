@@ -1,0 +1,48 @@
+// Static safety contract for the target-independent Ansible layer. Live behavior is exercised only
+// against operator-selected hosts; this suite proves the committed role cannot silently float refs,
+// skip the public record gate, expose runtime listeners, or select on-chain admission without keys.
+
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const TASKS = readFileSync(join(HERE, "ansible/roles/shade_tree_v4/tasks/main.yml"), "utf8");
+const DEFAULTS = readFileSync(join(HERE, "ansible/roles/shade_tree_v4/defaults/main.yml"), "utf8");
+const PLAYBOOK = readFileSync(join(HERE, "ansible/playbook.yml"), "utf8");
+const GATEWAY_SECRET = readFileSync(join(HERE, "ansible/roles/shade_tree_v4/templates/gateway-secrets.conf.j2"), "utf8");
+const ELDER_STAKE = readFileSync(join(HERE, "ansible/roles/shade_tree_v4/templates/elder-stake.conf.j2"), "utf8");
+
+let failures = 0;
+const ok = (condition, message) => {
+  if (condition) console.log(`  ok   ${message}`);
+  else { console.log(`  FAIL ${message}`); failures++; }
+};
+
+console.log("controller gate:");
+const preflightAt = TASKS.indexOf("Run the fail-closed v4 record preflight");
+const aptAt = TASKS.indexOf("Install controller prerequisites and host firewall");
+ok(preflightAt >= 0 && aptAt > preflightAt, "live record validation runs before the first remote package mutation");
+ok(/preflight\.mjs[\s\S]*--repo-root[\s\S]*--quiet/.test(TASKS), "controller verifies artifact bytes as part of deploy preflight");
+ok(/services\.node/.test(TASKS) && /version: "\{\{ shade_tree_service_pin\.commit \}\}"/.test(TASKS), "checkout uses the record's full immutable service commit");
+ok(!/version:\s*(main|master|HEAD)\b/.test(TASKS + DEFAULTS), "role has no floating git ref fallback");
+
+console.log("identity and admission:");
+ok(/onion-identity\.mjs[\s\S]*derive/.test(TASKS) && /canopySigner/.test(TASKS), "restored onion and Canopy signer are checked before cutover");
+ok(/membersSha256/.test(TASKS) && /checksum_algorithm: sha256/.test(TASKS), "invited member bytes must match the reviewed root hash");
+ok(/shade_tree_slash_key is match/.test(TASKS) && /shade_tree_gateway_operator_key is match/.test(TASKS), "on-chain private keys are syntactically required before mutation");
+ok(/no_log: true/g.test(TASKS) && (TASKS.match(/no_log: true/g) || []).length >= 8, "secret-bearing validation, copies, templates, and bootstrap are redacted");
+ok(/SHADE_TREE_SLASH_KEY/.test(GATEWAY_SECRET) && /SHADE_TREE_SLASH_CONTRACT/.test(GATEWAY_SECRET), "node drop-in binds slashing authorization to the recorded root");
+ok(/SHADE_TREE_STAKE_MODE=onchain/.test(ELDER_STAKE) && /SHADE_TREE_GATEWAY_REGISTRY/.test(ELDER_STAKE), "stake-gated Elder uses an explicit on-chain registry");
+
+console.log("host hardening and idempotence:");
+ok(/ufw default deny incoming/.test(TASKS) && /shade-tree-v4-admin/.test(TASKS) && /unexpected inbound allow rule/.test(TASKS), "firewall permits only the exact reviewed admin CIDR rule");
+ok(/SHADE_TREE_LOG_FORMAT: json/.test(TASKS) && /SHADE_TREE_BANNER: never/.test(TASKS), "bootstrap is pinned to JSON logs without terminal decoration");
+ok(/SHADE_TREE_ZK_ARTIFACTS/.test(TASKS) && /shade_tree_artifact_specs \| join/.test(TASKS), "node and heartbeat receive the record-derived explicit artifact set");
+ok(/Refuse public service or metrics listeners/.test(TASKS) && /127\[\.\]0\[\.\]0\[\.\]1/.test(TASKS), "postflight rejects non-loopback service or metrics sockets");
+ok(/shade_tree_reconcile_fingerprint/.test(TASKS) && /\.applied/.test(TASKS) && /only after every check passes/.test(TASKS), "re-runs use a configuration fingerprint written only after postflight success");
+ok(/hosts: shade_tree_v4/.test(PLAYBOOK) && !/(ansible_host|[0-9]{1,3}(?:\.[0-9]{1,3}){3})/.test(PLAYBOOK), "playbook contains no target or provider address");
+
+console.log(failures ? `\n${failures} FAILED` : "\nall v4 Ansible safety checks passed");
+process.exit(failures ? 1 : 0);
+

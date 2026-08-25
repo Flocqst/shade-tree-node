@@ -46,18 +46,29 @@ No host has been added, repurposed, or removed as part of this audit.
    one member secret cannot accidentally reuse a slot inside an epoch.
 3. Replace the untrusted development Groth16 setup, or explicitly scope a new
    isolated fleet to disposable testnet research with no real funds or sensitive
-   traffic. The decision and artifact hashes must be recorded.
+   traffic. The decision and artifact hashes must be recorded. The v4 preflight
+   rejects `production` while the pinned artifact lock still says
+   `UNTRUSTED-TESTNET` or lacks a completed trusted ceremony.
 4. Choose targets and confirm their provider account, owner, region, size,
    admin CIDR, SSH keys, and rollback path. Do not reuse an unowned Elder Tree.
-5. Create a v4 network record containing the Elder onion, pinned Canopy signer,
-   admitted roots, accepted artifact identifiers, and protocol range. Pin an
-   immutable git commit for every service.
-6. Implement current Ansible roles for the Elder Tree, Shade Tree node, Tor,
-   heartbeat, firewall, JSON logs, and loopback-only metrics. The roles must be
-   idempotent and must not clone the retired repository.
-7. Choose the admission policy. Start invited-only unless the required contracts,
-   roots, slashing keys, and operator authorization are all present. Missing
-   configuration must fail closed.
+5. **Preflight implemented; live values pending.** Create a v4 network record
+   containing the Elder onion, pinned Canopy signer, admitted roots, accepted
+   artifact identifiers, and protocol range. Pin an immutable git commit for every
+   service. [`deploy/v4/preflight.mjs`](../deploy/v4/preflight.mjs) validates this
+   record and recomputes verification-key hashes/content ids before any target is
+   changed; its null-filled example cannot deploy.
+6. **Target-independent automation implemented; provider execution pending.** The
+   [`deploy/v4` Ansible role](../deploy/v4/README.md) reconciles the Elder Tree,
+   Shade Tree node, Tor, heartbeat, firewall, JSON logs, and loopback-only metrics
+   through the current pinned checkout and shared hardened bootstrap. It verifies
+   restored identities, active services, source commit, artifact configuration,
+   and listener scope before writing its idempotence marker. No target inventory is
+   committed and no provider was changed by this work.
+7. **Fail-closed guard implemented; operator decision pending.** The record and role
+   default to invited-only. Staked or paid admission cannot run unless the reviewed
+   contract roots, non-secret authorization reference, explicit operator approval,
+   RPC, and required slashing/operator keys are all present. Missing configuration
+   stops before the first remote mutation.
 
 These gates require a target/provider decision and security work. They are not
 safe defaults to infer from the retired fleet.
