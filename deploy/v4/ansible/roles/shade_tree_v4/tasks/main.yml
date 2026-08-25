@@ -438,9 +438,21 @@
       ufw default allow outgoing >/dev/null
       ufw allow proto tcp from {{ shade_tree_admin_cidr | quote }} to any port {{ shade_tree_ssh_port | int }} comment shade-tree-v4-admin >/dev/null
       ufw --force enable >/dev/null
-      ufw status | awk -v port='{{ shade_tree_ssh_port | int }}/tcp' -v cidr={{ shade_tree_admin_cidr | quote }} '
-        $2 == "ALLOW" && ($1 != port || $4 != cidr) { print "unexpected inbound allow rule: " $0 > "/dev/stderr"; bad=1 }
-        END { exit bad ? 1 : 0 }
+      admin_cidr={{ shade_tree_admin_cidr | quote }}
+      display_cidr="$admin_cidr"
+      case "$display_cidr" in
+        */32) display_cidr="${display_cidr%/32}" ;;
+        */128) display_cidr="${display_cidr%/128}" ;;
+      esac
+      ufw status | awk -v port='{{ shade_tree_ssh_port | int }}/tcp' -v cidr="$admin_cidr" -v display_cidr="$display_cidr" '
+        $2 == "ALLOW" {
+          if ($1 == port && ($4 == cidr || $4 == display_cidr)) expected=1
+          else { print "unexpected inbound allow rule: " $0 > "/dev/stderr"; bad=1 }
+        }
+        END {
+          if (!expected) print "missing reviewed admin allow rule" > "/dev/stderr"
+          exit (bad || !expected) ? 1 : 0
+        }
       '
   args:
     executable: /bin/bash
