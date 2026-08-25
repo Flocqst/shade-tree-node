@@ -13,6 +13,8 @@ Add Shade Tree to an agent. Run a Shade Tree node to provide cover. The two
 sides meet through a proof-gated Tor onion service, one admitted CONNECT tunnel
 at a time.
 
+*The best shade asks for proof, not a name.*
+
 [Site][site] · [Grove][grove] · [Research][research-note] · [Docs](docs/README.md) ·
 [Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
 
