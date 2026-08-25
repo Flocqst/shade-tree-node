@@ -23,14 +23,13 @@ rounded observation time. Its trees are not one-to-one node markers.
 Public copy calls the bootnode the **Elder Tree** and its signed directory the
 **Canopy**. These names do not change the observer input or the signed schema.
 
-The Sepolia bootnode currently shown here is the earlier, pre-v4 research
-fleet recorded under `network/sepolia/`. Its nodes sign capabilities with the
-pre-v4 domain tag. The hosted observer has an explicit, read-only compatibility
-switch that verifies those signatures before counting. That switch is off by
-default and is not used by client discovery, routing, announcements, or node
-admission; Shade Tree proxies and nodes remain v4-only. When a coordinated v4
-fleet is live, the public source will move to that fleet rather than treating
-the earlier nodes as v4-compatible.
+The Sepolia source now points at the disposable Protocol v4 research Grove
+recorded in [`network/sepolia/deployment.json`](../network/sepolia/deployment.json):
+one dedicated Elder Tree and three dedicated Shade Tree nodes. The fleet is
+invited-only and uses explicitly untrusted testnet proof artifacts; it is not a
+production security claim. The hosted observer's earlier read-only pre-v4
+compatibility switch is disabled. Client discovery, routing, announcements, and
+node admission remain v4-only.
 
 The count means **announced within the bootnode TTL**. It does not necessarily
 mean the gateway was independently reachable. When optional active probing is
@@ -108,6 +107,50 @@ The scheduled, Tor-capable observer remains the only process that contacts the
 onion service, so visitor demand cannot create bootnode traffic. Combining the
 Tor read and public API in one process would require a managed container with a
 Tor sidecar, which adds infrastructure without improving this data contract.
+
+## Launch and update runbook
+
+The data plane has two independently deployed pieces. A GitHub Actions observer
+reads the Elder over Tor and force-updates the generated `network-state` branch;
+the already-deployed Vercel Function reads and verifies that branch. A new valid
+snapshot therefore does not require a Vercel deployment.
+
+Before enabling publication, an operator needs the public Elder onion and its
+pinned Canopy signer plus a repository secret named
+`SHADE_TREE_GROVE_SIGNING_KEY`. That private Ed25519 key must match
+[`network/grove-signing-public.pem`](../network/grove-signing-public.pem), which
+is pinned by both the API and browser. Configure the public observer inputs as
+repository variables, not secrets:
+
+```bash
+gh variable set SHADE_TREE_BOOTNODE_ONION --repo <owner/repo> --body <elder.onion>
+gh variable set SHADE_TREE_DIR_SIGNER --repo <owner/repo> --body <canopy-signer-hex>
+gh variable set SHADE_TREE_NETWORK --repo <owner/repo> --body sepolia
+gh variable set SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS --repo <owner/repo> --body 0
+gh workflow run uptime-probe.yml --repo <owner/repo> --ref <reviewed-ref>
+```
+
+The run is complete only when both `fleet uptime probe (over Tor)` and
+`publish signed aggregate` pass. Verify the generated head and production
+consumer independently:
+
+```bash
+gh api 'repos/<owner/repo>/contents/grove-v2.json?ref=network-state'
+curl --fail --show-error \
+  https://shade-tree-node.vercel.app/api/v2/data/grove/sepolia/head
+```
+
+Deploy Vercel only when the function, schema, static site, or pinned publication
+key changes. The linked project root is `docs/post`; from that directory, review
+the project link and deploy with `vercel --prod`, then repeat the endpoint and
+Grove-page checks. Never put the Grove signing private key in Vercel: the
+function verifies snapshots and does not sign them.
+
+The three-node research Grove immediately supplies announced count and bounded
+growth history. Relay-byte publication is intentionally still suppressed: the
+v2 contract requires at least five reporting node identities, and unavailable
+or sub-cohort input is never represented as zero. Enabling private relay
+reporting on only these three nodes would not make a public byte total eligible.
 
 Operator Prometheus endpoints are a separate, loopback-only system. The Elder
 Tree, nodes, heartbeats, registrars, and Proxies do not upload those metrics to
