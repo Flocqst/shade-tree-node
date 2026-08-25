@@ -23,6 +23,20 @@ at a time.
 > development. The checked-in Sepolia records describe the retired pre-v4
 > research fleet. Do not rely on this preview for real funds or sensitive use.
 
+## Implementation maturity
+
+Maturity describes implementation scope and validation, not security assurance.
+Both implementations are v0.3.0 research previews under the warning above.
+
+| Implementation | Status | Current scope | Validation |
+| --- | --- | --- | --- |
+| **Node.js / JavaScript** | Full-stack reference preview | Proxy and SDK, agent wrapper, Shade Tree node, Elder Tree, enrollment, and operator tools. This is the current agent and operator path. | Full suite on Node.js 20, 22, and 24; bootstrap E2E; best-effort real-Tor E2E. |
+| **Rust** | Conformance-tested client preview | The default binary verifies and selects. The `-live` build adds one-shot RLN admission over embedded Arti. It does not provide the HTTP Proxy, application payload forwarding, agent wrapper, Shade Tree node, or Elder Tree. | All-target, all-feature Cargo CI; shared v4 conformance vectors; Rust-to-JavaScript proof interop harnesses. |
+
+Use the Node.js path for agents and operators today. Use the checksummed Rust
+[`-live` release](rust/INSTALL.md) for protocol and standalone admission
+experiments.
+
 ## Agent developers
 
 Start with the practical [agent guide](docs/AGENT.md). Install the current agent
