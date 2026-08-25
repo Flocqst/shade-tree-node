@@ -7,5 +7,6 @@
 //! `tree` for the exact convention (hash, arity, depth, zero value, order).
 
 pub mod artifacts;
+pub mod identity;
 pub mod prover;
 pub mod tree;

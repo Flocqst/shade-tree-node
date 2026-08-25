@@ -16,6 +16,23 @@
   },
   "canonicalAnnounceBytesHex": "7b2276223a312c226f6e696f6e223a2275636e6b6c3564326d356d79616c377a6b78346e796c6a6b6373733474686a6478326c37717a617370373474716e637675747970703361642e6f6e696f6e222c22776569676874223a3130302c227473223a313030303030302c226e6f6e6365223a226162636465663031323334353637383961626364656630313233343536373839227d",
   "announceOnionSig": "b1169a85129aabed237b1623efd9074652ee2c12abb52499c6de343836dd43f392a7ef242deaa72814c353570b70edfd4b4b32690b27c20e103e1bff52465101",
+  "demoDirectoryAdvert": {
+    "_note": "Issue #67: demo is an unsigned top-level directory routing hint and is excluded from canonicalDirectoryBytes. A --leaf-source demo client keeps gateways named here plus legacy gateways without signed caps.admits; it never adds demo to the signed ADMIT_PATHS grammar.",
+    "demo": {
+      "port": 8878,
+      "powBits": 18,
+      "limit": 8,
+      "contract": "0x1111111111111111111111111111111111111111",
+      "chain": "eip155:11155111",
+      "gateways": [
+        "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion"
+      ]
+    },
+    "expectedCandidates": [
+      "ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion",
+      "legacy-policyless.example.onion"
+    ]
+  },
   "operator": "0x000000000000000000000000000000000000dEaD",
   "operatorAuthMessage": "Shade Tree gateway operator authorization\nonion=ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad.onion\noperator=0x000000000000000000000000000000000000dead",
   "signalHash": {

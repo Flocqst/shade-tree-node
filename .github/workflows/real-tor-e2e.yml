@@ -24,6 +24,7 @@ on:
       - "client/**"
       - "lib/**"
       - "group/**"
+      - "rust/**"
       - "test/real-tor-e2e-client.mjs"
       - "test/real-tor-e2e-container.sh"
       - "package.json"
@@ -46,3 +47,36 @@ jobs:
       # ACCEPT; a propagation timeout is a soft pass (see the script header + E2E-CONTAINER.md).
       - name: Real-Tor JS client -> fleet gateway ACCEPT (over Tor)
         run: bash test/real-tor-e2e-container.sh
+
+  rust-real-tor-e2e:
+    name: Rust embedded-Tor -> JS gateway ACCEPT (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install JavaScript dependencies and Tor
+        run: |
+          npm ci
+          sudo apt-get update -qq
+          sudo apt-get install -y tor
+
+      # Unlike the historical JS fleet probe's soft descriptor-propagation result,
+      # Rust maturity requires a real ACCEPT. The harness retries descriptor fetches
+      # and exits nonzero if embedded Arti never reaches the published onion.
+      - name: Rust embedded-Tor client -> JavaScript gateway ACCEPT
+        env:
+          SHADE_TREE_TOR_E2E: "1"
+          SHADE_TREE_TOR_DIAL_ATTEMPTS: "5"
+          SHADE_TREE_TOR_TIMEOUT_SECS: "300"
+        run: bash rust/shade-tree-rln/interop/egress-tor-run.sh
