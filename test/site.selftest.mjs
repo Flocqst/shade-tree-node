@@ -63,6 +63,7 @@ const grovePage = read("grove/index.html");
 const groveCss = read("grove/grove.css");
 const groveLoader = read("grove/network.js");
 const groveScene = read("grove/scene.js");
+const groveFreshness = read("grove/freshness.js");
 const groveHistory = read("grove/history.js");
 const groveVisualModel = read("grove/visual-model.js");
 const groveApi = read("api/grove.mjs");
@@ -133,9 +134,11 @@ const mobileDiagramFontSizes = [mobilePathGraphic, mobileReputationGraphic]
   .flatMap((graphic) => [...graphic.matchAll(/font-size:\s*(\d+)px/g)].map((match) => Number(match[1])));
 check("mobile diagram labels remain readable after responsive scaling", mobileDiagramFontSizes.length >= 5 && Math.min(...mobileDiagramFontSizes) >= 34);
 
-check("Grove keeps the Elder boundary outside the globe", /<div class="network-visual">[\s\S]*?<div class="network-stage"[\s\S]*?<\/div>\s*<p class="network-caption">Elder Tree handles discovery and stays off the traffic path\.<\/p>\s*<\/div>/.test(grovePage) && !/class="(?:scene-key|elder-label)"|data-elder-label|Census field/.test(grovePage));
+check("Grove keeps status and the Elder boundary below the globe", /<canvas id="network-canvas" aria-hidden="true"><\/canvas>\s*<\/div>\s*<div class="network-foot">\s*<div class="snapshot-state" role="status" aria-live="polite">[\s\S]*?<span data-view-state>Checking signed aggregate<\/span>[\s\S]*?<p class="network-caption">Elder Tree handles discovery and stays off the traffic path\.<\/p>/.test(grovePage) && !/class="(?:scene-key|elder-label)"|data-elder-label|Census field/.test(grovePage));
+check("Grove lower rail stays outside WebGL and stacks cleanly on mobile", /\.network-foot\s*\{[\s\S]*?grid-template-columns:[\s\S]*?margin-top:\s*1\.8rem/.test(groveCss) && /@media \(max-width: 760px\)[\s\S]*?\.network-foot\s*\{[\s\S]*?grid-template-columns:\s*1fr;[\s\S]*?margin-top:\s*1\.25rem/.test(groveCss) && /\.network-caption\s*\{[\s\S]*?justify-self:\s*end;/.test(groveCss) && /@media \(max-width: 760px\)[\s\S]*?\.network-caption\s*\{[\s\S]*?justify-self:\s*start;[\s\S]*?text-align:\s*left/.test(groveCss));
 check("compact navigation and controls keep full touch targets", /\.wordmark\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.nav-links a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.copy-command\s*\{[\s\S]*?min-width:\s*7\.6rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.site-footer a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.boundary-links a\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(groveCss));
 check("Grove labels distinguish observer attestations from browser verification", /Observer attests: Elder reached over Tor/.test(grovePage) && /Observer attests: Canopy verified and fresh/.test(grovePage) && /Browser verifies: publication signature/.test(grovePage));
+check("Grove names the scheduled observer and public API provenance", /A scheduled observer reads the Elder Tree over Tor\. Browsers receive only its periodically refreshed signed aggregate through the public API\./.test(grovePage) && /<dt>Refresh target<\/dt><dd data-snapshot-cadence>15 min<\/dd>/.test(grovePage));
 check("Grove removes globe overlays without blocking pinch zoom", !/touch-action\s*:|\.scene-key|\.elder-label/.test(groveCss) && /\.network-caption\s*\{[\s\S]*?font-size:\s*0\.75rem/.test(groveCss) && /\.provenance-panel dt\s*\{[\s\S]*?font-size:\s*0\.74rem/.test(groveCss) && /\.provenance-panel dd\s*\{[\s\S]*?font-size:\s*0\.76rem/.test(groveCss));
 
 check("full research article is preserved at /research", /id="references"/.test(research) && /id="further-reading"/.test(research));
@@ -164,6 +167,7 @@ for (const asset of [
   "grove/grove.css",
   "grove/network.js",
   "grove/scene.js",
+  "grove/freshness.js",
   "grove/history.js",
   "grove/visual-model.js",
   "grove/network.fallback.json",
@@ -205,7 +209,10 @@ check("network scene crosses a nonempty canopy in several census directions", /g
 check("abstract canopy density is deterministic, aggregate, and empty at zero", /grovePatchCount\(announced, quality\)/.test(groveScene) && /hashSeed\(`\$\{snapshot\.observedAt\}:\$\{announced\}`\)/.test(groveScene) && /announced <= 0\) return 0/.test(groveVisualModel) && /Math\.log2\(announced \+ 1\)/.test(groveVisualModel));
 check("scene controller exposes the complete query lifecycle", /return \{[\s\S]*beginQuery,[\s\S]*failQuery,[\s\S]*finishQuery,[\s\S]*updateSnapshot: replaceSnapshot/.test(groveScene));
 check("loader emits soft checks and strong new-census pulses", /sceneController\?\.beginQuery\(\)/.test(groveLoader) && /sceneController\?\.finishQuery\(snapshot, \{ freshCensus \}\)/.test(groveLoader) && /sceneController\?\.failQuery\(\)/.test(groveLoader) && /lastLiveObservedAt !== snapshot\.observedAt/.test(groveLoader));
-check("Grove resumes signed-view polling after BFCache restore", /function onPageHide\(\)\s*\{\s*window\.clearTimeout\(pollTimer\)/.test(groveLoader) && /function onPageShow\(event\)\s*\{\s*if \(!event\.persisted\) return;\s*load\(\)/.test(groveLoader) && /addEventListener\("pageshow", onPageShow\)/.test(groveLoader));
+check("Grove resumes signed-view polling after BFCache restore", /function onPageHide\(\)\s*\{\s*window\.clearTimeout\(pollTimer\);\s*window\.clearTimeout\(ageTimer\)/.test(groveLoader) && /function onPageShow\(event\)\s*\{\s*if \(!event\.persisted\) return;\s*updateFreshness\(\);\s*load\(\)/.test(groveLoader) && /addEventListener\("pageshow", onPageShow\)/.test(groveLoader));
+check("Grove updates relative age on minute boundaries without redrawing the scene", /nextAgeRefreshDelay/.test(groveLoader) && /function scheduleAgeRefresh\(\)[\s\S]*?updateFreshness\(\);[\s\S]*?scheduleAgeRefresh\(\)/.test(groveLoader) && /snapshotFreshness/.test(groveLoader) && /60_000 - \(elapsed % 60_000\)/.test(groveFreshness));
+check("Grove catches up after a hidden tab becomes visible", /function onVisibilityChange\(\)[\s\S]*?if \(document\.hidden\) return;[\s\S]*?updateFreshness\(\);[\s\S]*?Date\.now\(\) - lastLoadFinishedAt >= POLL_INTERVAL_MS\) load\(\)/.test(groveLoader) && /document\.addEventListener\("visibilitychange", onVisibilityChange\)/.test(groveLoader));
+check("Grove preserves the last verified live view when refresh fails", /if \(currentSnapshot && !currentView\.bundled\)[\s\S]*?refreshFailed: true[\s\S]*?updateFreshness\(\)/.test(groveLoader) && /Update unavailable · last verified/.test(groveFreshness) && /showUnavailable\(\)/.test(groveLoader));
 check("Grove geometry is aggregate-only", /snapshot\.observedAt/.test(groveScene) && /snapshot\.nodes\.announced/.test(groveScene) && !/onion|pubkey|operator|wallet|region|location|asn/i.test(groveScene));
 check("Grove dashboard stays inside the signed aggregate contract", ["data-node-count", "data-view-age", "data-node-hours", "data-change", "data-history-low", "data-history-high", "data-history-samples", "data-history-coverage"].every((field) => grovePage.includes(field)) && !/sessions|throughput|latency|bandwidth|success rate|reputation band/i.test(grovePage));
 check("24-hour trends use tested window and gap helpers", /windowedHistory\(snapshot\.history, snapshot\.observedAt\)/.test(groveLoader) && /splitHistory\(samples, snapshot\.source\.cadenceMinutes\)/.test(groveLoader) && /cadenceMinutes \* 1\.5 \* 60_000/.test(groveHistory));
@@ -224,7 +231,7 @@ check("copy controls stack before mobile commands can clip", /@media \(max-width
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));
 check("CSP limits reads and closes objects and workers", csp.includes("connect-src 'self'") && csp.includes("object-src 'none'") && csp.includes("worker-src 'none'"));
 check("browser reads only the versioned same-origin Sepolia Data API and bundled fallback", /const LIVE_URL = "\/api\/v1\/data\/grove\/sepolia\/head"/.test(groveLoader) && /const NETWORK = "sepolia"/.test(groveLoader) && /value\.network === NETWORK/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
-check("browser polling allows the API response to use edge caching", !/cache:\s*"no-store"/.test(groveLoader));
+check("browser polling uses normal HTTP cache revalidation for API ETags", /const POLL_INTERVAL_MS = 5 \* 60 \* 1_000/.test(groveLoader) && /cache:\s*"default"/.test(groveLoader) && !/cache:\s*"no-store"/.test(groveLoader));
 check("browser verifies a pinned Ed25519 snapshot before rendering", /crypto\.subtle\.verify/.test(groveLoader) && /invalid public snapshot/.test(groveLoader) && groveLoader.includes(grovePublicKeyRawBase64(grovePublicKey)));
 check("Vercel exposes a versioned Data API and keeps the old aggregate alias", config.rewrites?.length === 2 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
 check("Vercel deploys a bounded Grove function instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
@@ -240,7 +247,7 @@ check("tampering with the bundled count breaks its signature", !verifyPublicGrov
 const fallbackText = JSON.stringify(fallbackSnapshot);
 check("bundled snapshot contains no identity, place, activity, or pulse field", !/\.onion|pubkey|operator|wallet|address|region|country|coordinates?|asn|destination|tunnels?|bytes|requests?|queries|pulse/i.test(fallbackText));
 
-for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "grove/history.js", "grove/visual-model.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
+for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "grove/freshness.js", "grove/history.js", "grove/visual-model.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
   const result = spawnSync(process.execPath, ["--check", join(SITE, script)], { encoding: "utf8" });
   check(`${script} parses as JavaScript`, result.status === 0);
 }

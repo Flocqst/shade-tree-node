@@ -1,6 +1,7 @@
 /* global AbortController, atob, crypto, document, navigator, TextEncoder, window */
 
 import { splitHistory, windowedHistory } from "./history.js";
+import { nextAgeRefreshDelay, snapshotFreshness } from "./freshness.js";
 import { grovePatchCount } from "./visual-model.js";
 
 const LIVE_URL = "/api/v1/data/grove/sepolia/head";
@@ -21,6 +22,10 @@ let publicKeyPromise = null;
 let lastLiveObservedAt = null;
 let loadActive = false;
 let pollTimer = 0;
+let ageTimer = 0;
+let lastLoadFinishedAt = 0;
+let currentSnapshot = null;
+let currentView = { bundled: false, refreshFailed: false };
 
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
@@ -135,6 +140,7 @@ async function fetchSnapshot(url) {
   const timeout = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
+      cache: "default",
       headers: { Accept: "application/json" },
       signal: controller.signal,
     });
@@ -145,16 +151,6 @@ async function fetchSnapshot(url) {
   } finally {
     window.clearTimeout(timeout);
   }
-}
-
-function ageParts(iso) {
-  const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
-  if (minutes < 1) return { short: "now", long: "just now", minutes };
-  if (minutes < 60) return { short: `${minutes}m`, long: `${minutes} min ago`, minutes };
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return { short: `${hours}h`, long: `${hours} hr ago`, minutes };
-  const days = Math.floor(hours / 24);
-  return { short: `${days}d`, long: `${days} days ago`, minutes };
 }
 
 function hashSeed(text) {
@@ -211,6 +207,38 @@ function observationLabel(iso) {
   const hour = String(date.getUTCHours()).padStart(2, "0");
   const minute = String(date.getUTCMinutes()).padStart(2, "0");
   return `${month} ${day} · ${hour}:${minute} UTC`;
+}
+
+function updateFreshness() {
+  if (!currentSnapshot) return;
+  const status = snapshotFreshness(currentSnapshot, currentView);
+  document.body.classList.toggle("is-stale", status.stale);
+  document.body.classList.toggle("is-unavailable", currentView.refreshFailed);
+  setText("[data-view-age]", status.age.short);
+  setText("[data-snapshot-state]", status.snapshotState);
+  setText("[data-view-state]", status.viewState);
+}
+
+function scheduleAgeRefresh() {
+  window.clearTimeout(ageTimer);
+  if (!currentSnapshot) return;
+  ageTimer = window.setTimeout(() => {
+    updateFreshness();
+    scheduleAgeRefresh();
+  }, nextAgeRefreshDelay(currentSnapshot.observedAt));
+}
+
+function showUnavailable() {
+  currentSnapshot = null;
+  currentView = { bundled: false, refreshFailed: true };
+  window.clearTimeout(ageTimer);
+  document.body.classList.remove("is-stale");
+  document.body.classList.add("is-unavailable");
+  setText("[data-view-state]", "Public view unavailable");
+  setText("[data-view-age]", "Unavailable");
+  setText("[data-snapshot-state]", "Unavailable");
+  setText("[data-view-time]", "Unavailable");
+  setText("[data-network]", "Unavailable");
 }
 
 function drawHistory(snapshot) {
@@ -279,25 +307,16 @@ function drawHistory(snapshot) {
 
 async function renderSnapshot(snapshot, { bundled = false } = {}) {
   const count = snapshot.nodes.announced;
-  const age = ageParts(snapshot.observedAt);
   const cadence = Number(snapshot.source.cadenceMinutes) || 15;
-  const researchFleet = snapshot.network === "sepolia";
-  const stale = bundled || age.minutes > cadence * 3;
-  document.body.classList.toggle("is-stale", stale);
-  document.body.classList.remove("is-unavailable");
+  currentSnapshot = snapshot;
+  currentView = { bundled, refreshFailed: false };
+  updateFreshness();
+  scheduleAgeRefresh();
   setText("[data-node-count]", String(count));
   setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "n/a" : String(snapshot.growth.announcedNodeHours));
-  setText("[data-view-age]", age.short);
   setText("[data-view-time]", observationLabel(snapshot.observedAt));
   setText("[data-network]", snapshot.network);
   setText("[data-snapshot-cadence]", `${cadence} min`);
-  setText("[data-snapshot-state]", bundled ? "Reference" : stale ? "Stale" : "Verified");
-  const state = bundled
-    ? `Signed pre-v4 reference · ${age.long}`
-    : stale
-      ? `${researchFleet ? "Pre-v4 network snapshot" : "Signed snapshot"} · ${age.long} · stale`
-      : `${researchFleet ? "Network snapshot" : "Snapshot"} verified · ${age.long}`;
-  setText("[data-view-state]", state);
   drawHistory(snapshot);
   drawFallback(snapshot);
 
@@ -361,15 +380,20 @@ async function load() {
     lastLiveObservedAt = snapshot.observedAt;
   } catch {
     sceneController?.failQuery();
-    try {
-      await renderSnapshot(await fetchSnapshot(FALLBACK_URL), { bundled: true });
-    } catch {
-      document.body.classList.add("is-unavailable");
-      setText("[data-view-state]", "Public view unavailable");
-      setText("[data-view-age]", "Unavailable");
+    if (currentSnapshot && !currentView.bundled) {
+      currentView = { bundled: false, refreshFailed: true };
+      updateFreshness();
+      scheduleAgeRefresh();
+    } else {
+      try {
+        await renderSnapshot(await fetchSnapshot(FALLBACK_URL), { bundled: true });
+      } catch {
+        showUnavailable();
+      }
     }
   } finally {
     loadActive = false;
+    lastLoadFinishedAt = Date.now();
     document.body.classList.remove("is-checking");
     stage.classList.remove("is-querying");
     scheduleNextLoad();
@@ -380,12 +404,21 @@ load();
 
 function onPageHide() {
   window.clearTimeout(pollTimer);
+  window.clearTimeout(ageTimer);
 }
 
 function onPageShow(event) {
   if (!event.persisted) return;
+  updateFreshness();
   load();
+}
+
+function onVisibilityChange() {
+  if (document.hidden) return;
+  updateFreshness();
+  if (Date.now() - lastLoadFinishedAt >= POLL_INTERVAL_MS) load();
 }
 
 window.addEventListener("pagehide", onPageHide);
 window.addEventListener("pageshow", onPageShow);
+document.addEventListener("visibilitychange", onVisibilityChange);
