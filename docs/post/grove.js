@@ -506,12 +506,15 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const width = Math.max(1, stage.clientWidth);
     const height = Math.max(1, stage.clientHeight);
     const aspect = width / height;
+    const tabletClearing = mobile && width > 600;
+    // Stack the grove below the hero actions; phones keep a wider crop plus the CSS lowering.
     const desktopViewHeight = Math.min(35, Math.max(22, 35 / aspect));
-    const viewHeight = mobile ? 28 : desktopViewHeight;
+    const viewHeight = mobile ? (tabletClearing ? 34 : 36) : desktopViewHeight;
+    const verticalOffset = mobile ? (tabletClearing ? 9.5 : 8.5) : 0;
     camera.left = -(viewHeight * aspect) / 2;
     camera.right = (viewHeight * aspect) / 2;
-    camera.top = viewHeight / 2;
-    camera.bottom = -viewHeight / 2;
+    camera.top = viewHeight / 2 + verticalOffset;
+    camera.bottom = -viewHeight / 2 + verticalOffset;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
   }

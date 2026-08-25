@@ -822,7 +822,7 @@ img {
       linear-gradient(0deg, var(--understory), transparent 28%);
   }
 
-  .forest-fallback { inset: 34% -8% -3% 7%; }
+  .forest-fallback { inset: 52% -8% -6% 7%; }
 
   .home-copy {
     top: 8.7rem;
