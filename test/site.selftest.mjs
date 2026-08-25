@@ -60,6 +60,9 @@ const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
 const loader = read("site.js");
 const landingScene = read("grove.js");
 const grovePage = read("grove/index.html");
+const labPage = read("lab/index.html");
+const labCss = read("lab/lab.css");
+const labScript = read("lab/lab.js");
 const groveCss = read("grove/grove.css");
 const groveLoader = read("grove/network.js");
 const groveScene = read("grove/scene.js");
@@ -82,6 +85,13 @@ const pngMagic = "89504e470d0a1a0a";
 
 check("landing stays compact beside the full research note", landing.length < 10_000 && visibleWords(landing) <= 230 && research.length > 40_000);
 check("Grove stays concise while exposing useful aggregate context", grovePage.length < 7_500 && visibleWords(grovePage) <= 155);
+check("Protocol Lab is a fixture-driven single-purpose experience", (labPage.match(/<h1\b/g) || []).length === 1 && /Protocol fixture\.<\/strong> No public Grove traffic is created/.test(labPage) && /Zero live requests/.test(labPage) && !/fetch\s*\(/.test(labScript));
+check("Protocol Lab covers success and rejection paths", ["invited-success", "staked-success", "paid-success", "outsider-denied", "budget-exhausted"].every((name) => labPage.includes(`value="${name}"`) && labScript.includes(`"${name}"`)) && /failAt: 3/.test(labScript) && /failAt: 5/.test(labScript));
+check("Protocol Lab shares only replayable fixture state", /url\.searchParams\.set\("scenario", name\)/.test(labScript) && /navigator\.share/.test(labScript) && /twitter\.com\/intent\/tweet/.test(labScript) && !/(?:sourceIp|egressIp|targetHostname|onionIdentity|walletAddress|commitmentValue|rawProof|receiptBytes|exactTimestamp)\s*:/.test(labScript));
+check("Protocol Lab keeps sensitive fields out of its public card", /IP, target, onion, wallet, commitment, root, nullifier, proof, receipt bytes, or exact time/.test(labPage) && /not a cryptographic receipt for a person, tunnel, or destination/.test(labPage));
+check("Protocol Lab route is responsive and reduced-motion safe", /@media \(max-width: 650px\)[\s\S]*?\.route-stages\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(labCss) && /@media \(prefers-reduced-motion: reduce\)/.test(labCss) && /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/.test(labScript));
+check("Protocol Lab has replay, local-run, and post-success share actions", /Walk this route/.test(labPage) && /data-share>Share this route/.test(labPage) && /data-copy-link>Copy route link/.test(labPage) && /href="\/agent\/">Run locally/.test(labPage) && /result\.hidden = true/.test(labScript) && /result\.hidden = false/.test(labScript));
+check("Protocol Lab has a dedicated static social image", /og:image" content="https:\/\/shade-tree-node\.vercel\.app\/fig\/shade-tree-lab-og\.png"/.test(labPage));
 check("landing has one H1 and one decorative canvas", (landing.match(/<h1\b/g) || []).length === 1 && (landing.match(/<canvas[^>]+aria-hidden="true"/g) || []).length === 1);
 check("Grove has one H1, one focused detail section, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<section\b/g) || []).length === 1 && /role="status" aria-live="polite"/.test(grovePage));
 
@@ -158,6 +168,7 @@ for (const asset of [
   "grove.js",
   "fig/shade-tree-banner.webp",
   "fig/shade-tree-og.png",
+  "fig/shade-tree-lab-og.png",
   "fig/shade-tree-path.svg",
   "fig/shade-tree-path-mobile.svg",
   "fig/shade-tree-reputation.svg",
@@ -174,6 +185,9 @@ for (const asset of [
   "grove/history.js",
   "grove/visual-model.js",
   "grove/network.fallback.json",
+  "lab/index.html",
+  "lab/lab.css",
+  "lab/lab.js",
   "api/grove.mjs",
   "api/_grove-contract.mjs",
   "agent/index.html",
@@ -183,6 +197,7 @@ for (const asset of [
 
 check("Open Graph images are real PNG files", [
   join(SITE, "fig/shade-tree-og.png"),
+  join(SITE, "fig/shade-tree-lab-og.png"),
   join(ROOT, "assets", "shade-tree-og.png"),
 ].every((path) => existsSync(path) && readFileSync(path).subarray(0, 8).toString("hex") === pngMagic));
 
