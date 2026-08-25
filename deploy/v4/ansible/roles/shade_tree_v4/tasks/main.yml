@@ -215,16 +215,12 @@
   ansible.builtin.file:
     path: "{{ shade_tree_install_dir }}/deploy-state"
     state: directory
-    owner: root
-    group: root
     mode: "0700"
 
 - name: Restore the reviewed onion and signer material
   ansible.builtin.copy:
     src: "{{ shade_tree_identity_source }}/"
     dest: "{{ shade_tree_install_dir }}/deploy-state/"
-    owner: root
-    group: root
     mode: preserve
     directory_mode: "0700"
   register: shade_tree_identity_copy
@@ -241,8 +237,6 @@
   ansible.builtin.file:
     path: /etc/shade-tree
     state: directory
-    owner: root
-    group: root
     mode: "0750"
 
 - name: Install the reviewed public deployment record
