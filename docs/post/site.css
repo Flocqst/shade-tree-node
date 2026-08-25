@@ -329,33 +329,11 @@ img {
 
 .home-copy h1 span { display: block; }
 
-.hero-tagline {
-  max-width: 33rem;
-  margin: 1.35rem 0 0;
-  color: var(--muted);
-  font-size: clamp(1rem, 1.35vw, 1.16rem);
-  line-height: 1.45;
-}
-
-.hero-tagline a {
-  color: var(--lichen);
-  text-decoration: underline;
-  text-decoration-color: var(--line-strong);
-  text-underline-offset: 0.22em;
-  white-space: nowrap;
-  transition: color 160ms ease, text-decoration-color 160ms ease;
-}
-
-.hero-tagline a:hover {
-  color: var(--pulse);
-  text-decoration-color: var(--pulse);
-}
-
 .home-hero .hero-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem 2rem;
-  margin-top: 1.65rem;
+  margin-top: 2.6rem;
 }
 
 .home-hero .hero-actions a {
@@ -384,7 +362,48 @@ img {
   margin: 0 auto;
 }
 
-.role-trails { margin-top: clamp(3.5rem, 7vw, 6.5rem); }
+.about-panel {
+  display: grid;
+  grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
+  gap: clamp(2rem, 7vw, 7rem);
+  margin-top: clamp(3.5rem, 7vw, 6.5rem);
+  padding: clamp(2.5rem, 5vw, 4.5rem) 0;
+  border-top: 1px solid var(--line);
+}
+
+.about-panel h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.about-panel p {
+  max-width: 22ch;
+  margin: 0;
+  font-family: var(--display);
+  font-size: clamp(2rem, 3.6vw, 3.5rem);
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.about-panel a {
+  color: var(--lichen);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.16em;
+  white-space: nowrap;
+  transition: color 160ms ease, text-decoration-color 160ms ease;
+}
+
+.about-panel a:hover {
+  color: var(--pulse);
+  text-decoration-color: var(--pulse);
+}
+
+.role-trails { margin-top: 0; }
 
 .role {
   display: grid;
@@ -763,6 +782,8 @@ img {
 
   .role { grid-template-columns: 1fr; }
 
+  .about-panel { grid-template-columns: 1fr; }
+
   .role { gap: 2rem; }
 
   .role-intro {
@@ -803,7 +824,12 @@ img {
   }
 
   .home-hero .hero-actions a { padding-block: 0.65rem; }
-  .role-trails { margin-top: 2.5rem; }
+
+  .about-panel {
+    gap: 1.25rem;
+    margin-top: 2.5rem;
+    padding: 2.5rem 0;
+  }
 
   .role {
     gap: 1.5rem;

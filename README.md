@@ -2,6 +2,8 @@
 
 # Shade Tree
 
+Cover for local agents.
+
 Shade Tree gives agents anonymous egress when the clearnet [won’t let them
 through][research-note].
 
