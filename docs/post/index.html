@@ -63,17 +63,19 @@
     <section class="role-trails" aria-label="Ways to use Shade Tree Grove">
       <article id="proxy" class="role">
         <header class="role-intro">
+          <p class="route-label"><span>Seek cover</span> Primary route</p>
           <h2>For agents</h2>
           <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
-          <p class="tool-label">CLI</p>
+          <p class="tool-label">01 · Install the CLI</p>
           <div class="command agent-install" aria-label="Install Shade Tree Grove for an agent">
             <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
             <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
           </div>
           <div class="handoff" aria-label="Let another agent handle setup">
             <div class="handoff-copy">
+              <span class="handoff-step">02 · Hand off setup</span>
               <strong>Let your agent handle setup</strong>
               <span>Using Hermes, OpenClaw, or another agent? Copy the brief and send it over.</span>
             </div>
@@ -85,10 +87,12 @@
 
       <article id="node" class="role">
         <header class="role-intro">
+          <p class="route-label"><span>Provide cover</span> Side branch</p>
           <h2>Run a Shade Tree node</h2>
           <a class="role-link" href="/operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
+          <p class="tool-label">Start a node</p>
           <div class="command" aria-label="Install and prepare a Shade Tree node">
             <code>git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node</code>
             <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node" aria-label="Copy node operator installation commands">copy install</button>
