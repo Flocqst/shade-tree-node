@@ -67,7 +67,7 @@ cp "$REPO/group/members.json" "$MEMBERS_BAK"
 cp "$MEMBERS" "$REPO/group/members.json"
 
 echo "== starting local egress sink (:${SINK_PORT}) =="
-node -e 'const net=require("net"); net.createServer(s=>s.resume()).listen('"$SINK_PORT"',"127.0.0.1",()=>console.error("[sink] up on 127.0.0.1:'"$SINK_PORT"'"));' > "$WORK/sink.log" 2>&1 &
+node -e 'const net=require("net"); net.createServer(s=>{console.error("[sink] accepted");s.resume()}).listen('"$SINK_PORT"',"127.0.0.1",()=>console.error("[sink] up on 127.0.0.1:'"$SINK_PORT"'"));' > "$WORK/sink.log" 2>&1 &
 SINK_PID=$!
 disown "$SINK_PID" 2>/dev/null || true
 node "$HERE/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
@@ -120,11 +120,16 @@ for attempt in $(seq 1 "$DIAL_ATTEMPTS"); do
   sleep 15
 done
 
-node "$HERE/wait-log.mjs" "$WORK/gw.log" "egress target=${TARGET} " 5000 >/dev/null 2>&1 || true
+node "$HERE/wait-log.mjs" "$WORK/sink.log" "[sink] accepted" 5000 >/dev/null 2>&1 || true
 echo "--- gateway log ---"; cat "$WORK/gw.log"
-if [ "$SHADE_TREE_RC" -ne 0 ] || ! grep -q "egress target=${TARGET} " "$WORK/gw.log"; then
+echo "--- sink log ---"; cat "$WORK/sink.log"
+if [ "$SHADE_TREE_RC" -ne 0 ]; then
   echo "OVER-TOR EGRESS FAILED (shade-tree rc=$SHADE_TREE_RC) — likely HS descriptor propagation flake."
   echo "This step is BEST-EFFORT/gated; the authoritative accept check is egress-run.sh (plain TCP)."
+  exit 1
+fi
+if ! grep -Fq "[sink] accepted" "$WORK/sink.log"; then
+  echo "OVER-TOR EGRESS FAILED: client received success without the destination accepting a connection."
   exit 1
 fi
 
