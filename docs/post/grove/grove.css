@@ -391,7 +391,7 @@
 }
 
 .history-panel,
-.boundary-panel {
+.public-ledger {
   background: rgba(12, 23, 16, 0.82);
   border: 1px solid var(--line);
   backdrop-filter: blur(12px);
@@ -487,79 +487,96 @@
   font-size: 1.35rem;
 }
 
-.boundary-panel {
-  display: grid;
-  grid-template-columns: minmax(13rem, 0.72fr) minmax(24rem, 1.7fr);
-  gap: clamp(1.5rem, 3vw, 3.2rem);
+.public-ledger {
   padding: clamp(1.5rem, 3vw, 2.5rem);
 }
 
-.boundary-columns {
+.ledger-intro {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(13rem, 0.72fr) minmax(24rem, 1.7fr);
+  gap: clamp(1.5rem, 3vw, 3.2rem);
+  align-items: end;
+  padding-bottom: clamp(1.1rem, 2vw, 1.6rem);
+  border-bottom: 1px solid var(--line);
 }
 
-.boundary-columns > div {
-  padding: 1.1rem;
-  background: rgba(7, 15, 10, 0.56);
-  border: 1px solid rgba(147, 164, 134, 0.15);
-}
-
-.boundary-columns h3 {
+.ledger-intro h2 {
   margin: 0;
-  color: var(--pulse);
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 2.6vw, 2.6rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.ledger-intro p {
+  max-width: 32rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.ledger-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ledger-columns > div {
+  padding: clamp(1rem, 2.2vw, 1.5rem) clamp(1rem, 2.2vw, 1.5rem) clamp(1.1rem, 2.2vw, 1.6rem) 0;
+}
+
+.ledger-columns > div + div {
+  padding-right: 0;
+  padding-left: clamp(1rem, 2.2vw, 1.5rem);
+  border-left: 1px solid var(--line);
+}
+
+.ledger-columns h3 {
+  margin: 0;
+  color: var(--leaf);
   font-family: var(--mono);
   font-size: 0.75rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.boundary-columns ul {
+.ledger-columns ul {
   display: grid;
-  gap: 0.55rem;
-  margin: 0.8rem 0 0;
+  gap: 0;
+  margin: 0.65rem 0 0;
   padding: 0;
   color: var(--muted);
   font-size: 0.8rem;
   list-style: none;
 }
 
-.boundary-columns li {
-  position: relative;
-  padding-left: 1rem;
+.ledger-columns li {
+  padding: 0.48rem 0;
+  border-top: 1px solid rgba(147, 164, 134, 0.13);
 }
 
-.boundary-columns li::before {
-  position: absolute;
-  top: 0.55em;
-  left: 0;
-  width: 0.3rem;
-  height: 0.3rem;
-  content: "";
-  background: var(--leaf);
-  border-radius: 50%;
-}
-
-.boundary-links {
+.ledger-links {
   display: flex;
-  grid-column: 2;
-  gap: 1.5rem;
+  gap: 1.35rem;
   flex-wrap: wrap;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
 }
 
-.boundary-links a {
+.ledger-links a {
   display: inline-flex;
   min-height: 2.75rem;
   align-items: center;
-  color: var(--leaf);
-  border-bottom: 1px solid currentColor;
-  font-size: 0.8rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  text-decoration-color: rgba(147, 164, 134, 0.36);
+  text-underline-offset: 0.24rem;
 }
 
-.boundary-links a:hover {
-  color: var(--pulse);
+.ledger-links a:hover {
+  color: var(--leaf);
+  text-decoration-color: currentColor;
 }
 
 @keyframes checking {
@@ -580,8 +597,7 @@
     grid-column: 1;
   }
 
-  .history-panel,
-  .boundary-panel {
+  .history-panel {
     grid-template-columns: minmax(12rem, 0.6fr) minmax(20rem, 1.4fr);
   }
 
@@ -674,14 +690,12 @@
     border-top: 1px solid var(--line);
   }
 
-  .history-panel,
-  .boundary-panel {
+  .history-panel {
     grid-template-columns: 1fr;
   }
 
   .history-chart,
-  .history-summary,
-  .boundary-links {
+  .history-summary {
     grid-column: auto;
   }
 
@@ -693,8 +707,25 @@
     grid-template-columns: repeat(4, 1fr);
   }
 
-  .boundary-columns {
+  .ledger-intro,
+  .ledger-columns {
     grid-template-columns: 1fr;
+  }
+
+  .ledger-intro {
+    gap: 0.55rem;
+    align-items: start;
+    padding-bottom: 1rem;
+  }
+
+  .ledger-columns > div {
+    padding: 1rem 0;
+  }
+
+  .ledger-columns > div + div {
+    padding: 1rem 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 }
 
@@ -740,10 +771,8 @@
     padding-bottom: 0.55rem;
   }
 
-  .boundary-links {
-    gap: 0.75rem;
-    flex-direction: column;
-    align-items: flex-start;
+  .ledger-links {
+    gap: 1rem;
   }
 }
 

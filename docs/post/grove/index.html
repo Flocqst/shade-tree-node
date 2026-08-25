@@ -60,7 +60,7 @@
 
       <aside class="provenance-panel" aria-label="Snapshot provenance">
         <div class="provenance-head">
-          <span>Signed view</span>
+          <span>Snapshot</span>
           <strong data-snapshot-state>Verifying</strong>
         </div>
         <dl>
@@ -112,33 +112,34 @@
       </dl>
     </section>
 
-    <section class="boundary-panel" aria-labelledby="boundary-title">
-      <div class="section-copy">
-        <h2 id="boundary-title">A view with boundaries</h2>
-        <p>A scheduled observer reads the Elder Tree over Tor. Browsers receive only its periodically refreshed signed aggregate through the public API.</p>
-      </div>
-      <div class="boundary-columns">
+    <section class="public-ledger" aria-labelledby="public-ledger-title">
+      <header class="ledger-intro">
+        <h2 id="public-ledger-title">What’s public</h2>
+        <p>The Grove publishes signed totals, never a list of nodes.</p>
+      </header>
+      <div class="ledger-columns">
         <div>
-          <h3>Signed view</h3>
+          <h3>Published</h3>
           <ul>
-            <li>Observer attests: Elder reached over Tor</li>
-            <li>Observer attests: Canopy verified and fresh</li>
-            <li>Browser verifies: publication signature</li>
+            <li>Current node count</li>
+            <li>Reporting coverage and freshness</li>
+            <li>24-hour count history</li>
+            <li>Publication signature</li>
           </ul>
         </div>
         <div>
           <h3>Never published</h3>
           <ul>
             <li>Node identities</li>
-            <li>Locations or ASNs</li>
+            <li>Locations, IPs, or networks</li>
             <li>Traffic or destinations</li>
           </ul>
         </div>
       </div>
-      <div class="boundary-links">
-        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/data-api.md">Data API specification ↗</a>
-        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">Protocol specification ↗</a>
-      </div>
+      <nav class="ledger-links" aria-label="Technical specifications">
+        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/data-api.md">Data API</a>
+        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">Protocol specification</a>
+      </nav>
     </section>
   </main>
 
