@@ -87,11 +87,13 @@ their browser.
 
 The API gives browsers a 60-second cache and sets a five-minute Vercel edge
 policy with one hour of stale-while-revalidate. It gives the upstream read four
-seconds. A successful response carries a strong `ETag` derived from the
-SHA-256 hash of the exact response bytes plus
-`X-Shade-Tree-Schema: shade-tree-public-grove-v1`; a matching
-`If-None-Match` receives `304`. A failed read, malformed envelope, or bad
-signature returns a generic, non-cacheable `503` with `Retry-After: 60`. It never
+seconds. The origin derives an `ETag` from the SHA-256 hash of its exact response
+bytes. Vercel can expose the weak `W/` form after content transfer; both forms
+carry the same opaque hash and participate in weak `If-None-Match` comparison.
+The response also carries
+`X-Shade-Tree-Schema: shade-tree-public-grove-v1`; a matching conditional
+request receives `304`. A failed read, malformed envelope, or bad signature
+returns a generic, non-cacheable `503` with `Retry-After: 60`. It never
 translates failure into a zero count. The page then uses its bundled signed
 reference and labels that view accordingly.
 

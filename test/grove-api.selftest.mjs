@@ -14,6 +14,8 @@ import {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = JSON.parse(await readFile(join(ROOT, "docs/post/grove/network.fallback.json"), "utf8"));
+const dataApiSpec = await readFile(join(ROOT, "specs/data-api.md"), "utf8");
+const dataApiOpenApi = await readFile(join(ROOT, "specs/data-api.openapi.yaml"), "utf8");
 const originalFetch = globalThis.fetch;
 const originalError = console.error;
 const checks = [];
@@ -68,6 +70,7 @@ try {
   check("API gives Vercel a five-minute stale-while-revalidate cache", success.headers.get("vercel-cdn-cache-control") === "public, max-age=300, stale-while-revalidate=3600");
   const expectedEtag = `"${createHash("sha256").update(successBody).digest("base64url")}"`;
   check("API identifies its signed schema and hashes the exact response bytes", success.headers.get("x-shade-tree-schema") === snapshot.schema && success.headers.get("etag") === expectedEtag);
+  check("public contract permits Vercel's weak transfer validator", /Vercel can expose the weak `W\/` form/.test(dataApiSpec) && /pattern: '\^\(\?:W\/\)\?/.test(dataApiOpenApi));
   check("API does not opt into cross-origin browser reads", success.headers.get("access-control-allow-origin") === null);
 
   const reorderedSnapshot = Object.fromEntries(Object.entries(snapshot).reverse());

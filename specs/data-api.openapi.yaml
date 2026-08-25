@@ -40,10 +40,13 @@ paths:
                 type: string
                 const: public, max-age=60
             ETag:
-              description: Strong validator derived from SHA-256 of the exact response bytes.
+              description: >-
+                Opaque validator derived from SHA-256 of the origin response
+                bytes. The Vercel edge may expose its weak W/ form after
+                content transfer.
               schema:
                 type: string
-                pattern: '^"[A-Za-z0-9_-]{43}"$'
+                pattern: '^(?:W/)?"[A-Za-z0-9_-]{43}"$'
             X-Shade-Tree-Schema:
               schema:
                 type: string
@@ -67,7 +70,7 @@ paths:
             ETag:
               schema:
                 type: string
-                pattern: '^"[A-Za-z0-9_-]{43}"$'
+                pattern: '^(?:W/)?"[A-Za-z0-9_-]{43}"$'
             X-Shade-Tree-Schema:
               schema:
                 type: string
