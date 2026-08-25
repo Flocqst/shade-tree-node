@@ -28,12 +28,14 @@
 // Run:  node gateway/hardening.selftest.mjs
 
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import net from "node:net";
 
 // The egress policy is built from env at import time; allow loopback so the fake upstream
 // (a local echo server) is an admitted target. Set BEFORE the dynamic import.
-process.env.SHADE_TREE_EGRESS_ALLOW = "127.0.0.1:*";
-const { makeHandler, makeConnLimiter, HARDENING } = await import("./gateway.mjs");
+process.env.SHADE_TREE_EGRESS_ALLOW = "*:*";
+process.env.SHADE_TREE_ALLOW_PRIVATE_TARGETS = "1";
+const { makeHandler, makeConnLimiter, makeEgressPolicy, readEnvelope, HARDENING } = await import("./gateway.mjs");
 const { registry: metrics } = await import("../lib/metrics.mjs");
 
 let failures = 0;
@@ -126,6 +128,132 @@ await test("makeConnLimiter: caps, release, per-nullifier isolation, 0 == unlimi
   l.release(); l.release(); l.release(); l.release(); assert.equal(l.total(), 0, "release never underflows");
   const u = makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 });
   for (let i = 0; i < 50; i++) { assert.equal(u.acquire(), true); assert.equal(u.acquireNullifier("z"), true); }
+});
+
+// ---- cheap target gate ordering --------------------------------------------
+await test("malformed and policy-disallowed targets are rejected before proof verification", async () => {
+  let verifies = 0;
+  let lookups = 0;
+  let dials = 0;
+  const admit = makeAdmitAll();
+  const gw = await startGateway(makeHandler(admit, {
+    verify: async () => { verifies++; return { ok: false, reason: "should-not-run" }; },
+    targetPolicy: makeEgressPolicy({ allow: "allowed.example:443" }),
+    lookup: async () => { lookups++; return [{ address: "127.0.0.1", family: 4 }]; },
+    connect: () => { dials++; return new net.Socket(); },
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+  }));
+
+  const cases = [
+    ["missing-port", "bad-target"],
+    ["denied.example:443", "bad-target-policy"],
+  ];
+  for (const [target, reason] of cases) {
+    const c = await dial(gw.address().port);
+    c.sock.write(JSON.stringify({ v: 4, target }) + "\n");
+    await waitFor(() => c.closed, 2000, `${reason} connection to close`);
+    assert.equal(lastJson(c).err, reason);
+  }
+
+  assert.equal(verifies, 0, "Groth16 verification seam was never called");
+  assert.equal(admit.seen.length, 0, "rejected targets never reached admission");
+  assert.equal(lookups, 0, "rejected targets never triggered DNS");
+  assert.equal(dials, 0, "rejected targets never dialed upstream");
+  await closeServer(gw);
+});
+
+await test("fleet replay evidence is committed only after the destination connects", async () => {
+  const commits = [];
+  const spent = {
+    admit: async () => ({ ok: true, action: "first" }),
+    commit: (nullifier, epoch) => commits.push([String(nullifier), String(epoch)]),
+  };
+  const policy = makeEgressPolicy({ allow: "*:*" });
+
+  const dnsFail = await startGateway(makeHandler(spent, {
+    verify: stubVerify,
+    targetPolicy: policy,
+    lookup: async () => { throw new Error("resolver unavailable"); },
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+  }));
+  const failed = await dial(dnsFail.address().port);
+  failed.sock.write(JSON.stringify({ v: 4, target: "unavailable.example:443", nullifier: "pre-connect", share: { x: "1", y: "2" }, nonce: "n" }) + "\n");
+  await waitFor(() => failed.closed, 2000, "DNS refusal to close");
+  assert.equal(lastJson(failed).err, "bad-target-dns");
+  assert.deepEqual(commits, [], "a DNS failure does not poison cross-node failover");
+  await closeServer(dnsFail);
+
+  const echo = await startEcho();
+  const connected = await startGateway(makeHandler(spent, {
+    verify: stubVerify,
+    targetPolicy: policy,
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+  }));
+  const passed = await dial(connected.address().port);
+  passed.sock.write(envelopeFor("connected", echo.address().port));
+  await waitFor(() => passed.lines.length >= 1, 2000, "successful destination connection");
+  assert.deepEqual(lastJson(passed), { ok: true });
+  assert.deepEqual(commits, [["connected", "1"]], "an established egress publishes exactly once");
+  passed.sock.destroy();
+  await closeServer(connected);
+  await closeServer(echo);
+});
+
+await test("a second validated DNS address is tried when the first cannot connect", async () => {
+  const echo = await startEcho();
+  const spent = makeAdmitAll();
+  const attempts = [];
+  const gw = await startGateway(makeHandler(spent, {
+    verify: stubVerify,
+    targetPolicy: makeEgressPolicy({ allow: "*:*" }),
+    lookup: async () => [
+      { address: "127.0.0.2", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ],
+    connect: (port, address, cb) => {
+      attempts.push(address);
+      return net.connect(port, address, cb);
+    },
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 1000,
+    limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+  }));
+  const client = await dial(gw.address().port);
+  client.sock.write(JSON.stringify({ v: 4, target: `multi.example:${echo.address().port}`, nullifier: "multi-address", share: { x: "1", y: "2" }, nonce: "n" }) + "\n");
+  await waitFor(() => client.lines.length >= 1, 2000, "fallback address success ack");
+  assert.deepEqual(lastJson(client), { ok: true });
+  assert.deepEqual(attempts, ["127.0.0.2", "127.0.0.1"], "the handler stays on the validated answer set and tries the next address");
+  client.sock.destroy();
+  await closeServer(gw);
+  await closeServer(echo);
+});
+
+// ---- envelope line-size boundary -------------------------------------------
+await test("readEnvelope accepts a line exactly at the 64 KiB cap", async () => {
+  const socket = new EventEmitter();
+  const max = 64 * 1024;
+  const pending = readEnvelope(socket, { timeoutMs: 1000 });
+  socket.emit("data", Buffer.alloc(max, 0x61));
+  socket.emit("data", Buffer.from("\nrest"));
+  const { line, rest } = await pending;
+  assert.equal(Buffer.byteLength(line), max);
+  assert.equal(rest.toString("utf8"), "rest");
+});
+
+await test("readEnvelope rejects MAX+1 bytes when the extra byte and newline arrive later", async () => {
+  const socket = new EventEmitter();
+  const max = 64 * 1024;
+  const pending = readEnvelope(socket, { timeoutMs: 1000 });
+  socket.emit("data", Buffer.alloc(max, 0x61));
+  socket.emit("data", Buffer.from("x\n"));
+  await assert.rejects(pending, (error) => error?.reason === "envelope-too-large");
 });
 
 // ---- slow-loris on the envelope read ----------------------------------------
@@ -222,6 +350,42 @@ await test("a client that closes during verification never dials or leaks a per-
   await closeServer(gw);
 });
 
+await test("a client that closes during DNS resolution never dials or leaks a per-nullifier slot", async () => {
+  let finishLookup;
+  let lookupStarted = false;
+  let dials = 0;
+  const order = [];
+  const delayedLookup = () => {
+    order.push("dns");
+    lookupStarted = true;
+    return new Promise((resolve) => { finishLookup = resolve; });
+  };
+  const verifyThenAdmit = {
+    admit: async () => { order.push("admit"); return { ok: true, action: "first" }; },
+  };
+  const limiter = makeConnLimiter({ maxConns: 0, maxPerNullifier: 1 });
+  const gw = await startGateway(makeHandler(verifyThenAdmit, {
+    verify: async (env) => { order.push("verify"); return stubVerify(env); },
+    lookup: delayedLookup,
+    connect: () => { dials++; return new net.Socket(); },
+    envelopeTimeoutMs: 5000,
+    dnsTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    limiter,
+  }));
+  const c = await dial(gw.address().port);
+  c.sock.write(JSON.stringify({ v: 4, target: "slow.example:443", nullifier: "dns-race", share: { x: "1", y: "2" }, nonce: "n" }) + "\n");
+  await waitFor(() => lookupStarted, 2000, "DNS resolution to start");
+  assert.deepEqual(order, ["verify", "admit", "dns"], "DNS stays after proof verification and admission");
+  c.sock.destroy();
+  await waitFor(() => c.closed, 2000, "client close during DNS resolution");
+  finishLookup([{ address: "93.184.216.34", family: 4 }]);
+  await waitFor(() => limiter.total() === 0 && limiter.trackedNullifiers() === 0, 2000, "all DNS-race slots to release");
+  await sleep(10);
+  assert.equal(dials, 0, "no upstream dial starts for a client that closed during DNS resolution");
+  await closeServer(gw);
+});
+
 await test("a client that closes during upstream connect destroys it and a late callback cannot open a tunnel", async () => {
   let pendingCallback = null;
   let pendingUpstream = null;
@@ -307,6 +471,32 @@ await test("a client that closes during upstream connect destroys it and a late 
     assert.equal(metricValue("shade_tree_gateway_tunnels_total", { result: "drop", reason: "upstream-timeout" }), before + 1);
     assert.equal(metricValue("shade_tree_gateway_upstream_connect_seconds_count", {}), connectCountBefore + 1, "timed-out connect is observed exactly once");
     assert.ok(metricValue("shade_tree_gateway_upstream_connect_seconds_sum", {}) > connectSumBefore, "timed-out connect contributes its wait to the latency sum");
+    await closeServer(gw2);
+  });
+
+  await test("multiple DNS answers share one absolute upstream-connect deadline", async () => {
+    const attempts = [];
+    const blackHole = (_port, address) => { attempts.push(address); return new net.Socket(); };
+    const gw2 = await startGateway(makeHandler(makeAdmitAll(), {
+      verify: stubVerify,
+      connect: blackHole,
+      targetPolicy: makeEgressPolicy({ allow: "*:*" }),
+      lookup: async () => [
+        { address: "127.0.0.1", family: 4 },
+        { address: "127.0.0.2", family: 4 },
+        { address: "127.0.0.3", family: 4 },
+      ],
+      envelopeTimeoutMs: 5000,
+      idleTimeoutMs: IDLE_MS,
+      limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+    }));
+    const c = await dial(gw2.address().port);
+    const started = Date.now();
+    c.sock.write(JSON.stringify({ v: 4, target: "blackhole.example:443", nullifier: "bh-many", share: { x: "1", y: "2" }, nonce: "n" }) + "\n");
+    await waitFor(() => c.closed, IDLE_MS * 5, "multi-answer black hole to reach the shared deadline");
+    assert.equal(lastJson(c).err, "upstream:ETIMEDOUT");
+    assert.ok(Date.now() - started < IDLE_MS * 2.5, "DNS answer count does not multiply the deadline");
+    assert.deepEqual(attempts, ["127.0.0.1", "127.0.0.2", "127.0.0.3"], "fallbacks divide one deadline instead of receiving a full timeout each");
     await closeServer(gw2);
   });
 

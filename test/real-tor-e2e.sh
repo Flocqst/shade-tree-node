@@ -96,6 +96,7 @@ node "$INTEROP/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
 
 echo "== starting real JS gateway (127.0.0.1:${GW_PORT}) =="
 SHADE_TREE_EGRESS_ALLOW="$TARGET" \
+  SHADE_TREE_ALLOW_PRIVATE_TARGETS=1 \
   SHADE_TREE_METRICS_PORT="$METRICS_PORT" \
   node "$REPO/gateway/gateway.mjs" > "$WORK/gw.log" 2>&1 &
 GW_PID=$! ; track "$GW_PID" ; disown "$GW_PID" 2>/dev/null || true

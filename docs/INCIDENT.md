@@ -114,7 +114,8 @@ tampering, downtime).
   `(nullifier, share.x, nonce)`, and an identical envelope seen again after `SHADE_TREE_REPLAY_WINDOW_MS`
   (5s, the honest-retry window) is rejected `replayed-envelope` (T-FEAT-12,
   `gateway/gateway.mjs`). Against OTHER gateways it fails only when the fleet runs the shared
-  per-epoch nullifier tally (`SHADE_TREE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, `gateway/fleet-tally.mjs`;
+  per-epoch nullifier tally (`SHADE_TREE_FLEET_TALLY_PEERS` plus `SHADE_TREE_FLEET_TALLY_TOKEN`,
+  T-FEAT-20/20b, `gateway/fleet-tally.mjs`;
   off by default, fail-open); a fleet without the tally lets a captured envelope be fanned to
   peers, each of which sees it once and egresses it. Amplification is therefore bounded to
   one egress per non-tallying gateway per captured envelope, and it never slashes (identical `x`
@@ -154,7 +155,8 @@ proof and therefore permissionless.
 **Prevention.** Per-tunnel rotation across N non-colluding gateways spreads target metadata to
 ~1/N; RLN's fresh per-tunnel nullifiers stop even colluding gateways from rejoining a member's
 requests. Require `admission=stake` so misbehavior has a bond behind it. Enable the shared fleet
-tally (`SHADE_TREE_FLEET_TALLY_PEERS`, `docs/OPERATOR.md` section 5) so a captured envelope cannot be
+tally (`SHADE_TREE_FLEET_TALLY_PEERS` plus `SHADE_TREE_FLEET_TALLY_TOKEN`,
+`docs/OPERATOR.md` section 5) so a captured envelope cannot be
 fanned across the fleet.
 
 ---
@@ -274,7 +276,8 @@ collapsing. The reason string on the `DROP` line is the diagnostic.
 **Immediate containment.** Do not slash: these are gate rejections, not over-spends (no secret is
 reconstructed on a DROP). Identify the dominant DROP reason from logs first.
 
-**Root-cause investigation.** Read the DROP reasons on the gateway (`DROP <reason> target=`). Compare
+**Root-cause investigation.** Read the bounded DROP reasons on the gateway; destination targets are
+deliberately omitted from logs. Compare
 the gateway's live `recentRoots` against the root clients are proving against. Check both sides'
 `SHADE_TREE_EPOCH_SECONDS`, `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and root source
 (`SHADE_TREE_GROUP_CONTRACT` vs `members.json`). Confirm clocks. If on-chain, confirm the root provider is
@@ -339,9 +342,9 @@ member's own rate accounting matches what the gateway enforces. Run the slasher 
 - **Automated bootnode failover** (#1): clients auto-degrade to the LKG cache and bootnodes can
   federate (T-FEAT-1), but a client pins one bootnode onion; re-pointing it to a healthy peer is
   manual.
-- **Fleet-wide replay defense is opt-in** (#3, #7): per-gateway replay rejection is always on
+- **Cross-node replay suppression is opt-in** (#3, #7): per-gateway replay rejection is always on
   (T-FEAT-12); the cross-gateway tally (T-FEAT-20/20b) must be enabled with
-  `SHADE_TREE_FLEET_TALLY_PEERS` and is fail-open by design.
+  `SHADE_TREE_FLEET_TALLY_PEERS` plus `SHADE_TREE_FLEET_TALLY_TOKEN` and is fail-open by design.
 - **Client zero-trust operator re-verification is opt-in** (#3): `SHADE_TREE_VERIFY_STAKE=1` makes the
   client re-fetch `GET /gateway/<onion>` and re-check sigs + live stake itself (T-DEV-5,
   `client/selection.mjs`); off by default, the client trusts the bootnode's `staked` label.

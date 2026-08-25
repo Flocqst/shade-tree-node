@@ -14,12 +14,19 @@
 // so this pulls makeEgressPolicy straight out with no lib mocks.
 
 import assert from "node:assert/strict";
-import { makeEgressPolicy } from "../gateway/gateway.mjs";
+import {
+  isPublicEgressAddress,
+  MAX_EGRESS_ADDRESSES,
+  makeEgressPolicy,
+  privateTargetsAllowed,
+  resolveEgressTarget,
+} from "../gateway/gateway.mjs";
 
 let failures = 0;
 function ok(name) { console.log("  PASS  " + name); }
 function bad(name, e) { failures++; console.log("  FAIL  " + name + "  ::  " + (e && e.message || e)); }
 function test(name, fn) { try { fn(); ok(name); } catch (e) { bad(name, e); } }
+async function testAsync(name, fn) { try { await fn(); ok(name); } catch (e) { bad(name, e); } }
 
 // The old, hardcoded rule this policy must preserve by default (verbatim from the
 // pre-T-DEV-10 validTarget): a target is valid iff its port is exactly 443.
@@ -176,6 +183,115 @@ test("invalid empty-label hosts are dropped (default-deny)", () => {
   assert.equal(p(".evil.com", 443), false, "leading-dot host dropped");
   assert.equal(p("sub..evil.com", 443), false, "double-dot host dropped");
   assert.equal(p(".", 443), false, "lone dot dropped");
+});
+
+console.log("\negress policy — public-address boundary and DNS pinning:");
+
+test("public IPv4 and IPv6 addresses pass", () => {
+  assert.equal(isPublicEgressAddress("1.1.1.1"), true);
+  assert.equal(isPublicEgressAddress("8.8.8.8"), true);
+  assert.equal(isPublicEgressAddress("2606:4700:4700::1111"), true);
+  assert.equal(isPublicEgressAddress("2001:4860:4860::8888"), true);
+});
+
+test("loopback, private, link-local, shared, documentation, and multicast addresses fail", () => {
+  for (const address of [
+    "0.0.0.0", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.169.254",
+    "172.16.0.1", "192.0.2.1", "192.31.196.1", "192.52.193.1", "192.168.1.1",
+    "192.175.48.1", "198.18.0.1", "198.51.100.1",
+    "203.0.113.1", "224.0.0.1", "255.255.255.255", "::", "::1", "::ffff:127.0.0.1",
+    "64:ff9b::1", "2001:db8::1", "2002::1", "2620:4f:8000::1", "3fff::1",
+    "fc00::1", "fe80::1", "ff02::1",
+  ]) assert.equal(isPublicEgressAddress(address), false, address);
+});
+
+await testAsync("a literal private target fails closed by default", async () => {
+  assert.deepEqual(
+    await resolveEgressTarget({ ok: true, host: "169.254.169.254", port: 443 }),
+    { ok: false, reason: "bad-target-address" },
+  );
+});
+
+await testAsync("DNS answers are checked as a set and the chosen public address is pinned", async () => {
+  const lookup = async (host, options) => {
+    assert.equal(host, "example.com");
+    assert.deepEqual(options, { all: true, verbatim: true });
+    return [{ address: "93.184.216.34", family: 4 }, { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }];
+  };
+  const result = await resolveEgressTarget({ ok: true, host: "example.com", port: 443 }, { lookup });
+  assert.deepEqual(result, {
+    ok: true,
+    host: "example.com",
+    port: 443,
+    address: "93.184.216.34",
+    family: 4,
+    addresses: [
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ],
+  });
+});
+
+await testAsync("one private answer makes a mixed DNS response fail closed", async () => {
+  const lookup = async () => [
+    { address: "93.184.216.34", family: 4 },
+    { address: "127.0.0.1", family: 4 },
+  ];
+  assert.deepEqual(
+    await resolveEgressTarget({ ok: true, host: "example.com", port: 443 }, { lookup }),
+    { ok: false, reason: "bad-target-address" },
+  );
+});
+
+await testAsync("the pinned dial set is capped only after every DNS answer passes the public-address check", async () => {
+  const publicAnswers = Array.from({ length: MAX_EGRESS_ADDRESSES + 4 }, (_, i) => ({
+    address: `8.8.4.${i + 1}`,
+    family: 4,
+  }));
+  const bounded = await resolveEgressTarget(
+    { ok: true, host: "many.example", port: 443 },
+    { lookup: async () => publicAnswers },
+  );
+  assert.equal(bounded.ok, true);
+  assert.equal(bounded.addresses.length, MAX_EGRESS_ADDRESSES, "one proof can dial at most the hard-capped answer count");
+  assert.deepEqual(bounded.addresses, publicAnswers.slice(0, MAX_EGRESS_ADDRESSES));
+
+  const poisonedAfterCap = [...publicAnswers, { address: "127.0.0.1", family: 4 }];
+  assert.deepEqual(
+    await resolveEgressTarget(
+      { ok: true, host: "poisoned.example", port: 443 },
+      { lookup: async () => poisonedAfterCap },
+    ),
+    { ok: false, reason: "bad-target-address" },
+    "a private answer beyond the dial cap still rejects the whole hostname",
+  );
+});
+
+await testAsync("DNS errors and empty answers fail closed without exposing resolver details", async () => {
+  const throws = async () => { throw new Error("resolver detail"); };
+  assert.deepEqual(await resolveEgressTarget({ ok: true, host: "missing.example", port: 443 }, { lookup: throws }), { ok: false, reason: "bad-target-dns" });
+  assert.deepEqual(await resolveEgressTarget({ ok: true, host: "empty.example", port: 443 }, { lookup: async () => [] }), { ok: false, reason: "bad-target-dns" });
+});
+
+await testAsync("a stalled resolver is bounded", async () => {
+  const never = () => new Promise(() => {});
+  const started = Date.now();
+  assert.deepEqual(
+    await resolveEgressTarget({ ok: true, host: "stalled.example", port: 443 }, { lookup: never, timeoutMs: 5 }),
+    { ok: false, reason: "bad-target-dns" },
+  );
+  assert.ok(Date.now() - started < 500, "resolver timeout returned promptly");
+});
+
+await testAsync("private destinations require the explicit local-development opt-in", async () => {
+  const result = await resolveEgressTarget(
+    { ok: true, host: "localhost", port: 443 },
+    { lookup: async () => [{ address: "127.0.0.1", family: 4 }], allowPrivateTargets: true },
+  );
+  assert.equal(result.address, "127.0.0.1");
+  assert.equal(privateTargetsAllowed({ SHADE_TREE_ALLOW_PRIVATE_TARGETS: "1" }), true);
+  assert.equal(privateTargetsAllowed({ SHADE_TREE_ALLOW_PRIVATE_TARGETS: "true" }), false);
+  assert.equal(privateTargetsAllowed({}), false);
 });
 
 console.log("");

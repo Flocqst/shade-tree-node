@@ -117,13 +117,17 @@ function createShadePatch(scene, mobile) {
   const beamFragmentShader = `
     uniform float beamStrength;
     uniform float coreStrength;
+    uniform float beamPhase;
     varying vec2 vUv;
 
     void main() {
       float distanceFromCenter = abs(vUv.x - 0.5) * 2.0;
       float feather = 1.0 - smoothstep(0.12, 1.0, distanceFromCenter);
       float core = 1.0 - smoothstep(0.0, 0.13, distanceFromCenter);
-      gl_FragColor = vec4(vec3(0.886, 0.729, 0.353), feather * beamStrength + core * coreStrength);
+      float ends = smoothstep(0.0, 0.1, vUv.y) * (1.0 - smoothstep(0.86, 1.0, vUv.y));
+      float dapple = 0.72 + 0.28 * sin(vUv.y * 48.0 + beamPhase) * sin(vUv.y * 17.0 - beamPhase);
+      float alpha = (feather * beamStrength + core * coreStrength) * ends * dapple;
+      gl_FragColor = vec4(vec3(0.886, 0.729, 0.353), alpha);
     }
   `;
 
@@ -141,13 +145,13 @@ function createShadePatch(scene, mobile) {
   scene.add(patch);
 
   const beamSpecs = mobile ? [
-    { width: 1.2, length: 48, angle: -0.78, x: centerX + 0.6, z: centerZ - 0.8, strength: 0.078, core: 0.025 },
-    { width: 0.86, length: 48, angle: 0.24, x: centerX - 2.5, z: centerZ + 1.6, strength: 0.058, core: 0.018 },
-    { width: 0.68, length: 46, angle: 0.72, x: centerX + 3.2, z: centerZ - 0.7, strength: 0.046, core: 0.014 },
+    { width: 1.65, length: 48, angle: -1.02, x: centerX + 0.8, z: centerZ - 1.4, strength: 0.14, core: 0.046 },
+    { width: 1.24, length: 48, angle: 0.02, x: centerX - 3.2, z: centerZ + 2.4, strength: 0.12, core: 0.039 },
+    { width: 1.02, length: 46, angle: 1.01, x: centerX + 3.9, z: centerZ + 0.5, strength: 0.1, core: 0.032 },
   ] : [
-    { width: 1.55, length: 66, angle: -0.58, x: centerX + 1.2, z: centerZ - 0.8, strength: 0.064, core: 0.02 },
-    { width: 0.95, length: 64, angle: 0.14, x: centerX - 3.8, z: centerZ + 1.5, strength: 0.044, core: 0.014 },
-    { width: 0.7, length: 62, angle: 0.58, x: centerX + 5.2, z: centerZ + 0.8, strength: 0.034, core: 0.011 },
+    { width: 2.2, length: 66, angle: -1.02, x: centerX + 1.8, z: centerZ - 1.4, strength: 0.15, core: 0.05 },
+    { width: 1.6, length: 64, angle: 0.02, x: centerX - 4.5, z: centerZ + 2.2, strength: 0.12, core: 0.04 },
+    { width: 1.3, length: 62, angle: 1.01, x: centerX + 6, z: centerZ - 0.2, strength: 0.1, core: 0.034 },
   ];
 
   beamSpecs.forEach((spec, index) => {
@@ -159,14 +163,17 @@ function createShadePatch(scene, mobile) {
         uniforms: {
           beamStrength: { value: spec.strength },
           coreStrength: { value: spec.core },
+          beamPhase: { value: index * 1.73 },
         },
         transparent: true,
+        depthTest: false,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     );
     orientGroundBeam(beam, spec.angle);
     beam.position.set(spec.x, 0.026 + index * 0.001, spec.z);
+    beam.renderOrder = 2;
     scene.add(beam);
   });
 }
@@ -346,71 +353,81 @@ function createDataStream(scene, mobile) {
   destination.position.y = 0.08;
   scene.add(destination);
 
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(mobile ? 0.42 : 0.36, mobile ? 0.42 : 0.36, mobile ? 0.42 : 0.36),
-    new THREE.MeshBasicMaterial({ color: STREAM, toneMapped: false }),
-  );
-  scene.add(head);
+  function makePacket({ color, scale = 1, opacity = 1, light = 1, direction = 1 }) {
+    const headSize = (mobile ? 0.42 : 0.36) * scale;
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(headSize, headSize, headSize),
+      new THREE.MeshBasicMaterial({ color, toneMapped: false }),
+    );
+    scene.add(head);
 
-  const trail = [];
-  for (let index = 0; index < 6; index += 1) {
-    const segment = new THREE.Mesh(
-      new THREE.BoxGeometry(segmentSize * 1.22, segmentSize * 1.22, segmentSize * 1.22),
+    const trail = [];
+    for (let index = 0; index < 6; index += 1) {
+      const size = segmentSize * 1.22 * scale;
+      const segment = new THREE.Mesh(
+        new THREE.BoxGeometry(size, size, size),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: (0.52 - index * 0.07) * opacity,
+          toneMapped: false,
+        }),
+      );
+      trail.push(segment);
+      scene.add(segment);
+    }
+
+    const halo = new THREE.Mesh(
+      new THREE.SphereGeometry((mobile ? 0.62 : 0.54) * scale, 8, 6),
       new THREE.MeshBasicMaterial({
-        color: STREAM,
+        color,
         transparent: true,
-        opacity: 0.52 - index * 0.07,
+        opacity: 0.2 * opacity,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
         toneMapped: false,
       }),
     );
-    trail.push(segment);
-    scene.add(segment);
+    scene.add(halo);
+
+    const packetLight = new THREE.PointLight(color, (mobile ? 0.55 : 0.9) * light, 3.4, 2);
+    scene.add(packetLight);
+    return { head, trail, halo, packetLight, direction };
   }
 
-  const halo = new THREE.Mesh(
-    new THREE.SphereGeometry(mobile ? 0.62 : 0.54, 8, 6),
-    new THREE.MeshBasicMaterial({
-      color: STREAM,
-      transparent: true,
-      opacity: 0.2,
-      depthTest: false,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-  );
-  scene.add(halo);
+  const outbound = makePacket({ color: STREAM });
+  const inbound = makePacket({ color: 0xdde5d5, scale: 0.82, opacity: 0.82, light: 0.66, direction: -1 });
 
-  const packetLight = new THREE.PointLight(STREAM, mobile ? 0.55 : 0.9, 3.4, 2);
-  scene.add(packetLight);
-
-  function positionPacket(progress) {
+  function positionPacket(packet, progress) {
     const point = curve.getPointAt(progress);
-    head.position.copy(point);
-    halo.position.copy(point);
-    packetLight.position.copy(point);
-    packetLight.position.y += 0.4;
+    packet.head.position.copy(point);
+    packet.halo.position.copy(point);
+    packet.packetLight.position.copy(point);
+    packet.packetLight.position.y += 0.4;
 
     const pulse = 0.88 + Math.sin(progress * Math.PI * 10) * 0.08;
-    head.scale.setScalar(pulse);
-    halo.scale.setScalar(0.92 + pulse * 0.16);
+    packet.head.scale.setScalar(pulse);
+    packet.halo.scale.setScalar(0.92 + pulse * 0.16);
 
-    trail.forEach((segment, index) => {
-      const trailProgress = Math.max(0, progress - (index + 1) * (mobile ? 0.022 : 0.014));
+    packet.trail.forEach((segment, index) => {
+      const offset = (index + 1) * (mobile ? 0.022 : 0.014);
+      const trailProgress = THREE.MathUtils.clamp(progress - packet.direction * offset, 0, 1);
       segment.position.copy(curve.getPointAt(trailProgress));
-      segment.visible = progress > (index + 1) * 0.008;
+      segment.visible = packet.direction > 0 ? progress > offset * 0.4 : progress < 1 - offset * 0.4;
     });
   }
 
   return function updateDataStream(time, staticProgress = null) {
     if (staticProgress !== null) {
-      positionPacket(staticProgress);
+      positionPacket(outbound, staticProgress);
+      positionPacket(inbound, 1 - staticProgress);
       return;
     }
 
-    const cycle = time % 6100;
-    const progress = cycle < 3600 ? easeInOutCubic(cycle / 3600) : 1;
-    positionPacket(progress);
+    const outboundProgress = easeInOutCubic((time % 6200) / 6200);
+    positionPacket(outbound, outboundProgress);
+    positionPacket(inbound, 1 - outboundProgress);
   };
 }
 
@@ -422,14 +439,14 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     alpha: false,
     antialias: !mobile,
     failIfMajorPerformanceCaveat: true,
-    powerPreference: "high-performance",
+    powerPreference: "default",
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile ? 1.2 : 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.24;
   renderer.shadowMap.enabled = !mobile;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(GROUND);
@@ -517,12 +534,25 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     renderer.render(scene, camera);
   }
 
-  function tick(time) {
-    if (disposed) return;
+  function stopFrames() {
+    if (!frameId) return;
+    window.cancelAnimationFrame(frameId);
+    frameId = 0;
+  }
+
+  function scheduleFrame() {
+    if (disposed || reducedMotion || frameId || !stageVisible || document.hidden) return;
     frameId = window.requestAnimationFrame(tick);
-    if (!stageVisible || document.hidden || time - lastFrame < 42) return;
-    lastFrame = time;
-    render(time);
+  }
+
+  function tick(time) {
+    frameId = 0;
+    if (disposed || !stageVisible || document.hidden) return;
+    if (time - lastFrame >= 42) {
+      lastFrame = time;
+      render(time);
+    }
+    scheduleFrame();
   }
 
   function onPointerMove(event) {
@@ -554,19 +584,50 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   }) : null;
   const visibility = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
     stageVisible = entries.some((entry) => entry.isIntersecting);
+    if (stageVisible) {
+      lastFrame = 0;
+      scheduleFrame();
+    } else {
+      stopFrames();
+    }
   }) : null;
+
+  function onVisibilityChange() {
+    if (document.hidden) {
+      stopFrames();
+      return;
+    }
+    lastFrame = 0;
+    scheduleFrame();
+  }
+
+  function onPageHide(event) {
+    if (event.persisted) {
+      stopFrames();
+      return;
+    }
+    cleanup();
+  }
+
+  function onPageShow(event) {
+    if (!event.persisted) return;
+    lastFrame = 0;
+    scheduleFrame();
+  }
 
   function cleanup() {
     if (disposed) return;
     disposed = true;
-    window.cancelAnimationFrame(frameId);
+    stopFrames();
     resizer?.disconnect();
     visibility?.disconnect();
     breakpoint.removeEventListener?.("change", onBreakpointChange);
     stage.removeEventListener("pointermove", onPointerMove);
     stage.removeEventListener("pointerleave", onPointerLeave);
     canvas.removeEventListener("webglcontextlost", onContextLost);
-    window.removeEventListener("pagehide", cleanup);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
     renderer.dispose();
   }
 
@@ -577,12 +638,14 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   visibility?.observe(stage);
   canvas.addEventListener("webglcontextlost", onContextLost, { once: true });
   breakpoint.addEventListener?.("change", onBreakpointChange, { once: true });
-  window.addEventListener("pagehide", cleanup, { once: true });
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
 
   if (!reducedMotion) {
     stage.addEventListener("pointermove", onPointerMove, { passive: true });
     stage.addEventListener("pointerleave", onPointerLeave, { passive: true });
-    frameId = window.requestAnimationFrame(tick);
+    scheduleFrame();
   }
 
   return cleanup;

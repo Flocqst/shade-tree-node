@@ -132,6 +132,29 @@ function runScenarios(name, makeGracefulShutdown) {
 runScenarios("gateway makeGracefulShutdown", gatewayShutdown);
 runScenarios("bootnode makeGracefulShutdown", bootnodeShutdown);
 
+// Gateway shutdown also stops its background runtime resources at the beginning of a drain.
+console.log("\ngateway runtime cleanup:");
+{
+  const clock = makeClock();
+  const openSockets = new Set();
+  const events = [];
+  const server = makeFakeServer(openSockets);
+  const close = server.close;
+  server.close = (cb) => { events.push("server"); close(cb); };
+  const shutdown = gatewayShutdown(server, {
+    openSockets,
+    timeoutMs: 1000,
+    onExit: () => events.push("exit"),
+    onStart: () => events.push("runtime"),
+    log: () => {},
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  shutdown("SIGTERM");
+  shutdown("SIGTERM");
+  ok(events.join(",") === "runtime,server,exit", "runtime resources close once, before the listener and process exit");
+}
+
 // (d) importing the modules must NOT have installed signal handlers (only main() does).
 console.log("\nimport is side-effect-free (no signal handlers on import):");
 ok(process.listenerCount("SIGTERM") === 0, "(d) no SIGTERM listener installed by import");

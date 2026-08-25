@@ -1,7 +1,8 @@
 name: ci
 
-# Runs on every push and PR. Three gates an auditor also runs locally:
+# Runs on every push and PR. Four gates an auditor also runs locally:
 #   test  -- the full suite (node selftests + forge test) across a Node matrix
+#   rust  -- every Rust workspace target and feature, including tests
 #   lint  -- `npm run lint` (eslint bug net, not a formatter)
 #   audit -- `npm run audit:ci` supply-chain gate (blocks on critical advisories)
 
@@ -11,6 +12,10 @@ on:
   pull_request:
 
 jobs:
+  rust:
+    name: rust workspace
+    uses: ./.github/workflows/rust-verify.yml
+
   test:
     name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
@@ -34,7 +39,7 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Run the full suite (node selftests + forge test)
         run: npm test
@@ -51,7 +56,7 @@ jobs:
           node-version: 24
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Lint
         run: npm run lint
@@ -68,17 +73,8 @@ jobs:
           node-version: 24
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
-      # Blocking gate: fails CI on any *critical* advisory. Passes today.
-      - name: Audit (blocking, critical)
+      # Blocking gate: fails CI on any high or critical production advisory.
+      - name: Audit production dependencies (high or critical)
         run: npm run audit:ci
-
-      # Informational: surfaces the known *high* advisories without blocking.
-      # These are unavoidable transitive advisories in the prod crypto stack
-      # (ethers -> ws, @semaphore-protocol -> snarkjs, socks -> ip-address,
-      # etc.); the only npm-offered fix downgrades @semaphore-protocol/proof to
-      # 3.15.2, a breaking change. Tracked via Dependabot instead of blocked on.
-      - name: Audit (informational, high)
-        continue-on-error: true
-        run: npm audit --audit-level=high

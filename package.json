@@ -2,6 +2,9 @@
   "name": "shade-tree-node",
   "version": "0.3.0",
   "description": "Run a local proxy for an agent, or a node that provides proof-gated onion egress.",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "private": true,
   "bin": {
@@ -14,6 +17,7 @@
   },
   "//files": "Git installs use this runtime allowlist today. Publishing stays gated by private:true until Gate 1+2 clear. The Rust client ships separately as a crate (T-RUST-4).",
   "files": [
+    "assets/",
     "bin/",
     "bootnode/",
     "client/",
@@ -25,6 +29,7 @@
     "scripts/",
     "circuits/",
     "contracts/",
+    "docs/*.md",
     "README.md",
     "LICENSE"
   ],

@@ -8,9 +8,10 @@ Public docs call the local protocol client the **Proxy**, the egress gateway a *
 node**, and the discovery bootnode the **Elder Tree**. Source paths, environment variables,
 and flags retain `client`, `gateway`, and `bootnode` where compatibility matters.
 
-You need three things from the Grove operator: the Elder Tree onion, its pinned Canopy
-signer pubkey, and admission (your commitment added to the set, on chain or in the
-operator's set). Everything else is generated locally, and your secret stays on your machine.
+You need an access profile from the Grove operator: the Elder Tree onion, its pinned Canopy
+signer, your exact enrolled tier, and the member-set input for that admission path. Invited
+access uses the operator's member list. Staked or paid access uses operator-supplied contract
+and RPC values. Your secret stays on your machine.
 
 Status: research preview, unaudited, with testnet ZK artifacts. The software can be exercised
 in a local or operator-configured v4 Grove, but there is no public v4 service here.
@@ -21,20 +22,29 @@ See the repo README "Scope" and [`../SHIP-PLAN.md`](../SHIP-PLAN.md).
 
 ## 1. Get a member secret
 
-Self-enroll. The identity is generated on your machine; only the commitment leaves it.
+Self-enroll at the tier supplied by the operator. The identity is generated on your machine;
+only the commitment leaves it.
 
 ```bash
-shade-tree join                    # guided: prints your commitment + the exact next commands
-# or the raw tool:
-shade-tree enroll --commitment-only     # commitment on stdout, secret (export SHADE_TREE_SECRET=...) on stderr
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
+shade-tree enroll --commitment-only --limit "$SHADE_TREE_LIMIT"
 ```
 
 The secret is a bearer credential: whoever holds it can egress as you until the set is
-rotated. Keep it local. Hand the operator your commitment, or stake it yourself:
+rotated. Keep it local. Copy only its value into the hidden prompt in step 2; do not run the
+printed `export` line. For invited access, hand the commitment to the operator and get their
+updated member list. For staked access:
 
 ```bash
-shade-tree register-member <commitment>
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
+shade-tree register-member <commitment> --limit "$SHADE_TREE_LIMIT" \
+  --rpc-url <operator-rpc-url> --group-contract <operator-staked-set>
+unset SHADE_TREE_REGISTER_KEY
 ```
+
+Paste the funded registration key at the hidden prompt. A remote RPC requires an explicit key;
+the one-shot environment assignment keeps it out of argv, and `unset` clears it afterward.
 
 ## 2. Run the Proxy
 
@@ -46,16 +56,19 @@ and selects a node for that tunnel.
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
 ```
 
-Paste the member secret at the hidden prompt, then run:
+Paste the member secret at the hidden prompt. For invited access, run:
 
 ```bash
-shade-tree proxy \
+SHADE_TREE_MEMBERS_FILE=/path/from-operator/members.json \
+shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source invited \
   --bootnode <elder-onion> \
   --dir-signer <canopy-signer-pubkey>
 ```
 
 Get both discovery values from the same v4 Grove operator. If the operator gives you one
-node onion instead, use `--onion <v4-node.onion>` and omit Elder Tree discovery. Do not
+node onion instead, use `--onion <v4-node.onion>` and omit Elder Tree discovery. Staked and
+paid profiles replace the invited member-file and leaf-source values with the contract, RPC,
+and leaf source supplied by that same operator. Do not
 point this v4 Proxy at `network/sepolia/bootnode.json`; that record and its 2026-08-17
 go-live log are retained as pre-v4 deployment history.
 

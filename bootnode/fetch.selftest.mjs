@@ -8,7 +8,8 @@
 //
 // Exit 0 = parseHttp holds its contract on every crafted case; nonzero = a check failed.
 
-import { parseHttp } from "./fetch.mjs";
+import { EventEmitter } from "node:events";
+import { parseHttp, postOverTor } from "./fetch.mjs";
 
 let failures = 0;
 const ok = (cond, msg) => { if (cond) console.log(`  ok   ${msg}`); else { console.log(`  FAIL ${msg}`); failures++; } };
@@ -34,7 +35,7 @@ function throws(fn, check, msg) {
   }
 }
 
-function main() {
+async function main() {
   // --- happy path: 200 with a JSON body parses to the object -------------------
   console.log("parseHttp happy path:");
   const okObj = parseHttp(resp(200, "OK", JSON.stringify({ ok: true })));
@@ -79,8 +80,37 @@ function main() {
   const tail = parseHttp(resp(200, "OK", JSON.stringify({ pad: "z".repeat(100000), tail: "END" })));
   ok(tail.tail === "END" && tail.pad.length === 100000, "100KB body parses with trailing field intact");
 
+  console.log("\nonion destination routing:");
+  const socket = new EventEmitter();
+  const writes = [];
+  socket.write = (chunk) => {
+    writes.push(Buffer.from(chunk).toString("utf8"));
+    if (writes.length === 1) queueMicrotask(() => {
+      socket.emit("data", resp(200, "OK", '{"ok":true}'));
+      socket.emit("end");
+    });
+  };
+  socket.destroy = () => {};
+  let dial = null;
+  const socksClient = { createConnection: async (options) => { dial = options; return { socket }; } };
+  const onion = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion";
+  const routed = await postOverTor(onion, "/fleet-tally", { nullifier: "1", epoch: "2" }, {
+    destinationPort: 8879,
+    attempts: 1,
+    timeoutMs: 1000,
+    socksClient,
+  });
+  ok(routed.ok === true && dial.destination.host === onion && dial.destination.port === 8879, "SOCKS dials the configured onion virtual port, not hard-coded port 80");
+  ok(writes.join("").includes(`Host: ${onion}:8879\r\n`), "the HTTP Host authority carries the non-default onion port");
+  try {
+    await postOverTor(onion, "/", {}, { destinationPort: 70000, attempts: 1, socksClient });
+    ok(false, "invalid destination port is rejected");
+  } catch (error) {
+    ok(/invalid onion destination port/.test(error.message), "invalid destination port is rejected");
+  }
+
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: fetch parseHttp selftest (${failures} failure${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
-main();
+main().catch((error) => { console.error(error); process.exit(1); });

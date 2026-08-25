@@ -89,7 +89,7 @@ node "$HERE/wait-log.mjs" "$WORK/sink.log" "[sink] up" 15000
 # Start the real gateway. Allow ONLY our local sink target; default epoch length.
 # Wait on the gateway's OWN "gateway up" log line (never a TCP connect-probe: the gateway
 # reads a full newline-terminated envelope, and a half-open probe would EPIPE-crash it).
-SHADE_TREE_EGRESS_ALLOW="$TARGET" SHADE_TREE_EPOCH_SECONDS=120 \
+SHADE_TREE_EGRESS_ALLOW="$TARGET" SHADE_TREE_ALLOW_PRIVATE_TARGETS=1 SHADE_TREE_EPOCH_SECONDS=120 \
   node "$REPO/gateway/gateway.mjs" > "$WORK/gw.log" 2>&1 &
 GW_PID=$!
 disown "$GW_PID" 2>/dev/null || true

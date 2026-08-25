@@ -131,8 +131,10 @@ operator:
 
 ```bash
 bash scripts/start-tor-client.sh
-shade-tree client --secret <your-secret> --tor-port 9260 \
+read -s SHADE_TREE_SECRET
+SHADE_TREE_SECRET="$SHADE_TREE_SECRET" shade-tree proxy --limit <operator-tier> --tor-port 9260 \
   --bootnode <v4-bootnode.onion> --dir-signer <v4-directory-signer-hex>
+unset SHADE_TREE_SECRET
 ```
 
 If the v4 operator offers paid or staked admission, use only the registrar, RPC URL, and fresh

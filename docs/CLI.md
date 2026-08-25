@@ -33,6 +33,11 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 
 ## Commands
 
+Examples that send a transaction assume the key was first loaded with a hidden prompt, for
+example `read -s SHADE_TREE_REGISTER_KEY`. The one-shot
+`SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree …` form keeps its value out of
+argv and shell history; clear the shell variable with `unset SHADE_TREE_REGISTER_KEY` afterward.
+
 | Command | Script | What it does | Example |
 |---|---|---|---|
 | `run` | built into the CLI | Run one proxy-aware child with process-scoped Shade Tree routing. Refuses to spawn if the local proxy is unavailable. | `shade-tree run -- hermes` |
@@ -40,13 +45,13 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 | `keygen` | `bootnode/keygen.mjs` | Mint an onion identity: a Tor v3 hidden-service key plus the announce-signing seed. Writes `hs_ed25519_secret_key`, `hs_ed25519_public_key`, `hostname`, and `identity.local.json` into `<hsDir>`. Refuses to overwrite any identity file; `--force` is only for intentional rotation. | `shade-tree keygen tor/hs --label node-1` |
 | `elder` | `bootnode/server.mjs` | Run the Elder Tree as an onion service. It verifies node announcements and serves the signed Canopy. Long-running. | `shade-tree elder --port 8877 --admission stake --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `bootnode` | `bootnode/server.mjs` | Legacy alias for `elder`. | `shade-tree bootnode --port 8877` |
-| `heartbeat` | `bootnode/heartbeat.mjs` | Keep this node announced to the Elder. Long-running. | `shade-tree heartbeat --bootnode <onion> --operator-key 0xKEY` |
+| `heartbeat` | `bootnode/heartbeat.mjs` | Keep this node announced to the Elder. Long-running. For a staked Elder, load `SHADE_TREE_GW_OPERATOR_KEY` through a hidden prompt or use a precomputed operator address/signature pair. | `shade-tree heartbeat --bootnode <onion> --identity tor/hs-gateway/identity.local.json` |
 | `enroll` | `group/enroll.mjs` | Generate a member identity locally and print its secret + commitment (the secret never leaves the machine). | `shade-tree enroll alice --commitment-only` |
-| `identity` | `group/identity.mjs` | Export the **Rust client's `--identity` file** `{identitySecret, leaf}` from your member secret (same derivation as the JS client, `lib/identity-file.mjs` → `lib/rln.mjs`; `leaf` is your `members.json` entry). Secret from `--secret-file` > `SHADE_TREE_SECRET` (`--secret`) > `./.secret`. Stdout = the JSON only; `--out <path>` writes it mode 0600 instead. The public leaf is echoed on stderr, never the secret. Derive with the fleet's `SHADE_TREE_SLOTS`. | `SHADE_TREE_SECRET=0x… shade-tree identity --out identity.json` |
-| `register-member` | `group/register-onchain.mjs` | Stake a self-enrolled member commitment into `StakedReputationSet` (posts the tier's bond). `--limit N` (or `SHADE_TREE_LIMIT`) is the reputation tier the leaf was enrolled at (`enroll --limit N`); default 8. The rln-v4 set records it and charges `bondFor(N)`; an rln-v3 set admits only 8. | `shade-tree register-member 0xCOMMITMENT --limit 32 --rpc-url https://rpc.example --group-contract 0xSet` |
+| `identity` | `group/identity.mjs` | Export the **Rust client's `--identity` file** `{identitySecret, leaf}` from your member secret (same derivation as the JS client, `lib/identity-file.mjs` → `lib/rln.mjs`; `leaf` is your `members.json` entry). Secret from `--secret-file` > `SHADE_TREE_SECRET` (`--secret`) > `./.secret`. Stdout = the JSON only; `--out <path>` writes it mode 0600 instead. The public leaf is echoed on stderr, never the secret. Derive with the exact member `SHADE_TREE_LIMIT`; a non-default tier produces a different leaf. | `shade-tree identity --secret-file ./.secret --limit 32 --out identity.json` |
+| `register-member` | `group/register-onchain.mjs` | Stake a self-enrolled member commitment into `StakedReputationSet` (posts the tier's bond). `--limit N` (or `SHADE_TREE_LIMIT`) is the reputation tier the leaf was enrolled at (`enroll --limit N`); default 8. The rln-v4 set records it and charges `bondFor(N)`; an rln-v3 set admits only 8. A non-loopback RPC requires `SHADE_TREE_REGISTER_KEY`. | `SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree register-member 0xCOMMITMENT --limit 32 --rpc-url https://rpc.example --group-contract 0xSet` |
 | `pay` | `group/pay.mjs` | **Buy a membership leaf over HTTP 402** (T-FEAT-7): fetch the operator's quote from the registrar on the bootnode onion (`:8878`, over Tor), sign an EIP-3009 `TransferWithAuthorization` for the stablecoin with the **buyer** wallet (holds the coin, needs **no gas token**; the operator submits and pays gas), POST it, and print `settleTx` / `insertTx` / `leafIndex` / `root` once the operator has inserted your commitment into `PaidAccessSet`. `--protocol x402` (default) or `mpp`; `--limit 8\|32` (tier; default 8); registrar via the v4 operator's `--bootnode <onion>` (+ `--registrar-port`, default 8878) or `--registrar-url http://…` (no Tor); buyer key `--key-file <path>` / `--account <keystore.json>` (`SHADE_TREE_PAY_PASSPHRASE`) / `SHADE_TREE_PAY_KEY`; commitment `--commitment <dec>` or derived from your member secret like `identity` (`--secret-file` / `SHADE_TREE_SECRET` / `./.secret`) at `--limit`. `--dry-run` prints the challenge + the exact authorization it would sign and signs nothing; `--json` for machine output. Prints the Layer-0 advice (the transfer is public: pay from a fresh address). The checked-in Sepolia registrar is pre-v4 history, not a current payment endpoint. | `shade-tree pay --bootnode <v4-bootnode.onion> --limit 8 --protocol mpp --key-file buyer.key --secret-file ./.secret` |
 | `leaves` | `group/leaves.mjs` | Export an ON-CHAIN set's ordered leaves as a `members.json` document (`{ version: 2, members: [leaf, …] }`, slashed/exited slots written as the tree ZERO so the root matches). This is the bridge for the **Rust client**, whose `shade-tree egress --members <f>` reads only that file (T-FEAT-7). Rebuilds the tree from the contract's event log exactly as the gateway does (`lib/root-provider.mjs`). Contract: `--contract` > `SHADE_TREE_PAID_ACCESS_CONTRACT` > first `SHADE_TREE_GROUP_CONTRACT`. Stdout = the JSON only; `--out <path>` writes it instead. Nothing secret involved. | `shade-tree leaves --contract 0xPaid --rpc-url https://rpc.example --out members.json` |
-| `register-gateway` | `group/register-gateway.mjs` | Stake a gateway operator bond into `GatewayRegistry` (binds to the operator address). | `shade-tree register-gateway --gateway-registry 0xReg --register-key 0xKEY` |
+| `register-gateway` | `group/register-gateway.mjs` | Stake a gateway operator bond into `GatewayRegistry` (binds to the operator address). A non-loopback RPC requires `SHADE_TREE_REGISTER_KEY`. | `SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree register-gateway --gateway-registry 0xReg --rpc-url https://rpc.example` |
 | `exit-gateway` | `group/exit-gateway.mjs exit` | Operator-side exit half of `GatewayRegistry` (rollback of `register-gateway`): call `initiateExit()`, leave the active set, start the `UNBONDING` clock, and stay slashable until it elapses. Reads state first and refuses what would revert (`NotStaked`, second call = no-op). `--dry-run` prints target + calldata + an `eth_call` simulation and never broadcasts. Signer: `--key-file` / `--account` (Foundry keystore, `SHADE_TREE_KEYSTORE_PASSWORD`) / `--keystore` / `SHADE_TREE_REGISTER_KEY`; never on argv. | `shade-tree exit-gateway --gateway-registry 0xReg --rpc-url https://rpc.example --account shade-tree-operator --dry-run` |
 | `withdraw-gateway` | `group/exit-gateway.mjs withdraw` | After `UNBONDING`, call `withdraw(recipient)` to reclaim the bond (`--recipient`, default the operator address). Refuses `NotStaked` / `NotExiting` / `StillBonded` (prints the withdrawable time). Same `--dry-run` and signer options as `exit-gateway`. | `shade-tree withdraw-gateway --recipient 0xCold --gateway-registry 0xReg --rpc-url https://rpc.example --account shade-tree-operator` |
 | `gateway-status` | `group/exit-gateway.mjs status` | Read-only: an operator's stake state (`staked (active)` / `exiting` / `not staked`), `BOND`, `UNBONDING`, `withdrawableAt` and chain time. Needs no key: `--operator 0x…`. | `shade-tree gateway-status --operator 0xOp --gateway-registry 0xReg --rpc-url https://rpc.example` |
@@ -63,11 +68,11 @@ environment variables must be configured explicitly for the local HTTP CONNECT p
 
 `keygen` takes a positional `<hsDir>` plus `--label` and an intentional-rotation `--force`; `join` takes an optional role (`member` | `node`, with `gateway` as an alias) and a label / `<hsDir>`; `register-member` takes a positional `<commitment>` (`--limit` is env-mapped to `SHADE_TREE_LIMIT`, which it reads); `sign-directory` takes an optional positional unsigned-list path; `backup` / `restore` take `<src> <dest>` positionals. All other positionals are forwarded to the child module.
 
-Module-parsed flags (passed through, not env-mapped): `identity --out --secret-file`; `leaves --contract --out --from-block`; `exit-gateway` / `withdraw-gateway` / `gateway-status` `--dry-run --recipient --key-file --account --keystore` (`--operator`, `--rpc-url`, `--gateway-registry`, `--register-key` are env-mapped as usual); `restore --force`; `keygen --label --force`; `join node --force`; `enroll --commitment-only`. `--limit` is env-mapped (`SHADE_TREE_LIMIT`) for every command since T-FEAT-7 (`identity`, `register-member`, `client` all read it).
+Module-parsed flags (passed through, not env-mapped): `identity --out --secret-file`; `leaves --contract --out --from-block`; `exit-gateway` / `withdraw-gateway` / `gateway-status` `--dry-run --recipient --key-file --account --keystore` (`--operator`, `--rpc-url`, `--gateway-registry`, `--register-key` are env-mapped as usual); `restore --force`; `keygen --label --force`; `join node --force`; `enroll --commitment-only`. `--limit` is env-mapped to `SHADE_TREE_LIMIT`; `enroll`, `join`, `identity`, `register-member`, `pay`, and the Proxy all read it.
 
 ## Flags
 
-Every `--flag` sets exactly one `SHADE_TREE_*` env var (from `FLAG_ENV` in `bin/shade-tree.mjs`). Flags override the environment.
+A mapped `--flag` sets exactly one `SHADE_TREE_*` env var (from `FLAG_ENV` in `bin/shade-tree.mjs`). Mapped flags override the environment; command-specific flags are passed through to the child module.
 `--secret` remains a compatibility flag but exposes the bearer value in process
 arguments. Prefer a hidden shell read into `SHADE_TREE_SECRET` as shown in the
 [agent guide](AGENT.md).
@@ -98,24 +103,24 @@ arguments. Prefer a hidden shell read into `SHADE_TREE_SECRET` as shown in the
 | `--pay-protocols` | `SHADE_TREE_PAY_PROTOCOLS` | registrar / bootnode advert (`x402,mpp` subset; T-FEAT-9) |
 | `--leaf-source` | `SHADE_TREE_LEAF_SOURCE` | client (`auto\|invited\|staked\|paid`; T-FEAT-9) |
 | `--max-anon` | `SHADE_TREE_MAX_ANON` | client (bare flag ⇒ `true`: invited-only gateways; T-FEAT-9) |
-| `--limit` | `SHADE_TREE_LIMIT` | client / identity / register-member (the member's tier) |
+| `--limit` | `SHADE_TREE_LIMIT` | enroll / join / Proxy / identity / register-member / pay (the member's exact tier) |
 | `--root-provider` | `SHADE_TREE_ROOT_PROVIDER` | gateway |
 | `--slash-key` | `SHADE_TREE_SLASH_KEY` | gateway |
 | `--slash-contract` | `SHADE_TREE_SLASH_CONTRACT` | gateway |
-| `--secret` | `SHADE_TREE_SECRET` | client |
+| `--secret` | `SHADE_TREE_SECRET` | Proxy / identity / pay (compatibility only; prefer a hidden read or secret file) |
 | `--onion` | `SHADE_TREE_ONION` | client |
-| `--bootnode` | `SHADE_TREE_BOOTNODE_ONION` | client |
+| `--bootnode` | `SHADE_TREE_BOOTNODE_ONION` | Proxy / heartbeat / pay |
 | `--directory` | `SHADE_TREE_DIRECTORY` | client |
 | `--dir-signer` | `SHADE_TREE_DIR_SIGNER` | client |
 | `--shim-port` | `SHADE_TREE_SHIM_PORT` | client |
-| `--identity` | `SHADE_TREE_GW_IDENTITY` | gateway announce / heartbeat |
+| `--identity` | `SHADE_TREE_GW_IDENTITY` | heartbeat |
 | `--weight` | `SHADE_TREE_GW_WEIGHT` | gateway announce / heartbeat |
 | `--interval` | `SHADE_TREE_BOOTNODE_HEARTBEAT` | gateway announce / heartbeat |
 | `--operator-key` | `SHADE_TREE_GW_OPERATOR_KEY` | gateway announce / heartbeat |
-| `--operator` | `SHADE_TREE_GW_OPERATOR` | gateway announce / heartbeat |
+| `--operator` | `SHADE_TREE_GW_OPERATOR` | heartbeat / gateway status and exit tools |
 | `--operator-sig` | `SHADE_TREE_GW_OPERATOR_SIG` | gateway announce / heartbeat |
-| `--register-key` | `SHADE_TREE_REGISTER_KEY` | gateway announce / heartbeat |
-| `--bond` | `SHADE_TREE_BOND` | gateway announce / heartbeat |
+| `--register-key` | `SHADE_TREE_REGISTER_KEY` | member/gateway registration and gateway exit tools; avoid argv |
+| `--bond` | `SHADE_TREE_BOND` | member/gateway registration |
 
 Operator shortcuts are handled before command dispatch: `--quiet` sets the log
 level to `warn` unless `--log-level` is explicit, `--banner` sets
@@ -123,4 +128,4 @@ level to `warn` unless `--log-level` is explicit, `--banner` sets
 never mixed into JSON logs. `auto` output uses pretty logs and one ASCII tree on
 an interactive TTY, then JSON with no tree in systemd, CI, pipes, and files.
 
-Some env vars have no flag and must be set in the environment directly: `SHADE_TREE_SLASH_RECEIVER`, `SHADE_TREE_MEMBERS_FILE`, `SHADE_TREE_PAID_MIN_LEAVES`, `SHADE_TREE_CONFIRMATIONS`, `SHADE_TREE_STAKE_CACHE_MS`, `SHADE_TREE_FRESHNESS_ROOTS`, `SHADE_TREE_FROM_BLOCK`, `SHADE_TREE_FROM_BLOCKS`, `SHADE_TREE_LOGS_CHUNK`, `SHADE_TREE_DIRECTORY_CACHE`, `SHADE_TREE_DIRECTORY_REFRESH_MS`, `SHADE_TREE_SLOTS`, `SHADE_TREE_RLN_IDENTIFIER`, and the demo/test vars. See `docs/CONFIG.md`.
+Some env vars have no mapped module flag and must be set directly: `SHADE_TREE_SLASH_RECEIVER`, `SHADE_TREE_MEMBERS_FILE`, `SHADE_TREE_PAID_MIN_LEAVES`, `SHADE_TREE_CONFIRMATIONS`, `SHADE_TREE_STAKE_CACHE_MS`, `SHADE_TREE_FRESHNESS_ROOTS`, `SHADE_TREE_FROM_BLOCK`, `SHADE_TREE_FROM_BLOCKS`, `SHADE_TREE_LOGS_CHUNK`, `SHADE_TREE_DIRECTORY_CACHE`, `SHADE_TREE_DIRECTORY_REFRESH_MS`, `SHADE_TREE_SOCKS_ISOLATION`, `SHADE_TREE_PAY_HTTP_TIMEOUT_MS`, `SHADE_TREE_SLOTS`, and `SHADE_TREE_RLN_IDENTIFIER`. `shade-tree run` also reads `SHADE_TREE_PROXY_URL`, `SHADE_TREE_NO_PROXY`, and `SHADE_TREE_PROXY_CHECK_TIMEOUT_MS`; its equivalent flags are handled by the runner's narrow parser. See `docs/CONFIG.md`.

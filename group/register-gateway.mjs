@@ -21,6 +21,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { networkDefault } from "../lib/network-record.mjs";
+import { makeBoundedJsonRpcProvider, registrationKey, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -36,7 +37,12 @@ async function main() {
   // Resolution: explicit env > committed network record (SHADE_TREE_NETWORK) > deployer-local cache.
   const rpcUrl = process.env.SHADE_TREE_RPC_URL || networkDefault("SHADE_TREE_RPC_URL") || deployed.rpcUrl || "http://127.0.0.1:8545";
   const address = process.env.SHADE_TREE_GATEWAY_REGISTRY || networkDefault("SHADE_TREE_GATEWAY_REGISTRY") || deployed.gatewayRegistry || deployed.GatewayRegistry;
-  const key = process.env.SHADE_TREE_REGISTER_KEY || ANVIL_KEY_1;
+  const key = registrationKey({
+    rpcUrl,
+    explicitKey: process.env.SHADE_TREE_REGISTER_KEY,
+    developmentKey: ANVIL_KEY_1,
+    label: "gateway registration",
+  });
   if (!address) {
     console.error("no GatewayRegistry address: set SHADE_TREE_GATEWAY_REGISTRY, or SHADE_TREE_NETWORK=<name> with contracts.gatewayRegistry recorded, or write contracts/deployed.local.json");
     process.exit(1);
@@ -46,7 +52,7 @@ async function main() {
   try { ({ ethers } = await import("ethers")); }
   catch { console.error("register-gateway needs the `ethers` dependency."); process.exit(1); }
 
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   const abi = ["function register() payable", "function BOND() view returns (uint256)", "function isStaked(address) view returns (bool)"];
   const contract = new ethers.Contract(address, abi, wallet);
@@ -64,7 +70,7 @@ async function main() {
 
   const tx = await contract.register({ value: bond });
   console.log(`  tx:       ${tx.hash}  (waiting...)`);
-  const rcpt = await tx.wait();
+  const rcpt = await waitForTransactionReceipt(tx, { operation: "gateway registration" });
   console.log(`  mined in block ${rcpt.blockNumber}; operator staked. Authorize your onion via the heartbeat.`);
 }
 

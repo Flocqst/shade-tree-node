@@ -17,7 +17,7 @@
 //                                         -> print ONLY the commitment on stdout (secret +
 //                                            guidance to stderr); do NOT touch members.json.
 //                                            Pipe/hand the commitment to the operator, or:
-//                                            node group/register-onchain.mjs <commitment>
+//                                            node group/register-onchain.mjs <commitment> --limit <n>
 //   node group/enroll.mjs --limit 32 ...  -> enrol at a reputation TIER (T-FEAT-8): the leaf
 //                                            commits to userMessageLimit=32 instead of the
 //                                            default K (8). The member must then run its client
@@ -46,7 +46,7 @@ for (let i = 0; i < args.length; i++) {
   if (args[i].startsWith("--limit=")) { limitArg = args[i].slice("--limit=".length); args.splice(i, 1); break; }
 }
 let limit;
-try { limit = Number(normLimit(limitArg ?? K_SLOTS)); }
+try { limit = Number(normLimit(limitArg ?? process.env.SHADE_TREE_LIMIT ?? K_SLOTS)); }
 catch (e) { console.error("enroll: --" + e.message); process.exit(2); }
 const label = args.find((a) => !a.startsWith("--")) || "member-" + randomBytes(2).toString("hex");
 
@@ -60,15 +60,31 @@ const secret = "0x" + randomBytes(32).toString("hex");
 const commitment = rateCommitmentOf(identityFor(secret), limit).toString();
 const tierNote = limit === K_SLOTS ? "" : `   (tier limit ${limit}: run the client with SHADE_TREE_LIMIT=${limit})`;
 
+function printRegistrationGuide(write) {
+  write("To stake this commitment on a remote StakedReputationSet, load the public profile and");
+  write("funded key without putting the key in argv or shell history:");
+  write("  read -r SHADE_TREE_RPC_URL && export SHADE_TREE_RPC_URL");
+  write("  read -r SHADE_TREE_GROUP_CONTRACT && export SHADE_TREE_GROUP_CONTRACT");
+  write("  read -s SHADE_TREE_REGISTER_KEY");
+  write(`  SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree register-member ${commitment} --limit ${limit}`);
+  write("  unset SHADE_TREE_REGISTER_KEY");
+  write("");
+  write("For a loopback Anvil using the development defaults:");
+  write(`  shade-tree register-member ${commitment} --limit ${limit}`);
+}
+
 if (commitmentOnly) {
   // Machine path: stdout is the commitment alone, so it can be piped straight to
   // the on-chain register or handed to the operator. The secret goes to stderr so
   // it is visible to the human running this but never captured by a pipe.
   process.stderr.write("Self-enrollment (commitment-only). Keep this secret PRIVATE; it never leaves your machine:\n");
-  process.stderr.write("\n  export SHADE_TREE_SECRET=" + secret + "\n");
+  process.stderr.write("\n  secret value: " + secret + "\n");
+  process.stderr.write("\nLoad it without putting the value in shell history:\n");
+  process.stderr.write("  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET\n");
   if (limit !== K_SLOTS) process.stderr.write("  export SHADE_TREE_LIMIT=" + limit + "   (this leaf's tier; the client must prove with it)\n");
-  process.stderr.write("\nSubmit the commitment below (stdout) to the operator, or stake it on chain:\n");
-  process.stderr.write("  node group/register-onchain.mjs " + commitment + "\n\n");
+  process.stderr.write("\nSubmit the commitment below (stdout) to the operator, or stake it on chain.\n\n");
+  printRegistrationGuide((line) => process.stderr.write(line + "\n"));
+  process.stderr.write("\n");
   process.stdout.write(commitment + "\n");
   process.exit(0);
 }
@@ -91,8 +107,10 @@ console.log("  group root:   " + root);
 console.log("");
 console.log("Keep THIS SECRET private (the operator never sees it):");
 console.log("");
-console.log("  export SHADE_TREE_SECRET=" + secret);
+console.log("  secret value: " + secret);
+console.log("");
+console.log("Load it without putting the value in shell history:");
+console.log("  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET");
 if (limit !== K_SLOTS) console.log("  export SHADE_TREE_LIMIT=" + limit);
 console.log("");
-console.log("To stake the commitment on the on-chain StakedReputationSet instead of the local set:");
-console.log("  node group/register-onchain.mjs " + commitment);
+printRegistrationGuide(console.log);

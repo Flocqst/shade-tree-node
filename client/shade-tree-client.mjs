@@ -25,6 +25,7 @@ import tls from "node:tls";
 import https from "node:https";
 import { SocksClient } from "socks";
 import { currentEpoch, K_SLOTS, normLimit, requestSignal, proveForSlot, loadGroup, cleanUp, clientArtifactIds, selectArtifact } from "../lib/semaphore.mjs";
+import * as semaphoreConfig from "../lib/semaphore.mjs";
 // Namespace import (not named): selftests that mock lib/rln.mjs need not provide these two; they
 // are only touched by makeLeafSourceLoader when a contract is configured.
 import * as rln from "../lib/rln.mjs";
@@ -33,6 +34,9 @@ import { configuredContracts, loadGroupFromContract } from "../lib/root-provider
 import { admitPathOfSource, parseLeafSource, envFlag, ADMIT_ORDER } from "../lib/admission.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// Namespace access keeps lightweight module-loader tests compatible with older semaphore mocks
+// that do not export the clock constant, while production still uses the protocol's one source.
+const CLIENT_EPOCH_SECONDS = Number(semaphoreConfig.EPOCH_SECONDS ?? process.env.SHADE_TREE_EPOCH_SECONDS ?? 120);
 
 // ---- leaf-source discovery (T-FEAT-7, docs/PAYMENTS.md) ----------------------------
 // A member's leaf lives in exactly one of the sets the gateway trusts (gateway/gateway.mjs
@@ -100,13 +104,50 @@ export function makeLeafSourceLoader({
 // ---- slot pool: per-epoch group warm + one slot/tunnel rotation ----------------
 // (moved from the client proxy; the deterministic-retry + rotation invariants live here.)
 // `K` is THIS member's tier limit (T-FEAT-8): the userMessageLimit its leaf was enrolled with.
-// The pool wraps slots at K and every proof is made with `limit: K`, so a tier-2 member
+// The pool allocates slots 0..K-1 once per epoch and every proof is made with `limit: K`, so a tier-2 member
 // (K=32) gets 32 distinct nullifiers per epoch from the same tree, and a member configured
-// with a K its leaf does not carry cannot prove at all (proveForSlot: not in group).
-export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEpoch, K = K_SLOTS, loadGroupFn = loadGroup }) {
+// with a K its leaf does not carry cannot prove at all (proveForSlot: not in group). A K+1st
+// request fails locally; it never wraps into slashable slot reuse.
+export class ShadeTreeEpochBudgetError extends Error {
+  constructor({ epoch, limit, used = limit, epochSeconds = CLIENT_EPOCH_SECONDS, nowMs = Date.now() }) {
+    const epochValue = BigInt(epoch);
+    const seconds = Number(epochSeconds);
+    const resetAtMs = Number(epochValue + 1n) * seconds * 1000;
+    const finiteReset = Number.isSafeInteger(resetAtMs) && seconds > 0 ? resetAtMs : null;
+    const retryAfterMs = finiteReset == null ? null : Math.max(0, resetAtMs - nowMs);
+    super(`Shade Tree epoch budget exhausted: used ${used}/${limit} slots in epoch ${epochValue}; retry after the epoch resets${finiteReset == null ? "" : ` at ${new Date(finiteReset).toISOString()}`}`);
+    this.name = "ShadeTreeEpochBudgetError";
+    this.code = "SHADE_TREE_EPOCH_BUDGET_EXHAUSTED";
+    this.epoch = epochValue.toString();
+    this.limit = limit;
+    this.used = used;
+    this.remaining = 0;
+    this.resetAtMs = finiteReset;
+    this.resetAt = finiteReset == null ? null : new Date(finiteReset).toISOString();
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export function makeSlotPool({
+  secret,
+  prove = proveForSlot,
+  epochOf = currentEpoch,
+  K = K_SLOTS,
+  loadGroupFn = loadGroup,
+  // Deliberately scary and test-only. Protocol/slashing tests may need to mint a second,
+  // distinct signal for one slot. Production callers must never enable this: honest clients
+  // stop at K and wait for the next epoch instead of manufacturing slashable evidence.
+  unsafeAllowSlotReuseForTests = false,
+  epochSeconds = CLIENT_EPOCH_SECONDS,
+  now = Date.now,
+}) {
   K = Number(normLimit(K));
   let epoch = null;
-  let cursor = 0;
+  let cursor = 0; // next never-before-reserved slot in this epoch
+  let committed = 0;
+  let generation = 0;
+  let freeSlots = [];
+  const reservations = new Map();
   let group = null;
   let groupPromise = null;
   let source = null; // the discovered leaf-source label ("members.json" | "staked(0x..)" | "paid(0x..)"), T-FEAT-9
@@ -123,6 +164,10 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
   function rollover(ep) {
     epoch = ep;
     cursor = 0;
+    committed = 0;
+    generation += 1;
+    freeSlots = [];
+    reservations.clear();
     group = null;
     groupPromise = null;
     // Background warm: cache the group + prime the prover so tunnel-time proving is as
@@ -141,16 +186,55 @@ export function makeSlotPool({ secret, prove = proveForSlot, epochOf = currentEp
     return ep;
   }
 
-  // One slot per tunnel; wraps at K. A wrapped slot reused with a DISTINCT signal is an
-  // over-spend by construction (rate cap = K/epoch) — exactly what the gateway slashes.
+  // One slot per tunnel, up to K. Slot reuse with a DISTINCT signal is slashable evidence,
+  // so the normal path MUST NOT wrap. Exhaustion is local and typed: an agent can inspect the
+  // reset timestamp and retry in the next epoch without ever sending an over-spend.
   function nextSlot() {
     const ep = ensureEpoch();
-    const i = cursor;
-    cursor = (cursor + 1) % K;
-    return { epoch: ep, slot: i };
+    if (unsafeAllowSlotReuseForTests) {
+      const i = cursor % K;
+      cursor += 1;
+      return { epoch: ep, slot: i, commit: () => false, release: () => false };
+    }
+    const used = committed + reservations.size;
+    if (freeSlots.length === 0 && cursor >= K) {
+      throw new ShadeTreeEpochBudgetError({ epoch: ep, limit: K, used, epochSeconds, nowMs: now() });
+    }
+    const slot = freeSlots.length ? freeSlots.pop() : cursor++;
+    const token = {};
+    const reservation = { epoch: ep, slot, generation };
+    reservations.set(token, reservation);
+    let settled = false;
+    const settle = (release) => {
+      if (settled) return false;
+      settled = true;
+      const active = reservations.get(token);
+      // A stale completion from the previous epoch must never alter the new epoch's pool.
+      if (!active || active.generation !== generation || active.epoch !== epoch) return false;
+      reservations.delete(token);
+      if (release) freeSlots.push(active.slot);
+      else committed += 1;
+      return true;
+    };
+    return {
+      epoch: ep,
+      slot,
+      commit: () => settle(false),
+      release: () => settle(true),
+    };
   }
 
-  return { ensureEpoch, ensureGroup, leafSource, nextSlot, K, state: () => ({ epoch, cursor, source }) };
+  return {
+    ensureEpoch,
+    ensureGroup,
+    leafSource,
+    nextSlot,
+    K,
+    state: () => {
+      const used = unsafeAllowSlotReuseForTests ? cursor : committed + reservations.size;
+      return { epoch, cursor: used, remaining: Math.max(0, K - used), source };
+    },
+  };
 }
 
 // ---- protocol version negotiation (T-FEAT-11) -------------------------------
@@ -188,8 +272,8 @@ export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANG
 // dual-VK window verifies under the matching vkey. Which id: the newest of ours that the
 // gateway advertises in its signed caps (`caps.artifacts`); with no ad, optimistically our
 // newest — a real mismatch surfaces as a precise `artifact-unknown/retired` reject that
-// carries the gateway's accepted list (`ack.artifacts`), recorded on `this.gatewayArtifacts`
-// for the next attempt exactly like `gatewayRange`.
+// carries the gateway's accepted list (`ack.artifacts`). Reject-learned capabilities are keyed
+// by candidate onion: one stale or incompatible node must not redefine the whole Grove.
 
 // Build the envelope for one logical tunnel. `signal` is deterministic per tunnel
 // (H(target, nonce)); the caller reuses the SAME envelope across failover so a retry
@@ -200,46 +284,230 @@ export function selectProtoVersion(gatewayRange, clientRange = CLIENT_PROTO_RANG
 export async function buildEnvelope({ secret, target, pool, prove = proveForSlot, version = CLIENT_PROTO_MAX, artifact }) {
   const nonce = randomBytes(16).toString("hex");
   const signal = requestSignal(target, nonce);
-  const { epoch, slot } = pool.nextSlot();
-  const group = await pool.ensureGroup();
-  // `limit` = the pool's tier K (T-FEAT-8); a pool without one (older fakes) proves at the default.
-  const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined, limit: pool.K ?? K_SLOTS });
-  const { proof, nullifier, externalNullifier, share } = proved;
-  // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
-  // this target (verifyEnvelope check 2b). It reveals nothing (it is random per tunnel) and it is
-  // what stops a captured proof from being redirected to a different target. `v` is FIRST so the
-  // gateway's version gate reads it without parsing the rest. `artifact` names the ZK artifact set
-  // the proof was made with (T-HARD-8): the id the prover actually used (echoed back by
-  // proveForSlot), or the requested one for a prover that does not echo; omitted when `null`.
-  const artifactId = artifact === null ? null : (proved.artifact ?? artifact ?? null);
-  const envelope = artifactId
-    ? { v: version, target, nonce, artifact: artifactId, proof, nullifier, externalNullifier, share }
-    : { v: version, target, nonce, proof, nullifier, externalNullifier, share };
-  return { envelope, signal, slot, artifact: artifactId };
+  const reservation = pool.nextSlot();
+  const { epoch, slot } = reservation;
+  try {
+    const group = await pool.ensureGroup();
+    // `limit` = the pool's tier K (T-FEAT-8); a pool without one (older fakes) proves at the default.
+    const proved = await prove(secret, epoch, slot, signal, { group, artifact: artifact ?? undefined, limit: pool.K ?? K_SLOTS });
+    const { proof, nullifier, externalNullifier, share } = proved;
+    // The nonce rides in the envelope so the gateway can recompute the signal and BIND the proof to
+    // this target (verifyEnvelope check 2b). It reveals nothing (it is random per tunnel) and it is
+    // what stops a captured proof from being redirected to a different target. `v` is FIRST so the
+    // gateway's version gate reads it without parsing the rest. `artifact` names the ZK artifact set
+    // the proof was made with (T-HARD-8): the id the prover actually used (echoed back by
+    // proveForSlot), or the requested one for a prover that does not echo; omitted when `null`.
+    const artifactId = artifact === null ? null : (proved.artifact ?? artifact ?? null);
+    const envelope = artifactId
+      ? { v: version, target, nonce, artifact: artifactId, proof, nullifier, externalNullifier, share }
+      : { v: version, target, nonce, proof, nullifier, externalNullifier, share };
+    reservation.commit?.();
+    return { envelope, signal, slot, artifact: artifactId };
+  } catch (error) {
+    // Nothing can have reached a socket while the local envelope is still being built. Returning
+    // this reservation is therefore safe, and prevents repeated local prover failures from
+    // consuming the entire epoch. The tokenized pool makes release idempotent and epoch-scoped.
+    reservation.release?.();
+    throw error;
+  }
 }
 
-// Read one newline-terminated line, never waiting forever (a gateway that accepts but
-// never replies must surface as an error, not a hang). Returns { line, rest }.
-function readLine(socket, ms = 30000) {
+export const DEFAULT_GATEWAY_ACK_TIMEOUT_MS = 30_000;
+export const MAX_GATEWAY_ACK_BYTES = 64 * 1024;
+export const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
+export const DEFAULT_FETCH_MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+export class ShadeTreeGatewayAckError extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "ShadeTreeGatewayAckError";
+    this.code = code;
+    this.retryable = true;
+  }
+}
+
+export class ShadeTreeFetchError extends Error {
+  constructor(code, message, details = {}) {
+    const { cause, ...fields } = details;
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "ShadeTreeFetchError";
+    this.code = code;
+    Object.assign(this, fields);
+  }
+}
+
+function positiveDuration(value, fallback) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647
+    ? parsed
+    : fallback;
+}
+
+function positiveByteLimit(value, fallback) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function destroyFetchResource(resource) {
+  try { resource?.destroy?.(); } catch { /* best-effort close on a broken fake/native stream */ }
+}
+
+function destroyRejectedSocket(socket) {
+  // Never pass the rejection into destroy(): after listener cleanup, destroy(error) may emit an
+  // unhandled `error`. The original error is already carried by the rejected promise.
+  try { socket.destroy(); } catch { /* best-effort close on a broken fake/native socket */ }
+}
+
+// Read one newline-terminated acknowledgement. The acknowledgement frame is bounded independently
+// from any target bytes following its newline. Every failure owns and destroys the candidate
+// socket, including timeout, EOF/close, transport error, and an oversized unterminated frame.
+// Returns { line, rest }.
+export function readGatewayAck(socket, { timeoutMs = DEFAULT_GATEWAY_ACK_TIMEOUT_MS, maxBytes = MAX_GATEWAY_ACK_BYTES } = {}) {
+  const timeout = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+    ? Number(timeoutMs)
+    : DEFAULT_GATEWAY_ACK_TIMEOUT_MS;
+  const cap = Number.isSafeInteger(Number(maxBytes)) && Number(maxBytes) > 0
+    ? Number(maxBytes)
+    : MAX_GATEWAY_ACK_BYTES;
   return new Promise((resolve, reject) => {
-    let buf = Buffer.alloc(0);
-    const timer = setTimeout(() => { cleanup(); reject(new Error("gateway did not respond within " + ms + "ms")); }, ms);
-    const onData = (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      const nl = buf.indexOf(0x0a);
-      if (nl === -1) return;
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      resolve({ line: buf.subarray(0, nl).toString("utf8"), rest: buf.subarray(nl + 1) });
+      destroyRejectedSocket(socket);
+      reject(error);
     };
-    const onErr = (e) => { cleanup(); reject(e); };
+    const timer = setTimeout(() => fail(new ShadeTreeGatewayAckError(
+      "SHADE_TREE_GATEWAY_ACK_TIMEOUT",
+      `gateway did not acknowledge within ${timeout}ms`,
+    )), timeout);
+    const onData = (chunk) => {
+      if (settled) return;
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const nl = data.indexOf(0x0a);
+      const lineBytes = nl === -1 ? data.length : nl;
+      if (size + lineBytes > cap) {
+        fail(new ShadeTreeGatewayAckError(
+          "SHADE_TREE_GATEWAY_ACK_TOO_LARGE",
+          `gateway acknowledgement exceeded ${cap} bytes`,
+        ));
+        return;
+      }
+      if (nl === -1) {
+        chunks.push(data);
+        size += data.length;
+        return;
+      }
+      settled = true;
+      cleanup();
+      const prefix = nl === 0 ? Buffer.alloc(0) : data.subarray(0, nl);
+      const line = chunks.length === 0
+        ? prefix.toString("utf8")
+        : Buffer.concat([...chunks, prefix], size + prefix.length).toString("utf8");
+      resolve({ line, rest: data.subarray(nl + 1) });
+    };
+    const onErr = (error) => fail(new ShadeTreeGatewayAckError(
+      "SHADE_TREE_GATEWAY_ACK_TRANSPORT",
+      `gateway acknowledgement transport failed: ${error?.message || error}`,
+      { cause: error },
+    ));
+    const onEnd = () => fail(new ShadeTreeGatewayAckError(
+      "SHADE_TREE_GATEWAY_ACK_EOF",
+      "gateway ended the connection before acknowledging",
+    ));
+    const onClose = () => fail(new ShadeTreeGatewayAckError(
+      "SHADE_TREE_GATEWAY_ACK_CLOSED",
+      "gateway closed the connection before acknowledging",
+    ));
     function cleanup() {
       clearTimeout(timer);
       socket.removeListener("data", onData);
       socket.removeListener("error", onErr);
+      socket.removeListener("end", onEnd);
+      socket.removeListener("close", onClose);
     }
     socket.on("data", onData);
     socket.once("error", onErr);
+    socket.once("end", onEnd);
+    socket.once("close", onClose);
+    // A very fast peer can close between the SOCKS promise resolving and these listeners being
+    // attached. Inspect state after attachment so that already-observed EOF/close fails now rather
+    // than waiting for the timeout for an event that has already happened.
+    if (socket.destroyed || socket.closed) onClose();
+    else if (socket.readableEnded) onEnd();
   });
+}
+
+// Start the ack reader BEFORE writing, so a synchronous/fake response cannot be missed. A write
+// callback error races the bounded ack; the ack timeout also bounds a socket whose write never
+// completes. readGatewayAck owns destruction on every rejection.
+async function exchangeGatewayAck(socket, wire, options) {
+  const ack = readGatewayAck(socket, options);
+  if (socket.destroyed || socket.closed || socket.readableEnded) return ack;
+  const writeFailure = new Promise((_, reject) => {
+    try {
+      socket.write(wire, (error) => {
+        if (error) reject(new ShadeTreeGatewayAckError(
+          "SHADE_TREE_GATEWAY_WRITE_FAILED",
+          `gateway write failed: ${error.message || error}`,
+          { cause: error },
+        ));
+      });
+    } catch (error) {
+      reject(new ShadeTreeGatewayAckError(
+        "SHADE_TREE_GATEWAY_WRITE_FAILED",
+        `gateway write failed: ${error.message || error}`,
+        { cause: error },
+      ));
+    }
+  });
+  try {
+    return await Promise.race([ack, writeFailure]);
+  } catch (error) {
+    destroyRejectedSocket(socket);
+    throw error;
+  }
+}
+
+// Only node-local, plausibly transient refusals are safe to route around. Candidate capability
+// mismatches are handled separately: they are safe to route around without becoming health
+// evidence. Other cryptographic, policy, or replay refusals remain terminal.
+export function retryableGatewayRefusal(ack) {
+  const reason = typeof ack?.err === "string" ? ack.err : "";
+  return reason === "too-many-connections"
+    || reason === "nullifier-conn-limit"
+    || reason === "gateway-error"
+    || reason === "bad-target-dns"
+    || reason.startsWith("upstream:");
+}
+
+const GATEWAY_ARTIFACT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const MAX_LEARNED_GATEWAY_ARTIFACTS = 8;
+
+function protoRange(value) {
+  if (!Number.isSafeInteger(value?.min) || !Number.isSafeInteger(value?.max)) return null;
+  if (value.min < 0 || value.max < value.min) return null;
+  return { min: value.min, max: value.max };
+}
+
+function artifactIds(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = [...new Set(value.filter((id) => typeof id === "string" && GATEWAY_ARTIFACT_ID_RE.test(id)))];
+  return ids.length > 0 && ids.length <= MAX_LEARNED_GATEWAY_ARTIFACTS ? ids : null;
+}
+
+function capabilityRefusal(ack) {
+  const reason = typeof ack?.err === "string" ? ack.err : "";
+  const proto = protoRange(ack?.proto);
+  if (proto && /^(unsupported|bad)-version/.test(reason)) return { kind: "proto", proto };
+  const artifacts = artifactIds(ack?.artifacts);
+  if (artifacts && /^gate:(artifact-(unknown|retired)|bad-artifact)/.test(reason)) {
+    return { kind: "artifacts", artifacts };
+  }
+  return null;
 }
 
 // If the ack chunk carried early tunnel bytes after the newline, prepend them to the
@@ -304,6 +572,21 @@ export class ShadeTreeClient {
     this.torHost = opts.torHost || process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
     this.torPort = Number(opts.torPort || process.env.SHADE_TREE_TOR_PORT || 9250);
     this.dialAttempts = Number(opts.dialAttempts || 4);
+    // The gateway must acknowledge the envelope before a candidate is considered healthy.
+    // These option-only seams keep the production bounds fixed while letting offline tests use
+    // small timeouts/caps without sleeping or allocating 64 KiB frames.
+    this.gatewayAckTimeoutMs = Number.isFinite(Number(opts.gatewayAckTimeoutMs)) && Number(opts.gatewayAckTimeoutMs) > 0
+      ? Number(opts.gatewayAckTimeoutMs)
+      : DEFAULT_GATEWAY_ACK_TIMEOUT_MS;
+    this.gatewayAckMaxBytes = Number.isSafeInteger(Number(opts.gatewayAckMaxBytes)) && Number(opts.gatewayAckMaxBytes) > 0
+      ? Number(opts.gatewayAckMaxBytes)
+      : MAX_GATEWAY_ACK_BYTES;
+    // fetch() is intentionally bounded even when a destination accepts a tunnel and then stalls
+    // or streams forever. Calls may lower/raise either default without changing the result shape.
+    this.fetchTimeoutMs = positiveDuration(opts.fetchTimeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
+    this.fetchMaxBodyBytes = positiveByteLimit(opts.fetchMaxBodyBytes, DEFAULT_FETCH_MAX_BODY_BYTES);
+    // Injectable HTTPS request seam for deterministic transport-boundary selftests.
+    this._httpsRequest = opts.httpsRequest || https.request;
     // Per-tunnel SOCKS circuit isolation (T-FEAT-17): default ON, harmless without
     // IsolateSOCKSAuth. Disable with { socksIsolation: false } or SHADE_TREE_SOCKS_ISOLATION=0.
     this.socksIsolation = opts.socksIsolation !== false && process.env.SHADE_TREE_SOCKS_ISOLATION !== "0";
@@ -326,6 +609,10 @@ export class ShadeTreeClient {
     // set); `gatewayArtifacts` = a gateway's accepted list learned out-of-band or from a reject.
     this.artifacts = opts.artifacts || null; // null => clientArtifactIds() lazily (loads no circuit)
     this.gatewayArtifacts = opts.gatewayArtifacts || null;
+    // Capability rejects belong to the onion that sent them. The legacy singular fields above
+    // remain useful for one pinned gateway, but a directory client never lets one candidate's
+    // advertisement poison negotiation for every other candidate.
+    this._gatewayCapsByOnion = new Map();
     // Injectable prover (tests pass a fake); defaults to the real lib proveForSlot.
     this._prove = opts.prove || proveForSlot;
     // This member's tier limit (T-FEAT-8): { limit } or SHADE_TREE_LIMIT; default K_SLOTS (SHADE_TREE_SLOTS, 8).
@@ -397,15 +684,51 @@ export class ShadeTreeClient {
     }
   }
 
-  // The artifact id to prove with for this tunnel (T-HARD-8): the newest of OUR sets that the
-  // first candidate advertising an accepted set will verify (else, with no ad anywhere, our newest
-  // — falling back to a reject-learned `gatewayArtifacts`). ONE envelope is reused across failover,
-  // so the pick is made once, against the first advertising candidate; a later candidate that
-  // rejects it does so with a precise reason (terminal, like a version reject).
-  _pickArtifact(cands) {
+  _knownGatewayCaps(cand, candidateCount) {
+    const onion = String(cand.onion).replace(/\.onion$/, "");
+    const learned = this._gatewayCapsByOnion.get(onion) || {};
+    // A singular out-of-band capability has no onion key, so it is safe only when this call has
+    // one candidate. Multi-node calls use signed candidate caps plus onion-keyed reject learning.
+    const singular = candidateCount === 1;
+    return {
+      onion,
+      proto: learned.proto || protoRange(cand.proto) || (singular ? protoRange(this.gatewayRange) : null),
+      artifacts: learned.artifacts || artifactIds(cand.artifacts) || (singular ? artifactIds(this.gatewayArtifacts) : null),
+    };
+  }
+
+  _planEnvelope(cands) {
     const mine = this.artifacts || clientArtifactIds();
-    const ad = (cands.find((c) => Array.isArray(c.artifacts) && c.artifacts.length) || {}).artifacts || this.gatewayArtifacts;
-    return selectArtifact(ad, mine);
+    const evaluated = cands.map((cand) => {
+      const caps = this._knownGatewayCaps(cand, cands.length);
+      return {
+        cand,
+        caps,
+        pv: selectProtoVersion(caps.proto),
+        pa: selectArtifact(caps.artifacts, mine),
+      };
+    });
+    const chosen = evaluated.find(({ pv, pa }) => pv.ok && pa.ok);
+    if (!chosen) {
+      const versionCompatible = evaluated.filter(({ pv }) => pv.ok);
+      if (versionCompatible.length === 0) {
+        return { ok: false, stage: "version", reason: evaluated[0]?.pv.reason || "no candidate" };
+      }
+      return { ok: false, stage: "artifact", reason: versionCompatible[0].pa.reason };
+    }
+    const version = chosen.pv.version;
+    const artifact = chosen.pa.id;
+    // Preserve directory order while removing only candidates already known not to accept the
+    // exact wire profile. Unknown candidates remain eligible. Every actual attempt still receives
+    // the byte-identical envelope built below.
+    const attempts = evaluated
+      .filter(({ caps }) => {
+        const protoOk = !caps.proto || (version >= caps.proto.min && version <= caps.proto.max);
+        const artifactOk = !caps.artifacts || caps.artifacts.includes(artifact);
+        return protoOk && artifactOk;
+      })
+      .map(({ cand }) => cand);
+    return { ok: true, pv: chosen.pv, pa: chosen.pa, cands: attempts };
   }
 
   // Dial one gateway onion over Tor SOCKS, retrying through onion cold-start.
@@ -433,6 +756,37 @@ export class ShadeTreeClient {
     throw lastErr;
   }
 
+  _gateRefusalError(ack, onion) {
+    const candidate = String(onion || "").replace(/\.onion$/, "");
+    const learned = capabilityRefusal(ack);
+    if (learned && candidate) {
+      const previous = this._gatewayCapsByOnion.get(candidate) || {};
+      this._gatewayCapsByOnion.set(candidate, { ...previous, ...learned });
+      // Preserve the public, singular compatibility fields only for the configured pinned node.
+      if (this.onion === candidate) {
+        if (learned.proto) this.gatewayRange = learned.proto;
+        if (learned.artifacts) this.gatewayArtifacts = learned.artifacts;
+      }
+    }
+    // A version reject advertises the gateway's real range in ack.proto (T-FEAT-11). Surface the
+    // precise mutual-range failure and remember it for this onion's next call.
+    if (learned?.proto) {
+      const re = selectProtoVersion(learned.proto);
+      const error = new Error(`gate refused: ${ack.err} (gateway speaks ${learned.proto.min}-${learned.proto.max}; ${re.ok ? "retry as v" + re.version : re.reason})`);
+      error.gatewayCapabilityMismatch = true;
+      return error;
+    }
+    // An artifact reject advertises the accepted artifact ids. Remember and report the exact
+    // mutual-set result rather than reducing it to a generic invalid-proof error.
+    if (learned?.artifacts) {
+      const re = selectArtifact(learned.artifacts, this.artifacts || clientArtifactIds());
+      const error = new Error(`gate refused: ${ack.err} (gateway accepts artifacts ${learned.artifacts.join(",")}; ${re.ok ? "retry with " + re.id : re.reason})`);
+      error.gatewayCapabilityMismatch = true;
+      return error;
+    }
+    return new Error("gate refused: " + (typeof ack.err === "string" && ack.err ? ack.err : "unspecified refusal"));
+  }
+
   // connect("host:port", { onEvent }) -> a raw duplex stream tunneled to the target via a
   // gateway. Builds ONE proof and reuses the SAME envelope across gateway failover
   // (deterministic retry). Throws if the gate refuses or no gateway is reachable. TLS stays
@@ -449,27 +803,32 @@ export class ShadeTreeClient {
       emit({ phase: "select", status: "error", error: e.message });
       throw e;
     }
-    const onions = cands.map((c) => c.onion);
     emit({ phase: "select", status: "done", leafSource: await this.leafSource().catch(() => null), maxAnon: this.maxAnon, candidates: cands.map((c) => ({ onion: c.onion, admits: c.admits || null })) });
 
-    // Negotiate the wire version (T-FEAT-11): pick the highest version this client and the gateway
-    // both support. With no known gateway range this is v4; if the ranges are
-    // disjoint we fail closed HERE with a precise reason, before proving or dialing.
-    const pv = selectProtoVersion(this.gatewayRange);
-    if (!pv.ok) {
-      emit({ phase: "prove", status: "error", error: pv.reason });
-      throw new Error("version negotiation failed: " + pv.reason);
+    // Pick one wire profile against the first compatible candidate. Capability knowledge is
+    // candidate-local; a disjoint first node is skipped rather than failing the whole client.
+    // Unknown nodes remain eligible, and all actual attempts receive the same envelope.
+    const plan = this._planEnvelope(cands);
+    if (!plan.ok) {
+      emit({ phase: "prove", status: "error", error: plan.reason });
+      throw new Error(plan.stage + " negotiation failed: " + plan.reason);
     }
-    // Negotiate the ZK artifact set (T-HARD-8): the newest of ours the gateway advertises it
-    // accepts; disjoint => fail closed HERE, before proving or dialing.
-    const pa = this._pickArtifact(cands);
-    if (!pa.ok) {
-      emit({ phase: "prove", status: "error", error: pa.reason });
-      throw new Error("artifact negotiation failed: " + pa.reason);
-    }
+    cands = plan.cands;
+    const onions = cands.map((c) => c.onion);
+    const { pv, pa } = plan;
 
     emit({ phase: "prove", status: "start", artifact: pa.id });
-    const { envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool, prove: this._prove, version: pv.version, artifact: pa.id });
+    let envelope, slot;
+    try {
+      ({ envelope, slot } = await buildEnvelope({ secret: this.secret, target, pool: this.pool, prove: this._prove, version: pv.version, artifact: pa.id }));
+    } catch (error) {
+      emit({
+        phase: "prove", status: "error", error: error.message, code: error.code,
+        resetAt: error instanceof ShadeTreeEpochBudgetError ? error.resetAt : undefined,
+        retryAfterMs: error instanceof ShadeTreeEpochBudgetError ? error.retryAfterMs : undefined,
+      });
+      throw error;
+    }
     // Surface the real proof material for anyone who wants the cryptographic detail: the
     // Groth16 public signals (what the gateway verifies) + the proof points.
     const sp = envelope.proof.snarkProof;
@@ -488,52 +847,92 @@ export class ShadeTreeClient {
     // while different tunnels get different circuits (T-FEAT-17).
     const socksAuth = this.socksIsolation ? socksAuthForTunnel(envelope.nonce) : null;
 
-    let sock = null, usedOnion = null, lastErr = null;
+    let sock = null, usedOnion = null, ack = null, rest = Buffer.alloc(0), lastErr = null;
     for (const cand of onions) {
       const t0 = Date.now();
       emit({ phase: "dial", status: "start", onion: cand });
+      let candidateSocket = null;
       try {
-        sock = await this._dial(cand, this.dialAttempts, socksAuth);
-        usedOnion = cand;
-        sel?.reportResult?.(cand, { ok: true, latencyMs: Date.now() - t0 });
-        emit({ phase: "dial", status: "done", onion: cand, latencyMs: Date.now() - t0 });
-        break;
+        candidateSocket = await this._dial(cand, this.dialAttempts, socksAuth);
+        candidateSocket.setNoDelay(true);
       } catch (e) {
+        destroyRejectedSocket(candidateSocket);
         lastErr = e;
         sel?.reportResult?.(cand, { ok: false });
         emit({ phase: "dial", status: "failover", onion: cand, error: e.message });
+        continue;
       }
-    }
-    if (!sock) { emit({ phase: "dial", status: "error", error: (lastErr && lastErr.message) || "no gateway" }); throw lastErr || new Error("no gateway reachable"); }
-    sock.setNoDelay(true);
+      emit({ phase: "dial", status: "done", onion: cand, latencyMs: Date.now() - t0 });
 
-    emit({ phase: "gate", status: "start", onion: usedOnion });
-    sock.write(wire);
-    const { line, rest } = await readLine(sock);
-    let ack;
-    try { ack = JSON.parse(line); } catch { sock.destroy(); throw new Error("bad gateway ack: " + line.slice(0, 80)); }
-    if (!ack.ok) {
-      emit({ phase: "gate", status: "refused", error: ack.err, proto: ack.proto });
-      sock.destroy();
-      // A version reject advertises the gateway's real range in ack.proto (T-FEAT-11). Surface the
-      // precise mutual-range failure so a caller can widen support or pin a compatible gateway, and
-      // remember the range for the next attempt to this client.
-      if (ack.proto && typeof ack.err === "string" && /^(unsupported|bad)-version/.test(ack.err)) {
-        this.gatewayRange = ack.proto;
-        const re = selectProtoVersion(ack.proto);
-        throw new Error(`gate refused: ${ack.err} (gateway speaks ${ack.proto.min}-${ack.proto.max}; ${re.ok ? "retry as v" + re.version : re.reason})`);
+      emit({ phase: "gate", status: "start", onion: cand });
+      let candidateAck, candidateRest;
+      try {
+        const frame = await exchangeGatewayAck(candidateSocket, wire, {
+          timeoutMs: this.gatewayAckTimeoutMs,
+          maxBytes: this.gatewayAckMaxBytes,
+        });
+        candidateRest = frame.rest;
+        try {
+          candidateAck = JSON.parse(frame.line);
+        } catch (cause) {
+          throw new ShadeTreeGatewayAckError(
+            "SHADE_TREE_GATEWAY_ACK_INVALID",
+            "gateway returned an invalid JSON acknowledgement",
+            { cause },
+          );
+        }
+        if (!candidateAck || typeof candidateAck !== "object" || Array.isArray(candidateAck) || typeof candidateAck.ok !== "boolean") {
+          throw new ShadeTreeGatewayAckError(
+            "SHADE_TREE_GATEWAY_ACK_INVALID",
+            "gateway returned a malformed acknowledgement",
+          );
+        }
+      } catch (e) {
+        destroyRejectedSocket(candidateSocket);
+        lastErr = e;
+        sel?.reportResult?.(cand, { ok: false });
+        emit({ phase: "gate", status: "error", onion: cand, error: e.message, code: e.code });
+        emit({ phase: "dial", status: "failover", onion: cand, error: e.message });
+        continue;
       }
-      // An artifact reject (T-HARD-8) advertises the gateway's accepted artifact ids in
-      // ack.artifacts. Remember them and surface whether we hold a mutual set (retry with it) or
-      // not (upgrade/downgrade the client's prover artifacts) — never a bare `invalid-proof` guess.
-      if (Array.isArray(ack.artifacts) && typeof ack.err === "string" && /^gate:(artifact-(unknown|retired)|bad-artifact)/.test(ack.err)) {
-        this.gatewayArtifacts = ack.artifacts;
-        const re = selectArtifact(ack.artifacts, this.artifacts || clientArtifactIds());
-        throw new Error(`gate refused: ${ack.err} (gateway accepts artifacts ${ack.artifacts.join(",") || "(none)"}; ${re.ok ? "retry with " + re.id : re.reason})`);
+
+      if (candidateAck.ok !== true) {
+        const refusal = this._gateRefusalError(candidateAck, cand);
+        destroyRejectedSocket(candidateSocket);
+        emit({ phase: "gate", status: "refused", onion: cand, error: candidateAck.err, proto: candidateAck.proto, artifacts: candidateAck.artifacts });
+        if (refusal.gatewayCapabilityMismatch) {
+          // A protocol/artifact mismatch is evidence about this onion's deployment, not the proof
+          // or the rest of the Grove. Keep node health unchanged and try the identical wire at the
+          // next candidate.
+          lastErr = refusal;
+          emit({ phase: "dial", status: "failover", onion: cand, error: refusal.message });
+          continue;
+        }
+        if (retryableGatewayRefusal(candidateAck)) {
+          lastErr = refusal;
+          sel?.reportResult?.(cand, { ok: false });
+          emit({ phase: "dial", status: "failover", onion: cand, error: refusal.message });
+          continue;
+        }
+        // Client/proof/policy refusals are terminal and do not poison node health.
+        throw refusal;
       }
-      throw new Error("gate refused: " + ack.err);
+
+      const latencyMs = Date.now() - t0;
+      sock = candidateSocket;
+      usedOnion = cand;
+      ack = candidateAck;
+      rest = candidateRest;
+      // A SOCKS connection alone is not health evidence. Only a node that accepted the exact
+      // envelope and returned a bounded `ok:true` acknowledgement is marked healthy.
+      sel?.reportResult?.(cand, { ok: true, latencyMs });
+      emit({ phase: "gate", status: "done", onion: cand });
+      break;
     }
-    emit({ phase: "gate", status: "done", onion: usedOnion });
+    if (!sock) {
+      emit({ phase: "dial", status: "error", error: (lastErr && lastErr.message) || "no gateway" });
+      throw lastErr || new Error("no gateway reachable");
+    }
 
     // Optional signed egress success receipt (T-FEAT-13). Purely ADDITIVE: a receipt is present
     // only when the gateway runs with SHADE_TREE_RECEIPTS=1, and its absence never affects the tunnel
@@ -585,36 +984,118 @@ export class ShadeTreeClient {
   }
 
   // fetch(url, opts) -> { status, headers, body }. HTTPS over the tunnel (end-to-end TLS
-  // to the target; the gateway only relays ciphertext). opts: { method, headers, body }.
+  // to the target; the gateway only relays ciphertext). opts: { method, headers, body,
+  // timeoutMs, maxBodyBytes }. The deadline covers the complete fetch, including connect, TLS,
+  // headers, and body. A rejected call owns and destroys any request/response/tunnel it acquired.
   async fetch(url, opts = {}) {
     const emit = (e) => { try { opts.onEvent?.(e); } catch { /* best-effort */ } };
     const u = new URL(url);
     if (u.protocol !== "https:") throw new Error("ShadeTreeClient.fetch: https:// only (the gateway egresses :443)");
     const port = u.port || 443;
-    const socket = await this.connect(`${u.hostname}:${port}`, { onEvent: opts.onEvent, onion: opts.onion });
-    emit({ phase: "egress", status: "start", target: u.hostname });
+    const timeoutMs = positiveDuration(opts.timeoutMs, this.fetchTimeoutMs);
+    const maxBodyBytes = positiveByteLimit(opts.maxBodyBytes, this.fetchMaxBodyBytes);
+
     return new Promise((resolve, reject) => {
-      const req = https.request(
-        {
-          hostname: u.hostname,
-          port,
-          path: (u.pathname || "/") + (u.search || ""),
-          method: opts.method || "GET",
-          headers: opts.headers || {},
-          createConnection: () => tls.connect({ socket, servername: u.hostname }),
-        },
-        (res) => {
-          const chunks = [];
-          res.on("data", (c) => chunks.push(c));
-          res.on("end", () => {
-            emit({ phase: "egress", status: "done", httpStatus: res.statusCode });
-            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString("utf8"), gateway: socket.shadeTree });
-          });
-        }
-      );
-      req.on("error", reject);
-      if (opts.body) req.write(opts.body);
-      req.end();
+      let socket = null;
+      let req = null;
+      let res = null;
+      let settled = false;
+
+      const closeOwnedResources = () => {
+        destroyFetchResource(res);
+        destroyFetchResource(req);
+        destroyFetchResource(socket);
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        closeOwnedResources();
+        emit({ phase: "egress", status: "error", error: error.message, code: error.code });
+        reject(error);
+      };
+      const timer = setTimeout(() => fail(new ShadeTreeFetchError(
+        "SHADE_TREE_FETCH_TIMEOUT",
+        `ShadeTreeClient.fetch exceeded ${timeoutMs}ms; raise { fetchTimeoutMs } or per-call { timeoutMs } only for a known slow destination`,
+        { timeoutMs, retryable: true },
+      )), timeoutMs);
+
+      Promise.resolve()
+        .then(() => this.connect(`${u.hostname}:${port}`, { onEvent: opts.onEvent, onion: opts.onion }))
+        .then((connected) => {
+          socket = connected;
+          // connect() cannot currently accept an AbortSignal. If it finishes after the public
+          // deadline, consume its promise and immediately close the late tunnel.
+          if (settled) { destroyFetchResource(socket); return; }
+          emit({ phase: "egress", status: "start", target: u.hostname });
+
+          const onResponse = (response) => {
+            res = response;
+            if (settled) { destroyFetchResource(res); return; }
+            const chunks = [];
+            let receivedBytes = 0;
+            let ended = false;
+            const transportFailure = (cause, description = "response failed") => fail(new ShadeTreeFetchError(
+              "SHADE_TREE_FETCH_TRANSPORT",
+              `ShadeTreeClient.fetch ${description}: ${cause?.message || cause || "connection closed"}`,
+              { cause: cause instanceof Error ? cause : undefined, retryable: true },
+            ));
+            res.on("data", (chunk) => {
+              if (settled) return;
+              const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              receivedBytes += data.length;
+              if (receivedBytes > maxBodyBytes) {
+                fail(new ShadeTreeFetchError(
+                  "SHADE_TREE_FETCH_BODY_TOO_LARGE",
+                  `ShadeTreeClient.fetch response exceeded ${maxBodyBytes} bytes; raise { fetchMaxBodyBytes } or per-call { maxBodyBytes } only for a trusted destination`,
+                  { maxBodyBytes, receivedBytes, retryable: false },
+                ));
+                return;
+              }
+              chunks.push(data);
+            });
+            res.once("aborted", () => transportFailure(null, "response was aborted"));
+            res.once("error", (error) => transportFailure(error));
+            res.once("close", () => {
+              if (!ended && !settled) transportFailure(null, "response closed before completion");
+            });
+            res.once("end", () => {
+              if (settled) return;
+              ended = true;
+              settled = true;
+              clearTimeout(timer);
+              emit({ phase: "egress", status: "done", httpStatus: res.statusCode });
+              resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks, receivedBytes).toString("utf8"), gateway: socket.shadeTree });
+            });
+          };
+
+          try {
+            req = this._httpsRequest(
+              {
+                hostname: u.hostname,
+                port,
+                path: (u.pathname || "/") + (u.search || ""),
+                method: opts.method || "GET",
+                headers: opts.headers || {},
+                createConnection: () => tls.connect({ socket, servername: u.hostname }),
+              },
+              onResponse,
+            );
+            req.once("error", (cause) => fail(new ShadeTreeFetchError(
+              "SHADE_TREE_FETCH_TRANSPORT",
+              `ShadeTreeClient.fetch request failed: ${cause?.message || cause}`,
+              { cause, retryable: true },
+            )));
+            if (opts.body) req.write(opts.body);
+            req.end();
+          } catch (cause) {
+            fail(new ShadeTreeFetchError(
+              "SHADE_TREE_FETCH_TRANSPORT",
+              `ShadeTreeClient.fetch request failed: ${cause?.message || cause}`,
+              { cause, retryable: true },
+            ));
+          }
+        }, fail);
     });
   }
 }

@@ -5,20 +5,22 @@
 // incoming connection it:
 //   1. reads a single newline-terminated v4 JSON envelope
 //      { v:4, target, nonce, artifact?, proof /*RLNFullProof*/, nullifier, externalNullifier, share },
-//   2. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
+//   2. rejects malformed or operator-disallowed targets with a pure policy check,
+//   3. verifies it CHEAP-FIRST (docs/NEXT-VERSION.md, adversarial-review #4):
 //        externalNullifier is current/previous epoch's               (cheap)
 //        share.x == proof's committed public x                        (cheap)
 //        proof's public root ∈ recent-roots                           (cheap)
 //        `artifact` id ∈ the accepted ZK artifact set (T-HARD-8)      (cheap; absent => legacy id)
 //        RLN Groth16 verifyProof under THAT artifact's vkey            (expensive SNARK)
 //      all bundled behind lib verifyEnvelope(),
-//   3. collects the RLN share per `nullifier`: the first share egresses; an identical
+//   4. collects the RLN share per `nullifier`: the first share egresses; an identical
 //      replay (same share.x) is deduped (no slash); a SECOND DISTINCT signal (same
 //      nullifier, different x) reconstructs the identitySecret and slashes the member's
 //      on-chain stake,
-//   4. on success opens a raw :443 TCP tunnel to `target` from THIS host's IP and
+//   5. resolves the admitted target, rejects non-public addresses, and opens a raw :443 TCP
+//      tunnel to a validated pinned numeric answer from THIS host's IP; it
 //      pipes bytes both ways (TLS stays end-to-end client<->target),
-//   5. on any failure writes a short error envelope and drops the connection.
+//   6. on any failure writes a short error envelope and drops the connection.
 //
 // The reputation root is read from a RootProvider (the on-chain StakedReputationSet,
 // via lib/root-provider.mjs) so TRUSTED_ROOT is a recent-roots SET refreshed on
@@ -32,6 +34,7 @@
 // neither a root source nor a slash target.
 
 import net from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -45,11 +48,13 @@ import { makeConfiguredFleetTally } from "./fleet-tally.mjs";
 import { registry as metrics, installRuntimeMetrics, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { printOperatorBanner } from "../lib/operator-ui.mjs";
+import { jsonRpcCall, makeBoundedJsonRpcProvider, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LISTEN_HOST = "127.0.0.1";
 const LISTEN_PORT = Number(process.env.SHADE_TREE_GATEWAY_PORT || 8443);
 const MAX_ENVELOPE = 64 * 1024;
+export const MAX_EGRESS_ADDRESSES = 8;
 const log = createLogger("node");
 
 // ---- metrics (T-MON-2) ------------------------------------------------------
@@ -81,6 +86,7 @@ const DROP_LABELS = new Set([
   "bad-version", "unsupported-version", "wrong-group-root", "root-not-recent",
   "invalid-proof", "bad-share", "bad-signal", "bad-external-nullifier", "bad-nullifier",
   "artifact-unknown", "artifact-retired", "bad-artifact", "bad-target", "bad-target-policy",
+  "bad-target-address", "bad-target-dns",
   "replayed-envelope", "rate-slashed", "over-spend-slashed", "nullifier-conn-limit",
   "upstream-timeout", "upstream-refused", "upstream-unreachable", "upstream-reset",
   "upstream-error", "internal-error",
@@ -129,6 +135,8 @@ function upstreamDropLabel(code) {
 //                                 open tunnels: an exact-envelope honest retry inside the replay
 //                                 window is admitted idempotently, so without this cap one proof
 //                                 could pin N idle tunnels open. Over => `nullifier-conn-limit`.
+//   SHADE_TREE_DNS_TIMEOUT_MS      maximum time resolving an admitted target (default 5000).
+//                                 A stalled resolver cannot pin the handler indefinitely.
 function envInt(name, dflt) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return dflt;
@@ -140,6 +148,7 @@ export const HARDENING = Object.freeze({
   idleTimeoutMs: envInt("SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS", 300000),
   maxConns: envInt("SHADE_TREE_MAX_CONNS", 1024),
   maxConnsPerNullifier: envInt("SHADE_TREE_MAX_CONNS_PER_NULLIFIER", 8),
+  dnsTimeoutMs: envInt("SHADE_TREE_DNS_TIMEOUT_MS", 5000),
 });
 
 // Concurrent-connection accounting. Pure + injectable (the selftest drives it directly and via
@@ -264,10 +273,9 @@ export const PAID_MIN_LEAVES = Number(process.env.SHADE_TREE_PAID_MIN_LEAVES || 
 // Returns null when the contract has no such view (a StakedReputationSet) or the call fails.
 async function readLeafCount(contract, rpcUrl) {
   try {
-    const res = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: contract, data: "0x30e69fc3" }, "latest"] }) });
-    const j = await res.json();
-    if (j.error || typeof j.result !== "string" || j.result === "0x") return null;
-    return Number(BigInt(j.result));
+    const result = await jsonRpcCall(rpcUrl, "eth_call", [{ to: contract, data: "0x30e69fc3" }, "latest"]);
+    if (typeof result !== "string" || result === "0x") return null;
+    return Number(BigInt(result));
   } catch { return null; }
 }
 
@@ -300,6 +308,7 @@ export async function initRoots({
   loadStatic = loadGroup,
   makeProvider = (addrs) => makeRootProvider(undefined, { contracts: addrs }), // node|light per SHADE_TREE_ROOT_PROVIDER
   watchFile = (path, cb) => watch(path, { persistent: false }, cb),
+  pollIntervalMs = undefined,
   quiet = false,
 } = {}) {
   // Admission policy (T-FEAT-9): with no injected `want`, resolve SHADE_TREE_ADMIT over the configured
@@ -350,6 +359,7 @@ export async function initRoots({
 
   // On-chain: one provider per contract, unioned (lib/root-provider.mjs makeRootProvider).
   let provider = null;
+  let stopRootPolling = () => {};
   let paidWarned = false;
   const paidContracts = contracts.filter((c) => c.kind === "paid");
   const checkPaidFloor = async (first) => {
@@ -406,10 +416,13 @@ export async function initRoots({
         throw new Error(`no admission root available: ${e.message} (and no static members.json root to fall back on) -- refusing to start with an empty admission set`);
       }
     }
-    provider.onChange?.(() => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })));
+    stopRootPolling = provider.onChange?.(
+      () => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })),
+      pollIntervalMs,
+    ) || (() => {});
   }
   recompute();
-  if (quiet) return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider };
+  if (quiet) return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider, close: stopRootPolling };
 
   // Startup lines. `root source: on-chain RootProvider` / `members.json (PoC fallback)` are the
   // pre-T-FEAT-7 substrings scripts grep; the ABI-file `roots:` line names every source.
@@ -429,7 +442,7 @@ export async function initRoots({
     ...Object.fromEntries(perSource.map((p) => [`${(contracts.find((c) => c.address.toLowerCase() === String(p.contract || "").toLowerCase()) || {}).kind || "staked"}:${String(p.contract || "").slice(0, 10)}`, p.roots.length])),
   });
   if (want.onchain) await checkPaidFloor(true);
-  return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider };
+  return { count: want.static ? staticCount : null, contracts, admits, degraded: Array.from(degraded), provider, close: stopRootPolling };
 }
 
 // ---- share-collecting spent-set (RLN slashing at PoC fidelity) --------------
@@ -466,10 +479,11 @@ export async function initRoots({
 // CROSS-FLEET (T-FEAT-20): the per-gateway cache above defends ONE gateway only. A
 // non-colluding fleet still has no SHARED spent-set, so a malicious relay can fan a captured
 // envelope out to its PEERS (each sees it once). The optional `sharedTally` (gateway/fleet-
-// tally.mjs) closes that: on a nullifier we have NOT seen locally, we first ask the shared
+// tally.mjs) narrows that window: on a nullifier we have NOT seen locally, we first ask the shared
 // tally whether a PEER already admitted it this epoch and, if so, reject it as an exact
-// fleet-wide replay; when we DO admit a first-seen nullifier, we record it to the tally so
-// peers reject the same envelope. Only (nullifier, epoch) crosses the tally — never share.y,
+// cross-node replay. We publish a first-seen nullifier only after its destination connection
+// succeeds, so a DNS refusal or failed TCP dial can safely fail over to another node. Only
+// (nullifier, epoch) crosses the tally — never share.y,
 // target, or member identity (see the privacy note in fleet-tally.mjs). The tally is consulted
 // ONLY on the first-locally-seen branch, so the local slash path (2nd distinct share.x) and the
 // honest-retry window are UNCHANGED, and it is fail-OPEN: any tally error degrades to exactly
@@ -502,7 +516,7 @@ export function makeSpentSet({
     if (!e) {
       // First time THIS gateway sees this nullifier. Before admitting, ask the shared fleet
       // tally whether a PEER already admitted it this epoch — if so, this is an exact
-      // fleet-wide replay (a captured envelope fanned to us), reject it. `has()` is fail-open:
+      // cross-node replay (a captured envelope fanned to us), reject it. `has()` is fail-open:
       // an unreachable/throwing tally returns false and we fall through to the local admit, so
       // a tally outage degrades to the per-gateway defense, never denies a legitimate member.
       if (sharedTally && sharedTally.has(nullifier, opts.epoch)) {
@@ -512,9 +526,6 @@ export function makeSpentSet({
       const t = now();
       seen.set(k, { xs: new Set([String(share.x)]), first: share, slashed: false, at: t });
       seenEnv.set(ek, t);
-      // Announce the admitted nullifier so peers reject the same envelope. Only (nullifier,
-      // epoch) is shared; record() is fail-open (a publish failure never blocks this egress).
-      if (sharedTally) sharedTally.record(nullifier, opts.epoch);
       return { ok: true, action: "first" };
     }
     if (e.slashed) return { ok: false, action: "slashed", reason: "rate-slashed" };
@@ -552,13 +563,25 @@ export function makeSpentSet({
     return { ok: false, action: "slash", reason: "over-spend-slashed", commitment };
   }
 
+  // Publish only after the destination TCP connection is established. Admission remains local
+  // before then so a second distinct share can still slash on this node, while a pre-connect
+  // DNS/upstream failure does not poison the same envelope's cross-node failover path.
+  function commit(nullifier, epoch) {
+    if (!sharedTally || !seen.has(keyOf(nullifier))) return;
+    try {
+      sharedTally.record(nullifier, epoch);
+    } catch (e) {
+      log.warn("fleet tally publish failed; keeping per-node replay defense", { err: e?.message || "publish-failed" });
+    }
+  }
+
   function sweep() {
     const cutoff = now() - ttlMs;
     for (const [k, e] of seen) if (e.at < cutoff) seen.delete(k);
     for (const [ek, at] of seenEnv) if (at < cutoff) seenEnv.delete(ek);
   }
 
-  return { admit, sweep, size: () => seen.size };
+  return { admit, commit, sweep, size: () => seen.size };
 }
 
 // ---- on-chain slash submitter (ethers, hot key) -----------------------------
@@ -611,7 +634,7 @@ async function makeSlasher({ rootContracts = configuredContracts() } = {}) {
     return async (commitment) => log.info("SLASH (dry-run, no ethers)", { commitment: String(commitment).slice(0, 18) + ".." });
   }
 
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   const rcv = receiver || wallet.address;
   if (targets.length === 1) return makeOnchainSlasher({ ethers, wallet, address: targets[0].address, receiver: rcv });
@@ -694,7 +717,7 @@ export async function makeOnchainSlasher({ ethers, wallet, address, receiver }) 
       : await contract["slash(uint256,uint256,address)"](leaf, secret, receiver);
     // "SLASH tx <hash>" substring preserved for scripts/integration-sepolia.mjs's regex.
     log.info(`SLASH tx ${tx.hash} (waiting)`, { commitment: String(leaf).slice(0, 18) + "..", via: address, ...(tiered ? { limit } : {}) });
-    const rcpt = await tx.wait();
+    const rcpt = await waitForTransactionReceipt(tx, { operation: "slash" });
     // "SLASH mined block <n>" substring preserved for scripts/integration-sepolia.mjs's regex.
     log.info(`SLASH mined block ${rcpt.blockNumber}`, { commitment: String(leaf).slice(0, 18) + "..", via: address, ...(tiered ? { limit } : {}) });
     return { hash: tx.hash, block: rcpt.blockNumber, limit: tiered ? limit : K_SLOTS, commitment: leaf, contract: address };
@@ -798,16 +821,20 @@ function envelopeError(message, reason) {
 // The envelope deadline is ABSOLUTE from connect (setTimeout armed once, never re-armed on data), so
 // a slow-loris client that dribbles one byte at a time inside the timeout cannot hold the read open
 // past `timeoutMs` — that is the whole point of a deadline instead of an inactivity timer here.
-function readEnvelope(socket, { timeoutMs = HARDENING.envelopeTimeoutMs } = {}) {
+export function readEnvelope(socket, { timeoutMs = HARDENING.envelopeTimeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     let buf = Buffer.alloc(0);
     const onData = (chunk) => {
       buf = Buffer.concat([buf, chunk]);
       const nl = buf.indexOf(0x0a);
-      if (nl === -1) {
-        if (buf.length > MAX_ENVELOPE) cleanup(envelopeError("envelope too large", "envelope-too-large"));
+      // The cap applies to the line itself, not merely to newline-free buffers. A peer can send
+      // exactly MAX_ENVELOPE bytes, then append more bytes and the newline in one later chunk;
+      // checking only the `nl === -1` branch would let that oversized line through.
+      if (nl > MAX_ENVELOPE || (nl === -1 && buf.length > MAX_ENVELOPE)) {
+        cleanup(envelopeError("envelope too large", "envelope-too-large"));
         return;
       }
+      if (nl === -1) return;
       const line = buf.subarray(0, nl).toString("utf8");
       const rest = buf.subarray(nl + 1); // any early bytes after the envelope
       cleanup(null, line, rest);
@@ -907,14 +934,149 @@ const egressPolicy = makeEgressPolicy({
 // Returns { ok:true, host, port } for an admitted target, else { ok:false, reason }.
 // reason distinguishes a malformed target ("bad-target") from one the policy refuses
 // ("bad-target-policy") so the drop metric and error reply are precise.
-function validTarget(target) {
+function validTarget(target, policy = egressPolicy) {
   if (typeof target !== "string") return { ok: false, reason: "bad-target" };
   const m = target.match(/^([a-zA-Z0-9.\-]+):(\d{1,5})$/);
   if (!m) return { ok: false, reason: "bad-target" };
   const port = Number(m[2]);
   if (port < 1 || port > 65535) return { ok: false, reason: "bad-target" };
-  if (!egressPolicy(m[1], port)) return { ok: false, reason: "bad-target-policy" };
+  if (!policy(m[1], port)) return { ok: false, reason: "bad-target-policy" };
   return { ok: true, host: m[1], port };
+}
+
+// A hostname allow-list is not an SSRF boundary by itself: an allowed hostname can resolve to
+// loopback, RFC1918, link-local, or another special-purpose address. Resolve once, reject any
+// non-public answer, then try only those pinned NUMERIC answers so DNS cannot change between the
+// check and connect (DNS rebinding / TOCTOU). Local integration tests can opt in explicitly with
+// SHADE_TREE_ALLOW_PRIVATE_TARGETS=1; production defaults remain fail-closed.
+const IPV4_NON_PUBLIC = [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24],
+  ["192.0.2.0", 24], ["192.31.196.0", 24], ["192.52.193.0", 24],
+  ["192.88.99.0", 24], ["192.168.0.0", 16], ["192.175.48.0", 24],
+  ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24],
+  ["224.0.0.0", 4], ["240.0.0.0", 4],
+];
+
+function ipv4Int(address) {
+  const octets = String(address).split(".").map(Number);
+  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return (((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]) >>> 0;
+}
+
+function inIpv4Cidr(value, base, prefix) {
+  const shift = 32 - prefix;
+  return (value >>> shift) === (ipv4Int(base) >>> shift);
+}
+
+function ipv6BigInt(address) {
+  let source = String(address).toLowerCase();
+  const zone = source.indexOf("%");
+  if (zone !== -1) source = source.slice(0, zone);
+  if (net.isIP(source) !== 6) return null;
+
+  // Turn an IPv4 tail into two hextets before expanding `::`.
+  const tail = source.match(/(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  if (tail) {
+    const v4 = ipv4Int(tail);
+    if (v4 === null) return null;
+    source = source.slice(0, -tail.length) + `${((v4 >>> 16) & 0xffff).toString(16)}:${(v4 & 0xffff).toString(16)}`;
+  }
+  const halves = source.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return null;
+  const words = [...left, ...Array(missing).fill("0"), ...right];
+  if (words.length !== 8 || words.some((word) => !/^[0-9a-f]{1,4}$/.test(word))) return null;
+  return words.reduce((value, word) => (value << 16n) | BigInt(`0x${word}`), 0n);
+}
+
+function inIpv6Cidr(value, base, prefix) {
+  const baseValue = ipv6BigInt(base);
+  const shift = 128n - BigInt(prefix);
+  return (value >> shift) === (baseValue >> shift);
+}
+
+export function isPublicEgressAddress(address) {
+  const family = net.isIP(address);
+  if (family === 4) {
+    const value = ipv4Int(address);
+    return value !== null && !IPV4_NON_PUBLIC.some(([base, prefix]) => inIpv4Cidr(value, base, prefix));
+  }
+  if (family === 6) {
+    const value = ipv6BigInt(address);
+    if (value === null || !inIpv6Cidr(value, "2000::", 3)) return false;
+    // Special-purpose space inside global-unicast. Blocking the parent 2001::/23 is
+    // intentionally conservative: it contains protocol assignments, benchmarking, ORCHID,
+    // and other non-general destinations rather than ordinary public hosts.
+    return ![
+      ["2001::", 23], ["2001:db8::", 32], ["2002::", 16],
+      ["2620:4f:8000::", 48], ["3fff::", 20],
+    ].some(([base, prefix]) => inIpv6Cidr(value, base, prefix));
+  }
+  return false;
+}
+
+export function privateTargetsAllowed(env = process.env) {
+  return env.SHADE_TREE_ALLOW_PRIVATE_TARGETS === "1";
+}
+
+export async function resolveEgressTarget(target, {
+  lookup = dnsLookup,
+  allowPrivateTargets = false,
+  timeoutMs = HARDENING.dnsTimeoutMs,
+} = {}) {
+  const literalFamily = net.isIP(target.host);
+  if (literalFamily) {
+    if (!allowPrivateTargets && !isPublicEgressAddress(target.host)) {
+      return { ok: false, reason: "bad-target-address" };
+    }
+    return { ...target, address: target.host, family: literalFamily, addresses: [{ address: target.host, family: literalFamily }] };
+  }
+
+  let answers;
+  let timer = null;
+  const timedOut = Symbol("dns-timeout");
+  try {
+    const pending = Promise.resolve(lookup(target.host, { all: true, verbatim: true }));
+    if (timeoutMs > 0) {
+      answers = await Promise.race([
+        pending,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), timeoutMs);
+        }),
+      ]);
+    } else {
+      answers = await pending;
+    }
+  } catch {
+    return { ok: false, reason: "bad-target-dns" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (answers === timedOut) return { ok: false, reason: "bad-target-dns" };
+  if (!Array.isArray(answers) || answers.length === 0) return { ok: false, reason: "bad-target-dns" };
+  const normalized = answers.filter((answer) => answer && net.isIP(answer.address));
+  if (normalized.length !== answers.length || (!allowPrivateTargets && normalized.some((answer) => !isPublicEgressAddress(answer.address)))) {
+    return { ok: false, reason: "bad-target-address" };
+  }
+  const seen = new Set();
+  const addresses = normalized
+    .map((answer) => ({ address: answer.address, family: answer.family || net.isIP(answer.address) }))
+    .filter((answer) => {
+      const key = `${answer.family}:${answer.address}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    // Validate the complete resolver response above, then cap the pinned dial set. Slicing
+    // earlier could hide a private answer beyond the cap; leaving it uncapped lets one proof
+    // trigger arbitrarily many outbound connection attempts.
+    .slice(0, MAX_EGRESS_ADDRESSES);
+  const chosen = addresses[0];
+  return { ...target, address: chosen.address, family: chosen.family, addresses };
 }
 
 // ---- egress self-check (T-FEAT-16) ------------------------------------------
@@ -1028,14 +1190,17 @@ async function makeReceiptSigner() {
 
 // Also driven by lib/zk-artifacts.selftest.mjs with a fake socket (artifact-reject reply path).
 // Exported so gateway/hardening.selftest.mjs can run the REAL connection handler on a real
-// loopback socket. `verify` and `connect` are injectable ONLY for that (defaults are the real
-// verifyEnvelope + net.connect; main() passes neither); the hardening knobs default to HARDENING
-// (env) and the limiter to a fresh one, so main()'s call is byte-for-byte the pre-T-HARD-4 path
-// plus the caps.
+// loopback socket. Verification, target-policy, DNS, and connect seams are injectable ONLY for
+// tests (their defaults are the real production functions; main() passes none); the hardening
+// knobs default to HARDENING (env) and the limiter to a fresh one.
 export function makeHandler(spentSet, {
   makeReceipt = null,
   verify = verifyEnvelope,
   connect = net.connect,
+  targetPolicy = egressPolicy,
+  lookup = dnsLookup,
+  allowPrivateTargets = privateTargetsAllowed(),
+  dnsTimeoutMs = HARDENING.dnsTimeoutMs,
   envelopeTimeoutMs = HARDENING.envelopeTimeoutMs,
   idleTimeoutMs = HARDENING.idleTimeoutMs,
   limiter = makeConnLimiter(),
@@ -1090,6 +1255,16 @@ export function makeHandler(spentSet, {
         return socket.destroy();
       }
 
+      // Reject lexical garbage and operator-disallowed destinations before spending CPU on a
+      // proof. This check is deliberately pure: DNS resolution remains after proof verification
+      // and admission below, so unauthenticated peers cannot turn the node into a DNS oracle.
+      const tgt = validTarget(env.target, targetPolicy);
+      if (!tgt.ok) {
+        M.tunnels.inc({ result: "drop", reason: tgt.reason });
+        reply(socket, { ok: false, err: tgt.reason });
+        return socket.destroy();
+      }
+
       // Steps 1-3, cheap-first, inside the lib: fresh externalNullifier -> share.x binding
       // -> root ∈ recent-roots -> RLN Groth16 verify. Returns the authoritative
       // nullifier/externalNullifier/share (read from the proof's public signals) to act on.
@@ -1106,13 +1281,6 @@ export function makeHandler(spentSet, {
         // An artifact rejection advertises the accepted ids back (like `proto` on a version
         // reject) so the client can re-select a mutual artifact set or fail closed precisely.
         reply(socket, v.artifacts ? { ok: false, err: "gate:" + v.reason, artifacts: v.artifacts } : { ok: false, err: "gate:" + v.reason });
-        return socket.destroy();
-      }
-
-      const tgt = validTarget(env.target);
-      if (!tgt.ok) {
-        M.tunnels.inc({ result: "drop", reason: tgt.reason });
-        reply(socket, { ok: false, err: tgt.reason });
         return socket.destroy();
       }
 
@@ -1157,6 +1325,14 @@ export function makeHandler(spentSet, {
       }
       socket.once("close", releaseNullifierSlot);
 
+      const resolvedTarget = await resolveEgressTarget(tgt, { lookup, allowPrivateTargets, timeoutMs: dnsTimeoutMs });
+      if (!resolvedTarget.ok) {
+        M.tunnels.inc({ result: "drop", reason: resolvedTarget.reason });
+        reply(socket, { ok: false, err: resolvedTarget.reason });
+        return socket.destroy();
+      }
+      if (socket.destroyed) return;
+
       // Step 5: egress :443 tunnel (unchanged; TLS stays end-to-end).
       let established = false;
       let tunnelOpened = false;
@@ -1178,60 +1354,102 @@ export function makeHandler(spentSet, {
         upstreamConnectObserved = true;
         M.upstreamConnect.observe((performance.now() - upstreamStarted) / 1000);
       };
-      upstream = connect(tgt.port, tgt.host, () => {
-        if (socket.destroyed) {
-          upstream.destroy();
-          return;
-        }
-        established = true;
-        tunnelOpened = true;
+      const candidates = resolvedTarget.addresses?.length
+        ? resolvedTarget.addresses
+        : [{ address: resolvedTarget.address, family: resolvedTarget.family }];
+      let candidateIndex = 0;
+      const connectDeadlineAt = idleTimeoutMs > 0 ? performance.now() + idleTimeoutMs : Infinity;
+      const failConnectTimeout = (candidateSocket = null) => {
+        if (candidateSocket && candidateSocket !== upstream) return;
         observeUpstreamConnect();
-        onTunnelOpen();
-        log.debug("tunnel established", { port: tgt.port });
-        M.tunnels.inc({ result: "pass" });
-        // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
-        // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
-        reply(socket, successAck(makeReceipt));
-        if (env.__rest && env.__rest.length) upstream.write(env.__rest);
-        socket.pipe(upstream);
-        upstream.pipe(socket);
-      });
-      upstream.setNoDelay(true);
-      upstream.on("error", (e) => {
-        const reason = upstreamDropLabel(e.code);
-        if (established) M.tunnelCloses.inc({ reason: "upstream-error" });
-        else {
-          observeUpstreamConnect();
-          M.tunnels.inc({ result: "drop", reason });
-        }
-        log.debug("upstream connection closed", { reason, established });
-        reply(socket, { ok: false, err: "upstream:" + e.code });
+        M.tunnels.inc({ result: "drop", reason: "upstream-timeout" });
+        reply(socket, { ok: false, err: "upstream:ETIMEDOUT" });
+        candidateSocket?.destroy();
         socket.destroy();
-      });
-      socket.on("error", () => upstream.destroy());
-      // Idle timeout on the relay (T-HARD-4). A socket's inactivity timer covers BOTH its reads
-      // and its writes, and every relayed byte is a read on one side and a write on the other, so
-      // "one side idle for idleTimeoutMs" == "no bytes in EITHER direction" — either timer firing
-      // means the tunnel is dead weight and both ends are torn down. Armed on the upstream from
-      // creation, so a black-holed connect (never completes, never errors) is bounded too. Idle
-      // relay: counted in tunnel_closes (the tunnel already counted as pass); a connect that
-      // never completes: counted as a drop `upstream-timeout` (never passed).
-      if (idleTimeoutMs > 0) {
-        const onIdle = () => {
+      };
+      const dialNext = () => {
+        // Every validated answer shares one absolute connection deadline. Immediate failures
+        // may fall through to another pinned address, but DNS fanout cannot multiply the
+        // operator's timeout by the number of answers.
+        if (performance.now() >= connectDeadlineAt) return failConnectTimeout();
+        const candidate = candidates[candidateIndex++];
+        let candidateSocket = null;
+        candidateSocket = connect(tgt.port, candidate.address, () => {
+          if (candidateSocket !== upstream || socket.destroyed) {
+            candidateSocket.destroy();
+            return;
+          }
+          established = true;
+          if (idleTimeoutMs > 0) candidateSocket.setTimeout(idleTimeoutMs);
+          tunnelOpened = true;
+          observeUpstreamConnect();
+          onTunnelOpen();
+          // Cross-node replay evidence represents a real egress, not a failed DNS/TCP attempt.
+          // Publishing here preserves failover with the same envelope before any destination
+          // connection succeeds while making the established tunnel single-use across the fleet.
+          spentSet.commit?.(v.nullifier, v.externalNullifier);
+          log.debug("tunnel established", { port: tgt.port });
+          M.tunnels.inc({ result: "pass" });
+          // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
+          // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
+          reply(socket, successAck(makeReceipt));
+          if (env.__rest && env.__rest.length) candidateSocket.write(env.__rest);
+          socket.pipe(candidateSocket);
+          candidateSocket.pipe(socket);
+        });
+        upstream = candidateSocket;
+        candidateSocket.setNoDelay(true);
+        candidateSocket.on("error", (e) => {
+          if (candidateSocket !== upstream) return;
+          const reason = upstreamDropLabel(e.code);
+          if (!established && candidateIndex < candidates.length && !socket.destroyed) {
+            upstream = null;
+            candidateSocket.destroy();
+            dialNext();
+            return;
+          }
           if (established) {
-            M.tunnelCloses.inc({ reason: "idle-timeout" });
-            log.debug("tunnel closed", { reason: "idle-timeout", idleMs: idleTimeoutMs });
+            M.tunnelCloses.inc({ reason: "upstream-error" });
           } else {
             observeUpstreamConnect();
-            M.tunnels.inc({ result: "drop", reason: "upstream-timeout" });
-            reply(socket, { ok: false, err: "upstream:ETIMEDOUT" });
+            M.tunnels.inc({ result: "drop", reason });
+            reply(socket, { ok: false, err: "upstream:" + e.code });
           }
-          upstream.destroy();
+          log.debug("upstream connection closed", { reason, established });
           socket.destroy();
-        };
-        upstream.setTimeout(idleTimeoutMs, onIdle);
-        socket.setTimeout(idleTimeoutMs, onIdle);
-      }
+        });
+        // The upstream sees activity for bytes travelling in either direction, so one timer
+        // bounds both a black-holed connect and an idle established relay.
+        if (idleTimeoutMs > 0) {
+          const remainingConnectMs = Math.max(1, Math.ceil(connectDeadlineAt - performance.now()));
+          const laterCandidates = candidates.length - candidateIndex;
+          // Give each remaining pinned answer a fair slice of the one total deadline. This
+          // preserves fallback when an address black-holes without granting every address a
+          // fresh full timeout.
+          const candidateTimeoutMs = laterCandidates > 0
+            ? Math.max(1, Math.floor(remainingConnectMs / (laterCandidates + 1)))
+            : remainingConnectMs;
+          candidateSocket.setTimeout(candidateTimeoutMs, () => {
+            if (candidateSocket !== upstream) return;
+            if (established) {
+              M.tunnelCloses.inc({ reason: "idle-timeout" });
+              log.debug("tunnel closed", { reason: "idle-timeout", idleMs: idleTimeoutMs });
+            } else {
+              if (candidateIndex < candidates.length && performance.now() < connectDeadlineAt && !socket.destroyed) {
+                upstream = null;
+                candidateSocket.destroy();
+                dialNext();
+                return;
+              }
+              return failConnectTimeout(candidateSocket);
+            }
+            candidateSocket.destroy();
+            socket.destroy();
+          });
+        }
+      };
+      dialNext();
+      socket.on("error", () => upstream?.destroy());
     } catch (e) {
       // Request-path exceptions may contain peer-controlled values. Keep the default event useful
       // without copying arbitrary traffic metadata into logs.
@@ -1259,6 +1477,7 @@ export function makeGracefulShutdown(server, {
   onExit = (code) => process.exit(code),
   log = console.log,
   label = "gateway",
+  onStart = () => {},
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
@@ -1267,6 +1486,9 @@ export function makeGracefulShutdown(server, {
     if (started) return;
     started = true;
     log(`${label}: draining (${signal || "shutdown"}); ${openSockets.size} in-flight, no new connections, ${timeoutMs}ms grace`);
+    // Stop background control-plane work as soon as draining begins. Runtime cleanup must not
+    // be able to prevent the listener from closing, even if one optional subsystem misbehaves.
+    try { onStart(); } catch (error) { log(`${label}: shutdown cleanup failed (${error?.name || "Error"}); continuing drain`); }
     let timer = null;
     const finish = (code) => { if (timer) clearTimer(timer); onExit(code); };
     // Arm the grace window FIRST so an immediate (synchronous) clean drain can clear it —
@@ -1304,12 +1526,13 @@ async function main() {
   initArtifacts();
   const roots = await initRoots();
   const slash = await makeSlasher({ rootContracts: roots.contracts });
-  // Optional cross-fleet shared spent-nullifier tally (T-FEAT-20). null unless a real
-  // cross-host transport is wired — which this run does NOT bundle (follow-up), so this is
-  // null by default and makeSpentSet({ sharedTally:null }) is byte-identical to T-FEAT-12.
+  // Optional cross-fleet spent-nullifier tally (T-FEAT-20). It stays null unless peers and
+  // authentication are configured, so the default makeSpentSet({ sharedTally:null }) path is
+  // byte-identical to T-FEAT-12. The bundled transport is best-effort and fail-open.
   const sharedTally = makeConfiguredFleetTally();
   const spentSet = makeSpentSet({ slash, sharedTally });
-  setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000).unref();
+  const sweepTimer = setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000);
+  sweepTimer.unref();
 
   // Optional signed success receipts (T-FEAT-13); null unless SHADE_TREE_RECEIPTS=1.
   const makeReceipt = await makeReceiptSigner();
@@ -1357,15 +1580,34 @@ async function main() {
     const denyDesc = process.env.SHADE_TREE_EGRESS_DENY || "";
     const dflt = allowDesc === "*:443" && !denyDesc;
     log.info("egress policy ready", { allow: allowDesc, deny: denyDesc || "(none)", metadataOnly: dflt });
+    if (privateTargetsAllowed()) {
+      log.warn("private and special-purpose egress targets are ENABLED; use only for isolated local development", { env: "SHADE_TREE_ALLOW_PRIVATE_TARGETS" });
+    }
     log.debug("rate policy", { scheme: "rln-degree-1", defaultSlots: K_SLOTS, slashTiers: TIERS });
     const replayWindowMs = Number(process.env.SHADE_TREE_REPLAY_WINDOW_MS) || 5000;
     log.debug("replay defense ready", { replayWindowMs });
-    if (sharedTally) log.info("fleet tally: ON — sharing per-epoch spent nullifiers across the fleet (nullifier+epoch only; fail-open)");
-    log.debug("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
+    if (sharedTally) log.info("fleet tally: ON; best-effort per-epoch replay suppression after peer propagation (nullifier+epoch only; fail-open)");
+    log.debug("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, dnsTimeoutMs: HARDENING.dnsTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
   });
 
   const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);
-  const shutdown = makeGracefulShutdown(server, { openSockets, timeoutMs, label: "node", log: (message) => log.info(message, { event: "service.shutdown" }) });
+  const shutdown = makeGracefulShutdown(server, {
+    openSockets,
+    timeoutMs,
+    label: "node",
+    log: (message) => log.info(message, { event: "service.shutdown" }),
+    onStart: () => {
+      const cleanup = [
+        ["spent sweep", () => clearInterval(sweepTimer)],
+        ["root polling", () => roots.close?.()],
+        ["fleet tally", () => sharedTally?.close?.()],
+        ["metrics", () => metricsServer?.close?.()],
+      ];
+      for (const [resource, close] of cleanup) {
+        try { close(); } catch (error) { log.warn("shutdown resource cleanup failed", { resource, errorType: error?.name || "Error" }); }
+      }
+    },
+  });
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }

@@ -20,18 +20,20 @@ their onions, contracts, payment endpoint, or `sepolia` network preset with the 
 
 ## connect to an operator's v4 Grove: what you need
 
-- Node.js 18 or newer, then `npm install` in this repo (`npm link` if you want `shade-tree` on PATH,
+- Node.js 20 or newer, then `npm install` in this repo (`npm link` if you want `shade-tree` on PATH,
   otherwise `node bin/shade-tree.mjs` everywhere)
 - tor installed locally (`brew install tor`, or `apt install tor`); `bash scripts/start-tor-client.sh`
   starts one on SOCKS 9260, or use a system tor with `SHADE_TREE_TOR_PORT=9050`
 - your secret, sent to you privately and loaded through a hidden shell read
+- your exact enrolled tier from the operator
 - either one v4 node onion, or the operator's v4 Elder Tree onion plus pinned Canopy signer
+- for invited admission, the operator's current member list
 - for paid or staked admission, the registrar, chain, and contract values supplied by that operator
 
 ## connect to an operator's v4 Grove: run it
 
 ```bash
-npm install
+npm install && npm link
 bash scripts/start-tor-client.sh                                  # laptop tor, SOCKS 9260
 ```
 
@@ -39,12 +41,15 @@ Load the secret without putting it in shell history or process arguments:
 
 ```bash
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
 ```
 
-Paste the secret at the hidden prompt, then run:
+Paste the secret at the hidden prompt and enter the operator-supplied tier at the second prompt.
+For invited admission, run:
 
 ```bash
-SHADE_TREE_TOR_PORT=9260 shade-tree proxy \
+SHADE_TREE_MEMBERS_FILE=/path/from-operator/members.json \
+SHADE_TREE_TOR_PORT=9260 shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source invited \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex>
 curl -x http://127.0.0.1:8888 https://api.ipify.org               # the selected node's IP
 ```
@@ -84,15 +89,17 @@ paid-set address from the operator. With an EIP-3009 rail you hold the settle as
 gas: you sign and the operator submits. Do not substitute values from the historical Sepolia
 record.
 
-Before each Proxy command below, load the matching member secret into
-`SHADE_TREE_SECRET` with the hidden read shown above.
+Before any payment or Proxy command below, load the matching member secret into
+`SHADE_TREE_SECRET` with a hidden read. If you need a new identity, generate it at the
+operator's tier and copy only the secret value into the prompt:
 
 ```bash
-shade-tree enroll                                     # your secret + your commitment, locally; keep the secret
-shade-tree pay --bootnode <v4-elder.onion> --limit 8 \
-  --key-file buyer.key --secret-file ./.secret  # x402 (default) or --protocol mpp
+shade-tree enroll --commitment-only --limit "$SHADE_TREE_LIMIT"
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+shade-tree pay --bootnode <v4-elder.onion> --limit "$SHADE_TREE_LIMIT" \
+  --key-file buyer.key  # x402 (default) or --protocol mpp; reads SHADE_TREE_SECRET
 # -> paid (x402): settleTx 0x…  insertTx 0x…  leafIndex N  root …
-shade-tree proxy --limit 8 --leaf-source paid \
+shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source paid \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --paid-access-contract <v4-paid-set-address>
 ```
@@ -118,13 +125,20 @@ does not pick one). `docs/PAYMENTS.md` has the whole leak ledger.
 ## stake instead, when the v4 operator offers it
 
 ```bash
-shade-tree enroll --limit 8                                            # or --limit 32
-shade-tree register-member <commitment> --limit 8 \
+shade-tree enroll --commitment-only --limit "$SHADE_TREE_LIMIT"
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
+shade-tree register-member <commitment> --limit "$SHADE_TREE_LIMIT" \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
-shade-tree proxy --limit 8 --leaf-source staked \
+unset SHADE_TREE_REGISTER_KEY
+shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source staked \
   --bootnode <v4-elder.onion> --dir-signer <v4-canopy-signer-hex> \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
 ```
+
+Paste the funded member-registration key at the second hidden prompt. The one-shot environment
+assignment keeps it out of argv, and `unset` removes it before the long-running Proxy starts.
 
 Reuse a private slot on a different tunnel signal in one epoch and a node can reconstruct the RLN
 identity secret and attempt to slash the bond on chain. A failed slash submission is not a
@@ -168,17 +182,13 @@ Want to see exactly what happens to your bytes? Open `docs/walkthrough.html` in 
 - node 18 or newer
 - tor installed locally (`brew install tor`, or `apt install tor`)
 - the bundle you were sent (`shade-tree-gateway-deploy.tgz`), unpacked
-- your secret: one `export SHADE_TREE_SECRET=...` line, sent to you privately
+- the historical bearer credential, which must never be put in argv or shell history
 
 ## historical command (legacy)
 
-```bash
-cd shade-tree-node
-npm install
-bash scripts/join.sh <your-secret>
-```
-
-This command no longer establishes a tunnel. It is retained to document the original bundle.
+The retired `scripts/join.sh` helper accepted the secret as a positional argument. Do not run
+or reconstruct that form: it leaks the credential to process listings and shell history, and it
+no longer establishes a tunnel. This section records only the old topology.
 For the record, its built-in gateway onion was:
 
 ```

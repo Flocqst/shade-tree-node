@@ -312,7 +312,7 @@ async function main() {
     const stuck = { asset: tokenAddr, from: BUYER_B.address, nonce: randomNonce(), commitment: "434343", limit: 8, protocol: "mpp", state: "settling", createdAt: Date.now() };
     store2.put(stuck);
     const rec2 = await engine2.recover();
-    ok(rec2.failed === 1 && store2.get(tokenAddr, BUYER_B.address, stuck.nonce).state === "failed", "a 'settling' order whose tx never landed is marked failed on recovery (nonce unused on chain)");
+    ok(rec2.pending === 1 && rec2.failed === 0 && store2.get(tokenAddr, BUYER_B.address, stuck.nonce).state === "settling", "a legacy 'settling' order without a tx hash stays pending for manual reconciliation");
   } finally {
     if (server) await new Promise((r) => server.close(r));
     anvil.kill();

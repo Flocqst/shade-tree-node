@@ -88,8 +88,8 @@ public RLN and it reconciles with ROADMAP-v1 #1's remark that "our proof never l
 Tor-encrypted tunnel to a single verifier, so there is no public share to slash on."
 Correct — there is no *public* share. There is a **private** share, held by the one
 verifier, and it becomes reconstructable only on a provable rate violation. The single
-gateway is a feature here, not a limitation. (Going multi-gateway reintroduces the
-need to pool shares; see the fleet section.)
+gateway is a feature here, not a limitation. Multi-node slashing would require pooling
+shares; the current privacy-preserving fleet tally deliberately does not do that.
 
 **Consequence for the code.** The proof is no longer stock Semaphore; it is RLN.
 Adopt the [rate-limiting-nullifier](https://rate-limiting-nullifier.github.io/rln-docs/)
@@ -351,40 +351,23 @@ needs no light client at all), prove the on-chain gate end to end, and treat "re
 Rust to embed Helios" as a deliberate follow-on once the light-client path is the one
 we actually need — not a prerequisite.
 
-## Fleet composition: where single-node slashing breaks (see FLEET.md)
+## Fleet composition: where single-node slashing still breaks (see FLEET.md)
 
-Everything above is correct for **one** gateway. Across a fleet it breaks in a
-specific, important way, and it is the same fact from two sides:
+Everything above is correct for **one** node. Across a fleet, slashing remains local.
+A slash needs two distinct RLN shares under one nullifier on the same node. Shade Tree
+does not send shares between nodes because those are the values that reconstruct the
+member secret once the threshold is crossed.
 
-- The in-memory spent-set does not compose. A member can emit `L` signals at gateway A
-  and `L` more at gateway B. Each gateway sees only `L` shares for that nullifier,
-  neither reaches `L + 1`, so **neither can reconstruct**, no slash fires, and the
-  member also gets `N×` their intended budget across `N` gateways.
-- To slash cross-gateway spam, gateways must **pool shares**: publish `(nullifier,
-  share)` pairs to a common tally, so that once `L + 1` shares for one nullifier exist
-  anywhere in the fleet, any gateway reconstructs and slashes. This is precisely RLN's
-  original gossip design, reintroduced at the fleet layer. It is an honest cost, but a
-  bounded one: shares reveal nothing below threshold, and reconstruction still only
-  deanonymizes a *proven* over-spender's pseudonymous leaf.
+The optional fleet tally is deliberately smaller. It sends only `(nullifier, epoch)`
+after a destination connection succeeds. A peer that has received the announcement
+rejects a later envelope under that nullifier. This reduces cross-node replay after
+propagation without exposing a share, target, nonce, or member identifier.
 
-This ties directly to FLEET.md's "the rate limit does not compose across the fleet"
-section. The shared share-pool is the mechanism that makes both the fleet budget and
-fleet slashing work, and it is only safe to share because RLN shares carry no
-information until the abuse threshold is crossed. Rotation across the fleet (FLEET.md)
-plus per-tunnel unlinkable nullifiers (ROADMAP-v1 #1) plus this shared share-pool is the
-combination that gives "no operator, even a colluding set, can profile a member, *and*
-a spammer is still slashable no matter how they spread the abuse."
-
-**State the limitation plainly here, not only in FLEET.md: as written above, slashing
-is per-gateway, so a fleet without a shared tally lets a staked member split an
-over-spend across two gateways and evade the slash for free.** The shared tally is what
-closes that, and the two docs must agree on its schema. The tally is keyed
-`(nullifier, epoch)`; for budget it maps to a `count`, and for slashing it maps to the
-`shares` collected so far, and any gateway that observes the `L + 1`-th share
-reconstructs and slashes. That `(nullifier, epoch) -> {count, shares}` shape is the one
-contract between this doc and FLEET.md's "shared nullifier accounting"; whether it lives
-in a replicated KV, a gossip tally, or on chain is an implementation choice, but the key
-and the two values are fixed.
+The guarantee is best-effort. Tally pushes are asynchronous and fail-open, so concurrent
+attempts, dropped pushes, and partitions can still establish at different nodes. A
+distributed over-spend is not slashable unless both shares land on one node. Pooling
+shares could strengthen enforcement, but it would create a materially different privacy
+boundary and is not part of this implementation.
 
 **On "one canonical root" (FLEET.md seam #1): one on-chain *source*, two distinct
 lists.** Members and gateways are different node types — a member is an identity

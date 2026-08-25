@@ -39,7 +39,7 @@ function shadeTree(args, opts = {}) {
   return { code: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
 }
 
-const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
+const SECRET_RE = /secret value:\s*(0x[0-9a-fA-F]{64})/i;
 
 function isFieldElement(tok) {
   if (!/^[0-9]+$/.test(tok)) return false;
@@ -61,7 +61,8 @@ async function main() {
   ok(commitment != null && isFieldElement(commitment), "stdout prints a well-formed field-element commitment");
 
   const secret = (m.stderr.match(SECRET_RE) || [])[1];
-  ok(!!secret, "the bearer secret (export SHADE_TREE_SECRET=0x...) is emitted on STDERR");
+  ok(!!secret, "the bearer secret value is emitted on STDERR");
+  ok(/read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET/.test(m.stderr) && !/export SHADE_TREE_SECRET=0x/.test(m.stderr), "the secret handoff uses a hidden read rather than an inline export");
 
   // Stream contract: the secret must NEVER ride stdout in any form.
   ok(secret ? !m.stdout.includes(secret) : true, "the secret hex does NOT appear on stdout");
@@ -72,11 +73,26 @@ async function main() {
   ok(derived === commitment, "stdout commitment == rateCommitmentOf(identityFor(secret)) (composed real enroll)");
 
   // The whole point of the guide: the EXACT next commands, copy-paste ready.
-  ok(/shade-tree proxy \\/.test(m.stdout), "prints the `shade-tree proxy ...` command");
+  ok(/shade-tree proxy --limit 8 --leaf-source invited/.test(m.stdout), "prints the invited `shade-tree proxy ...` command");
+  ok(/shade-tree proxy --limit 8 --leaf-source staked/.test(m.stdout), "prints the staked `shade-tree proxy ...` command");
   ok(!/shade-tree proxy[\s\S]{0,80}--secret/.test(m.stdout), "the generated Proxy command keeps the bearer secret out of argv");
-  ok(/--bootnode <elder-onion>/.test(m.stdout), "the Proxy command shows the --bootnode placeholder");
-  ok(/--dir-signer <canopy-signer-pubkey>/.test(m.stdout), "the Proxy command shows the --dir-signer placeholder");
+  ok(/read -r SHADE_TREE_BOOTNODE_ONION/.test(m.stdout), "the guide loads the operator-supplied Elder onion");
+  ok(/read -r SHADE_TREE_DIR_SIGNER/.test(m.stdout), "the guide loads the operator-supplied Canopy signer");
+  ok(/read -r SHADE_TREE_MEMBERS_FILE/.test(m.stdout), "the invited branch requires the operator-supplied member list");
+  ok(/read -r SHADE_TREE_RPC_URL/.test(m.stdout) && /read -r SHADE_TREE_GROUP_CONTRACT/.test(m.stdout), "the staked branch requires the operator-supplied chain profile");
   ok(new RegExp(`shade-tree register-member ${commitment}`).test(m.stdout), "prints the optional `shade-tree register-member <commitment>` step");
+  ok(/read -s SHADE_TREE_REGISTER_KEY/.test(m.stdout) && /SHADE_TREE_REGISTER_KEY="\$SHADE_TREE_REGISTER_KEY" shade-tree register-member/.test(m.stdout) && /unset SHADE_TREE_REGISTER_KEY/.test(m.stdout), "the registration key is hidden, process-scoped, and cleared");
+  ok(!/--register-key\s+/.test(m.stdout), "the generated guide never puts the registration key in argv");
+
+  const tiered = shadeTree(["join", "member", "--limit", "32"], { timeout: 40_000 });
+  const tieredCommitment = (tiered.stdout.match(/commitment:\s+([0-9]+)/) || [])[1];
+  const tieredSecret = (tiered.stderr.match(SECRET_RE) || [])[1];
+  let tieredDerived = "__underivable__";
+  try { tieredDerived = rateCommitmentOf(identityFor(tieredSecret), 32).toString(); } catch { /* sentinel */ }
+  ok(tiered.code === 0 && tieredDerived === tieredCommitment, "`join --limit 32` bakes tier 32 into the enrolled leaf");
+  ok(/tier limit:\s+32/.test(tiered.stdout) && /proxy --limit 32 --leaf-source invited/.test(tiered.stdout) && /proxy --limit 32 --leaf-source staked/.test(tiered.stdout), "tiered join prints the matching Proxy limit");
+  ok(new RegExp(`register-member ${tieredCommitment} --limit 32`).test(tiered.stdout), "tiered join prints the matching registration limit");
+  ok(/export SHADE_TREE_LIMIT=32/.test(tiered.stderr), "tiered join tells the member to retain the exact limit");
 
   // default (no role) behaves as member too
   const def = shadeTree(["join"], { timeout: 40_000 });
@@ -105,9 +121,10 @@ async function main() {
     }
 
     // The EXACT next commands for a node operator.
-    ok(/SAFETY: local research only/.test(g.stdout) && /issue #73/.test(g.stdout) && /issue #6/.test(g.stdout) && /Do not use real funds or sensitive traffic/.test(g.stdout),
-       "prints the deployment blockers before the node command");
-    ok(/shade-tree register-gateway/.test(g.stdout), "prints the optional `shade-tree register-gateway` step");
+    ok(/SAFETY: disposable research only/.test(g.stdout) && /private-target guard is closed/.test(g.stdout) && /issue #6/.test(g.stdout) && /untrusted development Groth16 artifacts/.test(g.stdout) && /other deployment gates/.test(g.stdout) && !/issue #73/.test(g.stdout) && /Do not use real funds or sensitive traffic/.test(g.stdout),
+       "prints only the remaining deployment blockers before the node command");
+    ok(/SHADE_TREE_REGISTER_KEY="\$SHADE_TREE_REGISTER_KEY" shade-tree register-gateway/.test(g.stdout) && /unset SHADE_TREE_REGISTER_KEY/.test(g.stdout), "prints a process-scoped optional `shade-tree register-gateway` step");
+    ok(!/--register-key\s+/.test(g.stdout), "the node guide keeps the operator key out of argv");
     ok(/shade-tree node/.test(g.stdout), "prints the `shade-tree node` command");
     ok(/shade-tree heartbeat --bootnode <elder-onion>/.test(g.stdout), "prints the `shade-tree heartbeat --bootnode <onion>` command");
     ok(new RegExp(`--identity ${join(hsDir, "identity.local.json").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(g.stdout),

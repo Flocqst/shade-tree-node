@@ -283,10 +283,11 @@ async function main() {
   const run = spawnSync(process.execPath, [join(ROOT, "group/enroll.mjs"), "--commitment-only"], {
     cwd: ROOT, encoding: "utf8", timeout: 60_000,
   });
-  const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
+  const SECRET_RE = /secret value:\s*(0x[0-9a-fA-F]{64})/i;
   ok(run.status === 0, "enroll --commitment-only exits 0");
   const m = run.stderr.match(SECRET_RE);
-  ok(!!m, "the secret (export SHADE_TREE_SECRET=0x..) is emitted on STDERR");
+  ok(!!m, "the secret value is emitted on STDERR");
+  ok(/read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET/.test(run.stderr) && !/export SHADE_TREE_SECRET=0x/.test(run.stderr), "enrollment guidance keeps the secret out of shell history");
   const secret = m ? m[1] : "__none__";
   ok(!run.stdout.includes(secret), "the secret hex does NOT appear on stdout");
   ok(!/0x[0-9a-fA-F]{16,}/.test(run.stdout), "no long 0x-hex blob on stdout at all");

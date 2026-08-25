@@ -38,6 +38,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { makeBoundedJsonRpcProvider, rpcTimeoutMs, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -132,19 +133,6 @@ async function resolveSigner(opts, { ethers, provider, rpcUrl, env = process.env
   return { wallet: null, how: null };
 }
 
-// Probe the RPC once with a short timeout so an unreachable endpoint fails fast and quietly
-// (ethers' provider would otherwise retry network detection in a loop).
-async function probeChainId(rpcUrl, ms = 3000) {
-  const r = await fetch(rpcUrl, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
-    signal: AbortSignal.timeout(ms),
-  });
-  const j = await r.json();
-  if (!j.result) throw new Error(`eth_chainId: ${JSON.stringify(j.error || j)}`);
-  return BigInt(j.result);
-}
-
 const iso = (sec) => new Date(Number(sec) * 1000).toISOString();
 
 async function main() {
@@ -176,14 +164,15 @@ async function main() {
 
   // --- rpc + signer ------------------------------------------------------------------------------
   let chainId;
-  try { chainId = await probeChainId(rpcUrl); }
+  let provider = null;
+  try {
+    provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl, { timeoutMs: rpcTimeoutMs() });
+    chainId = (await provider.getNetwork()).chainId;
+  }
   catch (e) {
-    console.error(`  rpc:      UNREACHABLE (${e.name === "TimeoutError" ? "timeout" : e.message})`);
+    console.error(`  rpc:      UNREACHABLE (${e.message})`);
     if (!opts.dryRun) { console.error("exit-gateway failed: RPC unreachable"); process.exit(1); }
   }
-  const provider = chainId !== undefined
-    ? new ethers.JsonRpcProvider(rpcUrl, ethers.Network.from(chainId), { staticNetwork: true })
-    : null;
 
   let wallet = null, how = null;
   const needsKey = !opts.dryRun && opts.mode !== "status";
@@ -268,7 +257,9 @@ async function main() {
   // --- send ---------------------------------------------------------------------------------------
   const tx = opts.mode === "exit" ? await contract.initiateExit() : await contract.withdraw(recipient);
   console.log(`  tx:       ${tx.hash}  (waiting...)`);
-  const rcpt = await tx.wait();
+  const rcpt = await waitForTransactionReceipt(tx, {
+    operation: opts.mode === "exit" ? "gateway exit" : "gateway withdrawal",
+  });
   if (opts.mode === "exit") {
     const ev = rcpt.logs.map((l) => { try { return iface.parseLog(l); } catch { return null; } }).find((p) => p && p.name === "GatewayExiting");
     const wAt = ev ? ev.args.withdrawableAt : st.now + st.UNBONDING;

@@ -128,7 +128,7 @@ function supportsWebGL2() {
   try {
     context = probe.getContext("webgl2", {
       failIfMajorPerformanceCaveat: true,
-      powerPreference: "high-performance",
+      powerPreference: "default",
     });
   } catch {
     return false;

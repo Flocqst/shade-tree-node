@@ -45,6 +45,8 @@ function makeProxyMetrics(reg) {
 
 export function proxyFailureLabel(error) {
   if (error?.code === "SHADE_TREE_LOCAL_CLIENT_CLOSED") return "client-closed";
+  if (error?.code === "SHADE_TREE_EPOCH_BUDGET_EXHAUSTED") return "epoch-budget";
+  if (/^SHADE_TREE_GATEWAY_(?:ACK|WRITE)_/.test(String(error?.code || ""))) return "node-ack-failed";
   const value = String(error?.message || error || "internal").toLowerCase();
   if (value.includes("gate refused")) return "gate-refused";
   if (value.includes("version")) return "version-mismatch";

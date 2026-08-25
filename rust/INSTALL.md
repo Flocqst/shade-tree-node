@@ -63,10 +63,13 @@ shade-tree verify-receipt receipt.json --onion <onion>
 ```
 
 Live egress requires an identity and the membership set committed by the
-gateway. Generate the identity with the npm CLI, then use the live Rust build:
+gateway. Get the exact enrolled tier from the Grove operator. Generate the
+identity with the npm CLI at that tier, then use the live Rust build:
 
-```sh
-SHADE_TREE_SECRET=0x… shade-tree identity --out identity.json
+```bash
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
+shade-tree identity --limit "$SHADE_TREE_LIMIT" --out identity.json
 
 ./target/release/shade-tree egress \
   --directory directory.json \

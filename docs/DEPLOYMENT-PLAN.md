@@ -1,6 +1,6 @@
 # Protocol v4 deployment plan
 
-**Status:** blocked for node deployment · website deployable · 2026-08-23
+**Status:** blocked for node deployment · website deployable · 2026-08-24
 
 This is the current rollout plan. The older `DEPLOYMENT.md`, `GO-LIVE.md`, and
 Sepolia records describe the retired pre-v4 research fleet.
@@ -37,22 +37,25 @@ No host has been added, repurposed, or removed as part of this audit.
 
 ## Gates before infrastructure changes
 
-1. Fix [#73](https://github.com/dmarzzz/shade-tree-node/issues/73). A node must
-   reject private, loopback, link-local, carrier-grade NAT, metadata, multicast,
-   and reserved destinations before dialing. Hostname resolution must not turn
-   the node into a private-network relay.
-2. Replace the untrusted development Groth16 setup, or explicitly scope a new
+1. **Complete:** [#73](https://github.com/dmarzzz/shade-tree-node/issues/73). Nodes reject
+   private, loopback, link-local, carrier-grade NAT, metadata, multicast, and
+   reserved destinations after resolving every answer, then dial the checked
+   numeric address. The local-test override is explicit and warns at startup.
+2. Complete [#75](https://github.com/dmarzzz/shade-tree-node/issues/75): persist and
+   atomically coordinate Proxy slot allocation across restarts and processes so
+   one member secret cannot accidentally reuse a slot inside an epoch.
+3. Replace the untrusted development Groth16 setup, or explicitly scope a new
    isolated fleet to disposable testnet research with no real funds or sensitive
    traffic. The decision and artifact hashes must be recorded.
-3. Choose targets and confirm their provider account, owner, region, size,
+4. Choose targets and confirm their provider account, owner, region, size,
    admin CIDR, SSH keys, and rollback path. Do not reuse an unowned Elder Tree.
-4. Create a v4 network record containing the Elder onion, pinned Canopy signer,
+5. Create a v4 network record containing the Elder onion, pinned Canopy signer,
    admitted roots, accepted artifact identifiers, and protocol range. Pin an
    immutable git commit for every service.
-5. Implement current Ansible roles for the Elder Tree, Shade Tree node, Tor,
+6. Implement current Ansible roles for the Elder Tree, Shade Tree node, Tor,
    heartbeat, firewall, JSON logs, and loopback-only metrics. The roles must be
    idempotent and must not clone the retired repository.
-6. Choose the admission policy. Start invited-only unless the required contracts,
+7. Choose the admission policy. Start invited-only unless the required contracts,
    roots, slashing keys, and operator authorization are all present. Missing
    configuration must fail closed.
 

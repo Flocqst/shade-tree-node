@@ -3,7 +3,8 @@
 # gateway, in one idempotent command. You rent the box; this does the rest.
 #
 #   ssh root@<droplet>            # or a sudo user
-#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+#     | sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash
 #   # or, if you already cloned the repo on the box:
 #   sudo bash bootnode/deploy/bootstrap.sh
 #
@@ -72,6 +73,10 @@
 #                    gateway unit (gateway/gateway.mjs enforces it; a named path whose contract is
 #                    missing fails closed at startup) and the heartbeat unit (advertised as signed
 #                    `caps.admits`, so clients route only to gateways that admit their leaf).
+#     SHADE_TREE_MEMBERS_FILE  absolute path to an operator-owned members.json (REQUIRED when
+#                            `invited` is admitted in LIVE mode). The bootstrap validates and copies
+#                            it to root-owned /etc/shade-tree/members.json; it never serves the
+#                            repository demo set or a member set writable by the node service.
 #                    Companions, required when named:
 #     SHADE_TREE_GROUP_CONTRACT        StakedReputationSet address (`staked`)                       (REQUIRED with staked)
 #     SHADE_TREE_PAID_ACCESS_CONTRACT  PaidAccessSet address (`paid`)                                (REQUIRED with paid)
@@ -145,6 +150,7 @@ SHADE_TREE_HELIOS_VERSION="${SHADE_TREE_HELIOS_VERSION:-0.11.1}"
 SHADE_TREE_HELIOS_SHA256="${SHADE_TREE_HELIOS_SHA256:-}"
 HELIOS_BIN=/usr/local/bin/helios
 SHADE_TREE_ADMIT="${SHADE_TREE_ADMIT:-invited}"
+SHADE_TREE_MEMBERS_FILE="${SHADE_TREE_MEMBERS_FILE:-}"
 SHADE_TREE_REGISTRAR="${SHADE_TREE_REGISTRAR:-0}"
 SHADE_TREE_PAY_PROTOCOLS="${SHADE_TREE_PAY_PROTOCOLS:-x402,mpp}"
 SHADE_TREE_PAID_ACCESS_CONTRACT="${SHADE_TREE_PAID_ACCESS_CONTRACT:-}"
@@ -162,6 +168,9 @@ SHADE_TREE_ELDER_METRICS_PORT="${SHADE_TREE_ELDER_METRICS_PORT:-9100}"
 SHADE_TREE_NODE_METRICS_PORT="${SHADE_TREE_NODE_METRICS_PORT:-9101}"
 SHADE_TREE_REGISTRAR_METRICS_PORT="${SHADE_TREE_REGISTRAR_METRICS_PORT:-9102}"
 SHADE_TREE_HEARTBEAT_METRICS_PORT="${SHADE_TREE_HEARTBEAT_METRICS_PORT:-9103}"
+SHADE_TREE_FLEET_TALLY_PEERS="${SHADE_TREE_FLEET_TALLY_PEERS:-}"
+SHADE_TREE_FLEET_TALLY_TOKEN="${SHADE_TREE_FLEET_TALLY_TOKEN:-}"
+SHADE_TREE_FLEET_TALLY_PORT="${SHADE_TREE_FLEET_TALLY_PORT:-8879}"
 # Pinned sha256 of the a16z/helios 0.11.1 release tarballs (github.com/a16z/helios/releases/tag/0.11.1),
 # computed 2026-08-17 from the downloaded assets. Another SHADE_TREE_HELIOS_VERSION must bring its own
 # SHADE_TREE_HELIOS_SHA256 (no unpinned download, ever).
@@ -251,6 +260,20 @@ if [ "$ADMIT_STAKED" = "1" ]; then
   [[ "$SHADE_TREE_GROUP_CONTRACT" =~ ^0x[0-9a-fA-F]{40}(,0x[0-9a-fA-F]{40})*$ ]] \
     || die "SHADE_TREE_ADMIT names staked: needs SHADE_TREE_GROUP_CONTRACT=<0x StakedReputationSet address[,...]>"
 fi
+if [ "$ADMIT_INVITED" = "1" ] && [ -z "$SHADE_TREE_RENDER_ONLY" ]; then
+  [ -n "$SHADE_TREE_MEMBERS_FILE" ] \
+    || die "SHADE_TREE_ADMIT includes invited: pass SHADE_TREE_MEMBERS_FILE=/absolute/path/to/operator-members.json (the committed group/members.json is demo data and is never trusted by the live bootstrap)"
+  [[ "$SHADE_TREE_MEMBERS_FILE" = /* ]] \
+    || die "SHADE_TREE_MEMBERS_FILE must be an absolute path (got '$SHADE_TREE_MEMBERS_FILE')"
+  [ -r "$SHADE_TREE_MEMBERS_FILE" ] && [ -s "$SHADE_TREE_MEMBERS_FILE" ] \
+    || die "SHADE_TREE_MEMBERS_FILE must name a readable, non-empty file (got '$SHADE_TREE_MEMBERS_FILE')"
+fi
+[ -z "$SHADE_TREE_MEMBERS_FILE" ] || [[ "$SHADE_TREE_MEMBERS_FILE" =~ ^/[A-Za-z0-9._/+:-]+$ ]] \
+  || die "SHADE_TREE_MEMBERS_FILE contains unsupported path characters (use an absolute path without spaces)"
+SHADE_TREE_MEMBERS_RUNTIME_FILE="$SHADE_TREE_MEMBERS_FILE"
+if [ "$ADMIT_INVITED" = "1" ] && [ -n "$SHADE_TREE_MEMBERS_FILE" ]; then
+  SHADE_TREE_MEMBERS_RUNTIME_FILE="/etc/shade-tree/members.json"
+fi
 if [ "$ADMIT_PAID" = "1" ]; then
   [[ "$SHADE_TREE_PAID_ACCESS_CONTRACT" =~ ^0x[0-9a-fA-F]{40}$ ]] \
     || die "SHADE_TREE_ADMIT names paid: needs SHADE_TREE_PAID_ACCESS_CONTRACT=<0x PaidAccessSet address>"
@@ -294,6 +317,23 @@ if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then
   [[ "$SHADE_TREE_PAY_CHAIN_ID" =~ ^[1-9][0-9]{0,15}$ ]] || die "SHADE_TREE_PAY_CHAIN_ID must be a positive integer"
 fi
 
+FLEET_TALLY_ENABLED=0
+if [ -n "$SHADE_TREE_FLEET_TALLY_PEERS" ]; then
+  FLEET_TALLY_ENABLED=1
+  { [[ "$SHADE_TREE_FLEET_TALLY_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$SHADE_TREE_FLEET_TALLY_PORT" -ge 1024 ] && [ "$SHADE_TREE_FLEET_TALLY_PORT" -le 65535 ]; } \
+    || die "SHADE_TREE_FLEET_TALLY_PORT must be a port in 1024..65535 (got '$SHADE_TREE_FLEET_TALLY_PORT')"
+  [ "${#SHADE_TREE_FLEET_TALLY_TOKEN}" -ge 32 ] && [ "${#SHADE_TREE_FLEET_TALLY_TOKEN}" -le 128 ] && [[ "$SHADE_TREE_FLEET_TALLY_TOKEN" =~ ^[-A-Za-z0-9._~]+$ ]] \
+    || die "SHADE_TREE_FLEET_TALLY_PEERS needs SHADE_TREE_FLEET_TALLY_TOKEN (32..128 URL-safe characters)"
+  IFS=',' read -r -a TALLY_PEERS <<< "$SHADE_TREE_FLEET_TALLY_PEERS"
+  for peer in "${TALLY_PEERS[@]}"; do
+    [[ "$peer" =~ ^[a-z2-7]{56}\.onion:[0-9]{1,5}$ ]] \
+      || die "bootstrap tally peers must be <56-char-v3-onion>.onion:<port> (got '$peer')"
+    peer_port="${peer##*:}"
+    [ "$peer_port" -ge 1 ] && [ "$peer_port" -le 65535 ] \
+      || die "bootstrap tally peer port must be in 1..65535 (got '$peer_port')"
+  done
+fi
+
 # Every active local listener must have its own port. A metrics listener sharing a Tor-mapped
 # backend can otherwise win the bind race, accidentally putting /metrics behind an onion while
 # the intended service crash-loops. Tor's local SOCKS port is reserved here for the same reason.
@@ -319,6 +359,7 @@ fi
 if [ "$SHADE_TREE_HELIOS" = "1" ]; then
   reserve_runtime_port "Helios RPC" "$SHADE_TREE_HELIOS_PORT"
 fi
+[ "$FLEET_TALLY_ENABLED" = "1" ] && reserve_runtime_port "fleet tally backend" "$SHADE_TREE_FLEET_TALLY_PORT"
 
 # eth_getLogs start blocks (gateway on-chain roots): a bare block, or <0xaddr>=<block> pairs. Both
 # land verbatim in a unit file, so the shape is pinned here (no spaces/quotes/semicolons).
@@ -344,6 +385,7 @@ render_torrc() {  # $1 = output file
     fi
     echo "HiddenServiceDir /var/lib/tor/shade-tree-gateway"
     echo "HiddenServicePort 80 127.0.0.1:${SHADE_TREE_GATEWAY_PORT}"
+    [ "$FLEET_TALLY_ENABLED" = "1" ] && echo "HiddenServicePort ${SHADE_TREE_FLEET_TALLY_PORT} 127.0.0.1:${SHADE_TREE_FLEET_TALLY_PORT}"
     # Gateway-only box: the 402 registrar rides the GATEWAY onion on an extra virtual port (T-FEAT-9).
     [ "$SHADE_TREE_REGISTRAR" = "1" ] && [ "$WITH_BOOTNODE" = "0" ] && echo "HiddenServicePort ${SHADE_TREE_REGISTRAR_PORT} 127.0.0.1:${SHADE_TREE_REGISTRAR_PORT}"
     echo "HiddenServicePoWDefensesEnabled ${SHADE_TREE_ENABLE_POW}"
@@ -517,6 +559,14 @@ Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
 Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
 SyslogIdentifier=shade-tree-node
 EOF
+    if [ "$FLEET_TALLY_ENABLED" = "1" ]; then
+      echo "Environment=SHADE_TREE_FLEET_TALLY_PEERS=${SHADE_TREE_FLEET_TALLY_PEERS}"
+      echo "Environment=SHADE_TREE_FLEET_TALLY_LISTEN=127.0.0.1:${SHADE_TREE_FLEET_TALLY_PORT}"
+      echo "Environment=SHADE_TREE_TOR_HOST=127.0.0.1"
+      echo "Environment=SHADE_TREE_TOR_PORT=9050"
+      echo "EnvironmentFile=-/etc/shade-tree/fleet-tally.env"
+    fi
+    [ "$ADMIT_INVITED" = "1" ] && [ -n "$SHADE_TREE_MEMBERS_RUNTIME_FILE" ] && echo "Environment=SHADE_TREE_MEMBERS_FILE=${SHADE_TREE_MEMBERS_RUNTIME_FILE}"
     # Admission policy companions (T-FEAT-9): the contracts + RPC behind each admitted on-chain
     # path (SHADE_TREE_HELIOS=1 implies staked). Only rendered when the policy needs them.
     if [ "$ADMIT_STAKED" = "1" ] || [ "$SHADE_TREE_HELIOS" = "1" ]; then echo "Environment=SHADE_TREE_GROUP_CONTRACT=${SHADE_TREE_GROUP_CONTRACT}"; fi
@@ -701,6 +751,36 @@ else
 fi
 ( cd "$SHADE_TREE_DIR" && npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1 )
 
+# A live invited gateway must trust an operator-supplied set, never the repository's demo
+# members. Validate the document with the runtime we just installed, then copy it outside every
+# service-writable directory. The root-owned file is group-readable by the node, but the node
+# cannot rewrite its own admission root. This also keeps a later bootstrap invocation idempotent:
+# the source remains explicit, while the unit always reads the canonical protected copy.
+if [ "$ADMIT_INVITED" = "1" ]; then
+  MEMBERS_SOURCE="$SHADE_TREE_MEMBERS_FILE"
+  node - "$MEMBERS_SOURCE" <<'NODE'
+const { readFileSync } = require("node:fs");
+const path = process.argv[2];
+let doc;
+try { doc = JSON.parse(readFileSync(path, "utf8")); }
+catch (error) { console.error(`bootstrap.sh: invalid SHADE_TREE_MEMBERS_FILE ${path}: ${error.message}`); process.exit(1); }
+const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+if (doc?.version !== 2 || !Array.isArray(doc.members) || doc.members.length === 0 || doc.members.length > 2 ** 20 ||
+    doc.members.some((leaf) => typeof leaf !== "string" || !/^(0|[1-9][0-9]*)$/.test(leaf) || BigInt(leaf) >= FIELD)) {
+  console.error("bootstrap.sh: SHADE_TREE_MEMBERS_FILE must contain 1..1048576 canonical decimal-string BN254 field elements");
+  process.exit(1);
+}
+NODE
+  install -d -o root -g "$RUN_USER" -m 0750 /etc/shade-tree
+  MEMBERS_DEST="/etc/shade-tree/members.json"
+  if [ -e "$MEMBERS_DEST" ] && [ "$MEMBERS_SOURCE" -ef "$MEMBERS_DEST" ]; then
+    chown "root:$RUN_USER" "$MEMBERS_DEST"
+    chmod 0640 "$MEMBERS_DEST"
+  else
+    install -o root -g "$RUN_USER" -m 0640 "$MEMBERS_SOURCE" "$MEMBERS_DEST"
+  fi
+fi
+
 log "onion identities (reused if present)"
 if [ "$WITH_BOOTNODE" = "1" ]; then
   [ -f "$BN_HS/hostname" ] || node "$SHADE_TREE_DIR/bootnode/keygen.mjs" "$BN_HS" --label bootnode >/dev/null
@@ -765,6 +845,30 @@ elif [ -f /etc/systemd/system/shade-tree-helios.service ]; then
 fi
 
 log "systemd units"
+FLEET_TALLY_ENV_FILE=/etc/shade-tree/fleet-tally.env
+if [ "$FLEET_TALLY_ENABLED" = "1" ]; then
+  # Keep the directory traversable by the node's primary group when invited admission also
+  # installs members.json here. The tally token itself remains root-only below.
+  install -d -o root -g "$RUN_USER" -m 0750 /etc/shade-tree
+  FLEET_TALLY_ENV_TMP="$(mktemp /etc/shade-tree/.fleet-tally.env.XXXXXX)"
+  ( umask 077; printf 'SHADE_TREE_FLEET_TALLY_TOKEN=%s\n' "$SHADE_TREE_FLEET_TALLY_TOKEN" > "$FLEET_TALLY_ENV_TMP" )
+  chown root:root "$FLEET_TALLY_ENV_TMP"
+  chmod 0600 "$FLEET_TALLY_ENV_TMP"
+  mv -f "$FLEET_TALLY_ENV_TMP" "$FLEET_TALLY_ENV_FILE"
+else
+  # An omitted peer list is the off switch. Do not leave the previous shared bearer token
+  # behind after disabling the listener on an idempotent re-run.
+  rm -f "$FLEET_TALLY_ENV_FILE"
+fi
+
+# `enable --now` starts an inactive unit but deliberately does not reload an active one. Remember
+# the pre-run state so a live re-run applies new peer/token configuration (or stops a disabled
+# tally listener) without needlessly double-starting the gateway on its first install.
+if systemctl is-active --quiet shade-tree-gateway; then
+  GATEWAY_WAS_ACTIVE=1
+else
+  GATEWAY_WAS_ACTIVE=0
+fi
 UNITS="shade-tree-gateway"
 if [ "$WITH_BOOTNODE" = "1" ]; then
   render_bootnode_unit /etc/systemd/system/shade-tree-bootnode.service
@@ -779,7 +883,11 @@ render_gateway_unit /etc/systemd/system/shade-tree-gateway.service
 chown -R "$RUN_USER":"$RUN_USER" "$SHADE_TREE_DIR/deploy-state"
 systemctl daemon-reload
 # shellcheck disable=SC2086
-systemctl enable --now $UNITS >/dev/null 2>&1 || systemctl restart $UNITS
+if ! systemctl enable --now $UNITS >/dev/null 2>&1; then
+  systemctl restart $UNITS
+elif [ "$GATEWAY_WAS_ACTIVE" = "1" ]; then
+  systemctl restart shade-tree-gateway
+fi
 
 log "gateway heartbeat -> bootnode ${BN_ONION}"
 render_heartbeat_unit /etc/systemd/system/shade-tree-heartbeat.service
@@ -800,6 +908,32 @@ elif [ -f /etc/systemd/system/shade-tree-registrar.service ]; then
   systemctl disable --now shade-tree-registrar >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/shade-tree-registrar.service
 fi
+
+print_client_setup() {
+  local bootnode="$1"
+  local signer="$2"
+  cat <<EOF
+Client setup (the member loads their secret; the operator supplies the exact tier and profile):
+  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+  read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
+EOF
+  if [ "$ADMIT_INVITED" = "1" ]; then
+    cat <<'EOF'
+  SHADE_TREE_MEMBERS_FILE=/path/from-operator/members.json \
+EOF
+  fi
+  cat <<EOF
+  shade-tree proxy \\
+    --bootnode "$bootnode" \\
+    --dir-signer "$signer" \\
+    --limit "\$SHADE_TREE_LIMIT"
+EOF
+  if [ "$ADMIT_STAKED" = "1" ] || [ "$ADMIT_PAID" = "1" ]; then
+    cat <<'EOF'
+  Add the operator-supplied leaf source, contract, and RPC values for on-chain access.
+EOF
+  fi
+}
 
 if [ "$WITH_BOOTNODE" = "1" ]; then
   log "waiting for the bootnode signer + onion descriptors (~15s)…"
@@ -829,10 +963,7 @@ NOT a bootstrap tunable. Install it as a 0600 drop-in via stdin (never in argv/l
   curl --socks5-hostname 127.0.0.1:9050 "http://${REG_ONION}:${SHADE_TREE_REGISTRAR_PORT}/pay/quote?limit=8"   # expect 402 + the enabled rails' challenges (PAYMENT-REQUIRED / WWW-Authenticate: Payment)
 REG
 )
-Clients connect with (pin the signer!):
-  shade-tree client --secret <member-hex> \\
-    --bootnode ${BN_ONION} \\
-    --dir-signer ${SIGNER}
+$(print_client_setup "$BN_ONION" "$SIGNER")
 
 Check it:
   systemctl status shade-tree-bootnode shade-tree-gateway shade-tree-heartbeat$([ "$SHADE_TREE_HELIOS" = "1" ] && echo " shade-tree-helios")$([ "$SHADE_TREE_REGISTRAR" = "1" ] && echo " shade-tree-registrar")
@@ -858,10 +989,7 @@ admission=stake bootnode, stake the operator first (shade-tree register-gateway)
   Environment=SHADE_TREE_GW_OPERATOR_KEY=<operator-key>
 to /etc/systemd/system/shade-tree-heartbeat.service and \`systemctl daemon-reload && systemctl restart shade-tree-heartbeat\`.
 
-Clients connect with (pin the signer!):
-  shade-tree client --secret <member-hex> \\
-    --bootnode ${BN_ONION} \\
-    --dir-signer ${SIGNER}
+$(print_client_setup "$BN_ONION" "$SIGNER")
 
 Check it:
   systemctl status shade-tree-gateway shade-tree-heartbeat

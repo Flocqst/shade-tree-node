@@ -99,7 +99,7 @@ async function main() {
       rpcUrl: url, set, slashKey: ANVIL_KEY_1, registerKey: ANVIL_KEY_0, receiver: ANVIL_ADDR_2,
       confirmations: 1,
       targets: targets.map((t) => `127.0.0.1:${t.port}`),
-      gatewayEnv: { SHADE_TREE_EGRESS_ALLOW: targets.map((t) => `127.0.0.1:${t.port}`).join(","), SHADE_TREE_EPOCH_SECONDS: "120" },
+      gatewayEnv: { SHADE_TREE_EGRESS_ALLOW: targets.map((t) => `127.0.0.1:${t.port}`).join(","), SHADE_TREE_ALLOW_PRIVATE_TARGETS: "1", SHADE_TREE_EPOCH_SECONDS: "120" },
       settle: () => rpc(url, "evm_mine", []), // anvil: one block so head-1 covers the stakes
       sink: (line) => { if (!/^\[.*\] gateway/.test(line) || /SLASH|root source|slash: on-chain|tiers:/.test(line)) console.log("    " + line); },
     });

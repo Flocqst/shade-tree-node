@@ -13,7 +13,7 @@
 // key, so onionToPubkey(onion) === pubkey and verifyDirectory passes. These are
 // not reachable onions; they exist to exercise the signature and binding checks.
 
-import { writeFile, readFile } from "node:fs/promises";
+import { chmod, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -41,10 +41,11 @@ function newEd25519() {
 // Load or mint the signer secret.
 let signer;
 if (existsSync(SIGNER_KEY_PATH)) {
+  await chmod(SIGNER_KEY_PATH, 0o600);
   signer = JSON.parse(await readFile(SIGNER_KEY_PATH, "utf8"));
 } else {
   signer = newEd25519();
-  await writeFile(SIGNER_KEY_PATH, JSON.stringify(signer, null, 2) + "\n");
+  await writeFile(SIGNER_KEY_PATH, JSON.stringify(signer, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   console.log("minted a new directory signer key -> " + SIGNER_KEY_PATH + " (keep this secret)");
 }
 

@@ -158,10 +158,11 @@ async function main() {
     const badChild = flaky(1, ["777"]);
     const { CompositeRootProvider } = await import("../lib/root-provider.mjs");
     const comp = CompositeRootProvider([badChild, good]);
-    r = await initRoots({ contracts: [A, P], want: { static: false, onchain: true }, loadStatic, makeProvider: () => comp, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
+    r = await initRoots({ contracts: [A, P], want: { static: false, onchain: true }, loadStatic, makeProvider: () => comp, watchFile: noWatch, pollIntervalMs: 5, quiet: true, rpcUrl: "http://127.0.0.1:1" });
     ok(r.degraded.join() === "0xa" && _getRecentRoots().has("999") && !_getRecentRoots().has("777"), "one of two chain sources down at boot -> serve the other, that one degraded (composite errors[])");
-    await badChild.poll();
+    for (let i = 0; i < 50 && !_getRecentRoots().has("777"); i++) await new Promise((resolve) => setTimeout(resolve, 2));
     ok(_getRecentRoots().has("777") && _getRecentRoots().has("999") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "it heals on its next successful read");
+    r.close();
 
     // A provider with an established LKG returns that root with stale:true instead of throwing.
     // The gateway must retain the root while making the bounded source gauge reflect the outage,

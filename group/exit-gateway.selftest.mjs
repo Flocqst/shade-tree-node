@@ -17,6 +17,7 @@
 //   node group/exit-gateway.selftest.mjs
 
 import { spawn, spawnSync } from "node:child_process";
+import http from "node:http";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,6 +50,17 @@ function shadeTree(args, env = {}, timeout = 60_000) {
   const r = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env: cleanEnv(env), timeout });
   if (r.error) throw r.error;
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
+}
+function shadeTreeAsync(args, env = {}, timeout = 10_000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: cleanEnv(env), stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("child command timed out")); }, timeout);
+    child.on("error", reject);
+    child.on("close", (code) => { clearTimeout(timer); resolve({ code, out }); });
+  });
 }
 const sel = (sig) => "0x" + keccak256(sig).slice(0, 8);
 
@@ -99,6 +111,32 @@ async function part1() {
   ok(help.code === 0 && /withdraw/.test(help.out), "`shade-tree withdraw-gateway --help` exits 0");
   const top = shadeTree(["help"]);
   ok(/exit-gateway/.test(top.out) && /withdraw-gateway/.test(top.out) && /gateway-status/.test(top.out) && /\bidentity\b/.test(top.out), "`shade-tree help` lists exit-gateway, withdraw-gateway, gateway-status, identity");
+
+  const stalledRpc = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload;
+      try { payload = JSON.parse(body); } catch { res.statusCode = 400; return res.end(); }
+      if (payload.method === "eth_chainId") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: "0x1" }));
+      }
+      // Every post-probe request intentionally stalls until the bounded provider aborts it.
+    });
+  });
+  await new Promise((resolve) => stalledRpc.listen(0, "127.0.0.1", resolve));
+  try {
+    const bounded = await shadeTreeAsync(["gateway-status", "--operator", RCPT], {
+      SHADE_TREE_GATEWAY_REGISTRY: REG,
+      SHADE_TREE_RPC_URL: `http://127.0.0.1:${stalledRpc.address().port}`,
+      SHADE_TREE_RPC_TIMEOUT_MS: "150",
+    });
+    ok(bounded.code === 1 && /timeout|timed out/i.test(bounded.out), "post-probe GatewayRegistry reads obey SHADE_TREE_RPC_TIMEOUT_MS");
+  } finally {
+    stalledRpc.closeAllConnections?.();
+    await new Promise((resolve) => stalledRpc.close(resolve));
+  }
 }
 
 async function part2() {

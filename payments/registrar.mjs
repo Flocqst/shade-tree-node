@@ -53,6 +53,7 @@
 //   SHADE_TREE_PAY_TIMEOUT            challenge/authorization validity, seconds (maxTimeoutSeconds; default 600)
 //   SHADE_TREE_PAY_SETTLE_BUFFER      seconds of validBefore headroom a payment must still have (default 20)
 //   SHADE_TREE_PAY_CONFIRMATIONS      confirmations to wait per tx (default 1)
+//   SHADE_TREE_TX_RECEIPT_TIMEOUT_MS  wall-clock receipt deadline; timeout retains pending tx hash (default 180000)
 //   SHADE_TREE_PAY_ASSET_NAME / SHADE_TREE_PAY_ASSET_VERSION   EIP-712 domain overrides (default: token name()/version())
 //   SHADE_TREE_REGISTRAR_PAY_RATE / _PAY_BURST     token bucket in front of POST /pay (default 1/s, burst 10)
 //   SHADE_TREE_REGISTRAR_QUOTE_RATE / _QUOTE_BURST token bucket in front of quotes (default 20/s, burst 100)
@@ -71,6 +72,12 @@ import { makeRegistry, installRuntimeMetrics, listenMetrics, safeMetricsPort } f
 import { printOperatorBanner } from "../lib/operator-ui.mjs";
 import { networkDefault } from "../lib/network-record.mjs";
 import { parsePayProtocols } from "../lib/admission.mjs";
+import {
+  isTransactionReceiptTimeout,
+  makeBoundedJsonRpcProvider,
+  txReceiptTimeoutMs,
+  waitForTransactionReceipt,
+} from "../lib/rpc-safety.mjs";
 import { makeAnnounceBucket, makeGracefulShutdown } from "../bootnode/server.mjs";
 import { EIP3009_ABI, tokenDomain, recoverAuthorization, splitSignature, isAddress, isUintString, sameAddress } from "./eip3009.mjs";
 import {
@@ -147,7 +154,9 @@ function envInt(name, dflt) {
 // ---- the order store ---------------------------------------------------------------------
 // { version: 1, mppSecret: <hex>, orders: { "<asset>:<from>:<nonce>": Order } }
 // Order: { asset, from, nonce, commitment, limit, protocol, state, settleTx, insertTx, leafIndex,
-//          root, createdAt, updatedAt, error? }   state: settling | settled | inserted | failed
+//          root, createdAt, updatedAt, error? }
+// state: settling | settled | inserting | inserted | failed. A receipt deadline leaves the order
+// in settling/inserting with its tx hash; UNKNOWN is never rewritten as failure or rebroadcast.
 export function makeStore(path) {
   let data = { version: 1, mppSecret: null, orders: {} };
   if (path && existsSync(path)) {
@@ -241,36 +250,45 @@ export async function probeAsset(offer, token, provider) {
 // Transport-independent (the selftest drives it directly and through the HTTP server).
 //   verifyAndSettle({ protocol, limit, commitment, authorization, signature, meta }) ->
 //     { ok:true, replayed, order } | { ok:false, status, reason, detail }
-export function makeEngine({ offer, token, set, wallet, provider, store, confirmations = 1, now = () => Date.now(), maxInflight = 8 }) {
+export function makeEngine({ offer, token, set, wallet, provider, store, confirmations = 1, receiptDeadlineMs = txReceiptTimeoutMs(), now = () => Date.now(), maxInflight = 8 }) {
+  if (!Number.isSafeInteger(confirmations) || confirmations < 1) {
+    throw new Error("SHADE_TREE_PAY_CONFIRMATIONS must be a positive integer");
+  }
   const domain = () => tokenDomain({ name: offer.assetName, version: offer.assetVersion, chainId: offer.chainId, asset: offer.asset });
   const inflight = new Set(); // order keys currently being settled/inserted
   let txChain = Promise.resolve(); // serialize operator txs (one signer, one nonce sequence)
   const withTxLock = (fn) => { const p = txChain.then(fn, fn); txChain = p.catch(() => {}); return p; };
   const fail = (status, reason, detail) => ({ ok: false, status, reason, detail });
 
-  async function insertLeaf(order) {
-    // Resume-safe: if a previous attempt's insert did land, don't insert twice.
-    const already = await set.limitOf(order.commitment);
-    if (already !== 0n) {
-      order.state = "inserted";
-      order.leafIndex = order.leafIndex ?? null;
-      order.root = (await set.currentRoot()).toString();
-      store.put(order);
-      return order;
+  // getTransactionReceipt() proves inclusion, not the configured confirmation depth. This
+  // matters after a restart or operation timeout: advancing a one-block payment into a separate
+  // membership insert can leave access live if the payment block is later reorganized away.
+  async function receiptIsFinal(rcpt) {
+    if (!rcpt) return false;
+    if (confirmations <= 1) return true;
+    if (typeof rcpt.confirmations === "function") {
+      const depth = Number(await rcpt.confirmations());
+      return Number.isSafeInteger(depth) && depth >= confirmations;
     }
-    const tx = await withTxLock(async () => {
-      await set.insert.staticCall(order.commitment, order.limit); // surface a revert before paying gas
-      return set.insert(order.commitment, order.limit);
-    });
-    order.insertTx = tx.hash;
-    store.put(order);
-    const rcpt = await tx.wait(confirmations);
-    if (!rcpt || rcpt.status !== 1) { M.settleTxs.inc({ kind: "insert", result: "failed" }); throw new Error("insert tx reverted"); }
-    M.settleTxs.inc({ kind: "insert", result: "ok" });
+    const receiptBlock = Number(rcpt.blockNumber);
+    if (!Number.isSafeInteger(receiptBlock) || typeof provider?.getBlockNumber !== "function") return false;
+    const head = Number(await provider.getBlockNumber());
+    return Number.isSafeInteger(head) && head >= receiptBlock && head - receiptBlock + 1 >= confirmations;
+  }
+
+  async function finishInsert(order, rcpt, { countMetric = true } = {}) {
+    if (!rcpt || rcpt.status !== 1) {
+      order.state = "settled";
+      order.error = "insert-reverted";
+      store.put(order);
+      if (countMetric) M.settleTxs.inc({ kind: "insert", result: "failed" });
+      throw new Error("insert tx reverted");
+    }
+    if (countMetric) M.settleTxs.inc({ kind: "insert", result: "ok" });
     // Inserted(commitment, limit, index, root): index + the root right after OUR insert (the
     // event's root, not a later currentRoot(), so a concurrent insert can't confuse the receipt).
     let leafIndex = null, root = null;
-    for (const lg of rcpt.logs) {
+    for (const lg of rcpt.logs || []) {
       try {
         const parsed = set.interface.parseLog({ topics: lg.topics, data: lg.data });
         if (parsed && parsed.name === "Inserted" && parsed.args.commitment.toString() === order.commitment) { leafIndex = Number(parsed.args.index); root = parsed.args.root.toString(); break; }
@@ -280,9 +298,36 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     order.leafIndex = leafIndex;
     order.root = root || (await set.currentRoot()).toString();
     order.state = "inserted";
+    delete order.error;
     store.put(order);
     log.debug("registrar: leaf inserted", { limit: order.limit, protocol: order.protocol });
     return order;
+  }
+
+  async function insertLeaf(order) {
+    // Resume-safe: if a previous attempt's insert did land, don't insert twice.
+    const already = await set.limitOf(order.commitment);
+    if (already !== 0n) {
+      order.state = "inserted";
+      order.leafIndex = order.leafIndex ?? null;
+      order.root = (await set.currentRoot()).toString();
+      delete order.error;
+      store.put(order);
+      return order;
+    }
+    const tx = await withTxLock(async () => {
+      await set.insert.staticCall(order.commitment, order.limit); // surface a revert before paying gas
+      return set.insert(order.commitment, order.limit);
+    });
+    order.insertTx = tx.hash;
+    order.state = "inserting";
+    store.put(order);
+    const rcpt = await waitForTransactionReceipt(tx, {
+      confirmations,
+      timeoutMs: receiptDeadlineMs,
+      operation: "membership insert",
+    });
+    return finishInsert(order, rcpt);
   }
 
   async function settle(order, auth, signature) {
@@ -296,7 +341,11 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     order.state = "settling";
     store.put(order);
     log.debug("registrar: settlement sent", { protocol: order.protocol });
-    const rcpt = await tx.wait(confirmations);
+    const rcpt = await waitForTransactionReceipt(tx, {
+      confirmations,
+      timeoutMs: receiptDeadlineMs,
+      operation: "payment settlement",
+    });
     if (!rcpt || rcpt.status !== 1) { order.state = "failed"; order.error = "settle-reverted"; store.put(order); M.settleTxs.inc({ kind: "settle", result: "failed" }); throw new Error("settle tx reverted"); }
     M.settleTxs.inc({ kind: "settle", result: "ok" });
     order.state = "settled";
@@ -304,6 +353,57 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     store.put(order);
     return order;
   }
+
+  // Resolve only from a receipt or an already-active leaf. A null receipt is ambiguous: the tx
+  // may still be in a mempool, so retaining the state+hash is safer than submitting a duplicate.
+  async function reconcilePending(order) {
+    if (order.state === "settling") {
+      if (!order.settleTx) {
+        // Pre-deadline stores may lack the broadcast hash. authorizationState cannot repair that:
+        // EIP-3009 uses the same bit for transferred and canceled authorizations, while `false`
+        // does not exclude a still-pending transaction. Leave it for explicit operator recovery.
+        return false;
+      }
+      const rcpt = await provider.getTransactionReceipt(order.settleTx);
+      if (!rcpt) return false;
+      if (!await receiptIsFinal(rcpt)) return false;
+      if (rcpt.status !== 1) {
+        order.state = "failed";
+        order.error = "settle-reverted";
+      } else {
+        order.state = "settled";
+        order.settleBlock = rcpt.blockNumber;
+        delete order.error;
+      }
+      store.put(order);
+      return true;
+    }
+    if (order.state === "inserting") {
+      if (!order.insertTx) {
+        // An inactive leaf does not prove the insert was never broadcast, and an active one does
+        // not reveal its confirmation depth. Never rebroadcast or finalize without the tx hash.
+        return false;
+      }
+      const rcpt = await provider.getTransactionReceipt(order.insertTx);
+      if (!rcpt) return false;
+      if (!await receiptIsFinal(rcpt)) return false;
+      if (rcpt.status !== 1) {
+        order.state = "settled";
+        order.error = "insert-reverted";
+        store.put(order);
+        return true;
+      }
+      await finishInsert(order, rcpt, { countMetric: false });
+      return true;
+    }
+    return true;
+  }
+
+  const unresolved = (order) => {
+    const hash = order.state === "settling" ? order.settleTx : order.insertTx;
+    const depth = confirmations === 1 ? "1 confirmation" : `${confirmations} confirmations`;
+    return `${order.state === "settling" ? "settlement" : "insert"} transaction ${hash || "(hash unavailable)"} has not reached ${depth} and may still confirm; check /pay/status/${order.nonce} and the transaction hash before retrying`;
+  };
 
   async function verifyAndSettle({ protocol, limit, commitment, authorization: auth, signature, meta = {} }) {
     if (!isCommitment(commitment)) return fail(400, "bad-commitment", "commitment must be a decimal field element");
@@ -314,16 +414,27 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
       const same = existing.commitment === commitment && Number(existing.limit) === Number(limit);
       if (!same) return fail(409, "nonce-used", "this authorization nonce was already used for a different order");
       if (inflight.has(key)) return fail(409, "in-progress", "this order is being settled; retry shortly");
+      if (existing.state === "settling" || existing.state === "inserting") {
+        try { await reconcilePending(existing); }
+        catch (e) { return fail(502, "rpc-error", "could not reconcile the submitted transaction: " + shortErr(e)); }
+        if (existing.state === "settling" || existing.state === "inserting") {
+          return fail(503, "in-progress", unresolved(existing));
+        }
+      }
       if (existing.state === "inserted") return { ok: true, replayed: true, order: existing };
       if (existing.state === "settled") {
         // Crash between settle and insert: resume the insert (no second payment).
         inflight.add(key);
         try { await insertLeaf(existing); return { ok: true, replayed: true, order: existing }; }
-        catch (e) { existing.error = e.shortMessage || e.message; store.put(existing); return fail(502, "insert-failed", "settled but insert failed; retry /pay with the same authorization or ask the operator"); }
+        catch (e) {
+          existing.error = e.shortMessage || e.message;
+          store.put(existing);
+          if (isTransactionReceiptTimeout(e)) return fail(503, "in-progress", `${String(e.message).slice(0, 400)} Check /pay/status/${existing.nonce}.`);
+          return fail(502, "insert-failed", "settled but insert failed; retry /pay with the same authorization or ask the operator");
+        }
         finally { inflight.delete(key); }
       }
-      // failed / settling-unknown: fall through and re-verify (a stale 'settling' with an unused
-      // nonce means the tx never landed; the buyer's authorization is still good).
+      // A confirmed failure falls through and re-verifies. Unknown receipt state never does.
     }
     if (inflight.size >= maxInflight) return fail(503, "busy", "too many settlements in flight");
 
@@ -354,11 +465,13 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
         order.state = order.settleTx ? order.state : "failed";
         order.error = e.shortMessage || e.reason || e.message;
         store.put(order);
+        if (isTransactionReceiptTimeout(e)) return fail(503, "in-progress", `${String(e.message).slice(0, 400)} Check /pay/status/${order.nonce}.`);
         return fail(402, "settle-failed", "transferWithAuthorization would revert or failed: " + shortErr(e));
       }
       try { await insertLeaf(order); }
       catch (e) {
         order.error = e.shortMessage || e.message; store.put(order);
+        if (isTransactionReceiptTimeout(e)) return fail(503, "in-progress", `${String(e.message).slice(0, 400)} Check /pay/status/${order.nonce}.`);
         return fail(502, "insert-failed", "payment settled but the leaf insert failed; the registrar retries on boot, or POST again with the same authorization");
       }
       return { ok: true, replayed: false, order };
@@ -367,24 +480,25 @@ export function makeEngine({ offer, token, set, wallet, provider, store, confirm
     }
   }
 
-  // Boot: finish what a crash interrupted. Orders 'settling' are resolved from chain truth
-  // (authorizationState); 'settled' ones get their insert.
+  // Boot: reconcile submitted hashes from receipts, then finish confirmed settlements. Null
+  // receipts remain pending because an RPC cannot prove that a broadcast transaction was dropped.
   async function recover() {
-    let resumed = 0, failed = 0;
+    let resumed = 0, failed = 0, pending = 0;
     for (const order of store.all()) {
       try {
-        if (order.state === "settling") {
-          const used = await token.authorizationState(order.from, order.nonce);
-          if (!used) { order.state = "failed"; order.error = "settle never landed"; store.put(order); failed++; continue; }
-          order.state = "settled"; store.put(order);
+        if (order.state === "settling" || order.state === "inserting") {
+          await reconcilePending(order);
+          if (order.state === "settling" || order.state === "inserting") { pending++; continue; }
+          if (order.state === "failed") { failed++; continue; }
         }
         if (order.state === "settled") { await insertLeaf(order); resumed++; }
       } catch (e) {
+        if (isTransactionReceiptTimeout(e)) { pending++; continue; }
         failed++;
         log.error("registrar: recovery failed for an order", { reason: "recovery-failed", errorType: e?.name || "Error" });
       }
     }
-    return { resumed, failed };
+    return { resumed, failed, pending };
   }
 
   return { verifyAndSettle, recover, inflight: () => inflight.size, domain };
@@ -592,7 +706,7 @@ async function main() {
   const setAddr = process.env.SHADE_TREE_PAID_ACCESS_CONTRACT || networkDefault("SHADE_TREE_PAID_ACCESS_CONTRACT");
   if (!isAddress(setAddr || "")) { log.error("SHADE_TREE_PAID_ACCESS_CONTRACT (PaidAccessSet address) is required"); process.exit(1); }
   const offer = makeOffer(process.env);
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   if (!offer.payTo) offer.payTo = wallet.address;
   const token = new ethers.Contract(offer.asset, EIP3009_ABI, wallet);
@@ -609,7 +723,7 @@ async function main() {
   const store = makeStore(storePath);
   const engine = makeEngine({ offer, token, set, wallet, provider, store, confirmations: envInt("SHADE_TREE_PAY_CONFIRMATIONS", 1), maxInflight: envInt("SHADE_TREE_REGISTRAR_MAX_INFLIGHT", 8) });
   const rec = await engine.recover();
-  if (rec.resumed || rec.failed) log.info("registrar: recovery", rec);
+  if (rec.resumed || rec.failed || rec.pending) log.info("registrar: recovery", rec);
 
   const server = makeServer(engine, { offer, store, set });
   const openSockets = new Set();

@@ -106,6 +106,20 @@ function unitEnv(unit, key) {
 async function main() {
   const work = await mkdtemp(join(tmpdir(), "shade-tree-bootstrap-render-"));
   try {
+    console.log("client handoff template:");
+    const bootstrapSource = await readFile(SCRIPT, "utf8");
+    const deployReadme = await readFile(join(HERE, "README.md"), "utf8");
+    ok(!/shade-tree client\b/.test(bootstrapSource) && !/--secret\s+<member-hex>/.test(bootstrapSource), "bootstrap never emits the legacy client or argv-secret form");
+    ok(/read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET/.test(bootstrapSource) && /shade-tree proxy/.test(bootstrapSource), "bootstrap handoff loads the bearer secret through a hidden read before starting the Proxy");
+    ok(/SHADE_TREE_MEMBERS_FILE=\/path\/from-operator\/members\.json/.test(bootstrapSource) && /--limit "\\\$SHADE_TREE_LIMIT"/.test(bootstrapSource), "bootstrap handoff requires the invited member file and explicit operator tier");
+    ok((bootstrapSource.match(/\$\(print_client_setup "\$BN_ONION" "\$SIGNER"\)/g) || []).length === 2, "full-Grove and gateway-only summaries share the safe handoff template");
+    ok(/MEMBERS_DEST="\/etc\/shade-tree\/members\.json"/.test(bootstrapSource) && /install -o root -g "\$RUN_USER" -m 0640 "\$MEMBERS_SOURCE" "\$MEMBERS_DEST"/.test(bootstrapSource), "live bootstrap installs the invited admission root as root-owned and node-readable");
+    ok(!/chown "\$RUN_USER:\$RUN_USER" "\$MEMBERS_DEST"/.test(bootstrapSource) && /ProtectSystem=strict/.test(bootstrapSource) && /ReadWritePaths=\$\{SHADE_TREE_DIR\}\/deploy-state/.test(bootstrapSource), "the node cannot make its trusted member set service-writable through the systemd sandbox");
+    ok(/else\s+# An omitted peer list is the off switch[\s\S]*?rm -f "\$FLEET_TALLY_ENV_FILE"\s+fi/.test(bootstrapSource), "disabling the optional fleet tally removes its stale bearer-token file");
+    ok(/systemctl is-active --quiet shade-tree-gateway/.test(bootstrapSource) && /elif \[ "\$GATEWAY_WAS_ACTIVE" = "1" \]; then\s+systemctl restart shade-tree-gateway/.test(bootstrapSource), "an idempotent re-run restarts an already-running gateway so tally rotation or disablement takes effect");
+    ok(/mktemp \/etc\/shade-tree\/\.fleet-tally\.env\.XXXXXX/.test(bootstrapSource) && /mv -f "\$FLEET_TALLY_ENV_TMP" "\$FLEET_TALLY_ENV_FILE"/.test(bootstrapSource), "fleet tally token rotation replaces the root-only environment file atomically");
+    ok(/safe `shade-tree proxy` template/.test(deployReadme) && /exact\s+enrolled tier/.test(deployReadme) && !/shade-tree client/.test(deployReadme), "deploy README promises a template and names the operator values it cannot invent");
+
     // ---------------------------------------------------------------- 1. default == golden
     console.log("default render (golden):");
     const def = render(work, "default");
@@ -419,8 +433,44 @@ async function main() {
     ok(unitEnv(ruG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ADVERTISE") === "1" && unitEnv(hbG, "SHADE_TREE_BOOTNODE_ONION") === ONION + ".onion", "registrar + heartbeat name the GATEWAY onion as the registrar onion; heartbeat still announces to the remote bootnode");
     ok(unitEnv(gwRegFiles.get("etc/systemd/system/shade-tree-gateway.service"), "SHADE_TREE_ADMIT") === "invited,paid", "gateway-only gateway unit admits invited,paid");
 
+    console.log("fleet tally onion route:");
+    const tallyToken = "t".repeat(32);
+    const tallyPeer = `${ONION}.onion:8879`;
+    const tally = render(work, "fleet-tally", { SHADE_TREE_FLEET_TALLY_PEERS: tallyPeer, SHADE_TREE_FLEET_TALLY_TOKEN: tallyToken });
+    const tallyFiles = await readAll(tally.out);
+    const tallyBlocks = hsBlocks(tallyFiles.get("etc/tor/torrc.d-shade-tree"));
+    const tallyUnit = tallyFiles.get("etc/systemd/system/shade-tree-gateway.service");
+    ok(tally.status === 0 && tallyBlocks[1].lines.join("|") === "HiddenServicePort 80 127.0.0.1:8443|HiddenServicePort 8879 127.0.0.1:8879|HiddenServicePoWDefensesEnabled 0", "gateway onion maps distinct virtual port 8879 to the HTTP tally listener");
+    ok(unitEnv(tallyUnit, "SHADE_TREE_FLEET_TALLY_PEERS") === tallyPeer && unitEnv(tallyUnit, "SHADE_TREE_FLEET_TALLY_LISTEN") === "127.0.0.1:8879" && unitEnv(tallyUnit, "SHADE_TREE_TOR_PORT") === "9050", "gateway unit sends tally pushes through the local Tor SOCKS port and listens on the mapped backend");
+    ok(/^EnvironmentFile=-\/etc\/shade-tree\/fleet-tally\.env$/m.test(tallyUnit) && ![...tallyFiles.values()].some((body) => body.includes(tallyToken)), "rendered artifacts reference a protected token file and never contain the tally token");
+    for (const [name, env, re] of [
+      ["missing-token", { SHADE_TREE_FLEET_TALLY_PEERS: tallyPeer }, /needs SHADE_TREE_FLEET_TALLY_TOKEN/],
+      ["bad-peer", { SHADE_TREE_FLEET_TALLY_PEERS: "example.com:8879", SHADE_TREE_FLEET_TALLY_TOKEN: tallyToken }, /tally peers must be/],
+      ["port-collision", { SHADE_TREE_FLEET_TALLY_PEERS: tallyPeer, SHADE_TREE_FLEET_TALLY_TOKEN: tallyToken, SHADE_TREE_FLEET_TALLY_PORT: "9101" }, /active local service ports must be distinct/],
+    ]) {
+      const rejected = render(work, `fleet-tally-${name}`, env);
+      ok(rejected.status !== 0 && re.test(rejected.stderr), `fleet tally rejects ${name}`);
+    }
+
     // ---------------------------------------------------------------- 5. other guards
     console.log("guards:");
+    const noMembers = spawnSync("bash", [SCRIPT], {
+      env: { PATH: process.env.PATH, HOME: process.env.HOME ?? "/" },
+      encoding: "utf8",
+    });
+    ok(noMembers.status !== 0 && /pass SHADE_TREE_MEMBERS_FILE=\/absolute\/path/.test(noMembers.stderr), "live invited bootstrap refuses the repository demo member set before requiring root or installing anything");
+    const operatorMembers = join(def.out, "etc", "operator-members.json");
+    await writeFile(operatorMembers, '{"version":2,"members":["1"]}\n');
+    const explicitMembers = spawnSync("bash", [SCRIPT], {
+      env: { PATH: process.env.PATH, HOME: process.env.HOME ?? "/", SHADE_TREE_MEMBERS_FILE: operatorMembers },
+      encoding: "utf8",
+    });
+    ok(explicitMembers.status !== 0 && /run as root or with sudo/.test(explicitMembers.stderr + explicitMembers.stdout), "an explicit readable operator member set passes the live preflight and reaches the root boundary");
+    const membersInjection = render(work, "members-path-bad", { SHADE_TREE_MEMBERS_FILE: "/tmp/members.json\nEnvironment=BAD=1" });
+    ok(membersInjection.status !== 0 && /unsupported path characters/.test(membersInjection.stderr), "members path cannot inject a systemd Environment line");
+    const membersRendered = render(work, "members-canonical", { SHADE_TREE_MEMBERS_FILE: operatorMembers });
+    const membersUnit = await readFile(join(membersRendered.out, "etc/systemd/system/shade-tree-gateway.service"), "utf8");
+    ok(membersRendered.status === 0 && unitEnv(membersUnit, "SHADE_TREE_MEMBERS_FILE") === "/etc/shade-tree/members.json", "render review keeps the trusted member set outside service-writable deploy state");
     const adm = render(work, "adm-bad", { SHADE_TREE_ADMISSION: "vip" });
     ok(adm.status !== 0 && /SHADE_TREE_ADMISSION must be open or stake/.test(adm.stderr), "SHADE_TREE_ADMISSION=vip rejected");
     const admStake = render(work, "adm-stake", { SHADE_TREE_ADMISSION: "stake" });

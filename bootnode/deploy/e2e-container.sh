@@ -100,6 +100,18 @@ EXTRA_ENV=()
 docker exec \
   -e SHADE_TREE_REPO="file:///mnt/src" \
   -e SHADE_TREE_REF="$REF" \
+  -e SHADE_TREE_MEMBERS_FILE="/mnt/src/group/members.json" \
+  -e SHADE_TREE_ADMISSION="open" \
+  -e SHADE_TREE_BOOTNODE_PORT="$BOOTNODE_PORT" \
+  -e SHADE_TREE_GATEWAY_PORT="$GATEWAY_PORT" \
+  ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
+  "$CONTAINER" bash /mnt/src/bootnode/deploy/bootstrap.sh
+
+log "re-run bootstrap from its root-owned canonical members copy"
+docker exec \
+  -e SHADE_TREE_REPO="file:///mnt/src" \
+  -e SHADE_TREE_REF="$REF" \
+  -e SHADE_TREE_MEMBERS_FILE="/etc/shade-tree/members.json" \
   -e SHADE_TREE_ADMISSION="open" \
   -e SHADE_TREE_BOOTNODE_PORT="$BOOTNODE_PORT" \
   -e SHADE_TREE_GATEWAY_PORT="$GATEWAY_PORT" \

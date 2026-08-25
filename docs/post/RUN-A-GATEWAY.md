@@ -14,12 +14,12 @@ timing, lifetime, and traffic volume. You supply the destination-facing public I
 Status: research preview, unaudited, with testnet ZK artifacts. The software can be exercised
 in a local or operator-configured v4 Grove, but this repository does not advertise a public
 v4 service. The checked-in Sepolia records describe the incompatible pre-v4 research fleet.
-Do not put sensitive traffic on it. See the repo README "Scope" and
+Do not put sensitive traffic on it. See the repo README "Boundaries" and
 [`../SHIP-PLAN.md`](../SHIP-PLAN.md).
 
 ## Prerequisites
 
-- A fresh Ubuntu 24.04 box (for the one-command path), or Node.js 18+ and a local Tor
+- A fresh Ubuntu 24.04 box (for the one-command path), or Node.js 20+ and a local Tor
   daemon (for the manual path). `npm install && npm link` puts `shade-tree` on PATH; `shade-tree
   doctor` checks Node.js, Tor, dependencies, and keys.
 - An existing Elder Tree onion, if you are adding a node to a Grove someone else
@@ -27,16 +27,16 @@ Do not put sensitive traffic on it. See the repo README "Scope" and
 
 ## One command on a droplet
 
-> **Blocked today.** [Issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)
-> leaves private and link-local destinations reachable through the default node policy.
-> Do not run this public-host path until that guard and the current
-> [deployment gates](../DEPLOYMENT-PLAN.md) are closed.
+> **Blocked today.** The node now rejects non-public destination addresses after DNS
+> resolution, but the development ZK setup and the current
+> [deployment gates](../DEPLOYMENT-PLAN.md) still block public rollout.
 
 After those gates clear, the intended target is a fresh Ubuntu 24.04 host:
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+  | sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash
 ```
 
 It installs Tor (official repo, so onion PoW is available) and Node.js, mints the onion
@@ -83,20 +83,25 @@ slash member over-spenders. Stake binds to the operator address, never to an oni
 one stake can back rotating onions.
 
 ```bash
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
 shade-tree register-gateway \
   --gateway-registry 0x<GatewayRegistry> \
-  --register-key 0x<operator-key> \
   --rpc-url https://<rpc-endpoint>
+unset SHADE_TREE_REGISTER_KEY
 ```
 
 `--bond` defaults to the on-chain `BOND()`. The command is a no-op if the operator is
-already staked. For a staked Elder Tree, run the heartbeat with the operator key so it
+already staked. Paste the funded operator key at the hidden prompt. For a staked Elder Tree,
+run the heartbeat with its operator key through the same no-echo, process-scoped pattern so it
 signs the durable onion-to-operator authorization:
 
 ```bash
-SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key> shade-tree heartbeat \
+read -s SHADE_TREE_GW_OPERATOR_KEY
+SHADE_TREE_GW_OPERATOR_KEY="$SHADE_TREE_GW_OPERATOR_KEY" shade-tree heartbeat \
   --bootnode <elder-onion> \
   --identity tor/hs-gateway/identity.local.json
+unset SHADE_TREE_GW_OPERATOR_KEY
 ```
 
 ## Where to go deeper

@@ -23,53 +23,77 @@ npm link           # puts `shade-tree` on PATH; or just use `node bin/shade-tree
 shade-tree doctor        # checks node, tor, deps, keys
 ```
 
-Each `--flag` maps to an `SHADE_TREE_*` env var (see [CONFIG.md](CONFIG.md)); either works.
+Common `--flags` map to `SHADE_TREE_*` variables; command-specific flags pass through to the
+underlying module (see [CONFIG.md](CONFIG.md)).
 Agent developers who do not need the repository can use the shorter
 [agent install](AGENT.md#1-install-the-agent-cli).
 
 ## Path A: connect to an operator's v4 Grove
 
-Ask the operator for a member secret or enrollment path and either a node onion, or the v4
-Elder Tree onion plus its pinned Canopy signer. You need a Tor SOCKS port:
-`bash scripts/start-tor-client.sh` starts one on 9260 (or use `--tor-port 9050` with a system
-Tor). Pinning one node is the smallest path:
+Ask the operator for a member secret or enrollment path, the exact enrolled tier, and either a
+node onion or the v4 Elder Tree onion plus its pinned Canopy signer. Invited access also needs
+that operator's member list. You need a Tor SOCKS port: `bash scripts/start-tor-client.sh`
+starts one on 9260 (or use `--tor-port 9050` with a system Tor).
+
+Load the bearer secret without putting it in shell history or process arguments. Enter the
+operator-supplied tier at the second prompt:
 
 ```bash
-SHADE_TREE_SECRET=<hex> SHADE_TREE_ONION=<v4-node.onion> \
-  shade-tree proxy --tor-port 9260
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
+```
+
+For an invited profile pinned to one node:
+
+```bash
+SHADE_TREE_MEMBERS_FILE=/path/from-operator/members.json \
+shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source invited \
+  --tor-port 9260 --onion <v4-node.onion>
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json     # the node's IP
 ```
 
 For signed discovery and rotation, use both values supplied by the same v4 operator:
 
 ```bash
-SHADE_TREE_SECRET=<hex> shade-tree proxy --tor-port 9260 \
+SHADE_TREE_MEMBERS_FILE=/path/from-operator/members.json \
+shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source invited --tor-port 9260 \
   --bootnode <v4-elder.onion> \
   --dir-signer <v4-canopy-signer-hex>
 ```
 
 If that operator enables paid or staked admission, they must also supply the v4 registrar,
-chain, and contract addresses. Do not substitute the checked-in Sepolia values:
+chain, and contract addresses. Do not substitute the checked-in Sepolia values. Generate an
+identity at their tier, then copy only its secret value into the hidden prompt:
 
 ```bash
+shade-tree enroll --commitment-only --limit "$SHADE_TREE_LIMIT"
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+
 # paid admission, when offered by the v4 operator
-shade-tree enroll
-shade-tree pay --bootnode <v4-elder.onion> --limit 8 \
-  --protocol x402 --key-file buyer.key --secret-file ./.secret
+shade-tree pay --bootnode <v4-elder.onion> --limit "$SHADE_TREE_LIMIT" \
+  --protocol x402 --key-file buyer.key
 
 # staked admission, when offered by the v4 operator
-shade-tree register-member <commitment> --limit 8 \
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
+shade-tree register-member <commitment> --limit "$SHADE_TREE_LIMIT" \
   --rpc-url <operator-rpc-url> --group-contract <v4-staked-set-address>
+unset SHADE_TREE_REGISTER_KEY
 ```
+
+Paste the funded registration key at the hidden prompt. It is passed only to the registration
+process and cleared before the Proxy starts. A non-loopback RPC refuses the public Anvil key and
+requires this explicit key.
 
 The Proxy fetches the signed Canopy over Tor, verifies it against the pinned signer, and
 selects a node per tunnel. Member page: [JOIN.md](JOIN.md); buying: [PAYMENTS.md](PAYMENTS.md).
-Research preview and untrusted ZK artifacts: see the README "Status".
+Research preview and untrusted ZK artifacts: see the README warning and Boundaries.
 
 ## Path B: the local loop (understand the pieces)
 
-You need a local Tor daemon. The repo ships one (`scripts/run-*.sh` / `tor/torrc`); it runs
-SOCKS on 9250. Below, each role is a separate terminal.
+You need a local Tor daemon. This loop publishes two onion services from one Tor process. The
+checked-in `tor/torrc` and `scripts/start-tor.sh` publish one standalone node only, so do not use
+that single-node config unchanged here. Below, each role is a separate terminal.
 
 ### 1. Mint onion identities
 
@@ -78,9 +102,24 @@ shade-tree keygen tor/hs-bootnode --label bootnode   # Elder Tree identity; inte
 shade-tree keygen tor/hs-gateway  --label gateway    # node identity; internal path/label
 ```
 
-Each writes Tor HS key files + an `identity.local.json` (the announce-signing seed). Point
-your Tor daemon's `HiddenServiceDir` at these dirs so it publishes the onions
-(`HiddenServicePort 80 127.0.0.1:8877` for the Elder Tree, `... 127.0.0.1:8443` for the node).
+Each writes Tor HS key files plus `identity.local.json` (the announce-signing seed). In another
+terminal, start the exact two-service local configuration. This command stays in the foreground:
+
+```bash
+mkdir -p tor/data-local-loop
+chmod 700 tor/data-local-loop tor/hs-bootnode tor/hs-gateway
+tor --DataDirectory ./tor/data-local-loop \
+  --SocksPort 9250 \
+  --HiddenServiceDir ./tor/hs-bootnode \
+  --HiddenServicePort "80 127.0.0.1:8877" \
+  --HiddenServiceDir ./tor/hs-gateway \
+  --HiddenServicePort "80 127.0.0.1:8443" \
+  --Log "notice stdout"
+```
+
+This is the local-loop equivalent of two `HiddenServiceDir` blocks: the Elder Tree is onion port
+80 to loopback 8877, and the node is onion port 80 to loopback 8443. Wait for Tor to report
+`Bootstrapped 100%` before continuing.
 
 ### 2. Run the Elder Tree
 
@@ -92,10 +131,21 @@ It prints its **pinned signer pubkey**. Proxies need it. (`--admission open` mea
 control is the only requirement; `--admission stake` also requires an on-chain node bond, see
 [BOOTNODE.md](BOOTNODE.md).)
 
-### 3. Run a Shade Tree node and announce it
+### 3. Enroll one local invited member
+
+For this local loop, choose tier 8 and add its commitment to the repository's demo member
+file. Live bootstrap never accepts this file:
 
 ```bash
-shade-tree node                                      # verifies proofs, tunnels :443
+shade-tree enroll --limit 8
+```
+
+Copy only the printed secret value into the hidden prompt in step 5.
+
+### 4. Run a Shade Tree node and announce it
+
+```bash
+SHADE_TREE_MEMBERS_FILE=./group/members.json shade-tree node
 shade-tree heartbeat --bootnode <elder-onion> \
   --identity tor/hs-gateway/identity.local.json
 ```
@@ -107,15 +157,9 @@ Confirm it is listed:
 curl --socks5-hostname 127.0.0.1:9250 http://<elder-onion>/directory
 ```
 
-### 4. Connect a Proxy
+### 5. Connect a Proxy
 
-First get a member secret (the reputation-set identity):
-
-```bash
-shade-tree enroll                 # prints SHADE_TREE_SECRET (a member of the set) + its commitment
-```
-
-Then run the Proxy, pointed at the Elder Tree and pinning its signer:
+Load the member secret without putting it in shell history or process arguments:
 
 ```bash
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
@@ -124,7 +168,8 @@ read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
 Paste the member secret at the hidden prompt, then run:
 
 ```bash
-shade-tree proxy \
+SHADE_TREE_MEMBERS_FILE=./group/members.json \
+shade-tree proxy --limit 8 --leaf-source invited --tor-port 9250 \
   --bootnode <elder-onion> \
   --dir-signer <elder-signer-pubkey>
 ```
@@ -142,23 +187,23 @@ One RLN proof admits one CONNECT tunnel, not each HTTP request carried inside it
 
 ## Path C: your own Grove on a droplet (one command)
 
-> **Deployment blocked.** [Issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)
-> leaves private and link-local destinations reachable through the default node policy.
-> Do not run this path on a public or private-network-connected host until that guard and
-> the other [`DEPLOYMENT-PLAN.md`](DEPLOYMENT-PLAN.md) gates are closed.
+> **Deployment blocked.** The private-target guard is now closed by default, but the
+> development ZK setup and the other [`DEPLOYMENT-PLAN.md`](DEPLOYMENT-PLAN.md) gates remain.
+> Keep this path limited to disposable research infrastructure until they are closed.
 
 After those gates clear, the bootstrap target is a fresh Ubuntu 24.04 host:
 
 ```bash
 ssh root@<droplet>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+  | sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash
 ```
 
 It installs Tor + Node.js, mints the onions, starts the internal bootnode + gateway + heartbeat
-systemd units, and prints the Elder Tree onion, its pinned signer, and the Proxy command. Opt-ins:
+systemd units, and prints the Elder Tree onion, its pinned signer, and a Proxy template. Opt-ins:
 `SHADE_TREE_BOOTNODE_ONION=<onion>` (node-only host joining an existing Elder Tree), `SHADE_TREE_REGISTRAR=1`
 (sell access over 402), `SHADE_TREE_HELIOS=1` (light-client root anchor). See
-[bootnode/deploy/README.md](../bootnode/deploy/README.md). Then connect as in [step 4](#4-connect-a-proxy), pointing `--bootnode` / `--dir-signer` at what it printed.
+[bootnode/deploy/README.md](../bootnode/deploy/README.md). Then connect as in [step 5](#5-connect-a-proxy), pointing `--bootnode` / `--dir-signer` at what it printed and using the operator-supplied member values.
 
 ## On-chain mode (optional)
 
@@ -170,7 +215,7 @@ anvil &
 forge script script/Deploy.s.sol:Deploy --rpc-url http://127.0.0.1:8545 --broadcast \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 
-shade-tree register-member <commitment>          # stake a member (from `shade-tree enroll --commitment-only`)
+shade-tree register-member <commitment> --limit 8 # stake a tier-8 member from `shade-tree enroll --commitment-only --limit 8`
 shade-tree register-gateway                      # stake a node operator; command retains wire name
 shade-tree elder --admission stake --stake-mode onchain \
   --gateway-registry <addr> --rpc-url http://127.0.0.1:8545

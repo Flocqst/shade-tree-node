@@ -65,7 +65,7 @@
 //                            (11155111). Unset (default) => /health is byte-identical to before.
 
 import http from "node:http";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { chmod, readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { generateKeyPairSync, createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
@@ -123,12 +123,21 @@ function rawPubHex(pubKey) {
   return der.subarray(der.length - 32).toString("hex");
 }
 export async function loadOrMintSigner(path) {
-  if (existsSync(path)) return JSON.parse(await readFile(path, "utf8"));
+  if (existsSync(path)) {
+    await chmod(path, 0o600);
+    return JSON.parse(await readFile(path, "utf8"));
+  }
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const signer = { pub: rawPubHex(publicKey), priv: rawSeedHex(privateKey) };
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(signer, null, 2) + "\n");
-  return signer;
+  try {
+    await writeFile(path, JSON.stringify(signer, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    return signer;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    await chmod(path, 0o600);
+    return JSON.parse(await readFile(path, "utf8"));
+  }
 }
 
 // ---- replay guard: bounded nonce memory, swept with the entries -------------

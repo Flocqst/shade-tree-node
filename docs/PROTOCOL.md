@@ -129,7 +129,11 @@ member and epoch.
 
 Fleet-wide replay tallying is optional and fail-open. Without a shared tally, replay
 protection and accounting are strongest per node; the threat model records the residual
-cross-node window.
+cross-node window. A node publishes tally evidence only after its destination TCP connection
+succeeds. DNS and pre-connect failures can therefore retry the identical envelope at another
+node; once one egress establishes, peers reject that nullifier for the epoch.
+This rejection begins only after the asynchronous announcement arrives. A dropped push,
+concurrent attempt, or partition remains fail-open.
 
 ## Discovery and trust
 

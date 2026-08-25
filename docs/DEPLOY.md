@@ -53,7 +53,7 @@ local command; in production a leaf is added only after whatever admission
 ceremony you choose (stake, invite, proof-of-personhood).
 
 ```bash
-node group/enroll.mjs alice        # prints: export SHADE_TREE_SECRET=...  (give to the member)
+node group/enroll.mjs alice        # prints a secret value for the member's hidden prompt
 # repeat per member; each appends a commitment to group/members.json
 ```
 
@@ -62,7 +62,7 @@ own `SHADE_TREE_SECRET` on their own laptop.
 
 ## Droplet (gateway role)
 
-Ubuntu droplet, Tor + Node 18+:
+Ubuntu droplet, Tor + Node 20+:
 
 ```bash
 # Prefer the official Tor Project repo: its packages are built with the GPL
@@ -71,7 +71,7 @@ Ubuntu droplet, Tor + Node 18+:
 #   https://support.torproject.org/apt/  (add deb.torproject.org, then:)
 sudo apt-get update && sudo apt-get install -y tor
 tor --list-modules | grep pow        # want: pow: yes
-# install Node 18+ (nodesource or nvm)
+# install Node 20+ (nodesource or nvm)
 
 git clone <this-repo> && cd shade-tree-node
 npm install
@@ -106,7 +106,8 @@ Hold the same `group/members.json` and your own secret:
 
 ```bash
 export SHADE_TREE_ONION=<addr-from-the-droplet>.onion
-export SHADE_TREE_SECRET=<your-secret-from-enroll>
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT   # exact enrolled tier
 bash scripts/run-client.sh           # starts a client-only Tor (9260) + the shim
 bash scripts/verify.sh               # receipt: your IP vs the egress IP, RTT, google 200
 ```
@@ -153,7 +154,8 @@ still crosses the real Tor rendezvous between them.
 ```bash
 bash scripts/run-gateway.sh                       # note the printed onion
 export SHADE_TREE_ONION=<that-onion>
-export SHADE_TREE_SECRET=$(cat .secret)                 # an enrolled member
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET   # paste the enrolled member value
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT     # exact enrolled tier
 bash scripts/run-client.sh
 curl -x http://127.0.0.1:8888 https://api.ipify.org?format=json
 ```

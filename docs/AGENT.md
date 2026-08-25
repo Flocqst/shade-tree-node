@@ -50,6 +50,9 @@ SOCKS port:
 
 ```bash
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_BOOTNODE_ONION && export SHADE_TREE_BOOTNODE_ONION
+read -r SHADE_TREE_DIR_SIGNER && export SHADE_TREE_DIR_SIGNER
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
 ```
 
 Paste the member secret at the hidden prompt and press Enter. Then start the
@@ -58,13 +61,26 @@ Proxy:
 ```bash
 SHADE_TREE_MEMBERS_FILE=./members.json \
 shade-tree proxy \
-  --bootnode <elder.onion> \
-  --dir-signer <64-hex-canopy-signer> \
+  --bootnode "$SHADE_TREE_BOOTNODE_ONION" \
+  --dir-signer "$SHADE_TREE_DIR_SIGNER" \
+  --limit "$SHADE_TREE_LIMIT" \
   --tor-port 9050
 ```
 
 The secret is not echoed or placed in the long-running Proxy's process
 arguments.
+
+The operator must give you the enrolled tier. Use `8` only when the operator
+confirms the default tier; a mismatched tier derives a different leaf and fails
+membership verification.
+
+Run only one Proxy process per member secret. Slot accounting is currently
+process-local. Starting a second Proxy can reuse a slot and create slashable
+RLN evidence. So can restarting during the same epoch if any CONNECT attempt
+might have reached a node. Never run two Proxy processes with one secret. After a
+CONNECT attempt, wait for the next epoch before restarting. Persistent
+cross-process coordination is
+tracked in [issue #75](https://github.com/dmarzzz/shade-tree-node/issues/75).
 
 Tor Browser normally uses port 9150. The repository helper
 `scripts/start-tor-client.sh` uses 9260. If the operator gives you one pinned
@@ -90,7 +106,9 @@ shade-tree run -- hermes
 
 `shade-tree run` checks the local Proxy before launch. It gives HTTP, HTTPS, and
 WSS proxy variables only to its child. The current shell and unrelated services
-remain unchanged.
+remain unchanged. Inherited `SHADE_TREE_*` Proxy credentials and operator
+settings are stripped before the agent starts. Only the scoped Shade Tree
+routing markers are added back.
 
 If an agent ignores standard proxy variables, point its HTTP proxy setting at
 `http://127.0.0.1:8888`. The Proxy accepts HTTP CONNECT only, and nodes permit
@@ -115,6 +133,7 @@ values apply. Read the [SDK reference](SDK.md) and the tested
 - TLS hides the application path and body from the node when the agent uses HTTPS.
 - Tor does not prevent timing correlation by an observer who can watch both ends.
 - One proof admits one CONNECT tunnel, not every HTTP request inside it.
+- Slot accounting is process-local; do not share one member secret across Proxy processes.
 
 Read [Adapters](ADAPTERS.md) for proxy-aware tools and the
 [threat model](THREAT-MODEL.md) for the exact guarantees.

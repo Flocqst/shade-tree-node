@@ -9,12 +9,11 @@
   <meta property="og:description" content="Cover for local agents.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/">
-  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
-  <meta property="og:image:alt" content="A dark grove casting a patch of shade">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
+  <meta property="og:image:alt" content="A low-poly grove crossed by a private data path">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="/fig/shade-tree-banner.webp" as="image" type="image/webp" fetchpriority="high">
   <link rel="stylesheet" href="/site.css">
   <script type="module" src="/site.js"></script>
   <title>Shade Tree</title>
@@ -47,8 +46,8 @@
     <div class="home-copy">
       <h1 id="home-title"><span>Cover for</span><span>local agents.</span></h1>
       <div class="hero-actions">
-        <a href="#proxy">Install the Proxy <span aria-hidden="true">&#8599;</span></a>
-        <a href="#node">Run a Shade Tree node <span aria-hidden="true">&#8599;</span></a>
+        <a href="#proxy">Install the Proxy <span aria-hidden="true">&#8595;</span></a>
+        <a href="#node">Run a Shade Tree node <span aria-hidden="true">&#8595;</span></a>
       </div>
     </div>
   </header>
@@ -58,7 +57,7 @@
       <article id="proxy" class="role">
         <header class="role-intro">
           <h2>Install the Proxy</h2>
-          <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8599;</span></a>
+          <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
           <div class="command" aria-label="Install Shade Tree for an agent">
@@ -79,7 +78,7 @@
       <article id="node" class="role">
         <header class="role-intro">
           <h2>Run a Shade Tree node</h2>
-          <a class="role-link" href="/operator/">Operator guide <span aria-hidden="true">&#8599;</span></a>
+          <a class="role-link" href="/operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
           <div class="command" aria-label="Install and prepare a Shade Tree node">
@@ -99,7 +98,7 @@
             <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
           </div>
           <picture class="how-visual reputation-figure">
-            <source media="(max-width: 560px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="1100">
+            <source media="(max-width: 560px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="900">
             <img src="/fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
           </picture>
         </article>
@@ -109,7 +108,7 @@
             <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree never carries agent traffic.</p>
           </div>
           <picture class="how-visual network-figure">
-            <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
+            <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1250">
             <img src="/fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
           </picture>
           <p class="boundary">Tor exit addresses are public. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>

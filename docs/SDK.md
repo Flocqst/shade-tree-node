@@ -17,15 +17,21 @@ live in [`examples/agent-egress.mjs`](../examples/agent-egress.mjs) and
 
 ## Status
 
-This is a research-preview API. The package remains private on npm, so import
-it from a checkout:
+This is a research-preview API. The package remains private on npm, so install
+the Git repository in your agent project:
 
-```js
-import { ShadeTreeClient, cleanUp } from "./client/shade-tree-client.mjs";
+```sh
+npm install git+https://github.com/dmarzzz/shade-tree-node.git
 ```
 
-The reserved package export is `shade-tree-node/client` if the package is
-published later. Everything else beneath the repository is internal.
+Then use the exported client surface:
+
+```js
+import { ShadeTreeClient, cleanUp } from "shade-tree-node/client";
+```
+
+Pin the Git URL to a commit for a reproducible build. Everything else beneath
+the repository is internal.
 
 ## Constructor
 
@@ -51,8 +57,27 @@ an environment fallback is listed below; test injection hooks such as
 | `maxAnon` | `SHADE_TREE_MAX_ANON` | disabled | Restrict selection to invited-only gateways; requires an invited leaf. |
 
 `dialAttempts` is a constructor-only retry count and defaults to `4`.
+`fetchTimeoutMs` bounds a complete `fetch()` call and defaults to `120000`.
+`fetchMaxBodyBytes` caps the buffered response body and defaults to `8388608`
+(8 MiB). These are constructor defaults; one call can override them with
+`timeoutMs` and `maxBodyBytes`:
+
+```js
+await shadeTree.fetch(url, { timeoutMs: 30_000, maxBodyBytes: 1_048_576 });
+```
+
+Timeouts reject with `ShadeTreeFetchError` code `SHADE_TREE_FETCH_TIMEOUT`.
+Oversized bodies reject with code `SHADE_TREE_FETCH_BODY_TOO_LARGE`. The error
+also carries the active bound (`timeoutMs` or `maxBodyBytes`) and requests,
+responses, and tunnels acquired by that call are closed.
+
 `SHADE_TREE_BOOTNODE_ONION` is environment-only dynamic discovery; it requires
 the pinned directory signer and takes precedence over a static directory.
+
+Slot accounting is process-local. Never create two clients with one member
+secret. After any CONNECT attempt, wait for the next epoch before restarting a
+client with that secret. Persistent coordination is tracked in
+[issue #75](https://github.com/dmarzzz/shade-tree-node/issues/75).
 
 Node resolution for each tunnel is: call-level onion pin, client-level onion
 pin, signed directory selection, then the local development onion. If none can
@@ -122,7 +147,7 @@ callbacks are best-effort and do not change the result.
 request so the proof worker can exit:
 
 ```js
-import { ShadeTreeClient, cleanUp } from "./client/shade-tree-client.mjs";
+import { ShadeTreeClient, cleanUp } from "shade-tree-node/client";
 
 const shadeTree = new ShadeTreeClient({
   secret: process.env.SHADE_TREE_SECRET,

@@ -9,7 +9,7 @@
   <meta property="og:description" content="Prepare a Shade Tree node for the Grove.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/operator/">
-  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/operator/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -41,7 +41,7 @@
     <div class="guide-steps">
       <section class="guide-step guide-note" aria-labelledby="operator-safety">
         <h2 id="operator-safety">Local research only</h2>
-        <p>Do not place the current node on a public or private-network-connected host. Public rollout is blocked by the unresolved private-IP egress guard in <a href="https://github.com/dmarzzz/shade-tree-node/issues/73">issue #73</a> and the development Groth16 setup in <a href="https://github.com/dmarzzz/shade-tree-node/issues/6">issue #6</a>.</p>
+        <p>The node rejects non-public destination addresses after DNS resolution. Public rollout remains blocked by the untrusted development Groth16 artifacts in <a href="https://github.com/dmarzzz/shade-tree-node/issues/6">issue #6</a> and the remaining deployment gates. There is no repo-maintained public v4 connection profile.</p>
       </section>
 
       <section class="guide-step" aria-labelledby="operator-install">

@@ -86,6 +86,7 @@ log "run bootstrap.sh inside the container (clone file:///mnt/src @ $REF)"
 docker exec \
   -e SHADE_TREE_REPO="file:///mnt/src" \
   -e SHADE_TREE_REF="$REF" \
+  -e SHADE_TREE_MEMBERS_FILE="/mnt/src/group/members.json" \
   -e SHADE_TREE_ADMISSION="open" \
   -e SHADE_TREE_BOOTNODE_PORT="$BOOTNODE_PORT" \
   -e SHADE_TREE_GATEWAY_PORT="$GATEWAY_PORT" \
@@ -98,8 +99,8 @@ cd /opt/shade-tree
 # Derive a single member whose rateCommitment leaf becomes the gateway's whole membership set,
 # so the client (same secret) proves against the exact root the gateway trusts.
 node rust/shade-tree-rln/interop/egress-derive.mjs /tmp "$SECRET"
-cp /tmp/members.json /opt/shade-tree/group/members.json
-chown -R shade-tree:shade-tree /opt/shade-tree/group/members.json 2>/dev/null || true
+cp /tmp/members.json /opt/shade-tree/deploy-state/members.json
+chown shade-tree:shade-tree /opt/shade-tree/deploy-state/members.json 2>/dev/null || true
 systemctl restart shade-tree-gateway
 # wait for the gateway to be listening again on loopback
 for _ in $(seq 1 30); do

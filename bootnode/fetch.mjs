@@ -26,12 +26,19 @@ export async function postOverTor(onion, path, body, opts = {}) {
 // OOM. A signed directory is tiny (~a few hundred bytes/entry); 2 MB is generous headroom.
 const MAX_RESP = Number(process.env.SHADE_TREE_BOOTNODE_MAX_RESP || 2 * 1024 * 1024);
 
-export async function requestOverTor(onion, { method = "GET", path = "/", body = null, torHost = "127.0.0.1", torPort = 9250, timeoutMs = 20000, attempts = 4, maxBytes = MAX_RESP } = {}) {
+export async function requestOverTor(onion, { method = "GET", path = "/", body = null, torHost = "127.0.0.1", torPort = 9250, destinationPort = 80, timeoutMs = 20000, attempts = 4, maxBytes = MAX_RESP, authorization = null, socksClient = SocksClient } = {}) {
   const host = onion.replace(/\.onion$/, "") + ".onion";
+  if (!Number.isSafeInteger(Number(destinationPort)) || Number(destinationPort) < 1 || Number(destinationPort) > 65535) {
+    throw new Error("invalid onion destination port");
+  }
+  destinationPort = Number(destinationPort);
+  if (authorization != null && (typeof authorization !== "string" || !/^[\x20-\x7e]{1,512}$/.test(authorization))) {
+    throw new Error("invalid authorization header");
+  }
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await once(host, method, path, body, { torHost, torPort, timeoutMs, maxBytes });
+      return await once(host, method, path, body, { torHost, torPort, destinationPort, timeoutMs, maxBytes, authorization, socksClient });
     } catch (e) {
       lastErr = e;
       await sleep(Math.min(1000 * (i + 1), 4000)); // back off through onion cold-start
@@ -40,15 +47,15 @@ export async function requestOverTor(onion, { method = "GET", path = "/", body =
   throw new Error(`bootnode ${method} failed after ${attempts} attempts: ${lastErr?.message || lastErr}`);
 }
 
-function once(host, method, path, body, { torHost, torPort, timeoutMs, maxBytes = MAX_RESP }) {
+function once(host, method, path, body, { torHost, torPort, destinationPort, timeoutMs, maxBytes = MAX_RESP, authorization = null, socksClient }) {
   return new Promise((resolve, reject) => {
     let socket;
     const payload = body == null ? null : Buffer.from(JSON.stringify(body), "utf8");
     const timer = setTimeout(() => { try { socket?.destroy(); } catch {} reject(new Error("timeout")); }, timeoutMs);
-    SocksClient.createConnection({
+    socksClient.createConnection({
       proxy: { host: torHost, port: torPort, type: 5 },
       command: "connect",
-      destination: { host, port: 80 },
+      destination: { host, port: destinationPort },
     })
       .then(({ socket: s }) => {
         socket = s;
@@ -59,8 +66,10 @@ function once(host, method, path, body, { torHost, torPort, timeoutMs, maxBytes 
         });
         s.on("end", () => { clearTimeout(timer); try { resolve(parseHttp(buf)); } catch (e) { reject(e); } });
         s.on("error", (e) => { clearTimeout(timer); reject(e); });
-        let req = `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\nAccept: application/json\r\n`;
+        const authority = destinationPort === 80 ? host : `${host}:${destinationPort}`;
+        let req = `${method} ${path} HTTP/1.1\r\nHost: ${authority}\r\nConnection: close\r\nAccept: application/json\r\n`;
         if (payload) req += `Content-Type: application/json\r\nContent-Length: ${payload.length}\r\n`;
+        if (authorization) req += `Authorization: ${authorization}\r\n`;
         req += "\r\n";
         s.write(req);
         if (payload) s.write(payload);

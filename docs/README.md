@@ -18,7 +18,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`JOIN.md`](JOIN.md) | The member page: get a leaf, connect to a v4 operator or local fleet, what is public per path |
 | [`CLI.md`](CLI.md) | Every `shade-tree` command with its module and an example |
 | [`CONFIG.md`](CONFIG.md) | Every `SHADE_TREE_*` variable, its default, who reads it, its `--flag` |
-| [`STATUS.md`](STATUS.md) | Historical: the June 2026 single-gateway PoC status (the README "Status" is current) |
+| [`STATUS.md`](STATUS.md) | Historical: the June 2026 single-gateway PoC status (the README warning and Boundaries are current) |
 
 ## Use it (clients, SDK, agents)
 

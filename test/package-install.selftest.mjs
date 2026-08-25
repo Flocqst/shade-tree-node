@@ -34,6 +34,7 @@ try {
   const npmRoot = run("npm", ["root", "--global", "--prefix", prefix]).stdout.trim();
   const installed = join(npmRoot, "shade-tree-node");
   for (const path of [
+    "assets/shade-tree-readme-banner.webp",
     "bin/shade-tree.mjs",
     "bootnode/fetch.mjs",
     "client/shim.mjs",
@@ -54,9 +55,11 @@ try {
   const cli = join(prefix, "bin", "shade-tree");
   const joined = run(cli, ["join", "node", hsDir], { cwd: work });
   assert.match(joined.stdout, /joining as a SHADE TREE NODE operator/);
-  assert.match(joined.stdout, /SAFETY: local research only/);
-  assert.match(joined.stdout, /issue #73/);
+  assert.match(joined.stdout, /SAFETY: disposable research only/);
+  assert.match(joined.stdout, /private-target guard is closed/);
+  assert.doesNotMatch(joined.stdout, /issue #73/);
   assert.match(joined.stdout, /issue #6/);
+  assert.match(joined.stdout, /untrusted development Groth16 artifacts/);
   assert.match(joined.stdout, /shade-tree node/);
   assert.ok(existsSync(join(hsDir, "hostname")), "installed CLI did not mint the node onion identity");
   assert.ok(existsSync(join(hsDir, "identity.local.json")), "installed CLI did not write the node announcement identity");

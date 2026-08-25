@@ -23,15 +23,17 @@ below use `tofu` — substitute `terraform` if you prefer.
 
 ## Secrets / vars the operator supplies
 
-Two required inputs; everything else has a default matching `bootstrap.sh`.
+Three required inputs; everything else has a default matching `bootstrap.sh`.
 
 | Var | What | How to supply |
 |---|---|---|
 | `do_token` | DigitalOcean API token (read/write) | `export TF_VAR_do_token="dop_v1_..."` (preferred) or a **gitignored** `terraform.tfvars` |
 | `ssh_public_key` | Your SSH **public** key material | `ssh_public_key = file("~/.ssh/id_ed25519.pub")` in `terraform.tfvars`, or paste the line |
+| `members_json` | Operator-owned v2 invited-member document | `members_json = file("/absolute/path/operator-members.json")` in a gitignored `terraform.tfvars` |
 
-Nothing else is secret. Never commit a real token — `terraform.tfvars` and all
-state files are already in this directory's [`.gitignore`](.gitignore). Start
+Member commitments are public, but the repository copy is demo data and must not become a real
+admission set. Never commit a real token. `terraform.tfvars` and all state files are already in
+this directory's [`.gitignore`](.gitignore). Start
 from [`terraform.tfvars.example`](terraform.tfvars.example).
 
 ## Plan / apply / destroy
@@ -76,7 +78,7 @@ IP(s) in production (default is open).
 | `droplet_size` | `s-1vcpu-1gb` | 1vCPU/1GB runs Tor + 3 Node units comfortably |
 | `image` | `ubuntu-24-04-x64` | bootstrap targets fresh 24.04 |
 | `droplet_name` | `shade-tree-bootnode` | also names the key + firewall |
-| `git_repo` | `github.com/dmarzzz/shade-tree-node` | passed as `SHADE_TREE_REPO` |
+| `git_repo` | `https://github.com/dmarzzz/shade-tree-node` | passed as `SHADE_TREE_REPO`; HTTPS GitHub URLs only |
 | `git_ref` | `main` | passed as `SHADE_TREE_REF`; **pin a tag/sha for reproducibility** |
 | `admission` | `open` | `open` or `stake` → `SHADE_TREE_ADMISSION` |
 | `bootnode_port` | `8877` | loopback → `SHADE_TREE_BOOTNODE_PORT` |
@@ -85,12 +87,18 @@ IP(s) in production (default is open).
 | `ssh_allowed_cidrs` | `["0.0.0.0/0", "::/0"]` | lock down in prod |
 | `tags` | `["shade-tree","bootnode","gateway"]` | DO tags |
 
+The module validates the member document, repository URL, git ref, and every
+port during planning. Invalid values stop before DigitalOcean resources are
+created. `members_json` must contain 1 to 1,048,576 canonical decimal-string
+BN254 field elements in the v2 document shape.
+
 ## How it delegates to `bootstrap.sh`
 
 `user_data.sh.tftpl` renders a small first-boot script that:
 
-1. exports `SHADE_TREE_REPO`, `SHADE_TREE_REF`, `SHADE_TREE_ADMISSION`, `SHADE_TREE_BOOTNODE_PORT`,
-   `SHADE_TREE_GATEWAY_PORT` — the exact env tunables `bootstrap.sh` reads;
+1. writes the supplied member document to a root-only file and exports
+   `SHADE_TREE_REPO`, `SHADE_TREE_REF`, `SHADE_TREE_ADMISSION`, `SHADE_TREE_BOOTNODE_PORT`,
+   `SHADE_TREE_GATEWAY_PORT`, and `SHADE_TREE_MEMBERS_FILE`, the exact env tunables `bootstrap.sh` reads;
 2. waits out the first-boot apt lock;
 3. `curl`s `bootstrap.sh` from `raw.githubusercontent.com` at the **same pinned
    ref**, and runs it as root.
@@ -98,12 +106,18 @@ IP(s) in production (default is open).
 The wrapper contains **zero** provisioning logic of its own. If bring-up changes,
 it changes in `bootstrap.sh`; this module keeps working unchanged.
 
-## Multiple gateways across regions/ASNs (T-DEPLOY-2)
+## Multiple regions and Groves
 
-Run this module once per box with a different `region` (and `droplet_name`),
-e.g. via separate workspaces/dirs or a `for_each` wrapper, to spread the
-both-ends AS vantage. Each box announces its gateway to its own bootnode; point
-clients at the directory as usual.
+Each module instance creates one bootnode plus one gateway. Running it in several
+regions therefore creates independent Groves with separate signed directories; it
+does not create one multi-gateway fleet.
+
+For one Grove across regions/ASNs, provision its Elder Tree first, then use
+[`bootstrap.sh` gateway-only mode](../README.md#add-a-second-gateway-to-an-existing-bootnode)
+for each additional box with `SHADE_TREE_BOOTNODE_ONION` and
+`SHADE_TREE_BOOTNODE_SIGNER`. This module does not currently pass through the
+remote-Elder or optional fleet-tally settings. Configure those through the
+bootstrap path, or extend the module before using it for a shared fleet.
 
 ## Updates — composes with the rolling update (T-DEPLOY-6)
 

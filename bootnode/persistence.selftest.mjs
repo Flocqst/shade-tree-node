@@ -12,7 +12,7 @@
 //
 // Exit 0 = all invariants held; nonzero = a check failed (prints which).
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +34,10 @@ async function main() {
     const g2 = await generateOnionIdentity(join(work, "g2"), { label: "g2" });
     const g3 = await generateOnionIdentity(join(work, "g3"), { label: "g3" });
     const signer = await loadOrMintSigner(join(work, "signer.key"));
+    ok(((await stat(join(work, "signer.key"))).mode & 0o777) === 0o600, "new signer key is mode 0600");
+    await chmod(join(work, "signer.key"), 0o644);
+    await loadOrMintSigner(join(work, "signer.key"));
+    ok(((await stat(join(work, "signer.key"))).mode & 0o777) === 0o600, "existing loose signer key is tightened to mode 0600");
     const TTL = 900; // seconds an accepted gateway stays listed without re-announcing
     const mk = (persistPath, now) => makeRegistry({
       signer, stake: MockStakeVerifier({}), admission: "open", ttlSec: TTL,

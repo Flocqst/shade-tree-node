@@ -9,7 +9,7 @@
   <meta property="og:description" content="Add Shade Tree to one local agent.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/agent/">
-  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/agent/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -63,8 +63,8 @@
         </div>
         <p>The secret is not echoed or placed in the Proxy's process arguments. For invited access, save the operator's member list as <code>members.json</code>, then start the Proxy with system Tor on port 9050:</p>
         <div class="command" aria-label="Start the local Shade Tree Proxy">
-          <code>SHADE_TREE_MEMBERS_FILE=./members.json \<br>shade-tree proxy \<br>&nbsp;&nbsp;--bootnode &lt;elder.onion&gt; \<br>&nbsp;&nbsp;--dir-signer &lt;64-hex-canopy-signer&gt; \<br>&nbsp;&nbsp;--tor-port 9050</code>
-          <button class="copy-command" type="button" data-copy="SHADE_TREE_MEMBERS_FILE=./members.json \&#10;shade-tree proxy \&#10;  --bootnode &lt;elder.onion&gt; \&#10;  --dir-signer &lt;64-hex-canopy-signer&gt; \&#10;  --tor-port 9050" aria-label="Copy Proxy start command">copy</button>
+          <code>SHADE_TREE_MEMBERS_FILE=./members.json \<br>shade-tree proxy \<br>&nbsp;&nbsp;--bootnode &lt;elder.onion&gt; \<br>&nbsp;&nbsp;--dir-signer &lt;64-hex-canopy-signer&gt; \<br>&nbsp;&nbsp;--limit &lt;operator-tier&gt; \<br>&nbsp;&nbsp;--leaf-source invited \<br>&nbsp;&nbsp;--tor-port 9050</code>
+          <button class="copy-command" type="button" data-copy="SHADE_TREE_MEMBERS_FILE=./members.json \&#10;shade-tree proxy \&#10;  --bootnode &lt;elder.onion&gt; \&#10;  --dir-signer &lt;64-hex-canopy-signer&gt; \&#10;  --limit &lt;operator-tier&gt; \&#10;  --leaf-source invited \&#10;  --tor-port 9050" aria-label="Copy Proxy start command">copy</button>
         </div>
         <p>Tor Browser usually listens on 9150. Staked and paid profiles use the contract and RPC values supplied by the same operator.</p>
       </section>

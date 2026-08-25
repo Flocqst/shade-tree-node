@@ -14,7 +14,10 @@ import { collectPublicGrove } from "./grove-snapshot.mjs";
 const NOW = new Date("2026-08-23T12:00:00.000Z");
 const onion = (char) => char.repeat(56) + ".onion";
 const gateways = [
-  { onion: onion("a"), pubkey: "11".repeat(32), operator: "0x" + "22".repeat(20), health: "up", caps: { region: "na" } },
+  {
+    onion: onion("a"), pubkey: "11".repeat(32), operator: "0x" + "22".repeat(20), health: "up", caps: { region: "na" },
+    metrics: { reporterId: "MUST_NOT_PUBLISH", requests: 9001, bytes: 123456, destinations: ["private.example"] },
+  },
   { onion: onion("b"), pubkey: "33".repeat(32), operator: "0x" + "44".repeat(20), health: "down", caps: { region: "eu" } },
 ];
 const directory = { version: 1, issued: Math.floor(NOW.getTime() / 1000), signer: "55".repeat(32), signature: "66".repeat(64), gateways };
@@ -43,7 +46,7 @@ assert.equal(aggregateAnnouncedNodeHours([
 ], { now: NOW }), 2);
 
 const serialized = JSON.stringify(snapshot);
-for (const secret of [gateways[0].onion, gateways[1].onion, gateways[0].pubkey, gateways[0].operator, "region", "caps", "markedDown"]) {
+for (const secret of [gateways[0].onion, gateways[1].onion, gateways[0].pubkey, gateways[0].operator, "region", "caps", "markedDown", "MUST_NOT_PUBLISH", "requests", "bytes", "private.example"]) {
   assert.equal(serialized.includes(secret), false, `public snapshot omits ${secret.slice(0, 16)}`);
 }
 assert.deepEqual(Object.keys(snapshot).sort(), ["growth", "history", "network", "nodes", "observedAt", "privacy", "schema", "source"]);

@@ -112,9 +112,11 @@ v4 paid-set address if it is a paid leaf (`docs/PAYMENTS.md`).
 Env, if you want to set the pieces yourself: `SHADE_TREE_SECRET`, then one discovery source:
 `SHADE_TREE_BOOTNODE_ONION`+`SHADE_TREE_DIR_SIGNER` (operator's v4 fleet),
 `SHADE_TREE_DIRECTORY`+`SHADE_TREE_DIR_SIGNER` (an operator-supplied static signed directory), or
-`SHADE_TREE_ONION` (pin one gateway); plus `SHADE_TREE_TOR_HOST`/`SHADE_TREE_TOR_PORT`. **Gotcha:** in
-directory mode you must set `SHADE_TREE_DIR_SIGNER` or the shim silently falls back to a stale local
-`tor/hs/hostname`.
+`SHADE_TREE_ONION` (pin one gateway); plus `SHADE_TREE_TOR_HOST`/`SHADE_TREE_TOR_PORT`. The routed
+`shade-tree proxy` command fails before startup when a directory or Elder Tree is configured without
+its pinned signer. A direct SDK import or `node client/shim.mjs` bypasses that router validation and
+can reach the local-development `tor/hs/hostname` fallback, so treat a missing signer there as a
+configuration error too.
 
 ## Planned: stock HTTP CONNECT + `Proxy-Authorization`
 

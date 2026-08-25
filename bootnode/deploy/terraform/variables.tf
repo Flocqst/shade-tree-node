@@ -14,6 +14,28 @@ variable "ssh_public_key" {
   type        = string
 }
 
+variable "members_json" {
+  description = "Operator-owned v2 invited-member document. Commitments are public, but never use the repository demo set. Cloud-init writes this to a root-only file for bootstrap.sh."
+  type        = string
+
+  validation {
+    condition = (
+      can(jsondecode(var.members_json)) &&
+      try(jsondecode(var.members_json).version == 2, false) &&
+      try(can(tolist(jsondecode(var.members_json).members)), false) &&
+      try(length(jsondecode(var.members_json).members) > 0, false) &&
+      try(length(jsondecode(var.members_json).members) <= 1048576, false) &&
+      try(alltrue([
+        for leaf in jsondecode(var.members_json).members :
+        can(regex("^\"(0|[1-9][0-9]*)\"$", jsonencode(leaf))) &&
+        can(tonumber(leaf)) &&
+        tonumber(leaf) < 21888242871839275222246405745257275088548364400416034343698204186575808495617
+      ]), false)
+    )
+    error_message = "members_json must be a v2 document with 1..1048576 canonical decimal-string BN254 field elements."
+  }
+}
+
 variable "droplet_name" {
   description = "Name/hostname for the droplet (also used to name the SSH key + firewall)."
   type        = string
@@ -50,12 +72,28 @@ variable "git_repo" {
   description = "Git URL the box clones (passed to bootstrap.sh as SHADE_TREE_REPO). Also used to derive the raw.githubusercontent.com slug for fetching bootstrap.sh itself."
   type        = string
   default     = "https://github.com/dmarzzz/shade-tree-node"
+
+  validation {
+    condition     = can(regex("^https://github[.]com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+([.]git)?$", var.git_repo))
+    error_message = "git_repo must be an HTTPS GitHub repository URL such as https://github.com/owner/repo."
+  }
 }
 
 variable "git_ref" {
   description = "Pinned branch/tag/sha to deploy (SHADE_TREE_REF). Pin a tag or sha for reproducibility; T-DEPLOY-6's rolling-update.sh moves a live box to a new ref later."
   type        = string
   default     = "main"
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$", var.git_ref)) &&
+      !strcontains(var.git_ref, "..") &&
+      !strcontains(var.git_ref, "//") &&
+      !endswith(var.git_ref, "/") &&
+      !endswith(var.git_ref, ".")
+    )
+    error_message = "git_ref must be a shell-safe branch, tag, or SHA without traversal, spaces, or metacharacters."
+  }
 }
 
 variable "admission" {
@@ -73,18 +111,33 @@ variable "bootnode_port" {
   description = "Loopback backend port for the bootnode (SHADE_TREE_BOOTNODE_PORT). Published as an onion; NEVER opened to clearnet."
   type        = number
   default     = 8877
+
+  validation {
+    condition     = floor(var.bootnode_port) == var.bootnode_port && var.bootnode_port >= 1024 && var.bootnode_port <= 65535
+    error_message = "bootnode_port must be an integer in 1024..65535."
+  }
 }
 
 variable "gateway_port" {
   description = "Loopback backend port for the gateway (SHADE_TREE_GATEWAY_PORT). Published as an onion; NEVER opened to clearnet."
   type        = number
   default     = 8443
+
+  validation {
+    condition     = floor(var.gateway_port) == var.gateway_port && var.gateway_port >= 1024 && var.gateway_port <= 65535
+    error_message = "gateway_port must be an integer in 1024..65535."
+  }
 }
 
 variable "tor_socks_port" {
   description = "Local Tor SOCKS port used for the verify curl in the outputs. bootstrap.sh currently pins the heartbeat's SHADE_TREE_TOR_PORT to 9050; this is informational for the operator's verify command."
   type        = number
   default     = 9050
+
+  validation {
+    condition     = floor(var.tor_socks_port) == var.tor_socks_port && var.tor_socks_port >= 1024 && var.tor_socks_port <= 65535
+    error_message = "tor_socks_port must be an integer in 1024..65535."
+  }
 }
 
 # ---- firewall ----

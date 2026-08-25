@@ -127,11 +127,14 @@ img {
 
 .wordmark {
   display: inline-flex;
+  flex-shrink: 0;
+  min-height: 2.75rem;
   gap: 0.7rem;
   align-items: center;
   font-family: var(--display);
   font-weight: 620;
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .tree-mark {
@@ -177,6 +180,14 @@ img {
 .site-footer a,
 .role-link {
   transition: color 160ms ease;
+}
+
+.nav-links a {
+  display: inline-flex;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
 }
 
 .nav-links a:hover,
@@ -334,6 +345,7 @@ img {
   border-bottom: 1px solid var(--line-strong);
   font-size: 0.86rem;
   font-weight: 620;
+  min-height: 2.75rem;
   transition: color 180ms ease, border-color 180ms ease, transform 180ms ease;
 }
 
@@ -382,6 +394,7 @@ img {
 
 .role-link {
   display: inline-flex;
+  min-height: 2.75rem;
   gap: 0.45rem;
   align-items: center;
   margin-top: 1.25rem;
@@ -419,6 +432,7 @@ img {
 
 .copy-command {
   min-width: 7.6rem;
+  min-height: 2.75rem;
   padding: 0.75rem 1rem;
   color: var(--lichen);
   background: transparent;
@@ -470,9 +484,21 @@ img {
 }
 
 .task-preview summary {
+  display: inline-flex;
   width: max-content;
+  min-height: 2.75rem;
+  align-items: center;
   cursor: pointer;
-  list-style-position: outside;
+  list-style: none;
+}
+
+.task-preview summary::before {
+  margin-right: 0.42rem;
+  content: "▸";
+}
+
+.task-preview[open] summary::before {
+  content: "▾";
 }
 
 .task-preview code {
@@ -661,6 +687,14 @@ img {
   gap: 1.4rem;
 }
 
+.site-footer a {
+  display: inline-flex;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+}
+
 @media (max-width: 900px) {
   :root { --page: min(100% - 2rem, 46rem); }
 
@@ -726,7 +760,7 @@ img {
     margin-top: 1.45rem;
   }
 
-  .home-hero .hero-actions a { padding-block: 0.45rem; }
+  .home-hero .hero-actions a { padding-block: 0.65rem; }
   .role-trails { margin-top: 2.5rem; }
 
   .role {

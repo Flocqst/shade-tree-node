@@ -32,6 +32,8 @@ const keys = [
   "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "WSS_PROXY", "wss_proxy",
   "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "NODE_USE_ENV_PROXY",
   "SHADE_TREE_ACTIVE", "SHADE_TREE_PROXY_URL", "SHADE_TREE_NO_PROXY",
+  "SHADE_TREE_SECRET", "SHADE_TREE_REGISTER_KEY", "SHADE_TREE_DIRECTORY",
+  "SHADE_TREE_LOG_LEVEL", "AGENT_TOKEN",
 ];
 console.log(JSON.stringify({ env: Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null])), argv: process.argv.slice(1) }));
 `;
@@ -57,6 +59,11 @@ async function main() {
       no_proxy: "*",
       ALL_PROXY: "socks5://ambient.invalid:3",
       all_proxy: "socks5://ambient-lower.invalid:4",
+      SHADE_TREE_SECRET: "must-not-reach-agent",
+      SHADE_TREE_REGISTER_KEY: "must-not-reach-agent",
+      SHADE_TREE_DIRECTORY: "/operator-only/directory.json",
+      SHADE_TREE_LOG_LEVEL: "debug",
+      AGENT_TOKEN: "ordinary-child-env-is-preserved",
     },
   });
   assert.equal(good.code, 0, good.out);
@@ -72,6 +79,10 @@ async function main() {
   assert.equal(observed.env.NO_PROXY, "127.0.0.1,localhost,::1,host.docker.internal,ollama.local");
   assert.equal(observed.env.no_proxy, observed.env.NO_PROXY);
   assert.equal(observed.env.SHADE_TREE_NO_PROXY, observed.env.NO_PROXY);
+  for (const key of ["SHADE_TREE_SECRET", "SHADE_TREE_REGISTER_KEY", "SHADE_TREE_DIRECTORY", "SHADE_TREE_LOG_LEVEL"]) {
+    assert.equal(observed.env[key], null, `${key} is Proxy/operator state and is stripped from the agent child`);
+  }
+  assert.equal(observed.env.AGENT_TOKEN, "ordinary-child-env-is-preserved", "unrelated agent configuration remains available");
   assert.deepEqual(observed.argv, ["child-arg"], "child argv after `--` is preserved");
   assert.equal(process.env.HTTPS_PROXY, parentHttps, "the wrapper does not mutate its parent shell");
 

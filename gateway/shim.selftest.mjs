@@ -189,12 +189,12 @@ function mockProve(calls) {
   };
 }
 
-await test("one slot per tunnel; cursor rotates and wraps at K", async () => {
+await test("the explicit unsafe test seam can exercise deliberate slot reuse", async () => {
   const calls = [];
-  const pool = makeSlotPool({ secret: "sek", prove: mockProve(calls), epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const pool = makeSlotPool({ secret: "sek", prove: mockProve(calls), epochOf: () => 7n, K: 4, loadGroupFn: noGroup, unsafeAllowSlotReuseForTests: true });
   const got = [];
   for (let n = 0; n < 6; n++) got.push(pool.nextSlot().slot);
-  assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "slots rotate one per tunnel and wrap at K");
+  assert.deepEqual(got, [0, 1, 2, 3, 0, 1], "the test-only seam wraps at K for overspend coverage");
 });
 
 await test("envelope is a coherent v4 bundle; share bound to requestSignal(target,nonce)", async () => {

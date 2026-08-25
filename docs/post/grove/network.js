@@ -1,7 +1,9 @@
-/* global atob, crypto, document, navigator, TextEncoder, window */
+/* global AbortController, atob, crypto, document, navigator, TextEncoder, window */
 
 const LIVE_URL = "/api/grove";
 const FALLBACK_URL = "/grove/network.fallback.json";
+const FETCH_TIMEOUT_MS = 9_000;
+const POLL_INTERVAL_MS = 5 * 60 * 1_000;
 const PUBLIC_KEY_RAW = "377fAP+xg5aKu7AzQa7yB3NMpFpquPSIgs3TcQtVSYI=";
 const KEY_ID = "grove-2026-08";
 const stage = document.getElementById("network-stage");
@@ -13,6 +15,8 @@ let sceneController = null;
 let sceneSeed = null;
 let publicKeyPromise = null;
 let lastLiveObservedAt = null;
+let loadActive = false;
+let pollTimer = 0;
 
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
@@ -124,11 +128,20 @@ async function verifyAttestation(snapshot) {
 }
 
 async function fetchSnapshot(url) {
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
-  const value = await response.json();
-  if (!validSnapshot(value) || !await verifyAttestation(value)) throw new Error("invalid public snapshot");
-  return value;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
+    const value = await response.json();
+    if (!validSnapshot(value) || !await verifyAttestation(value)) throw new Error("invalid public snapshot");
+    return value;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function ageParts(iso) {
@@ -176,7 +189,7 @@ function drawFallback(snapshot) {
     tree.style.setProperty("--x", `${x}%`);
     tree.style.setProperty("--y", `${y}%`);
     tree.style.setProperty("--size", `${size}%`);
-    tree.style.setProperty("--turn", `${Math.round(random() * 180)}deg`);
+    tree.style.setProperty("--turn", `${Math.round((random() - 0.5) * 12)}deg`);
     fallback.append(tree);
   }
 }
@@ -194,12 +207,21 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.remove("is-unavailable");
   setText("[data-node-count]", String(count));
+  const renderCap = window.matchMedia("(max-width: 700px), (pointer: coarse)").matches ? 24 : 48;
+  const compactLabel = window.matchMedia("(max-width: 360px)").matches;
+  let elderLabel = compactLabel ? "Elder Tree · not counted" : "Elder Tree · discovery · not counted";
+  if (count > renderCap) {
+    elderLabel = compactLabel
+      ? `Elder · not counted · ${renderCap}/${count} shown`
+      : `Elder Tree · discovery · not counted · ${renderCap} of ${count} nodes shown`;
+  }
+  setText("[data-elder-label]", elderLabel);
   setText("[data-hero-count]", String(count));
   setText("[data-hero-tree-word]", count === 1 ? "tree" : "trees");
   setText("[data-hero-tail]", researchFleet ? "in the research Grove." : "in the Grove.");
   setText("[data-canopy-label]", stale ? "Last verified canopy" : "Current canopy");
-  setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "waiting" : String(snapshot.growth.announcedNodeHours));
-  setText("[data-view-age]", age.long);
+  setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "n/a" : String(snapshot.growth.announcedNodeHours));
+  setText("[data-view-age]", age.short);
   setText("[data-snapshot-cadence]", `${cadence}-minute snapshots`);
   const state = bundled
     ? `Signed pre-v4 reference · ${age.long}`
@@ -241,7 +263,20 @@ async function mountScene(snapshot) {
   sceneSeed = `${snapshot.observedAt}:${snapshot.nodes.announced}`;
 }
 
+function scheduleNextLoad() {
+  window.clearTimeout(pollTimer);
+  pollTimer = window.setTimeout(() => {
+    if (document.hidden) {
+      scheduleNextLoad();
+      return;
+    }
+    load();
+  }, POLL_INTERVAL_MS);
+}
+
 async function load() {
+  if (loadActive) return;
+  loadActive = true;
   // This pulse represents the browser checking the same-origin signed aggregate. The browser
   // never contacts the onion bootnode. A separate pulse is used when observedAt proves that the
   // upstream observer published a new census.
@@ -250,7 +285,7 @@ async function load() {
   sceneController?.beginQuery();
   try {
     const snapshot = await fetchSnapshot(LIVE_URL);
-    const freshCensus = lastLiveObservedAt !== snapshot.observedAt;
+    const freshCensus = lastLiveObservedAt !== null && lastLiveObservedAt !== snapshot.observedAt;
     await renderSnapshot(snapshot);
     sceneController?.finishQuery(snapshot, { freshCensus });
     lastLiveObservedAt = snapshot.observedAt;
@@ -264,12 +299,23 @@ async function load() {
       setText("[data-view-age]", "Unavailable");
     }
   } finally {
+    loadActive = false;
     document.body.classList.remove("is-checking");
     stage.classList.remove("is-querying");
+    scheduleNextLoad();
   }
 }
 
 load();
-window.setInterval(() => {
-  if (!document.hidden) load();
-}, 5 * 60 * 1000);
+
+function onPageHide() {
+  window.clearTimeout(pollTimer);
+}
+
+function onPageShow(event) {
+  if (!event.persisted) return;
+  load();
+}
+
+window.addEventListener("pagehide", onPageHide);
+window.addEventListener("pageshow", onPageShow);

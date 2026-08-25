@@ -50,6 +50,10 @@ async function main() {
   ok(shadeTreeCli([]).code === 0, "`shade-tree` with no command exits 0 (prints help)");
   const runHelp = shadeTreeCli(["run", "--help"]);
   ok(runHelp.code === 0 && /process-scoped|scoped HTTP\(S\) proxy/i.test(runHelp.out), "`shade-tree run --help` describes scoped routing and exits 0");
+  const proxyHelp = shadeTreeCli(["proxy", "--help"]);
+  ok(proxyHelp.code === 0 && /read -s SHADE_TREE_SECRET/.test(proxyHelp.out) && /--limit N/.test(proxyHelp.out) && /docs\/AGENT\.md/.test(proxyHelp.out), "`shade-tree proxy --help` gives the secret, tier, and agent-guide path");
+  const nodeHelp = shadeTreeCli(["node", "--help"]);
+  ok(nodeHelp.code === 0 && /shade-tree join node/.test(nodeHelp.out) && /development ZK setup/.test(nodeHelp.out), "`shade-tree node --help` gives the guided setup and deployment boundary");
 
   // --- version ---------------------------------------------------------------
   console.log("\nversion:");
@@ -82,6 +86,8 @@ async function main() {
   ok(ihelp.code === 0 && /--out/.test(ihelp.out), "`shade-tree identity --help` exits 0 and names --out");
   const heartbeatMetrics = shadeTreeCli(["heartbeat", "--metrics-port", "70000"], { timeout: 10_000 });
   ok(heartbeatMetrics.code !== 0 && /SHADE_TREE_HEARTBEAT_METRICS_PORT/.test(heartbeatMetrics.out) && !/SHADE_TREE_METRICS_PORT:/.test(heartbeatMetrics.out), "heartbeat remaps common --metrics-port to its dedicated metrics listener");
+  const tieredEnroll = shadeTreeCli(["enroll", "--commitment-only", "--limit", "32"], { timeout: 40_000 });
+  ok(tieredEnroll.code === 0 && /export SHADE_TREE_LIMIT=32/.test(tieredEnroll.out), "enroll receives the tier selected by the top-level --limit flag");
 
   // --- live flag plumbing: keygen mints an onion into a positional dir --------
   // Proves BOTH positional passthrough (<hsDir>) and the module-parsed --label flag (which is

@@ -6,7 +6,7 @@
 //
 // Stream contract, read straight from group/enroll.mjs:
 //   node group/enroll.mjs --commitment-only  -> stdout: commitment ONLY (one line)
-//                                                stderr: "export SHADE_TREE_SECRET=0x..." + guidance
+//                                                stderr: secret value + hidden-read guidance
 //                                                (does NOT touch members.json)
 //   node group/enroll.mjs                     -> stdout (console.log): BOTH secret + commitment
 //                                                (and seeds group/members.json)
@@ -50,7 +50,7 @@ function isFieldElement(tok) {
   return n > 0n && n < FIELD;
 }
 
-const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
+const SECRET_RE = /secret value:\s*(0x[0-9a-fA-F]{64})/i;
 
 function main() {
   // === 1. commitment-only mode: stdout is the commitment ALONE, secret is NOT on stdout ===
@@ -65,7 +65,9 @@ function main() {
 
   // The secret lives on STDERR in this mode; pull it out so we can prove it is absent from stdout.
   const m = c1.stderr.match(SECRET_RE);
-  ok(!!m, "the secret (export SHADE_TREE_SECRET=0x...) is emitted on STDERR");
+  ok(!!m, "the secret value is emitted on STDERR");
+  ok(/read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET/.test(c1.stderr), "stderr gives a hidden-read command instead of an inline export");
+  ok(!/export SHADE_TREE_SECRET=0x/.test(c1.stderr), "stderr does not make the secret a shell-history command");
   const secret = m ? m[1] : "__no-secret-found__";
 
   // The security assertion: the operator channel (stdout) must not leak the bearer secret in
@@ -79,6 +81,17 @@ function main() {
   let derived = "__underivable__";
   try { derived = rateCommitmentOf(identityFor(secret)).toString(); } catch { /* left as sentinel */ }
   ok(derived === commitment, "stdout commitment == rateCommitmentOf(identityFor(secret)) (leaf matches the secret)");
+  ok(new RegExp(`shade-tree register-member ${commitment} --limit 8`).test(c1.stderr), "default enrollment prints a registration command with the exact tier");
+  ok(/read -s SHADE_TREE_REGISTER_KEY/.test(c1.stderr) && /SHADE_TREE_REGISTER_KEY="\$SHADE_TREE_REGISTER_KEY" shade-tree register-member/.test(c1.stderr) && /unset SHADE_TREE_REGISTER_KEY/.test(c1.stderr), "remote registration guidance keeps the funded key hidden, process-scoped, and cleared");
+  ok(!/--register-key\s+/.test(c1.stderr), "registration guidance never puts the funded key in argv");
+
+  const tiered = runEnroll(["--commitment-only", "--limit", "32"]);
+  const tieredCommitment = tiered.stdout.trim();
+  const tieredSecret = (tiered.stderr.match(SECRET_RE) || [])[1];
+  let tieredDerived = "__underivable__";
+  try { tieredDerived = rateCommitmentOf(identityFor(tieredSecret), 32).toString(); } catch { /* sentinel */ }
+  ok(tiered.status === 0 && tieredDerived === tieredCommitment, "tier-32 enrollment derives a tier-32 leaf");
+  ok(new RegExp(`shade-tree register-member ${tieredCommitment} --limit 32`).test(tiered.stderr), "tier-32 enrollment prints a matching tier-32 registration command");
 
   // === 2. two commitment-only runs generate a FRESH identity each time ===
   console.log("\nfreshness (identity generated locally, per run):");
@@ -90,7 +103,7 @@ function main() {
 
   // commitment-only mode must not seed the local set (leaves members.json untouched).
   const before = readFileSync(MEMBERS, "utf8");
-  ok(!before.includes(commitment) && !before.includes(commitment2),
+  ok(!before.includes(commitment) && !before.includes(commitment2) && !before.includes(tieredCommitment),
      "commitment-only runs did NOT write into members.json");
 
   // === 3. default mode differs: BOTH secret and commitment appear (difference is real) ===
@@ -106,9 +119,11 @@ function main() {
   }
   ok(d.status === 0, "exits 0");
   const dm = d.stdout.match(SECRET_RE);
-  ok(!!dm, "default mode DOES print a secret (export SHADE_TREE_SECRET=0x...) on stdout");
+  ok(!!dm, "default mode DOES print the member's secret value on stdout");
+  ok(/read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET/.test(d.stdout) && !/export SHADE_TREE_SECRET=0x/.test(d.stdout), "default guidance uses a hidden read rather than an inline secret export");
   const dCommit = (d.stdout.match(/commitment:\s+([0-9]+)/) || [])[1];
   ok(dCommit != null && isFieldElement(dCommit), "default mode also prints a well-formed commitment");
+  ok(new RegExp(`shade-tree register-member ${dCommit} --limit 8`).test(d.stdout), "default local-demo output retains the exact registration tier");
   ok(dm && dCommit && dm[1] !== dCommit, "secret and commitment are distinct values");
   ok(readFileSync(MEMBERS, "utf8") === snapshot, "members.json restored to its pre-test contents");
 

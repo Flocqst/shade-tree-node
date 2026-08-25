@@ -18,7 +18,7 @@
 // Stream contract (mirrors enroll's commitment-only mode, so the secret is never captured by a
 // pipe or scrolled into a shared log):
 //   stdout -> the human guide: role banner, commitment/onion, and numbered copy-paste next steps.
-//   stderr -> the bearer SECRET (`export SHADE_TREE_SECRET=0x...`) with its "keep this local" note.
+//   stderr -> the bearer SECRET value with its "keep this local" note and a hidden-read command.
 // The Proxy command reads SHADE_TREE_SECRET from the environment and never embeds the raw hex,
 // so stdout carries no secret material.
 
@@ -26,24 +26,33 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { generateOnionIdentity } from "../bootnode/keygen.mjs";
+import { K_SLOTS, normLimit } from "../lib/rln.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENROLL = join(HERE, "enroll.mjs");
 
 const args = process.argv.slice(2);
+let limitArg = process.env.SHADE_TREE_LIMIT;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--limit") { limitArg = args[i + 1]; args.splice(i, 2); break; }
+  if (args[i].startsWith("--limit=")) { limitArg = args[i].slice("--limit=".length); args.splice(i, 1); break; }
+}
+let memberLimit;
+try { memberLimit = Number(normLimit(limitArg ?? K_SLOTS)); }
+catch (error) { process.stderr.write(`join: --${error.message}\n`); process.exit(2); }
 const positionals = args.filter((a) => !a.startsWith("--"));
 const mode = ["node", "gateway"].includes(positionals[0]) ? "node" : "member";
 
 const out = (s = "") => process.stdout.write(s + "\n");
 const err = (s = "") => process.stderr.write(s + "\n");
 
-const SECRET_RE = /SHADE_TREE_SECRET=(0x[0-9a-fA-F]{64})/;
+const SECRET_RE = /secret value:\s*(0x[0-9a-fA-F]{64})/i;
 
 function joinMember() {
   // The role is MEMBER when positionals[0] is "member" or absent. An optional local-only label
   // is handed straight to enroll: the token after "member", or a lone token that isn't a role.
   const label = positionals[0] === "member" ? positionals[1] : positionals[0];
-  const enrollArgs = ["--commitment-only", ...(label ? [label] : [])];
+  const enrollArgs = ["--commitment-only", "--limit", String(memberLimit), ...(label ? [label] : [])];
 
   // Compose the REAL self-enrollment: commitment on the child's stdout, secret on its stderr.
   const r = spawnSync(process.execPath, [ENROLL, ...enrollArgs], { encoding: "utf8", timeout: 60_000 });
@@ -64,31 +73,47 @@ function joinMember() {
   out("You generated this identity locally; only the commitment ever leaves this machine.");
   out("");
   out("  commitment:   " + commitment + "   (public; hand this to the operator or stake it on chain)");
+  out("  tier limit:   " + memberLimit + "   (the Proxy must use this same per-epoch limit)");
   out("");
   out("Next steps:");
   out("");
   out("  1. Keep your secret (printed on stderr below). It is a BEARER credential: whoever holds");
-  out("     it can egress as you until the set is rotated. Export it in the shell you'll run from:");
+  out("     it can egress as you until the set is rotated. Load it without shell history:");
   out("");
-  out("       export SHADE_TREE_SECRET=<your-secret-hex>      # copy the exact value from stderr");
+  out("       read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET");
+  out("       # paste only the exact secret value from stderr at the hidden prompt");
   out("");
-  out("  2. (optional) Stake the commitment on the on-chain StakedReputationSet:");
+  out("  2. Load the Elder Tree onion and its Canopy signer from the same Grove operator:");
   out("");
-  out("       shade-tree register-member " + commitment);
+  out("       read -r SHADE_TREE_BOOTNODE_ONION && export SHADE_TREE_BOOTNODE_ONION");
+  out("       read -r SHADE_TREE_DIR_SIGNER && export SHADE_TREE_DIR_SIGNER");
   out("");
-  out("  3. Run the Proxy, pointed at an Elder Tree and pinning its signer:");
+  out("  3a. Invited access: load the operator's member-list path, then run the Proxy:");
   out("");
-  out("       shade-tree proxy \\");
-  out("         --bootnode <elder-onion> \\");
-  out("         --dir-signer <canopy-signer-pubkey>");
+  out("       read -r SHADE_TREE_MEMBERS_FILE && export SHADE_TREE_MEMBERS_FILE");
+  out("       shade-tree proxy --limit " + memberLimit + " --leaf-source invited");
   out("");
-  out("     (get <elder-onion> and <canopy-signer-pubkey> from the Grove operator.)");
+  out("  3b. Staked access: load the operator's RPC and staked-set address, then fund the");
+  out("      registration key through a hidden prompt for this one transaction only:");
+  out("");
+  out("       read -r SHADE_TREE_RPC_URL && export SHADE_TREE_RPC_URL");
+  out("       read -r SHADE_TREE_GROUP_CONTRACT && export SHADE_TREE_GROUP_CONTRACT");
+  out("       read -s SHADE_TREE_REGISTER_KEY");
+  out("       SHADE_TREE_REGISTER_KEY=\"$SHADE_TREE_REGISTER_KEY\" shade-tree register-member " + commitment + " --limit " + memberLimit);
+  out("       unset SHADE_TREE_REGISTER_KEY");
+  out("       shade-tree proxy --limit " + memberLimit + " --leaf-source staked");
+  out("");
+  out("     Paid access has a separate buying step: docs/PAYMENTS.md.");
 
   // --- the secret (stderr; never on stdout) ---------------------------------
   err("");
   err("Keep THIS SECRET private — it stays on your machine and the operator never sees it:");
   err("");
-  err("  export SHADE_TREE_SECRET=" + secret);
+  err("  secret value: " + secret);
+  err("");
+  err("Load it without putting the value in shell history:");
+  err("  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET");
+  err("  export SHADE_TREE_LIMIT=" + memberLimit);
   err("");
   process.exit(0);
 }
@@ -106,15 +131,20 @@ async function joinNode() {
   out("  hsDir:        " + id.dir + "   (point Tor's HiddenServiceDir here)");
   out("  identity:     " + join(id.dir, "identity.local.json") + "   (announce-signing seed; keep secret)");
   out("");
-  out("SAFETY: local research only. Do not run this node on a public or private-network-connected host.");
-  out("Public-host rollout is blocked by issue #73 (private-IP egress) and issue #6 (development Groth16 setup).");
-  out("Do not use real funds or sensitive traffic.");
+  out("SAFETY: disposable research only. Do not use real funds or sensitive traffic.");
+  out("The private-target guard is closed. Public rollout remains blocked by issue #6");
+  out("(untrusted development Groth16 artifacts) and the other deployment gates.");
   out("");
   out("Next steps:");
   out("");
-  out("  1. (optional) Stake a gateway operator bond so clients can require skin-in-the-game:");
+  out("  1. (optional) Stake a gateway operator bond. Load the public chain profile, then");
+  out("     keep the funded operator key out of argv and shell history:");
   out("");
-  out("       shade-tree register-gateway");
+  out("       read -r SHADE_TREE_RPC_URL && export SHADE_TREE_RPC_URL");
+  out("       read -r SHADE_TREE_GATEWAY_REGISTRY && export SHADE_TREE_GATEWAY_REGISTRY");
+  out("       read -s SHADE_TREE_REGISTER_KEY");
+  out("       SHADE_TREE_REGISTER_KEY=\"$SHADE_TREE_REGISTER_KEY\" shade-tree register-gateway");
+  out("       unset SHADE_TREE_REGISTER_KEY");
   out("");
   out("  2. Run the egress gateway (verifies member proofs, tunnels :443):");
   out("");

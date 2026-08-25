@@ -1,7 +1,8 @@
 name: release
 
 # Build the distributable `shade-tree` binary and attach it to a GitHub Release (T-RUST-4).
-# SEPARATE from ci.yml (which stays the correctness gate) — this workflow only packages.
+# SEPARATE from ci.yml, because tag pushes do not run that workflow. The shared
+# rust-verify workflow is therefore a hard dependency of every packaging job.
 #
 # Two honest binary flavors:
 #   - DEFAULT `shade-tree` (deterministic core: verify-directory / select / verify-receipt /
@@ -46,6 +47,10 @@ permissions:
   contents: write # attach assets to the Release on a tag push
 
 jobs:
+  rust-verify:
+    name: rust verification
+    uses: ./.github/workflows/rust-verify.yml
+
   set-version:
     name: resolve version
     runs-on: ubuntu-latest
@@ -70,7 +75,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: npm ci || npm install
+      - run: npm ci
       # Recomputes sha256/size of every ZK artifact vs the lock, the Rust include_bytes!/
       # include_str! paths, the Solidity VK constants, and the artifact ids (T-HARD-8).
       - run: node test/zk-artifacts.selftest.mjs
@@ -78,7 +83,7 @@ jobs:
   # ------------------------------------------------------------------ default (cross)
   default:
     name: default ${{ matrix.target }}
-    needs: [set-version, lock-check]
+    needs: [set-version, lock-check, rust-verify]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -149,7 +154,7 @@ jobs:
   # ------------------------------------------------------------------ live (native per runner)
   live:
     name: live ${{ matrix.target }}
-    needs: [set-version, lock-check]
+    needs: [set-version, lock-check, rust-verify]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -162,9 +162,33 @@ function runHelp() {
   console.log("usage: shade-tree run [--proxy URL] [--no-proxy HOSTS] [--check-timeout-ms N] -- <command> [args]");
   console.log("\nThe local proxy is checked before launch. If it is unavailable, the command is not run.");
   console.log("Only the child receives proxy variables; the current shell and unrelated services are unchanged.");
+  console.log("Proxy credentials and other inherited SHADE_TREE_* settings are stripped from the child.");
   console.log("Uppercase and lowercase HTTP(S)/WSS proxy variables are set; inherited ALL_PROXY is removed.");
   console.log("Loopback services bypass the proxy. Add other agent-local hosts with --no-proxy.");
   console.log("Software that ignores standard proxy environment variables is not routed by this wrapper.");
+}
+
+function proxyHelp(command = "proxy") {
+  console.log(`shade-tree ${command}: run the loopback HTTP-CONNECT Proxy for one or more local agents\n`);
+  console.log("usage: shade-tree proxy --bootnode ONION --dir-signer HEX [--limit N] [--tor-port N]");
+  console.log("   or: shade-tree proxy --onion NODE_ONION [--limit N] [--tor-port N]\n");
+  console.log("Load the member secret without putting it in shell history or process arguments:");
+  console.log("  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET\n");
+  console.log("Invited profiles also set SHADE_TREE_MEMBERS_FILE. Use the exact tier supplied by the operator;");
+  console.log("tier 8 is only a default. Start Tor first, then route one child with:");
+  console.log("  shade-tree run -- your-agent\n");
+  console.log("Current v4 Elder onion, signer, membership input, and tier come from one Grove operator.");
+  console.log("Guide: https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md");
+}
+
+function nodeHelp(command = "node") {
+  console.log(`shade-tree ${command}: run the proof-gated destination-facing Shade Tree node\n`);
+  console.log("usage: shade-tree node --admit invited[,staked][,paid] [operator flags]\n");
+  console.log("A node verifies one RLN proof before each CONNECT tunnel and publishes no direct listener;");
+  console.log("Tor maps its onion service to the loopback gateway. Keep private services unreachable.");
+  console.log("Public rollout remains blocked by the deployment gates and development ZK setup.\n");
+  console.log("Guided local setup: shade-tree join node");
+  console.log("Guide: https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md");
 }
 
 function parseRunArgs(argv) {
@@ -226,6 +250,13 @@ function checkProxy(url, timeoutMs) {
 
 function scopedProxyEnv(base, proxyUrl, noProxy) {
   const env = { ...base };
+  // The Proxy owns every SHADE_TREE_* credential and operator setting. The agent child needs
+  // only the three scoped routing markers installed below. In particular, a user commonly
+  // exports SHADE_TREE_SECRET to start the Proxy from one terminal; inheriting it here would
+  // hand the member credential to the very agent process the Proxy is meant to isolate.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("SHADE_TREE_")) delete env[key];
+  }
   for (const key of ["ALL_PROXY", "all_proxy"]) delete env[key];
   Object.assign(env, {
     HTTPS_PROXY: proxyUrl,
@@ -308,7 +339,12 @@ async function main() {
   if (cmd === "run") { await runScoped(rest); return; }
 
   const { flags, positionals } = parse(rest);
-  if (flags.help) { console.log(`shade-tree ${cmd}: ${entry.help}`); process.exit(0); }
+  if (flags.help) {
+    if (["proxy", "client", "shim"].includes(cmd)) proxyHelp(cmd);
+    else if (["node", "gateway"].includes(cmd)) nodeHelp(cmd);
+    else console.log(`shade-tree ${cmd}: ${entry.help}`);
+    process.exit(0);
+  }
 
   // Opt-out for unusual setups: `--no-validate` (or SHADE_TREE_SKIP_VALIDATE=1) bypasses the config
   // check below. Consume the flag here so it never leaks to the child as a passthrough arg.

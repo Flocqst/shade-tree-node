@@ -223,8 +223,9 @@ Then turn on staking end to end (per `bootnode/deploy/README.md`):
 
 1. Deploy (this runbook) and set the four vars above on the `shade-tree-bootnode` unit.
 2. Stake the operator: `shade-tree register-gateway` with the operator key funded on that chain.
-3. Add `SHADE_TREE_GW_OPERATOR_KEY=<operator-key>` to the `shade-tree-heartbeat` unit so the heartbeat
-   signs the durable onion↔operator authorization.
+3. Put `SHADE_TREE_GW_OPERATOR_KEY=<operator-key>` in a root-readable mode-0600 environment file
+   referenced by the `shade-tree-heartbeat` unit so the key is not placed in its command or shell
+   history; the heartbeat uses it to sign the durable onion↔operator authorization.
 
 ## 8. Composition with T-DEPLOY-3 (infra-as-code)
 

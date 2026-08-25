@@ -9,8 +9,8 @@
   <meta property="og:description" content="A living, privacy-aware view of the Grove.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
-  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-banner.webp">
-  <meta property="og:image:alt" content="A dark grove of Shade Tree nodes">
+  <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
+  <meta property="og:image:alt" content="A low-poly grove crossed by a private data path">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -38,8 +38,8 @@
     <div class="network-stage" id="network-stage">
       <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true"></div>
       <canvas id="network-canvas" aria-hidden="true"></canvas>
-      <div class="elder-label" aria-hidden="true"><span></span>Elder Tree</div>
     </div>
+    <div class="elder-label"><span class="elder-leader" aria-hidden="true"></span><span data-elder-label>Elder Tree · discovery · not counted</span></div>
 
     <div class="network-copy">
       <h1 id="grove-title"><span data-hero-count>Last</span> <span data-hero-tree-word>view</span> <span data-hero-tail>of the Grove.</span></h1>
@@ -49,14 +49,14 @@
         <span data-view-state>Checking signed view</span>
       </div>
       <div class="hero-actions">
-        <a class="solid-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node</a>
+        <a class="solid-action" href="/operator/">Run a node</a>
         <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PUBLIC-GROVE.md">Data contract</a>
       </div>
     </div>
 
     <dl class="network-data">
-      <div><dt>Trees</dt><dd data-node-count>…</dd></div>
-      <div><dt>Verified</dt><dd data-view-age>…</dd></div>
+      <div><dt>Shade Trees</dt><dd data-node-count>…</dd></div>
+      <div><dt>Observed</dt><dd data-view-age>…</dd></div>
       <div><dt>Node-hours</dt><dd data-node-hours>…</dd></div>
     </dl>
   </header>

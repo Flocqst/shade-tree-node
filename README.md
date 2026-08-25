@@ -1,4 +1,4 @@
-![A dark grove casting a patch of shade](assets/shade-tree-banner.webp)
+![A low-poly grove crossed by an amber network path](assets/shade-tree-readme-banner.webp)
 
 # Shade Tree
 
@@ -10,7 +10,7 @@ Cover for local agents.
 [![MIT][license-badge]][license-url]
 
 Add Shade Tree to an agent. Run a Shade Tree node to provide cover. The two
-sides meet through a proof-gated Tor onion service, one admitted HTTPS tunnel
+sides meet through a proof-gated Tor onion service, one admitted CONNECT tunnel
 at a time.
 
 [Site][site] · [Grove][grove] · [Research][research-note] · [Docs](docs/README.md) ·
@@ -30,21 +30,25 @@ CLI directly from GitHub:
 npm install --global git+https://github.com/dmarzzz/shade-tree-node.git
 ```
 
-This is a Git install, not an npm registry release. Bring Tor and an
-operator-supplied v4 access profile. For invited access, that profile includes a
-member list:
+This is a Git install, not an npm registry release. You need Node.js 20+, npm,
+Git, Tor, and an operator-supplied v4 access profile. For invited access, that
+profile includes a member list and the tier used to enroll your leaf:
 
 ```bash
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_BOOTNODE_ONION && export SHADE_TREE_BOOTNODE_ONION
+read -r SHADE_TREE_DIR_SIGNER && export SHADE_TREE_DIR_SIGNER
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT
 ```
 
-Paste the bearer secret at the hidden prompt. Then start the Proxy:
+Paste the member secret at the hidden prompt. Then start the Proxy:
 
 ```bash
 SHADE_TREE_MEMBERS_FILE=./members.json \
 shade-tree proxy \
-  --bootnode <v4-elder.onion> \
-  --dir-signer <64-hex-canopy-signer> \
+  --bootnode "$SHADE_TREE_BOOTNODE_ONION" \
+  --dir-signer "$SHADE_TREE_DIR_SIGNER" \
+  --limit "$SHADE_TREE_LIMIT" \
   --tor-port 9050
 ```
 
@@ -65,17 +69,14 @@ and its signer pin from the operator you intend to use.
 
 ## How it works
 
-<picture>
-  <source media="(max-width: 560px)" srcset="docs/post/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1710">
-  <img src="docs/post/fig/shade-tree-path.svg" width="1600" height="760" alt="Shade Tree discovery plane and proof-gated traffic path">
-</picture>
+![Shade Tree reputation gate and network path](docs/post/fig/shade-tree-readme.svg)
 
-Shade Tree is a Tor-based egress layer. Tor keeps the Proxy source IP out of the
-node application connection. Each CONNECT tunnel carries a Groth16 RLN proof
-that a rate-commitment leaf belongs to an admitted Merkle root without revealing
-which leaf. The proof binds the target-and-nonce signal to a private per-epoch
-message slot. The node verifies it before egress and uses epoch-scoped
-nullifiers to enforce its view of the member's tunnel limit.
+Shade Tree is a Tor-based egress layer. The node sees Tor, not the Proxy host's
+source IP. Each CONNECT tunnel carries a Groth16 RLN proof that a
+rate-commitment leaf belongs to an admitted Merkle root without revealing which
+leaf. The proof binds the target-and-nonce signal to a private per-epoch message
+slot. The node verifies it before egress and uses epoch-scoped nullifiers to
+enforce its view of the member's tunnel limit.
 
 ## Roles
 
@@ -87,12 +88,9 @@ nullifiers to enforce its view of the member's tunnel limit.
 | Canopy | The signed directory of announced nodes |
 | Grove | The network of Shade Tree nodes |
 
-The Elder Tree is outside the traffic path. Its pinned signer is a discovery
-authority: clients trust it to choose the candidate list. A compromised signer
-can omit, reorder, or add entries. It cannot make an existing onion terminate
-at a different key, and capabilities remain verifiable when their onion-signed
-advertisement is present. Code and wire docs keep `client`, `gateway`,
-`bootnode`, and `directory` where compatibility matters.
+The Elder Tree is outside the traffic path. Its pinned signer controls discovery
+and can omit, reorder, or add candidates. See the [threat
+model](docs/THREAT-MODEL.md) for the exact trust boundary.
 
 [Tor exit addresses are public][tor-exit-list], and [shared traffic often trips
 abuse controls][tor-captchas]. Shade Tree gates each tunnel and publishes no
@@ -103,11 +101,11 @@ egress-IP list. Destinations still see and can block a node IP.
 A Shade Tree node is a Tor onion service with a proof-gated CONNECT gateway.
 Its public IP becomes the destination-facing egress IP.
 
-Do not expose the current node on a public or private-network-connected host.
-[Issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73) leaves private
-and link-local destinations reachable through the default egress policy. Node
-deployment stays blocked until that guard and the other [deployment
-gates](docs/DEPLOYMENT-PLAN.md) are closed.
+Nodes reject loopback, private, link-local, documentation, multicast, and other
+special-purpose destination addresses after DNS resolution. The explicit
+`SHADE_TREE_ALLOW_PRIVATE_TARGETS=1` escape hatch is for isolated local tests
+only. Public deployment remains blocked on the other [deployment
+gates](docs/DEPLOYMENT-PLAN.md), including replacement ZK artifacts.
 
 For a local research node, install the current CLI and let the guided command
 prepare its onion identity:
@@ -138,7 +136,11 @@ use structured JSON logs and separate loopback metrics for each role. See the
 - A node can refuse, delay, truncate, or misroute a valid tunnel.
 - Co-located services keep separate trust boundaries only if the operator does.
 - Replay and rate accounting are strongest per node. The optional cross-node
-  tally is fail-open.
+  tally is fail-open and suppresses later replays only after propagation, so
+  concurrent attempts can still pass on different nodes.
+- Client slot accounting is process-local. Never run two Proxy processes with
+  one member secret. After any CONNECT attempt, wait for the next epoch before
+  restarting that Proxy.
 
 One proof admits one CONNECT tunnel, not one HTTP request. HTTP/2 and keep-alive
 can carry many requests inside it. Read the [protocol](docs/PROTOCOL.md) and

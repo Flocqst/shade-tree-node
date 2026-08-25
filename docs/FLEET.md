@@ -6,8 +6,10 @@ tested (`lib/directory.mjs`, `client/selection.mjs`, `group/directory.example.js
 the `SHADE_TREE_DIRECTORY` path in `client/shim.mjs`); live discovery through a bootnode is
 `bootnode/` (`docs/BOOTNODE.md`); the shared per-epoch spent-nullifier tally across
 gateways is `gateway/fleet-tally.mjs` (`SHADE_TREE_FLEET_TALLY_PEERS`, T-FEAT-20/20b, opt-in,
-fail-open — it shares only `(nullifier, epoch)`, so a replay to a second gateway is
-rejected but cross-gateway *share* exchange for reconstruction is not wired). What is
+authenticated with `SHADE_TREE_FLEET_TALLY_TOKEN`, fail-open, and memory-bounded — it shares only
+`(nullifier, epoch)`, so a later replay to a second gateway is rejected after propagation;
+concurrent or partitioned attempts remain fail-open, and cross-gateway *share* exchange
+for reconstruction is not wired). What is
 *not* built is the on-chain-sourced directory (the onion is deliberately never on chain,
 ADR 0002; `GatewayRegistry` stakes an operator address only). The "fleet budget does not
 compose" section below is the original analysis that motivated the tally. This expands
@@ -212,17 +214,16 @@ violation across two *different* gateways gives each gateway only one share, so 
 gateway alone can reconstruct, and neither slashes. The double-spend is invisible to
 both.
 
-The consequence is direct: **fleet-wide double-spend detection and cross-gateway
-slashing require the shared tally from option (b).** Without a shared/gossiped spent-set,
-the fleet is exactly the place a staked member can violate the rate for free by
-splitting shares across gateways. With it, a shared view of `(nullifier, epoch) -> shares`
-lets whichever gateway crosses the two-share threshold reconstruct and slash. So the
-shared tally is not only how you enforce one budget across the fleet; under
-ONCHAIN.md's slashing it is also the *only* thing that makes the slash uncircumventable
-by rotation. And it must still be paired with item 1's per-tunnel nullifiers so that
-the shared share-set is not also a profile. This is the tightest three-way coupling in
-the design: **fleet rotation, shared accounting, and per-tunnel nullifiers have to
-ship together to be simultaneously private, rate-capped, and slashable.**
+The built tally does **not** share RLN shares. It announces only `(nullifier, epoch)`
+after an egress connection succeeds. Once that announcement reaches a peer, the peer
+rejects a later attempt under the same nullifier. This is useful replay suppression,
+but it is asynchronous and fail-open. Concurrent attempts, dropped pushes, and
+partitions can still establish on different nodes.
+
+Cross-node slashing remains unbuilt by design. It would require sharing the RLN values
+that reconstruct a member secret once the threshold is crossed, which creates a much
+stronger privacy boundary than the current count-only tally. A distributed over-spend
+is slashable only if both shares land on one node.
 
 ## The directory as a trust and availability surface
 
@@ -262,7 +263,7 @@ adversarial-review #10, separate). What it *can* do:
 |---|---|
 | Log metadata | Harvest `(nullifier, destination host:port, timing, volume)` for the traffic it wins — the adversarial-review #5 profile, for its share of the fleet |
 | Censor / degrade | Accept a proof then drop or stall the egress; indistinguishable from downtime, forces failover |
-| Refuse to cooperate | Not enforce the shared budget, not contribute RLN shares, not slash abusers — a hole in fleet-wide rate limiting and slashing (docs/ONCHAIN.md) |
+| Refuse to cooperate | Skip best-effort tally pushes or local slashing, weakening cross-node replay suppression and enforcement (docs/ONCHAIN.md) |
 | **Sybil the directory** | Register many hostile gateways / high `weight` to capture a large traffic share, amplifying all of the above |
 
 The last row is the amplifier and the reason "should the service stake?" is the right

@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { normLimit, K_SLOTS } from "../lib/rln.mjs";
 import { parseContractList } from "../lib/root-provider.mjs";
+import { makeBoundedJsonRpcProvider, registrationKey, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -80,7 +81,12 @@ async function main() {
   // SHADE_TREE_GROUP_CONTRACT may be a comma list since T-FEAT-7 (several sets trusted by the gateway);
   // a stake goes to the FIRST — the canonical staked set. (Paid access is inserted by the operator, docs/PAYMENTS.md.)
   const address = parseContractList(process.env.SHADE_TREE_GROUP_CONTRACT)[0] || deployed.StakedReputationSet || deployed.address;
-  const key = process.env.SHADE_TREE_REGISTER_KEY || ANVIL_KEY_0;
+  const key = registrationKey({
+    rpcUrl,
+    explicitKey: process.env.SHADE_TREE_REGISTER_KEY,
+    developmentKey: ANVIL_KEY_0,
+    label: "member registration",
+  });
   if (!address) {
     console.error("no StakedReputationSet address: set SHADE_TREE_GROUP_CONTRACT or write contracts/deployed.local.json");
     process.exit(1);
@@ -94,7 +100,7 @@ async function main() {
     process.exit(1);
   }
 
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl);
   const wallet = new ethers.Wallet(key, provider);
   const abi = [
     "function register(uint256 commitment) payable",
@@ -130,7 +136,7 @@ async function main() {
     ? await contract["register(uint256,uint256)"](commitment, LIMIT, { value: bond })
     : await contract["register(uint256)"](commitment, { value: bond });
   console.log(`  tx:       ${tx.hash}  (waiting for confirmation...)`);
-  const rcpt = await tx.wait();
+  const rcpt = await waitForTransactionReceipt(tx, { operation: "member registration" });
   console.log(`  mined in block ${rcpt.blockNumber}; member staked and admitted to the on-chain root.`);
 }
 

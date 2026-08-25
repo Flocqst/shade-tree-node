@@ -15,6 +15,12 @@ export SHADE_TREE_ADMISSION="${admission}"
 export SHADE_TREE_BOOTNODE_PORT="${bootnode_port}"
 export SHADE_TREE_GATEWAY_PORT="${gateway_port}"
 
+# Invited admission is the default. Materialize the operator's public commitments in a
+# root-only file; bootstrap.sh validates and copies it into the service's deploy-state.
+install -m 0600 /dev/null /root/shade-tree-members.json
+printf '%s' '${members_json_b64}' | base64 --decode > /root/shade-tree-members.json
+export SHADE_TREE_MEMBERS_FILE=/root/shade-tree-members.json
+
 LOG=/var/log/shade-tree-bootstrap.log
 exec > >(tee -a "$LOG") 2>&1
 

@@ -82,29 +82,25 @@ anonymous: invited, staked, paid.
 
 ## The Rust binary
 
-`shade-tree-0.1.1-<target>-live` needs no Node and no tor daemon; the default non-live binary
+`shade-tree-0.3.0-<target>-live` needs no Node and no tor daemon; the default non-live binary
 verifies, selects and fetches directories but does not egress ([`rust/INSTALL.md`](../rust/INSTALL.md)):
 
 ```bash
-SHADE_TREE_SECRET=<hex> shade-tree identity --out identity.json              # JS CLI, once: {identitySecret, leaf}
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT                           # exact enrolled tier
+shade-tree identity --limit "$SHADE_TREE_LIMIT" --out identity.json           # JS CLI, once
 shade-tree leaves --contract <v4-member-set-address> --rpc-url <operator-rpc-url> --out members.json
-./shade-tree-0.1.1-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
+./shade-tree-0.3.0-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
   --signer <v4-directory-signer-hex> \
   --identity identity.json --members members.json --target api.ipify.org:443
 ```
 
-## The 30-second local loop
+## The local loop
 
-One box, each line its own terminal, a local tor daemon ([`QUICKSTART.md`](QUICKSTART.md) Path B):
-
-```bash
-shade-tree keygen tor/hs-bootnode           # mint an onion identity
-shade-tree bootnode --admission open        # discovery bootnode (its own onion service)
-shade-tree gateway                          # an access-gated node (SHADE_TREE_ADMIT=invited)
-shade-tree heartbeat --bootnode <onion>     # keep the gateway announced
-shade-tree enroll                           # a member identity (prints SHADE_TREE_SECRET)
-shade-tree proxy --bootnode <onion> --dir-signer <signer-pubkey> # reads SHADE_TREE_SECRET
-```
+One box can run the Elder Tree, one node, and one Proxy. It needs two onion-service mappings,
+while the checked-in `tor/torrc` is intentionally the single-node helper. Follow
+[`QUICKSTART.md`](QUICKSTART.md) Path B for the copyable two-service Tor command, exact tier,
+member list, heartbeat, and Proxy steps.
 
 Watch the gate drop non-members with `node scripts/probe.mjs {noproof|garbage|wronggroup}`.
 

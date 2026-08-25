@@ -94,14 +94,16 @@ recovers to `from` over the token domain; on chain: `authorizationState(from,non
 `balanceOf(from) ≥ value`, `PaidAccessSet.limitOf(commitment) == 0` (never take money for a
 leaf that cannot be inserted); an `eth_call` simulation of `transferWithAuthorization`. Then,
 serialized on the operator key: settle → wait `SHADE_TREE_PAY_CONFIRMATIONS` (1) → insert → wait.
+Each receipt wait also has the wall-clock `SHADE_TREE_TX_RECEIPT_TIMEOUT_MS` deadline (180 s).
 
 **Idempotency + crash safety.** Every order is keyed by `(asset, from, nonce)` in a small JSON
 store (`SHADE_TREE_REGISTRAR_STORE`, atomic tmp+rename like the bootnode's). An identical replay of a
 finished order returns the stored receipt (`200`, `replayed:true`, no second insert); the same
 nonce with a different commitment is `409 nonce-used`; a nonce already consumed on chain that
 the store never saw is `402`. A settle that mined but whose insert did not is resumed on the
-next identical POST and on boot (`recover()`); a stored `settling` order whose nonce is unused on
-chain is marked failed (the tx never landed; the buyer's authorization is still good).
+next identical POST and on boot (`recover()`). If a receipt deadline expires, the order remains
+`settling` or `inserting` with its broadcast hash. A null receipt is ambiguous, so the registrar
+reports `503 in-progress` and never resubmits until a receipt or active leaf resolves the state.
 `GET /pay/status/<nonce>` shows an order's public state.
 
 ### No facilitator: the operator IS the facilitator

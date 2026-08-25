@@ -47,13 +47,27 @@ record as "no default". Wired today: `bin/shade-tree.mjs` (every command), `clie
 
 ```bash
 # A current, non-retired record can configure the whole stack by name:
-SHADE_TREE_NETWORK=<current-v4-network> SHADE_TREE_SECRET=<hex> shade-tree client
+read -s SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT
+SHADE_TREE_SECRET="$SHADE_TREE_SECRET" SHADE_TREE_LIMIT="$SHADE_TREE_LIMIT" \
+  SHADE_TREE_NETWORK=<current-v4-network> shade-tree proxy
+unset SHADE_TREE_SECRET
+unset SHADE_TREE_LIMIT
 SHADE_TREE_NETWORK=<current-v4-network> shade-tree heartbeat
-SHADE_TREE_NETWORK=<current-v4-network> shade-tree register-gateway --register-key <hex>
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
+  SHADE_TREE_NETWORK=<current-v4-network> shade-tree register-gateway
+unset SHADE_TREE_REGISTER_KEY
 
 # With no current record, pin values supplied by the v4 fleet operator instead:
-shade-tree client --secret <hex> --bootnode <v4-bootnode.onion> --dir-signer <v4-signer-hex>
+read -s SHADE_TREE_SECRET
+SHADE_TREE_SECRET="$SHADE_TREE_SECRET" shade-tree proxy --limit <operator-tier> \
+  --bootnode <v4-bootnode.onion> --dir-signer <v4-signer-hex>
+unset SHADE_TREE_SECRET
 ```
+
+The `unset` after a Proxy or heartbeat runs when that long-running process stops. The hidden reads
+keep bearer and operator keys out of argv and shell history.
 
 The checked-in `sepolia` record is retired pre-v4 history and cannot be used in
 place of `<current-v4-network>`.

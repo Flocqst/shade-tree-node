@@ -5,7 +5,7 @@ provider "digitalocean" {
 locals {
   # Derive owner/repo for raw.githubusercontent.com from the clone URL so there is
   # a single source of truth for which repo/ref the box provisions from.
-  repo_slug = replace(replace(var.git_repo, "https://github.com/", ""), ".git", "")
+  repo_slug = trimsuffix(replace(var.git_repo, "https://github.com/", ""), ".git")
 }
 
 # SSH key registered with DigitalOcean and injected into the droplet at create.
@@ -27,12 +27,13 @@ resource "digitalocean_droplet" "bootnode" {
   tags     = var.tags
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    git_repo      = var.git_repo
-    repo_slug     = local.repo_slug
-    git_ref       = var.git_ref
-    admission     = var.admission
-    bootnode_port = var.bootnode_port
-    gateway_port  = var.gateway_port
+    git_repo         = var.git_repo
+    repo_slug        = local.repo_slug
+    git_ref          = var.git_ref
+    admission        = var.admission
+    bootnode_port    = var.bootnode_port
+    gateway_port     = var.gateway_port
+    members_json_b64 = base64encode(var.members_json)
   })
 }
 

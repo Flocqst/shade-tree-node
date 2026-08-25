@@ -11,6 +11,9 @@ do_token = "dop_v1_REPLACE_ME"
 #   ssh_public_key = file("~/.ssh/id_ed25519.pub")   # or paste the line below
 ssh_public_key = "ssh-ed25519 AAAA...replace... you@host"
 
+# Public invited-member commitments. Do not use the repository's demo set.
+members_json = file("/absolute/path/to/operator-members.json")
+
 # --- optional (defaults shown; all match bootstrap.sh) ---
 
 # droplet_name  = "shade-tree-bootnode"

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1100" viewBox="0 0 720 1100" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900" role="img" aria-labelledby="title desc">
   <title id="title">Shade Tree reputation gate for small screens</title>
-  <desc id="desc">An operator admits invited, staked, or paid rate commitments into a Merkle root. A Proxy holds one private rate-commitment leaf and creates a Groth16 RLN membership proof without revealing which leaf it holds. A Shade Tree node verifies the proof against the admitted root, then tracks the epoch-scoped nullifier to enforce its local view of the tunnel budget.</desc>
+  <desc id="desc">An operator admits invited, staked, or paid rate commitments into a Merkle root. A Proxy holds one private rate-commitment leaf and creates a Groth16 RLN membership proof without revealing which leaf it holds. A Shade Tree node verifies the proof against the admitted root, then tracks epoch-scoped nullifiers to enforce its local tunnel budget.</desc>
 
   <defs>
     <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
@@ -20,10 +20,7 @@
     </radialGradient>
     <filter id="soft-glow" x="-100%" y="-100%" width="300%" height="300%">
       <feGaussianBlur stdDeviation="5" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <marker id="arrow-moss" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto">
       <path d="M1 1l10 5-10 5z" fill="#a3b293"/>
@@ -32,11 +29,10 @@
       <path d="M1 1l10 5-10 5z" fill="#d1b66e"/>
     </marker>
     <style>
-      .step { fill: #a3b293; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 20px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
-      .label { fill: #dde5d5; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 28px; font-weight: 650; letter-spacing: -0.01em; }
-      .note { fill: #a3b293; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 21px; font-weight: 500; }
-      .route { fill: #dde5d5; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 20px; font-weight: 560; }
-      .tiny { fill: #65765d; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 20px; font-weight: 560; }
+      .step { fill: #a3b293; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 34px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #dde5d5; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 36px; font-weight: 650; letter-spacing: -0.01em; }
+      .note { fill: #a3b293; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 34px; font-weight: 500; }
+      .route { fill: #dde5d5; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 34px; font-weight: 560; }
     </style>
 
     <g id="proxy-icon">
@@ -45,7 +41,6 @@
       <path d="M0-11c13 7 18 18 9 27C3 23-9 21-12 13-16 5-10-4 0-11z" fill="#d1b66e"/>
       <path d="M-6 14L7-2" fill="none" stroke="#070c09" stroke-width="2.5" stroke-linecap="round"/>
     </g>
-
     <g id="proof-icon">
       <circle r="61" fill="#111913" stroke="#a3b293" stroke-width="3"/>
       <circle r="46" fill="none" stroke="#65765d" stroke-width="2" stroke-dasharray="3 8"/>
@@ -54,7 +49,6 @@
       <circle cx="-42" cy="-2" r="4.5" fill="#d1b66e"/>
       <circle cx="42" cy="2" r="4.5" fill="#d1b66e"/>
     </g>
-
     <g id="tree-node">
       <path d="M-7 12h14v61H-7z" fill="#65765d"/>
       <path d="M-6 39l-24-23M6 41l26-25M0 30V0" fill="none" stroke="#65765d" stroke-width="7" stroke-linecap="round"/>
@@ -64,94 +58,60 @@
     </g>
   </defs>
 
-  <rect width="720" height="1100" fill="url(#field)"/>
-
-  <g fill="none" stroke="#65765d" opacity="0.1" aria-hidden="true">
-    <ellipse cx="85" cy="190" rx="88" ry="170"/>
-    <ellipse cx="85" cy="190" rx="63" ry="125"/>
-    <ellipse cx="85" cy="190" rx="38" ry="80"/>
-    <path d="M742 186c-103 100-125 214-67 341s33 256-74 386"/>
-    <path d="M777 220c-95 97-116 205-60 326s36 250-61 368"/>
+  <rect width="720" height="900" fill="url(#field)"/>
+  <g fill="none" stroke="#65765d" opacity="0.09" aria-hidden="true">
+    <ellipse cx="76" cy="160" rx="78" ry="138"/>
+    <ellipse cx="76" cy="160" rx="48" ry="92"/>
+    <path d="M760 110c-110 88-132 190-72 304s34 228-74 336"/>
   </g>
 
-  <!-- Step 1: operator admission. -->
-  <text class="step" x="42" y="55">01  Operator admission</text>
-
+  <text class="step" x="38" y="48">01 Operator admission</text>
   <g aria-label="Invited, staked, and paid admission paths">
-    <circle cx="74" cy="112" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
-    <circle cx="74" cy="170" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
-    <circle cx="74" cy="228" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
-    <path d="M74 101v22M63 112h22M66 162l16 16M82 162l-16 16M64 228h20" fill="none" stroke="#d1b66e" stroke-width="2.5" stroke-linecap="round"/>
-    <text class="route" x="105" y="119">invited</text>
-    <text class="route" x="105" y="177">staked</text>
-    <text class="route" x="105" y="235">paid</text>
-    <path d="M190 112c66 0 56 40 108 40M190 170c52 0 61-18 108-18M190 228c59 0 61-42 108-42" fill="none" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="300" cy="152" r="8" fill="#a3b293"/>
-    <circle cx="300" cy="186" r="8" fill="#a3b293"/>
-    <path d="M308 152c45 0 41 17 82 17M308 186c42 0 43-17 82-17" fill="none" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="405" cy="169" r="48" fill="url(#amber-halo)"/>
-    <circle cx="405" cy="169" r="23" fill="#111913" stroke="#d1b66e" stroke-width="3" filter="url(#soft-glow)"/>
-    <path d="M394 169l7 7 15-17" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <text class="label" x="451" y="157">Admitted</text>
-    <text class="label" x="451" y="190">Merkle root</text>
-    <text class="tiny" x="451" y="220">root r</text>
-    <text class="note" x="42" y="284">The operator decides which commitments enter the root.</text>
+    <circle cx="66" cy="104" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
+    <circle cx="66" cy="157" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
+    <circle cx="66" cy="210" r="11" fill="#111913" stroke="#a3b293" stroke-width="3"/>
+    <path d="M66 93v22M55 104h22M58 149l16 16M74 149l-16 16M56 210h20" fill="none" stroke="#d1b66e" stroke-width="2.5" stroke-linecap="round"/>
+    <text class="route" x="98" y="113">invited</text>
+    <text class="route" x="98" y="166">staked</text>
+    <text class="route" x="98" y="219">paid</text>
+    <path d="M248 104c48 0 47 39 97 39M248 157h97M248 210c48 0 47-39 97-39" fill="none" stroke="#65765d" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="360" cy="157" r="47" fill="url(#amber-halo)"/>
+    <circle cx="360" cy="157" r="23" fill="#111913" stroke="#d1b66e" stroke-width="3" filter="url(#soft-glow)"/>
+    <path d="M349 157l7 7 15-17" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="label" x="413" y="149">Admitted</text>
+    <text class="label" x="413" y="191">Merkle root</text>
   </g>
+  <path d="M360 205C615 235 657 507 252 684" fill="none" stroke="#d1b66e" stroke-width="2.5" stroke-dasharray="3 9" stroke-linecap="round" marker-end="url(#arrow-root)"/>
 
-  <!-- The admitted root is passed to the verifying node along a separate route. -->
-  <path d="M405 217C609 249 641 503 578 758" fill="none" stroke="#d1b66e" stroke-width="2.5" stroke-dasharray="3 9" stroke-linecap="round" marker-end="url(#arrow-root)"/>
-  <text class="tiny" x="605" y="402" text-anchor="middle" transform="rotate(79 605 402)">admitted root r</text>
+  <text class="step" x="38" y="306">02 Private proof</text>
+  <circle cx="166" cy="414" r="88" fill="url(#moss-halo)"/>
+  <g transform="translate(166 397)"><use href="#proxy-icon"/></g>
+  <text class="label" x="166" y="487" text-anchor="middle">Proxy</text>
+  <text class="route" x="166" y="532" text-anchor="middle">private leaf</text>
+  <path d="M255 405h111" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
+  <g transform="translate(467 405)"><use href="#proof-icon"/></g>
+  <text class="label" x="467" y="487" text-anchor="middle">Groth16 RLN proof</text>
+  <text class="note" x="467" y="532" text-anchor="middle">Hides which leaf</text>
+  <path d="M528 405h70c30 0 44 22 44 51v100c0 33-17 49-48 49H205c-37 0-54 10-54 26" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-moss)"/>
+  <text class="route" x="385" y="585" text-anchor="middle">proof + epoch nullifier</text>
 
-  <!-- Step 2: private proof. -->
-  <text class="step" x="42" y="355">02  Private proof</text>
+  <text class="step" x="38" y="675">03 Local enforcement</text>
+  <circle cx="166" cy="746" r="92" fill="url(#moss-halo)"/>
+  <g transform="translate(166 727)"><use href="#tree-node"/></g>
+  <circle cx="217" cy="695" r="16" fill="#111913" stroke="#d1b66e" stroke-width="3"/>
+  <path d="M209 695l5 5 11-13" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text class="label" x="166" y="816" text-anchor="middle">Shade Tree node</text>
+  <text class="note" x="166" y="866" text-anchor="middle">Verifies the proof</text>
 
-  <circle cx="165" cy="467" r="90" fill="url(#moss-halo)"/>
-  <g transform="translate(165 448)">
-    <use href="#proxy-icon"/>
-  </g>
-  <text class="label" x="165" y="535" text-anchor="middle">Proxy</text>
-  <text class="route" x="165" y="565" text-anchor="middle">private leaf</text>
-  <text class="tiny" x="165" y="592" text-anchor="middle">witness stays local</text>
-
-  <path d="M254 456h94" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-moss)"/>
-
-  <g transform="translate(447 456)">
-    <use href="#proof-icon"/>
-  </g>
-  <text class="label" x="447" y="535" text-anchor="middle">Groth16 RLN proof</text>
-  <text class="note" x="447" y="568" text-anchor="middle">Proves membership</text>
-  <text class="note" x="447" y="595" text-anchor="middle">without revealing which leaf</text>
-
-  <path d="M508 456h68c36 0 50 25 50 58v101c0 36-17 55-49 55H179c-44 0-63 20-63 60v44" fill="none" stroke="#a3b293" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-moss)"/>
-  <path d="M535 456h37" fill="none" stroke="#d1b66e" stroke-width="11" stroke-opacity="0.08"/>
-  <text class="route" x="371" y="649" text-anchor="middle">proof + epoch nullifier</text>
-
-  <!-- Step 3: node verifies the proof and tracks its own nullifier state. -->
-  <text class="step" x="42" y="744">03  Local enforcement</text>
-
-  <circle cx="165" cy="844" r="98" fill="url(#moss-halo)"/>
-  <g transform="translate(165 824)">
-    <use href="#tree-node"/>
-  </g>
-  <circle cx="216" cy="792" r="16" fill="#111913" stroke="#d1b66e" stroke-width="3"/>
-  <path d="M208 792l5 5 11-13" fill="none" stroke="#d1b66e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text class="label" x="165" y="914" text-anchor="middle">Shade Tree node</text>
-  <text class="note" x="165" y="945" text-anchor="middle">Verifies proof against root r</text>
-
-  <g transform="translate(505 844)" aria-label="Local epoch nullifier state">
-    <path d="M-116 0h232" fill="none" stroke="#65765d" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="-92" r="12" fill="#d1b66e"/>
-    <circle cx="-46" r="12" fill="#d1b66e"/>
+  <g transform="translate(513 742)" aria-label="Local epoch nullifier state">
+    <path d="M-118 0h236" fill="none" stroke="#65765d" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="-94" r="12" fill="#d1b66e"/>
+    <circle cx="-47" r="12" fill="#d1b66e"/>
     <circle r="12" fill="#111913" stroke="#65765d" stroke-width="3"/>
-    <circle cx="46" r="12" fill="#111913" stroke="#65765d" stroke-width="3"/>
-    <circle cx="92" r="12" fill="#111913" stroke="#65765d" stroke-width="3"/>
-    <path d="M-98-1l5 5 9-11M-52-1l5 5 9-11" fill="none" stroke="#070c09" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="47" r="12" fill="#111913" stroke="#65765d" stroke-width="3"/>
+    <circle cx="94" r="12" fill="#111913" stroke="#65765d" stroke-width="3"/>
+    <path d="M-100-1l5 5 9-11M-53-1l5 5 9-11" fill="none" stroke="#070c09" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  <text class="route" x="505" y="890" text-anchor="middle">epoch e nullifiers</text>
-  <text class="note" x="505" y="924" text-anchor="middle">Local tunnel</text>
-  <text class="note" x="505" y="951" text-anchor="middle">budget view</text>
-
-  <path d="M42 1001H678" fill="none" stroke="#65765d" stroke-width="1" stroke-opacity="0.35"/>
-  <text class="tiny" x="42" y="1036">Membership authorizes a request.</text>
-  <text class="tiny" x="42" y="1065">Nullifiers expose repeated use within an epoch.</text>
+  <text class="route" x="513" y="795" text-anchor="middle">epoch nullifiers</text>
+  <text class="note" x="513" y="844" text-anchor="middle">Local tunnel budget</text>
 </svg>

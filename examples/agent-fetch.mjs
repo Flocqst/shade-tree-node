@@ -7,16 +7,30 @@
 // Prereqs:
 //   - an enrolled member secret in SHADE_TREE_SECRET (or edit below),
 //   - a running client Tor SOCKS (scripts/start-tor-client.sh -> 9260),
-//   - the signed directory + its signer.
+//   - a current v4 Elder Tree + its pinned Canopy signer,
+//   - the operator-supplied tier and member source for that enrollment.
 //
 // Run:
 //   SHADE_TREE_SECRET=0x… \
-//   SHADE_TREE_DIRECTORY=$PWD/network/sepolia/directory.json \
-//   SHADE_TREE_DIR_SIGNER=189f4511…1321 \
+//   SHADE_TREE_BOOTNODE_ONION=<operator-supplied-v4-elder>.onion \
+//   SHADE_TREE_DIR_SIGNER=<operator-supplied-64-hex-signer> \
+//   SHADE_TREE_LIMIT=<operator-supplied-tier> \
+//   SHADE_TREE_MEMBERS_FILE=<operator-supplied-members.json> \
 //   SHADE_TREE_TOR_PORT=9260 \
 //   node examples/agent-fetch.mjs  https://api.ipify.org  https://cloudflare.com/cdn-cgi/trace
 
 import { ShadeTreeClient, cleanUp } from "../client/shade-tree-client.mjs";
+
+for (const name of ["SHADE_TREE_SECRET", "SHADE_TREE_BOOTNODE_ONION", "SHADE_TREE_DIR_SIGNER", "SHADE_TREE_LIMIT"]) {
+  if (!process.env[name]) {
+    console.error(`set ${name} from a current v4 operator profile; retired network records are not compatible`);
+    process.exit(1);
+  }
+}
+if (!process.env.SHADE_TREE_MEMBERS_FILE && !process.env.SHADE_TREE_GROUP_CONTRACT && !process.env.SHADE_TREE_PAID_ACCESS_CONTRACT) {
+  console.error("set the operator-supplied member source: SHADE_TREE_MEMBERS_FILE, SHADE_TREE_GROUP_CONTRACT, or SHADE_TREE_PAID_ACCESS_CONTRACT");
+  process.exit(1);
+}
 
 const urls = process.argv.slice(2);
 if (!urls.length) urls.push("https://api.ipify.org");

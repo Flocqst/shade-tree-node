@@ -8,19 +8,26 @@ that joins an existing bootnode instead (see Tunables).
 
 ## Run it
 
+Prepare an operator-owned v2 `members.json` containing the invited rate commitments, then run:
+
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+  | sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash
 ```
 
 or, if you already cloned the repo on the box:
 
 ```bash
-sudo bash bootnode/deploy/bootstrap.sh
+sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash bootnode/deploy/bootstrap.sh
 ```
 
-It prints the **bootnode onion**, the **pinned signer pubkey**, the **gateway onion**, and
-the exact `shade-tree client …` command to hand out. Re-running is safe (keys and units are reused).
+The live bootstrap refuses the committed demo member set. If this node does not admit `invited`,
+set `SHADE_TREE_ADMIT=staked`, `paid`, or `staked,paid` with the required contract and RPC settings.
+
+It prints the **bootnode onion**, the **pinned signer pubkey**, the **gateway onion**, and a
+safe `shade-tree proxy` template. Each member loads their own local secret; the operator
+supplies the exact enrolled tier and admission inputs. Re-running is safe (keys and units are reused).
 
 ## What it installs
 
@@ -34,9 +41,12 @@ the exact `shade-tree client …` command to hand out. Re-running is safe (keys 
 - Three systemd units: `shade-tree-bootnode`, `shade-tree-gateway`, `shade-tree-heartbeat` — all `Restart=always`.
   (Gateway-only mode: two units, no `shade-tree-bootnode`. `SHADE_TREE_HELIOS=1` adds a fourth,
   `shade-tree-helios`, plus the sha256-pinned `helios` binary at `/usr/local/bin/helios`.)
-- A `torrc` include publishing two onions (bootnode → `:8877`, gateway → `:8443`), each block
-  carrying `HiddenServicePoWDefensesEnabled <SHADE_TREE_ENABLE_POW>` right after its `HiddenServicePort`
-  (it is a per-service option). Gateway-only mode publishes the gateway onion only.
+- A `torrc` include publishing two onion services on virtual port `80`: the bootnode maps to
+  `127.0.0.1:8877` and the gateway maps to `127.0.0.1:8443`. Each block carries
+  `HiddenServicePoWDefensesEnabled <SHADE_TREE_ENABLE_POW>` after its `HiddenServicePort`
+  (it is a per-service option). Gateway-only mode publishes the gateway onion only. When the
+  optional fleet tally is enabled, the gateway onion also maps virtual port `8879` to the
+  authenticated loopback tally listener.
 
 ## Tunables
 
@@ -62,6 +72,10 @@ the script exits before installing anything on a bad one.
 | `SHADE_TREE_HELIOS_CHECKPOINT` | *(unset)* | weak-subjectivity checkpoint: a recent **finalized** beacon block root (`0x` + 64 hex, e.g. `GET <beacon>/eth/v1/beacon/headers/finalized` → `data.root`, cross-checked against a second source). Unset = helios `--load-external-fallback` (fetches one from public checkpoint services). Pinning is the more trust-minimized bootstrap. |
 | `SHADE_TREE_HELIOS_VERSION` / `SHADE_TREE_HELIOS_SHA256` | `0.11.1` / *(pinned table)* | release to install; a version without a pinned sha256 in `bootstrap.sh` must pass `SHADE_TREE_HELIOS_SHA256=<sha256 of helios_linux_<arch>.tar.gz>` — there is no unpinned download. Unsupported arch (only amd64/arm64 are pinned) ⇒ the script stops and tells you to install `helios` at `/usr/local/bin/helios` by hand and re-run. |
 | `SHADE_TREE_ADMIT` | `invited` | **Admission policy** (T-FEAT-9, `docs/adr/0008`): `invited[,staked][,paid]`, normalized to the canonical anonymity order (`invited,staked,paid`). Rendered into BOTH `shade-tree-gateway.service` (enforced by `gateway/gateway.mjs`: these are the ONLY root sources + slash targets; a named path whose contract is missing fails closed at startup) and `shade-tree-heartbeat.service` (advertised as signed `caps.admits`, so clients route only to gateways that admit their leaf source). Default `invited` alone = the maximum-anonymity mode (members.json only, no contract, no RPC). `staked` needs `SHADE_TREE_GROUP_CONTRACT`, `paid` needs `SHADE_TREE_PAID_ACCESS_CONTRACT`, either needs `SHADE_TREE_RPC_URL` — validated up front and rendered into the gateway unit. `SHADE_TREE_HELIOS=1` requires `staked`; `SHADE_TREE_REGISTRAR=1` requires `paid`. The default golden render gained `Environment=SHADE_TREE_ADMIT=invited` in both units. |
+| `SHADE_TREE_MEMBERS_FILE` | *(required in live mode when `invited` is admitted)* | Absolute path to the operator-owned v2 member set. The bootstrap validates it, installs a root-owned, node-readable copy at `/etc/shade-tree/members.json`, and points the node there. The node cannot rewrite its own admission root. The committed `group/members.json` is demo data and is never selected implicitly by a live bootstrap. |
+| `SHADE_TREE_FLEET_TALLY_PEERS` | *(unset = off)* | Optional comma-separated tally peers as `<56-char-v3-onion>.onion:8879`. The bootstrap accepts onion peers only, routes pushes through local Tor, and publishes this node's authenticated tally listener on the same virtual port. List the other nodes, not this node. Re-run without this setting to disable tally, remove its stored token, remove the onion port mapping, and restart the gateway so the listener stops. |
+| `SHADE_TREE_FLEET_TALLY_TOKEN` | *(required with peers)* | Shared 32 to 128 character URL-safe token. Use the same independently generated token on every tally peer. The bootstrap writes it to `/etc/shade-tree/fleet-tally.env` with mode `0600`; it is not embedded in the rendered unit or torrc. Re-running atomically rotates the file and restarts an already-running gateway so token and peer changes take effect. |
+| `SHADE_TREE_FLEET_TALLY_PORT` | `8879` | Onion virtual port and loopback backend for the optional tally. Must be distinct from every service and metrics port. |
 | `SHADE_TREE_REGISTRAR` | `0` | **Opt-in 402 registrar** (T-FEAT-7, `docs/PAYMENTS.md` "Shipped 2026-08-17"): `1` = render + start a hardened `shade-tree-registrar.service` (`payments/registrar.mjs` on `127.0.0.1:SHADE_TREE_REGISTRAR_PORT`; same sandbox as the other Node units; order store under `deploy-state/`), publish it as an **extra virtual port of an onion this box runs** (`HiddenServicePort <port> 127.0.0.1:<port>` inside the BOOTNODE HS block on a bootnode+gateway box, so buyers reach `http://<bootnode-onion>:<port>/pay/quote`; or — T-FEAT-9 — inside the GATEWAY HS block on a gateway-only box, `SHADE_TREE_BOOTNODE_ONION` set, so buyers reach `http://<gateway-onion>:<port>/pay/quote`), set `SHADE_TREE_REGISTRAR_ADVERTISE=1` (+ asset/prices/chain/protocols) on `shade-tree-bootnode.service` (when present) so `/health` carries `pay: {port, protocols, asset, chain, tiers}`, AND the same advert (+ `SHADE_TREE_REGISTRAR_ONION`) on `shade-tree-heartbeat.service` so the gateway's signed caps carry `pay`. Requires `paid` in `SHADE_TREE_ADMIT`. Re-running with `0` disables and removes the unit. The unit is **enabled but not started** until the operator key drop-in exists (see below). Also accepts `true/false/yes/no/on/off`. |
 | `SHADE_TREE_PAY_PROTOCOLS` | `x402,mpp` | With `SHADE_TREE_REGISTRAR=1`: the rails this registrar serves + advertises (`x402,mpp` / `x402` / `mpp`; normalized to `x402,mpp` order; rendered into the registrar unit, the bootnode advert and the heartbeat advert). A disabled rail gets no 402 challenge and its payload is refused `400 protocol-disabled`. |
 | `SHADE_TREE_PAID_ACCESS_CONTRACT` | *(unset)* | **required with `SHADE_TREE_REGISTRAR=1`**: `PaidAccessSet` address the registrar inserts into (`network/sepolia/contracts.json` `contracts.paidAccessSet`). |
@@ -91,7 +105,7 @@ curl --socks5-hostname 127.0.0.1:9050 "http://<bootnode-onion>:8878/pay/quote?li
 ### Add a second gateway to an existing bootnode
 
 ```bash
-SHADE_TREE_BOOTNODE_ONION=<bootnode>.onion SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> \
+SHADE_TREE_BOOTNODE_ONION=<bootnode>.onion SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> SHADE_TREE_MEMBERS_FILE=/root/operator-members.json \
   bash bootnode/deploy/bootstrap.sh
 journalctl -u shade-tree-heartbeat -f          # 'announced (...)' once the descriptors propagate
 ```
@@ -103,7 +117,7 @@ what you sell"): the default is `invited` (members.json only). A gateway-only bo
 access on its own onion, with its own `PaidAccessSet`:
 
 ```bash
-SHADE_TREE_BOOTNODE_ONION=<bootnode>.onion SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> SHADE_TREE_ADMIT=invited,paid SHADE_TREE_REGISTRAR=1 SHADE_TREE_PAY_PROTOCOLS=x402 SHADE_TREE_PAID_ACCESS_CONTRACT=0x… SHADE_TREE_PAY_ASSET=0x… SHADE_TREE_PAY_PRICES=8=100000,32=400000 SHADE_TREE_RPC_URL=https://…   bash bootnode/deploy/bootstrap.sh
+SHADE_TREE_BOOTNODE_ONION=<bootnode>.onion SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> SHADE_TREE_MEMBERS_FILE=/root/operator-members.json SHADE_TREE_ADMIT=invited,paid SHADE_TREE_REGISTRAR=1 SHADE_TREE_PAY_PROTOCOLS=x402 SHADE_TREE_PAID_ACCESS_CONTRACT=0x… SHADE_TREE_PAY_ASSET=0x… SHADE_TREE_PAY_PRICES=8=100000,32=400000 SHADE_TREE_RPC_URL=https://…   bash bootnode/deploy/bootstrap.sh
 # -> torrc: HiddenServicePort 8878 inside the GATEWAY HS block; shade-tree-registrar.service on this box;
 #    the heartbeat advertises admits=[invited,paid] + pay{protocols:[x402],…} as signed caps
 ```

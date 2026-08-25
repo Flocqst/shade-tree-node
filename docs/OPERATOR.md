@@ -1,10 +1,9 @@
 # Operator runbook
 
 > [!CAUTION]
-> Public-host deployment is currently blocked. The default node egress policy
-> has an unresolved private-IP SSRF flaw
-> ([issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)), and the
-> bundled Groth16 artifacts use an untrusted development setup. Treat the
+> Public-host deployment is currently blocked. Nodes now resolve once, reject
+> non-public answers, and pin the checked address before dialing, but the
+> bundled Groth16 artifacts still use an untrusted development setup. Treat the
 > commands below as local research and future-rollout documentation. See the
 > current [deployment plan](DEPLOYMENT-PLAN.md).
 
@@ -37,13 +36,14 @@ and the client command. Idempotent (re-running reuses keys and units).
 
 ```bash
 ssh root@<droplet-ip>
-curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh \
+  | sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash
 ```
 
 Or, if the repo is already on the box:
 
 ```bash
-sudo bash bootnode/deploy/bootstrap.sh
+sudo env SHADE_TREE_MEMBERS_FILE=/root/operator-members.json bash bootnode/deploy/bootstrap.sh
 ```
 
 It creates three `Restart=always` units:
@@ -79,7 +79,7 @@ existing bootnode:
 
 ```bash
 ssh root@<new-droplet-ip>
-SHADE_TREE_BOOTNODE_ONION=<bootnode-onion> SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> \
+SHADE_TREE_BOOTNODE_ONION=<bootnode-onion> SHADE_TREE_BOOTNODE_SIGNER=<pinned-signer> SHADE_TREE_MEMBERS_FILE=/root/operator-members.json \
   bash <(curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/bootnode/deploy/bootstrap.sh)
 journalctl -u shade-tree-heartbeat -f -o cat  # msg="heartbeat accepted" once Tor is ready
 ```
@@ -87,9 +87,11 @@ journalctl -u shade-tree-heartbeat -f -o cat  # msg="heartbeat accepted" once To
 `SHADE_TREE_BOOTNODE_SIGNER` is only echoed into the printed client command (the heartbeat does
 not need it). Optional: `SHADE_TREE_GATEWAY_REGION=<na|sa|eu|af|as|oc|aq|unknown>` to advertise a
 coarse region, `SHADE_TREE_ENABLE_POW=1` to enable onion PoW. For a `stake` bootnode, stake the
-operator (b. below) and then add `Environment=SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key>` to
+operator (b. below), place `SHADE_TREE_GW_OPERATOR_KEY=<operator-key>` in a root-readable mode-0600
+environment file, and reference it with `EnvironmentFile=` from
 `/etc/systemd/system/shade-tree-heartbeat.service` (`systemctl daemon-reload && systemctl restart
-shade-tree-heartbeat`); the key is a secret and is not a `bootstrap.sh` tunable.
+shade-tree-heartbeat`). Do not put the key in the unit command or shell history; it is not a
+`bootstrap.sh` tunable.
 
 ### By hand
 
@@ -112,14 +114,17 @@ to slash member over-spenders. Stake binds to the operator **address**, never to
 onion (one stake can back rotating onions).
 
 ```bash
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" \
 shade-tree register-gateway \
   --gateway-registry 0x<GatewayRegistry> \
-  --register-key 0x<operator-key> \
   --rpc-url https://<rpc-endpoint>
+unset SHADE_TREE_REGISTER_KEY
 ```
 
 `--bond` is optional (defaults to the on-chain `BOND()`). The command is a no-op if
-the operator is already staked.
+the operator is already staked. Paste the funded operator key at the hidden prompt; the
+one-shot environment assignment keeps its value out of argv and `unset` clears it afterward.
 
 ### c. Run the gateway and heartbeat
 
@@ -135,10 +140,15 @@ For a staked bootnode, add the operator key so the heartbeat signs the durable
 onion<->operator authorization:
 
 ```bash
-SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key> shade-tree heartbeat \
+read -s SHADE_TREE_GW_OPERATOR_KEY
+SHADE_TREE_GW_OPERATOR_KEY="$SHADE_TREE_GW_OPERATOR_KEY" shade-tree heartbeat \
   --bootnode <bootnode-onion> \
   --identity tor/hs-gateway/identity.local.json
+unset SHADE_TREE_GW_OPERATOR_KEY
 ```
+
+The final `unset` runs after the heartbeat stops. For a durable service, load the key from the
+root-readable environment file described below instead of placing it in a command or shell history.
 
 The heartbeat re-announces every `--interval` seconds (default 300). Confirm you are
 listed:
@@ -336,10 +346,12 @@ outside the honest-retry window (`SHADE_TREE_REPLAY_WINDOW_MS`, default 5s) is d
 spent-set — a malicious relay could fan one captured envelope to **peer** gateways and
 each would serve it once.
 
-The optional **shared nonce tally** (`gateway/fleet-tally.mjs`) closes that: gateways
-share a per-epoch spent-**nullifier** tally, so a nullifier admitted at gateway A
-propagates and gateway B rejects the same envelope `replayed-envelope` once it has the
-tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
+The optional **shared nonce tally** (`gateway/fleet-tally.mjs`) reduces that replay
+window on a best-effort basis. Gateways share a per-epoch spent-**nullifier** tally.
+Gateway A publishes only after the destination TCP connection succeeds, then gateway B
+rejects the same envelope `replayed-envelope` once it receives the tally. DNS and
+pre-connect failures remain eligible for cross-node failover. A tally-based rejection
+logs `scope=fleet`.
 
 - **What crosses the wire, and why it is safe.** Only the pair `(nullifier, epoch)` is
   shared — never member identity/commitment, never `share.y` (the secret a slash
@@ -350,19 +362,20 @@ tally. On such a fleet-wide rejection the gateway logs `scope=fleet`.
   peer learns only "some request with nullifier N happened in epoch E." Because `share.y`
   never leaves a gateway, the tally is **not** a slashing/deanonymization side channel.
 - **Slashing stays local.** A slash needs two shares under one nullifier; since `share.y`
-  is not shared, a **distributed** over-spend (the two shares landing on different
-  gateways) is rejected fleet-wide but slashed only where both shares land. That is the
-  intended privacy trade — the alternative (gossiping shares) would leak the very bytes
-  that reconstruct an identity.
+  is not shared, a peer that has received the first gateway's tally rejects a distributed
+  over-spend, but concurrent attempts or a failed push can still pass at different
+  gateways. Slashing occurs only where both shares land. That is the intended privacy
+  trade: gossiping shares would leak the bytes that reconstruct an identity.
 - **Fail-open.** A gateway that cannot reach the tally degrades to the per-gateway
   T-FEAT-12 defense and keeps serving — the tally is defense-in-depth, never an admission
   authority, so a partition or a broken peer cannot deny legitimate members.
 - **Off by default.** No shared transport is wired unless one is configured. With no
   `SHADE_TREE_FLEET_TALLY_PEERS` set the gateway runs **exactly** the per-gateway behavior
   (byte-identical to T-FEAT-12). When the tally is active the gateway logs `fleet tally: ON`
-  at startup. Note: with the tally enabled a nullifier is single-use **fleet-wide**, so a
-  client that fails over to another gateway must use a fresh RLN slot (a follow-up on the
-  client side); until then, keep it off in production.
+  at startup. A client can reuse the same envelope across nodes until one destination
+  connection succeeds. That success triggers an asynchronous announcement; peers reject
+  later replays after receiving it. This is not an atomic fleet spent-set: concurrent
+  attempts, dropped pushes, and partitions remain fail-open.
 
 #### Real cross-host transport (T-FEAT-20b — HTTP push)
 
@@ -371,31 +384,43 @@ subscribe(cb) }` seam. The bundled real transport (`makeHttpTallyTransport` in
 `gateway/fleet-tally.mjs`) is a tiny **HTTP push**: each gateway exposes an inbound
 announcement endpoint and POSTs `{"nullifier":…,"epoch":…}` to each **configured peer**
 gateway. It is a direct **1-hop** push to a fixed peer set — not a forwarding flood — so a
-nullifier crosses the wire at most once per peer per admit (no gossip storm, no loops: the
+nullifier crosses the wire at most once per peer per established egress (no gossip storm, no loops: the
 inbound handler only records locally, it never re-publishes).
 
-- **Enable it** with `SHADE_TREE_FLEET_TALLY_PEERS` (comma-separated peer gateways). A peer that is
-  an `.onion` is reached **over Tor** (reusing the bootnode fetch path — no exit node, the
+- **Enable it** with `SHADE_TREE_FLEET_TALLY_PEERS` (comma-separated peer gateways) and the same
+  randomly generated `SHADE_TREE_FLEET_TALLY_TOKEN` on every tally peer. The token must be 32 to
+  256 printable non-space characters. Missing or invalid authentication leaves the optional tally
+  off, so a half-configured mesh cannot expose an unauthenticated intake endpoint. A peer that is
+  an `.onion:port` is reached **over Tor** (reusing the bootnode fetch path — no exit node, the
   peer never learns this gateway's IP); a bare `host:port` peer is reached with a plain HTTP
-  POST (localhost / private management network). Set `SHADE_TREE_FLEET_TALLY_LISTEN` (`host:port` or
+  POST and sends the bearer token in cleartext. Use that form only on localhost or a trusted,
+  encrypted private link. Set `SHADE_TREE_FLEET_TALLY_LISTEN` (`host:port` or
   `port`, default `127.0.0.1:0`) for this gateway's inbound endpoint — behind Tor, map the
-  gateway's onion to that local port. `SHADE_TREE_FLEET_TALLY_PATH` overrides the endpoint path
+  gateway's onion to that local port. The bundled bootstrap does this on virtual port `8879` when
+  `SHADE_TREE_FLEET_TALLY_PEERS` and `SHADE_TREE_FLEET_TALLY_TOKEN` are set. It accepts onion peers
+  only and keeps the shared token in a root-only environment file.
+  `SHADE_TREE_FLEET_TALLY_PATH` overrides the endpoint path
   (default `/fleet-tally`). For a full mesh, list the other gateways as each gateway's peers
   (federation, T-FEAT-1, already discovers them).
 - **Trust model — peers are semi-trusted.** Peers are fleet gateways the operator configured,
   not the open internet, but the transport assumes any peer can be down, slow, or malicious
   and bounds the damage:
   - **Fail-open, both directions.** Outbound POSTs are fire-and-forget with a per-peer timeout
-    (`SHADE_TREE_FLEET_TALLY_TIMEOUT_MS`, default 4s); a refused / 500 / slow / partitioned peer is
+    (`SHADE_TREE_FLEET_TALLY_TIMEOUT_MS`, default 4s); a refused / 401 / 500 / slow / partitioned peer is
     swallowed and **never** blocks admission — `publish()` returns synchronously and the
-    gateway proceeds on its local defense. Inbound malformed / oversized bodies are dropped
-    (400/413), never crash the endpoint.
+    gateway proceeds on its local defense. Missing/wrong bearer credentials are rejected with
+    401 and logged by the sender; inbound malformed / oversized bodies are dropped (400/413),
+    never crash the endpoint. The listener has fixed header, request, keep-alive, header-size,
+    and 256-connection limits. Outbound work is capped at four in-flight pushes per peer and 128
+    total; excess announcements drop fail-open instead of accumulating sockets.
   - **Only two fields ever read.** The inbound handler reads **only** `nullifier` and `epoch`;
     any extra key a peer stuffs into the body is ignored, never stored, never acted on — the
     same privacy invariant as above, now enforced at the wire boundary.
-  - **Bounded blast radius.** A malicious peer flooding fake nullifiers can at worst fill this
-    gateway's per-epoch bucket up to the flood cap (`maxPerEpoch`, memory stays bounded; past
-    the cap recording simply stops — lose dedup, never deny). It cannot cause a fleet-wide
+  - **Bounded blast radius.** Both public fields must be canonical decimal BN254 field elements.
+    State is capped per epoch (50,000 entries by default), across epoch buckets (4), and in total
+    (100,000). Expired buckets are pruned before new state allocates. Past any cap recording simply
+    stops: lose dedup, never deny. A malicious authenticated peer therefore cannot grow memory
+    without bound. It cannot cause a fleet-wide
     outage. A live nullifier is `H(identitySecret, externalNullifier)`, per-tunnel
     pseudorandom and unpredictable, so a flooder cannot pre-image a **future** honest member's
     nullifier to get it pre-rejected — its garbage collides with nothing real, and the only
@@ -497,12 +522,18 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_BANNER` | `--banner` / `--no-banner` | Show the one-time ASCII tree. `auto` shows it only on an interactive, non-JSON terminal. |
 | `SHADE_TREE_METRICS_PORT` | `--metrics-port` | Separate loopback metrics listener for the Elder Tree, node, registrar, or Proxy. Unset or `0` is off for direct runs. |
 | `SHADE_TREE_HEARTBEAT_METRICS_PORT` | `--heartbeat-metrics-port` | Separate loopback heartbeat metrics listener. Unset or `0` is off for direct runs. |
-| `SHADE_TREE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion` peers over Tor, `host:port` over plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). |
+| `SHADE_TREE_FLEET_TALLY_PEERS` | (none) | Comma-separated peer gateways for the cross-fleet shared nonce tally (T-FEAT-20b). `.onion:port` peers use Tor; `host:port` uses plain HTTP. **Unset = off** (per-gateway behavior, byte-identical). The bootstrap accepts onion peers only and maps port 8879 by default. |
+| `SHADE_TREE_FLEET_TALLY_TOKEN` | (none) | Required shared bearer secret for tally peers, 32..256 printable non-space characters. Generate independently of node/operator keys. Missing or invalid = tally stays off. Never log or put it in a URL. |
 | `SHADE_TREE_FLEET_TALLY_LISTEN` | (none) | Inbound tally endpoint `host:port` (or bare `port`); default `127.0.0.1:0`. Behind Tor, map the gateway onion to this local port. |
 | `SHADE_TREE_FLEET_TALLY_PATH` | (none) | Inbound tally endpoint path (default `/fleet-tally`). |
 | `SHADE_TREE_FLEET_TALLY_TIMEOUT_MS` | (none) | Per-peer push timeout (default 4000). A slow/down peer is swallowed (fail-open), never blocks admission. |
+| `SHADE_TREE_FLEET_TALLY_MAX_PER_EPOCH` | (none) | In-memory entries per external-nullifier bucket (default 50000, hard max 200000). Past the cap evidence is dropped fail-open. |
+| `SHADE_TREE_FLEET_TALLY_MAX_EPOCHS` | (none) | In-memory external-nullifier buckets (default 4, hard max 16). |
+| `SHADE_TREE_FLEET_TALLY_MAX_TOTAL` | (none) | Aggregate in-memory tally entries across buckets (default 100000, hard max 500000). |
 | `SHADE_TREE_FLEET_TALLY` | (none) | Legacy flag; with no `SHADE_TREE_FLEET_TALLY_PEERS` it only logs a note and stays off (fail-open). |
 | `SHADE_TREE_EGRESS_ALLOW` / `SHADE_TREE_EGRESS_DENY` | (none) | Egress policy (see §2). When `SHADE_TREE_EGRESS_ALLOW` is **set**, the heartbeat also advertises its concrete allowed ports as SIGNED capabilities (T-FEAT-10b) so clients can route by port. Unset = default `*:443` and **no** caps advertised. |
+| `SHADE_TREE_DNS_TIMEOUT_MS` | (none) | Target DNS deadline in milliseconds (default 5000). Resolution checks every answer, rejects the hostname if any answer is non-public, then pins at most eight validated numeric results. Those candidates share one upstream-connect deadline and are tried in resolver order. `0` disables the DNS deadline. |
+| `SHADE_TREE_ALLOW_PRIVATE_TARGETS` | (none) | Unsafe local-test escape hatch. Only exact value `1` permits private and special-purpose destination addresses; startup emits a warning. Never use on a network-connected node. |
 | `SHADE_TREE_GATEWAY_REGION` | (none) | Coarse self-declared region bucket advertised in signed caps: one of `na sa eu af as oc aq unknown`. Continent-scale only (too coarse to fingerprint). Unset/invalid = omitted. |
 | `SHADE_TREE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
 | `SHADE_TREE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `SHADE_TREE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
@@ -592,10 +623,9 @@ export SHADE_TREE_TIERS=8,32
 
 Limits are 1..65535 (the circuit's 16-bit range check; never admit more). With
 `SHADE_TREE_TIERS` unset a tiered over-spender is still slashed, but the log names the default-tier
-leaf (`slash: tier of the over-spent leaf not resolvable locally`). **On chain**, tiers are not
-admitted yet: `StakedReputationSet`'s hasher pins `K = 8`, so a tiered leaf staked on chain
-cannot be slashed there until the follow-up in `docs/ONCHAIN.md` "Tiers on chain" ships —
-use tiers on `members.json` gateways, or only at the default limit on chain.
+leaf (`slash: tier of the over-spent leaf not resolvable locally`). The current rln-v4
+`StakedReputationSet` admits `register(commitment, limit)`, prices tiers with `bondFor(limit)`,
+and resolves the enrolled limit during slashing. The retired rln-v3 contract remains tier-8 only.
 
 ### Choose what you admit and what you sell (T-FEAT-9, ADR [0008](adr/0008-per-gateway-admission-and-payment-choice.md))
 

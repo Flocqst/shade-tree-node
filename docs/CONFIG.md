@@ -37,9 +37,10 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
 | `SHADE_TREE_GATEWAY_PORT` | `8443` | Loopback port Tor maps the node onion to. | gateway | `--gateway-port` |
-| `SHADE_TREE_GROUP_CONTRACT` | (unset; falls back to `contracts/deployed.local.json`, else `members.json`) | `StakedReputationSet` address — or, since T-FEAT-7, a COMMA-SEPARATED LIST of set addresses (a single value is byte-equivalent to before). Each is read on-chain via its own RootProvider (node or light, per `SHADE_TREE_ROOT_PROVIDER`) and the gateway trusts the UNION of their roots (`lib/root-provider.mjs` `CompositeRootProvider`). If unset it uses the local `members.json` root (PoC fallback). Also every listed contract is a slash TARGET (routing, see `SHADE_TREE_SLASH_CONTRACT`). | gateway root source, root-provider | `--group-contract` |
-| `SHADE_TREE_PAID_ACCESS_CONTRACT` | (unset; or `network/<SHADE_TREE_NETWORK>/contracts.json` `contracts.paidAccessSet`) | The `PaidAccessSet` address (T-FEAT-7, `docs/PAYMENTS.md`, `docs/adr/0007-paid-access.md`): sugar that APPENDS one more root source (kind `paid`) to the `SHADE_TREE_GROUP_CONTRACT` list and one more slash target. Same tree, same proofs; its leaves are inserted by the operator after an off-chain (HTTP 402) payment. Startup logs `roots: members.json + staked(0x…) + paid(0x…)` and `paid-access anonymity set: N leaves (floor K=…)`. | gateway root source + slasher, `shade-tree leaves` default | `--paid-access-contract` |
-| `SHADE_TREE_ROOTS` | (unset = union of what is configured: `onchain` whenever a contract is set, PLUS `static` whenever `members.json` exists) | Which root SOURCES feed the trusted set: comma list from `static` (the members.json file, `SHADE_TREE_MEMBERS_FILE`) and `onchain` (every configured contract). `onchain` alone = the pre-T-FEAT-7 on-chain-only behavior; `static` alone ignores configured contracts. `onchain` without any contract is a startup error. | gateway root source | `--roots` |
+| `SHADE_TREE_ADMIT` | `invited` | Admission paths this gateway trusts: `invited[,staked][,paid]`, normalized to that order. Only named paths become proof roots or routed slash targets. `staked` requires `SHADE_TREE_GROUP_CONTRACT`; `paid` requires `SHADE_TREE_PAID_ACCESS_CONTRACT`; a missing required contract is a startup error. Configuring a contract does not admit it by itself. | gateway root source + slasher | `--admit` |
+| `SHADE_TREE_GROUP_CONTRACT` | (unset; or `network/<SHADE_TREE_NETWORK>/contracts.json`) | Comma-separated `StakedReputationSet` addresses available to the `staked` admission path. Each admitted set is read through its own RootProvider (`node` or `light`) and their roots are unioned by `CompositeRootProvider`. The gateway does not read or route slashing to these contracts unless `SHADE_TREE_ADMIT` includes `staked`. | gateway root source, root-provider | `--group-contract` |
+| `SHADE_TREE_PAID_ACCESS_CONTRACT` | (unset; or `network/<SHADE_TREE_NETWORK>/contracts.json` `contracts.paidAccessSet`) | `PaidAccessSet` address available to the `paid` admission path. Its leaves are inserted after an off-chain HTTP 402 payment. The gateway reads the root, reports its anonymity-set floor, and includes it in slash routing only when `SHADE_TREE_ADMIT` includes `paid`. | gateway root source + slasher, `shade-tree leaves` default | `--paid-access-contract` |
+| `SHADE_TREE_ROOTS` | (unset; `SHADE_TREE_ADMIT` governs) | Deprecated admission alias: `static` maps to `invited`; `onchain` maps to the configured `staked` and/or `paid` paths. `SHADE_TREE_ADMIT` wins when both are set. `onchain` without a configured contract is a startup error. | gateway root source | `--roots` |
 | `SHADE_TREE_MEMBERS_FILE` | `group/members.json` | Path of the static members list (`{ version, members: [leaf, …] }`) the `static` root source reads and watches. | gateway (static root), lib/rln `loadGroup`, client leaf discovery | (none) |
 | `SHADE_TREE_PAID_MIN_LEAVES` | `8` | The paid set's anonymity-set floor K (`docs/PAYMENTS.md` open item 3): at startup and on every refresh that crosses it the gateway WARNs `paid-access anonymity set: N leaves (floor K=8) — BELOW the floor` when `leafCount() < K`. It NEVER refuses proofs over it: the floor is a logged deployment parameter, not a gate. Metrics: `shade_tree_gateway_paid_access_leaves`. | gateway startup / refresh | (none) |
 | `SHADE_TREE_ROOT_PROVIDER` | `node` | Root source mode: `node` (trusted local node, event reconstruction) or `light` (EIP-1186 storage proof of `currentRoot` against the block header, `LightClientRootProvider`; the header's `stateRoot` is RPC-trusted unless `SHADE_TREE_HELIOS_RPC_URL` anchors it to the beacon sync committee, T-DEV-9b). | root-provider factory | `--root-provider` |
@@ -49,11 +50,21 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | `SHADE_TREE_SLASH_CONTRACT` | (unset; falls back to `deployed.local.json`) | The PRIMARY slash contract. Independent of the membership root source, so a gateway can slash on-chain while membership stays on `members.json`, or keep slashing a superseded set (the fleet's rln-v3) it no longer reads roots from. T-FEAT-7 ROUTING: every configured root contract (`SHADE_TREE_GROUP_CONTRACT` list + `SHADE_TREE_PAID_ACCESS_CONTRACT`) is appended as a further target, and an over-spender is slashed on WHICHEVER holds a live leaf of the reconstructed secret (`limitOf(leaf) != 0`, or `isActive` on rln-v3), primary first; held by none → the primary gets the default-tier claim (revert on record), as before. Startup logs `slash: routing over primary(0x…) + staked(0x…) + paid(0x…)`; a slash logs `slash: routed to paid(0x…)` and `SLASH tx … via=0x…`. One target = the plain single-contract slasher, unchanged. | gateway slasher | `--slash-contract` |
 | `SHADE_TREE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |
 | `SHADE_TREE_ENVELOPE_TIMEOUT_MS` | `30000` | Absolute deadline (from connect, NOT re-armed by activity) for the newline-terminated envelope; a slow-loris client that never sends the newline or dribbles bytes is cut at the deadline (reply `bad-envelope:envelope timeout`, drop reason `envelope-timeout`). `0` disables. | gateway | (none) |
-| `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). Also bounds a black-holed upstream connect (`upstream-timeout`). `0` disables. | gateway | (none) |
+| `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). It is also the one aggregate deadline shared by every pinned upstream address during connect (`upstream-timeout`). `0` disables. | gateway | (none) |
+| `SHADE_TREE_DNS_TIMEOUT_MS` | `5000` | Deadline for resolving an admitted target. The gateway checks every DNS answer, refuses the hostname if any answer is non-public, then pins at most eight validated numeric results in resolver order. `0` disables the DNS deadline, not address validation. | gateway | (none) |
+| `SHADE_TREE_ALLOW_PRIVATE_TARGETS` | (unset) | Unsafe local-development escape hatch. Only `1` permits private or special-purpose destination addresses; the gateway warns at startup. Never set on a network-connected node. | gateway | (none) |
 | `SHADE_TREE_MAX_CONNS` | `1024` | Max concurrent client connections, decided at accept BEFORE any byte is read; over => reply `too-many-connections` + close. `0` = unlimited. | gateway | (none) |
 | `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` | `8` | Max concurrent tunnels ONE nullifier may hold open (the RLN budget counts requests, not open tunnels; an in-window honest retry is admitted idempotently, so without this one proof could pin N idle tunnels). Over => `nullifier-conn-limit`. `0` = unlimited. | gateway | (none) |
 | `SHADE_TREE_TIERS` | `SHADE_TREE_SLOTS` (i.e. `8`) | Comma-separated tier limits this gateway KNOWS (T-FEAT-8), e.g. `8,32`; ascending, distinct, 1..65535; `K` is always included. Used ONLY after an over-spend to name which tier's leaf the reconstructed `identitySecret` sits behind (`resolveSlashLeaf`); verification never consults it (the tier is private to the proof). Against an rln-v4 (tiered) slash contract the on-chain slasher unions this with the contract's `allowedLimits()` and resolves the tier via `limitOf` on chain, then calls `slash(commitment, secret, limit, receiver)`; against rln-v3 it calls the 3-arg default-tier slash (auto-detected at startup, logged as `slash: on-chain … abi=`). Bad value = startup error. | gateway slash path | (none) |
 | `SHADE_TREE_REPLAY_WINDOW_MS` | `5000` | Honest-retry window of the per-gateway seen-envelope cache; an exact replay later than this is dropped `replayed-envelope`. | gateway | (none) |
+| `SHADE_TREE_FLEET_TALLY_PEERS` | (off) | Comma-separated tally peers. `.onion` peers use Tor. Bare `host:port` peers use cleartext HTTP and are safe only on localhost or a trusted encrypted private link. No peers leaves the optional fleet tally off. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_TOKEN` | (required with peers) | Shared 32 to 256 character bearer token for tally pushes. Missing or invalid authentication leaves the tally off. Never log or place it in a public unit file. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_LISTEN` | `127.0.0.1:0` | Inbound tally listener as `host:port` or `port`. Keep it loopback unless an authenticated, firewalled private link is intentional. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_PATH` | `/fleet-tally` | HTTP path for authenticated tally announcements. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_TIMEOUT_MS` | `4000` | Per-peer push timeout. Non-2xx, timeout, and network failures log and drop fail-open. Outbound work is also capped at four in-flight pushes per peer and 128 total. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_MAX_PER_EPOCH` | `50000` | Maximum recorded nullifiers in one epoch bucket. Past the cap, evidence drops fail-open. Hard maximum 200000. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_MAX_EPOCHS` | `4` | Maximum live epoch buckets. Hard maximum 16. | gateway fleet tally | (none) |
+| `SHADE_TREE_FLEET_TALLY_MAX_TOTAL` | `100000` | Maximum recorded entries across all epoch buckets. Hard maximum 500000. | gateway fleet tally | (none) |
 | `SHADE_TREE_SHUTDOWN_TIMEOUT_MS` | `10000` | Drain grace on SIGTERM/SIGINT before in-flight tunnels are force-closed. | gateway, bootnode | (none) |
 
 ## Client
@@ -70,8 +81,9 @@ Read by `client/shim.mjs` / `client/shade-tree-client.mjs` (proxy + library) and
 | `SHADE_TREE_DIRECTORY_CACHE` | `cache/bootnode-directory.lkg` (bootnode) or `<SHADE_TREE_DIRECTORY>.lkg` (file), else none | Last-known-good directory cache path. | client selection | (none) |
 | `SHADE_TREE_DIRECTORY_REFRESH_MS` | `300000` (5 min) | How often to refresh the loaded directory. | client selection | (none) |
 | `SHADE_TREE_SHIM_PORT` | `8888` | Local HTTP-CONNECT proxy listen port (on `127.0.0.1`). | shim | `--shim-port` |
+| `SHADE_TREE_SOCKS_ISOLATION` | enabled | Set `0` to disable per-tunnel SOCKS credentials. With Tor `IsolateSOCKSAuth`, the default gives separate CONNECT tunnels separate Tor streams; without that Tor option the credentials are harmless. | client / Proxy | `ShadeTreeClient({ socksIsolation })` |
 | `SHADE_TREE_SLOTS` | `8` | `K_SLOTS`: the DEFAULT tier's per-epoch rate cap (`userMessageLimit` baked into a leaf enrolled without `--limit`; number of per-slot nullifiers before over-spend). | lib/rln (client + gateway) | (none) |
-| `SHADE_TREE_LIMIT` | `SHADE_TREE_SLOTS` (8) | THIS member's reputation-tier limit (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`): the `userMessageLimit` its leaf was enrolled with (`shade-tree enroll --limit N`), staked at, or bought at. The client wraps slots at it and proves with it; a value the leaf does not carry fails at discovery/prove time (`your leaf … is in none of …` / `not in group`). 1..65535. Also read by `shade-tree identity` (`--limit`) for the Rust identity file, and by `shade-tree register-member` (`--limit`) as the tier to stake at (`register(commitment, limit)` for `bondFor(limit)` on an rln-v4 set; an rln-v3 set admits only 8). `--limit` is env-mapped for every `shade-tree` command. | client, `shade-tree identity`, `shade-tree register-member` | `ShadeTreeClient({ limit })`, `--limit` |
+| `SHADE_TREE_LIMIT` | `SHADE_TREE_SLOTS` (8) | THIS member's reputation-tier limit (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`): the `userMessageLimit` its leaf was enrolled with (`shade-tree enroll --limit N`), staked at, or bought at. The Proxy wraps slots at it and proves with it; a value the leaf does not carry fails at discovery/prove time (`your leaf … is in none of …` / `not in group`). 1..65535. Enrollment and `shade-tree identity` bake it into the leaf, registration and payment submit that same tier, and the Proxy must use it afterward. | Proxy, enroll, join, identity, register-member, pay | `ShadeTreeClient({ limit })`, `--limit` |
 | `SHADE_TREE_GROUP_CONTRACT` / `SHADE_TREE_PAID_ACCESS_CONTRACT` / `SHADE_TREE_RPC_URL` (client) | (unset → members.json only) | Leaf-source DISCOVERY (T-FEAT-7): the client looks for its own leaf in `members.json` first, then in each configured contract in order (the group list, then the paid set), rebuilding that set's tree from its event log (`lib/root-provider.mjs` `loadGroupFromContract`) and proving against it. With no contract configured behavior is unchanged (members.json). A leaf found nowhere is a precise error naming every source tried. `SHADE_TREE_NETWORK` fills these from the record. | client (`makeLeafSourceLoader`) | `--group-contract`, `--paid-access-contract`, `--rpc-url` |
 | `SHADE_TREE_LEAF_SOURCE` | `auto` | Which set to prove from (T-FEAT-9): `auto` = whichever set holds the leaf (members.json first, then the staked sets, then the paid set — as before); `invited` / `staked` / `paid` PINS the search to that set (a member with a leaf in several sets chooses which one — and therefore which gateways admit it). The discovered/pinned source is the client's **leaf source** for admission filtering: only gateways whose signed `caps.admits` include it are dialed (a gateway advertising no policy is assumed to admit any path during the rollout, logged once); none ⇒ a fail-closed error naming every gateway's policy. | client (`makeLeafSourceLoader`, `selectCandidates`) | `--leaf-source` |
 | `SHADE_TREE_MAX_ANON` | (unset = off) | `1`/`true`: **maximum-anonymity mode** (T-FEAT-9). Route ONLY to gateways whose signed `admits` is exactly `["invited"]` (their whole population is invited; a policy-less gateway cannot prove it and is excluded), and REFUSE to run with a staked/paid leaf (an invited-only gateway would reject it `wrong-group-root`; the client says why before any dial). No invited-only gateway in the directory ⇒ fail closed with the fleet's policies. | client | `--max-anon` (bare flag) |
@@ -92,7 +104,7 @@ Read by `lib/gateway-registry.mjs` (StakeVerifier), `lib/root-provider.mjs` (Roo
 | `SHADE_TREE_FROM_BLOCKS` | (from the record, see above) | Per-contract start blocks `<0xaddr>=<block>[,...]` (block 0x-hex or decimal; address case-insensitive). Wins over `SHADE_TREE_FROM_BLOCK` for the named contract; others fall through. A malformed entry is a startup error (never a silent scan from 0). | root-provider (node), client, `shade-tree leaves` | (none) |
 | `SHADE_TREE_LOGS_CHUNK` | `10000` | Blocks per `eth_getLogs` call. The scan is PAGED: `[from, to]` is split into windows of this size (`to` resolved to a number once), a window the RPC refuses as too wide / too many results (`exceed maximum block range`, `Log response size exceeded`, `query returned more than 10000 results`, `limited to a 10,000 blocks range`, … — `lib/root-provider.mjs` `LOG_RANGE_ERROR_PATTERNS`) is halved and retried down to a floor of 8; a range that fits one window is one call. Public Sepolia RPCs cap at 50k (publicnode) / 10k (Infura, QuickNode) / 2k (Alchemy free), so 10k is safe by default; a local node can take `1000000`. Finalized reads then continue INCREMENTALLY (only new blocks per refresh). | root-provider (node), client, `shade-tree leaves` | (none) |
 | `SHADE_TREE_CONFIRMATIONS` | `0` | Confirmation depth. `0` reads `latest` (stake) / `finalized` (roots); `>0` reads `head - N` for reorg safety. | gateway-registry, root-provider | (none) |
-| `SHADE_TREE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway) | Funding / operator private key used to submit the stake tx. `exit-gateway` / `withdraw-gateway` reuse it as the operator signer (falling back to `SHADE_TREE_GW_OPERATOR_KEY`; the anvil default applies only on a loopback RPC). Prefer `--key-file` / `--account` on a real chain. | register-onchain, register-gateway, exit-gateway, withdraw-gateway | `--register-key` |
+| `SHADE_TREE_REGISTER_KEY` | anvil account #0 (member) / #1 (gateway), **loopback RPC only** | Funding / operator private key used to submit the stake tx. A non-loopback RPC without an explicit key fails before any request; public Anvil keys are never selected remotely. `exit-gateway` / `withdraw-gateway` reuse it as the operator signer (falling back to `SHADE_TREE_GW_OPERATOR_KEY`). Prefer `--key-file` / `--account` where supported on a real chain. | register-onchain, register-gateway, exit-gateway, withdraw-gateway | `--register-key` |
 | `SHADE_TREE_KEYSTORE_PASSWORD` | (unset → interactive prompt on a TTY) | Password for the Foundry-style encrypted keystore selected with `--account <name>` (`~/.foundry/keystores/<name>`, dir overridable via `FOUNDRY_KEYSTORES`) or `--keystore <path>`. Env only, never argv. | exit-gateway, withdraw-gateway, gateway-status | (none) |
 | `SHADE_TREE_BOND` | on-chain `BOND()` (member also tries `deployed.bond`) | Bond amount in wei to stake. | register-onchain, register-gateway | `--bond` |
 
@@ -123,6 +135,7 @@ Read by `payments/registrar.mjs` (the operator's HTTP-402 service that sells mem
 | `SHADE_TREE_PAY_KEY` | (unset) | **Buyer** wallet key for `shade-tree pay` (holds the stablecoin; needs no ETH). Alternatives: `--key-file <path>` (raw hex) or `--account <keystore.json>` + `SHADE_TREE_PAY_PASSPHRASE`. Never argv. | `shade-tree pay` | `--key-file` / `--account` |
 | `SHADE_TREE_PAY_PROTOCOL` | `x402` | `shade-tree pay` rail: `x402` or `mpp`. | `shade-tree pay` | `--protocol` |
 | `SHADE_TREE_REGISTRAR_URL` | (unset) | `shade-tree pay` direct URL (no Tor; tests / a local registrar). Production goes through Tor to `SHADE_TREE_BOOTNODE_ONION:SHADE_TREE_REGISTRAR_PORT`. | `shade-tree pay` | `--registrar-url` |
+| `SHADE_TREE_PAY_HTTP_TIMEOUT_MS` | `240000` | Per-attempt deadline for the paying `POST /pay`, which may span settlement and insertion receipts over Tor. The buyer retries once with the same idempotent order. This is separate from the operator's per-transaction `SHADE_TREE_TX_RECEIPT_TIMEOUT_MS`. | `shade-tree pay` | (none) |
 
 ## Common
 
@@ -130,6 +143,8 @@ Read by `payments/registrar.mjs` (the operator's HTTP-402 service that sells mem
 |---|---|---|---|---|
 | `SHADE_TREE_NETWORK` | (unset) | Name of a committed network record under `network/<name>/`. Fills any UNSET discovery / contract var from `bootnode.json` (`SHADE_TREE_BOOTNODE_ONION`, `SHADE_TREE_DIR_SIGNER`, `SHADE_TREE_BOOTNODE_ADMISSION`, or the static `SHADE_TREE_DIRECTORY` fallback) and `contracts.json` (`SHADE_TREE_GATEWAY_REGISTRY`, `SHADE_TREE_GROUP_CONTRACT`, `SHADE_TREE_PAID_ACCESS_CONTRACT` from `contracts.paidAccessSet`, `SHADE_TREE_PAY_ASSET` from `payAsset.address`, `SHADE_TREE_REGISTRAR_PORT` from `registrar.port`, `SHADE_TREE_RPC_URL`). Explicit env/flags always win. See `network/README.md`. | `shade-tree` (all commands), client selection, heartbeat, gateway-registry, register-gateway, uptime probe | `--network` |
 | `SHADE_TREE_RPC_URL` | `http://127.0.0.1:8545` (register scripts try `deployed.rpcUrl` first) | JSON-RPC endpoint for all on-chain reads/writes. | gateway-registry, root-provider, gateway slasher, register-* | `--rpc-url` |
+| `SHADE_TREE_RPC_TIMEOUT_MS` | `15000` | Deadline for each execution JSON-RPC request, including root refreshes, stake checks, slashing, registration, and registrar settlement. Invalid or zero values fall back to the default rather than disabling the guard. | root-provider, gateway-registry, gateway slasher, register-*, registrar | (none) |
+| `SHADE_TREE_TX_RECEIPT_TIMEOUT_MS` | `180000` | Wall-clock deadline after broadcasting a transaction while waiting for its receipt and requested confirmations. A timeout is reported as unresolved, with the transaction hash; it does not mean the transaction failed and must be checked before retrying. Invalid or zero values fall back to the default. | gateway slasher, register-*, exit-gateway, registrar | (none) |
 | `SHADE_TREE_TOR_HOST` | `127.0.0.1` | Local Tor SOCKS host. | heartbeat, client, selection | `--tor-host` |
 | `SHADE_TREE_TOR_PORT` | `9250` | Local Tor SOCKS port. | heartbeat, client, selection | `--tor-port` |
 | `SHADE_TREE_EPOCH_SECONDS` | `120` | Epoch length in seconds (the nullifier/rate window). Must match on client and gateway. | lib/rln (client + gateway) | `--epoch-seconds` |
@@ -138,6 +153,14 @@ Read by `payments/registrar.mjs` (the operator's HTTP-402 service that sells mem
 | `SHADE_TREE_BANNER` | `auto` | One-time ASCII tree after the role is ready: `auto`, `always`, or `never` (boolean spellings also accepted). `auto` requires an interactive TTY. JSON output always suppresses it. | long-running roles | `--banner` / `--no-banner` |
 | `SHADE_TREE_METRICS_PORT` | `0` (off) | Separate Prometheus listener for the Elder Tree, node, registrar, or Proxy. It is hard-bound to loopback and serves only `/metrics`, `/livez`, and `/readyz`. Choose a free port for each process on the host. | bootnode, gateway, registrar, client proxy | `--metrics-port` |
 | `SHADE_TREE_HEARTBEAT_METRICS_PORT` | `0` (off) | Separate loopback Prometheus listener for the heartbeat. | heartbeat | `--heartbeat-metrics-port` |
+
+## Scoped agent runner (`shade-tree run`)
+
+| Env var | Default | Controls | Component | Flag |
+|---|---|---|---|---|
+| `SHADE_TREE_PROXY_URL` | `http://127.0.0.1:<SHADE_TREE_SHIM_PORT>` | HTTP CONNECT Proxy URL installed only into the child process. Only `http://` URLs containing a host and port are accepted. | `shade-tree run` | `--proxy` |
+| `SHADE_TREE_NO_PROXY` | (unset) | Extra comma-separated agent-local hosts appended to the fixed loopback bypass list. `*` is rejected because it would bypass Shade Tree. | `shade-tree run` | `--no-proxy` |
+| `SHADE_TREE_PROXY_CHECK_TIMEOUT_MS` | `2000` | TCP preflight deadline before the child is started; integer 1..30000 milliseconds. | `shade-tree run` | `--check-timeout-ms` |
 
 ## Deploy (`bootnode/deploy/bootstrap.sh`)
 
@@ -154,6 +177,8 @@ Read only by the one-command droplet bring-up (not by any `shade-tree` process).
 | `SHADE_TREE_ELDER_METRICS_PORT` / `SHADE_TREE_NODE_METRICS_PORT` / `SHADE_TREE_REGISTRAR_METRICS_PORT` / `SHADE_TREE_HEARTBEAT_METRICS_PORT` | `9100` / `9101` / `9102` / `9103` | Loopback metrics ports written into the Elder Tree, node, optional registrar, and heartbeat units. All four must be distinct and cannot reuse an active service or Tor port. |
 | `SHADE_TREE_REPO` / `SHADE_TREE_REF` / `SHADE_TREE_DIR` / `SHADE_TREE_BOOTNODE_PORT` / `SHADE_TREE_GATEWAY_PORT` | see script header | Clone source, install dir, loopback backend ports. |
 | `SHADE_TREE_ADMIT` | `invited` | The gateway's admission policy (T-FEAT-9), rendered into BOTH the gateway unit (enforced) and the heartbeat unit (advertised as signed `caps.admits`); normalized to the canonical order `invited,staked,paid`. `staked` requires `SHADE_TREE_GROUP_CONTRACT`, `paid` requires `SHADE_TREE_PAID_ACCESS_CONTRACT`, either requires `SHADE_TREE_RPC_URL` (validated up front; rendered into the gateway unit). `SHADE_TREE_HELIOS=1` requires `staked` (it anchors the on-chain root); `SHADE_TREE_REGISTRAR=1` requires `paid` (admit what you sell). The default render's units gained `Environment=SHADE_TREE_ADMIT=invited` (golden regenerated). |
+| `SHADE_TREE_FLEET_TALLY_PEERS` / `SHADE_TREE_FLEET_TALLY_TOKEN` | *(unset = off)* | Optional bootstrap-managed tally mesh. Peers must be v3 `.onion:port` addresses and share one independently generated 32 to 128 character URL-safe token. The token is written to a root-only environment file, not the unit. |
+| `SHADE_TREE_FLEET_TALLY_PORT` | `8879` | Loopback tally backend and gateway-onion virtual port. Must not collide with a service, Tor, or metrics port. |
 | `SHADE_TREE_REGISTRAR` | `0` | `1` = render + start `shade-tree-registrar.service` (the 402 registrar), publish it as an extra `HiddenServicePort SHADE_TREE_REGISTRAR_PORT` of an onion this box runs — the BOOTNODE onion (bootnode+gateway box; the bootnode advertises it in `/health`) or, T-FEAT-9, the GATEWAY onion (gateway-only box, `SHADE_TREE_BOOTNODE_ONION` set) — and make the heartbeat advertise it as signed `caps.pay`. Companions (all required with `1`): `SHADE_TREE_PAID_ACCESS_CONTRACT`, `SHADE_TREE_PAY_ASSET`, `SHADE_TREE_PAY_PRICES`, `SHADE_TREE_RPC_URL`, `paid` in `SHADE_TREE_ADMIT`; optional `SHADE_TREE_PAY_PROTOCOLS` (default `x402,mpp`; rendered into the registrar unit + both adverts), `SHADE_TREE_PAY_TO`, `SHADE_TREE_REGISTRAR_PORT`, `SHADE_TREE_PAY_CHAIN_ID`. The operator key is a secret → a 0600 drop-in, never a tunable (`docs/OPERATOR.md` "Selling access via 402"). |
 | `SHADE_TREE_RENDER_ONLY` | (unset) | `<dir>`: render the torrc + units under `<dir>/etc/…` and exit (no root, nothing installed); `--render <dir>` is the same. |
 
@@ -174,7 +199,7 @@ Not part of the core protocol; set only when running the demo page or the Sepoli
 
 Chainless: mock stake (everyone counts as staked), members root from the local `members.json`, discovery either pinned or via a static signed directory / local bootnode. No `SHADE_TREE_GROUP_CONTRACT`, so the gateway uses the `members.json` fallback and never touches an RPC.
 
-```sh
+```bash
 # gateway (members.json root, dry-run slashing, mock stake)
 export SHADE_TREE_STAKE_MODE=mock
 # shade-tree gateway
@@ -185,7 +210,8 @@ export SHADE_TREE_BOOTNODE_ADMISSION=open
 # shade-tree bootnode
 
 # client — pinned single onion (simplest), OR static directory
-export SHADE_TREE_SECRET=0x<member-secret-from-enroll>
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT   # exact enrolled tier
 export SHADE_TREE_ONION=<gateway-onion>            # pin one gateway
 #   or, fleet rotation over a signed directory / local bootnode:
 # export SHADE_TREE_DIRECTORY=group/directory.example.json
@@ -200,36 +226,38 @@ export SHADE_TREE_TOR_PORT=9250
 
 On-chain everything: bootnode requires operator stake, gateway reads the membership root on-chain and slashes for real. Point every component at the same RPC and contract addresses.
 
-```sh
+```bash
 # shared
 export SHADE_TREE_RPC_URL=https://<your-rpc-endpoint>
 export SHADE_TREE_CONFIRMATIONS=6            # read head-N for reorg safety on a public chain
+export SHADE_TREE_ADMIT=staked               # enforced by the node; advertised by the heartbeat
 
 # bootnode — require live operator stake
 export SHADE_TREE_BOOTNODE_ADMISSION=stake
 export SHADE_TREE_STAKE_MODE=onchain
 export SHADE_TREE_GATEWAY_REGISTRY=0x<GatewayRegistry>
-# shade-tree bootnode
+# shade-tree elder
 
 # gateway operator heartbeat (durably authorizes this onion for the staked operator)
 export SHADE_TREE_BOOTNODE_ONION=<bootnode-onion>
 export SHADE_TREE_GW_IDENTITY=tor/hs/identity.local.json
-export SHADE_TREE_GW_OPERATOR_KEY=0x<operator-key>
+read -s SHADE_TREE_GW_OPERATOR_KEY && export SHADE_TREE_GW_OPERATOR_KEY
 # shade-tree heartbeat
 
 # gateway — on-chain root + real slashing
 export SHADE_TREE_GROUP_CONTRACT=0x<StakedReputationSet>
 export SHADE_TREE_ROOT_PROVIDER=node
-export SHADE_TREE_SLASH_KEY=0x<slasher-hot-key>
+read -s SHADE_TREE_SLASH_KEY && export SHADE_TREE_SLASH_KEY
 export SHADE_TREE_SLASH_CONTRACT=0x<StakedReputationSet>
 # export SHADE_TREE_SLASH_RECEIVER=0x<receiver>    # optional; defaults to the slasher address
-# shade-tree gateway
+# shade-tree node
 
 # client — live directory from the bootnode, pinned to its signer
-export SHADE_TREE_SECRET=0x<member-secret>
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT   # exact enrolled tier
 export SHADE_TREE_BOOTNODE_ONION=<bootnode-onion>
 export SHADE_TREE_DIR_SIGNER=<bootnode-signer-pubkey>
-# shade-tree client
+# shade-tree proxy
 ```
 
 ## Client directory freshness bound (T-FEAT-21)

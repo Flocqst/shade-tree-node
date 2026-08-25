@@ -1,0 +1,77 @@
+name: rust-verify
+
+# One reusable Rust gate for pull requests and release tags. Keeping the commands
+# here prevents the release workflow from silently testing less than CI.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: check and test workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Assert package versions agree
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          with open("package.json", encoding="utf-8") as package_file:
+              package_version = json.load(package_file)["version"]
+
+          metadata = json.loads(
+              subprocess.check_output(
+                  [
+                      "cargo",
+                      "metadata",
+                      "--manifest-path",
+                      "rust/Cargo.toml",
+                      "--no-deps",
+                      "--format-version",
+                      "1",
+                  ],
+                  text=True,
+              )
+          )
+          mismatches = [
+              f'{package["name"]}={package["version"]}'
+              for package in metadata["packages"]
+              if package["version"] != package_version
+          ]
+          if mismatches:
+              raise SystemExit(
+                  "Rust workspace versions must match package.json "
+                  f'({package_version}): {", ".join(mismatches)}'
+              )
+
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/v"):
+              tag_version = ref.removeprefix("refs/tags/v")
+              if tag_version != package_version:
+                  raise SystemExit(
+                      f"Release tag v{tag_version} does not match package version "
+                      f"{package_version}"
+                  )
+
+          print(f"package.json and all Rust crates: {package_version}")
+          PY
+
+      - name: Check workspace (all targets and features)
+        working-directory: rust
+        run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Test workspace (all features)
+        working-directory: rust
+        run: cargo test --workspace --all-features --locked

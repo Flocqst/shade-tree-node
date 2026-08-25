@@ -184,6 +184,7 @@ async function main() {
       SHADE_TREE_HELIOS_RPC_URL: "",
       SHADE_TREE_NETWORK: "",
       SHADE_TREE_EGRESS_ALLOW: targetList.join(","),
+      SHADE_TREE_ALLOW_PRIVATE_TARGETS: "1",
       SHADE_TREE_EPOCH_SECONDS: "120",
     };
     const gwLog = { log: (step, line) => { if (/roots:|admits:|SHADE_TREE_ADMIT|paid-access|slash:|SLASH|root source|routed/.test(line)) console.log("    " + line); } };

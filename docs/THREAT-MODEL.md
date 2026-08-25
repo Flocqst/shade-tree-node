@@ -437,7 +437,8 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
 
 - **Cross-fleet replay / rate is fleet-wide only when the tally is on (T-FEAT-20/20b, ROADMAP-v1
   #1/#3).** §4.6 defends *one* gateway. The shared per-epoch nullifier tally
-  (`gateway/fleet-tally.mjs`, `SHADE_TREE_FLEET_TALLY_PEERS`) rejects a replay at a second gateway and
+  (`gateway/fleet-tally.mjs`, `SHADE_TREE_FLEET_TALLY_PEERS`, authenticated by
+  `SHADE_TREE_FLEET_TALLY_TOKEN`) rejects a replay at a second gateway and
   shares only `(nullifier, epoch)` (RLN's per-tunnel nullifiers keep it from being a linkability
   channel), but it is **opt-in and fail-open**: a fleet without it lets a malicious gateway fan a
   captured envelope to peers (each accepts it once), and a member spreading requests across `N`

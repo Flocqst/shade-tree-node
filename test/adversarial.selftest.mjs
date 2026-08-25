@@ -283,6 +283,7 @@ async function main() {
     // =====================================================================================
     console.log("\nSCENARIO 6 — gateway endpoint DoS (slow-loris / half-close crash / tunnel pinning):");
     process.env.SHADE_TREE_EGRESS_ALLOW = "127.0.0.1:*"; // egress policy is built at import; allow the loopback echo target
+    process.env.SHADE_TREE_ALLOW_PRIVATE_TARGETS = "1"; // isolated loopback attack harness only
     const { makeHandler, makeConnLimiter } = await import("../gateway/gateway.mjs");
     const echo = net.createServer((c) => { c.on("data", (d) => c.write(d)); c.on("error", () => {}); });
     await new Promise((r) => echo.listen(0, "127.0.0.1", r));

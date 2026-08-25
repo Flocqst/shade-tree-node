@@ -34,7 +34,7 @@ console.log("shade-tree doctor\n");
 
 // node
 const major = Number(process.versions.node.split(".")[0]);
-major >= 18 ? okLine(`node ${process.versions.node}`) : badLine(`node ${process.versions.node} (need >= 18 for global fetch/webcrypto)`);
+major >= 20 ? okLine(`node ${process.versions.node}`) : badLine(`node ${process.versions.node} (need >= 20; see package.json engines)`);
 
 // deps
 existsSync(join(ROOT, "node_modules", "socks")) && existsSync(join(ROOT, "node_modules", "@semaphore-protocol"))
@@ -46,8 +46,15 @@ existsSync(join(ROOT, "node_modules", "ethers")) ? okLine("ethers present (on-ch
 const tor = await has("tor", ["--version"]);
 tor ? okLine(tor) : warnLine("tor not on PATH — the gateway/bootnode/client need a Tor daemon (see docs/QUICKSTART.md)");
 const torHost = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1";
-const torPort = Number(process.env.SHADE_TREE_TOR_PORT || 9250);
-(await portOpen(torHost, torPort)) ? okLine(`Tor SOCKS reachable at ${torHost}:${torPort}`) : warnLine(`no Tor SOCKS at ${torHost}:${torPort} (start tor, or set --tor-port)`);
+const explicitTorPort = process.env.SHADE_TREE_TOR_PORT;
+const torPorts = explicitTorPort ? [Number(explicitTorPort)] : [9250, 9050, 9150, 9260];
+let reachableTorPort = null;
+for (const port of torPorts) {
+  if (await portOpen(torHost, port)) { reachableTorPort = port; break; }
+}
+reachableTorPort
+  ? okLine(`Tor SOCKS reachable at ${torHost}:${reachableTorPort}`)
+  : warnLine(`no Tor SOCKS at ${torHost}:${torPorts.join(",")} (start Tor, or set SHADE_TREE_TOR_PORT)`);
 
 // foundry (only needed to deploy/test the contracts)
 const forge = await has("forge", ["--version"]);

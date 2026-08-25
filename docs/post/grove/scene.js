@@ -210,13 +210,14 @@ function addAnnouncedGrove(scene, snapshot, quality) {
   const rootPoints = [];
   treeSpecs.forEach((tree, index) => {
     const bend = (index % 2 ? 1 : -1) * (0.12 + (index % 4) * 0.035);
-    const middle = new THREE.Vector3(tree.x * 0.48 - tree.z * bend, 0.025, tree.z * 0.48 + tree.x * bend);
-    const end = new THREE.Vector3(tree.x, 0.025, tree.z);
+    const middle = new THREE.Vector3(tree.x * 0.48 - tree.z * bend, 0.06, tree.z * 0.48 + tree.x * bend);
+    const end = new THREE.Vector3(tree.x, 0.06, tree.z);
     rootPoints.push(ORIGIN, middle, middle, end);
   });
   const rootGeometry = new THREE.BufferGeometry().setFromPoints(rootPoints);
-  const rootMaterial = new THREE.LineBasicMaterial({ color: SIGNAL, transparent: true, opacity: 0.12 });
+  const rootMaterial = new THREE.LineDashedMaterial({ color: SIGNAL, transparent: true, opacity: 0.2, dashSize: 0.18, gapSize: 0.12 });
   const roots = new THREE.LineSegments(rootGeometry, rootMaterial);
+  roots.computeLineDistances();
   group.add(roots);
   scene.add(group);
 
@@ -274,7 +275,7 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
     antialias: !lowQuality,
     canvas,
     failIfMajorPerformanceCaveat: true,
-    powerPreference: lowQuality ? "default" : "high-performance",
+    powerPreference: "default",
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, lowQuality ? 1 : 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -400,7 +401,7 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
   function updateStrongPulse(time) {
     if (!Number.isFinite(strongStartedAt)) {
       censusSignal.dots.visible = false;
-      groveRecord.roots.material.opacity = 0.12;
+      groveRecord.roots.material.opacity = 0.2;
       signalLight.intensity = 0;
       return;
     }
@@ -413,7 +414,7 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
     const elapsed = time - strongStartedAt;
     const total = 1500 + censusSignal.specs.length * 18;
     const envelope = Math.sin(clamp(elapsed / total) * Math.PI);
-    groveRecord.roots.material.opacity = 0.12 + envelope * 0.68;
+    groveRecord.roots.material.opacity = 0.2 + envelope * 0.6;
     signalLight.intensity = envelope * 2.2;
     censusSignal.dots.visible = elapsed >= 0 && elapsed < total;
     censusSignal.specs.forEach((spec, index) => {
@@ -440,7 +441,7 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
     if (elapsed >= total) {
       strongStartedAt = -Infinity;
       censusSignal.dots.visible = false;
-      groveRecord.roots.material.opacity = 0.12;
+      groveRecord.roots.material.opacity = 0.2;
       signalLight.intensity = 0;
       elderRecord.assets.leafMaterials.forEach((material) => { material.emissiveIntensity = 0; });
       groveRecord.assets.leafMaterials.forEach((material) => { material.emissiveIntensity = 0; });
@@ -459,13 +460,26 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
     renderer.render(scene, camera);
   }
 
-  function tick(time) {
-    if (disposed) return;
+  function stopFrames() {
+    if (!frameId) return;
+    window.cancelAnimationFrame(frameId);
+    frameId = 0;
+  }
+
+  function scheduleFrame() {
+    if (disposed || reducedMotion || frameId || !stageVisible || document.hidden) return;
     frameId = window.requestAnimationFrame(tick);
+  }
+
+  function tick(time) {
+    frameId = 0;
+    if (disposed || !stageVisible || document.hidden) return;
     const minimumFrame = lowQuality ? 50 : 34;
-    if (!stageVisible || document.hidden || time - lastFrame < minimumFrame) return;
-    lastFrame = time;
-    render(time);
+    if (time - lastFrame >= minimumFrame) {
+      lastFrame = time;
+      render(time);
+    }
+    scheduleFrame();
   }
 
   function onPointerMove(event) {
@@ -482,9 +496,8 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
 
   function onContextLost(event) {
     event.preventDefault();
-    disposed = true;
+    cleanup();
     stage.classList.remove("is-live");
-    window.cancelAnimationFrame(frameId);
   }
 
   function replaceSnapshot(nextSnapshot) {
@@ -537,27 +550,64 @@ export function mountNetworkGrove({ stage, canvas, snapshot, reducedMotion, qual
   resizer?.observe(stage);
   const visibility = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
     stageVisible = entries.some((entry) => entry.isIntersecting);
+    if (stageVisible) {
+      lastFrame = 0;
+      scheduleFrame();
+    } else {
+      stopFrames();
+    }
   }) : null;
   visibility?.observe(stage);
   canvas.addEventListener("webglcontextlost", onContextLost, { once: true });
 
+  function onVisibilityChange() {
+    if (document.hidden) {
+      stopFrames();
+      return;
+    }
+    lastFrame = 0;
+    scheduleFrame();
+  }
+
+  function onPageHide(event) {
+    if (event.persisted) {
+      stopFrames();
+      return;
+    }
+    cleanup();
+  }
+
+  function onPageShow(event) {
+    if (!event.persisted) return;
+    lastFrame = 0;
+    scheduleFrame();
+  }
+
+  function cleanup() {
+    if (disposed) return;
+    disposed = true;
+    stopFrames();
+    resizer?.disconnect();
+    visibility?.disconnect();
+    canvas.removeEventListener("webglcontextlost", onContextLost);
+    stage.removeEventListener("pointermove", onPointerMove);
+    stage.removeEventListener("pointerleave", onPointerLeave);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
+    disposeObject(scene);
+    renderer.dispose();
+  }
+
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
+
   if (!reducedMotion) {
     stage.addEventListener("pointermove", onPointerMove, { passive: true });
     stage.addEventListener("pointerleave", onPointerLeave, { passive: true });
-    frameId = window.requestAnimationFrame(tick);
+    scheduleFrame();
   }
-
-  window.addEventListener("pagehide", (event) => {
-    if (event.persisted) return;
-    disposed = true;
-    window.cancelAnimationFrame(frameId);
-    resizer?.disconnect();
-    visibility?.disconnect();
-    stage.removeEventListener("pointermove", onPointerMove);
-    stage.removeEventListener("pointerleave", onPointerLeave);
-    disposeObject(scene);
-    renderer.dispose();
-  }, { once: true });
 
   return {
     beginQuery,
