@@ -79,6 +79,27 @@ paths:
               schema:
                 type: string
                 const: nosniff
+        "400":
+          description: Query parameters are not supported.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                    const: unsupported_query
         "503":
           description: No valid upstream snapshot is available; never represents a zero count.
           headers:

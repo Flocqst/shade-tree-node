@@ -63,9 +63,10 @@ try {
   });
   const upstreamUrl = new URL(upstreamCall.url);
   const fixedSource = new URL(GROVE_SNAPSHOT_URL);
-  check("API requests only the fixed signed-snapshot source", upstreamUrl.origin === fixedSource.origin && upstreamUrl.pathname === fixedSource.pathname && /^\d+$/.test(upstreamUrl.searchParams.get("minute") || "") && [...upstreamUrl.searchParams].length === 1);
+  check("API requests only the fixed signed-snapshot source", upstreamUrl.href === fixedSource.href);
   check("API fetch is bounded by a signal and refuses redirects", upstreamCall.options.signal instanceof AbortSignal && upstreamCall.options.redirect === "error");
-  check("API revalidates the generated branch before applying its own cache", upstreamCall.options.headers["Cache-Control"] === "no-cache");
+  check("API revalidates the generated branch before applying its own cache", upstreamCall.options.cache === "no-store" && upstreamCall.options.headers["Cache-Control"] === "no-cache");
+  check("API requests GitHub's raw representation with a pinned API version", upstreamCall.options.headers.Accept === "application/vnd.github.raw+json" && upstreamCall.options.headers["X-GitHub-Api-Version"] === "2022-11-28");
   check("API returns a successful JSON response", success.status === 200 && success.headers.get("content-type") === "application/json; charset=utf-8");
   const successBody = await success.text();
   check("API returns the signed envelope unchanged", successBody === `${JSON.stringify(snapshot)}\n`);
@@ -104,6 +105,17 @@ try {
     }),
   );
   check("API honors the If-None-Match wildcard", wildcardConditional.status === 304);
+
+  let queryReachedUpstream = false;
+  const unsupportedQuery = await requestWith(
+    async () => {
+      queryReachedUpstream = true;
+      return upstream(snapshot);
+    },
+    new Request("https://shade-tree-node.vercel.app/api/v1/data/grove/sepolia/head?cache-bust=1"),
+  );
+  check("API rejects unsupported query parameters before reaching upstream", unsupportedQuery.status === 400 && !queryReachedUpstream);
+  check("unsupported query responses are generic and not cached", unsupportedQuery.headers.get("cache-control") === "no-store" && await unsupportedQuery.text() === '{"error":"unsupported_query"}\n');
 
   console.error = () => {};
   for (const [name, body, options] of [

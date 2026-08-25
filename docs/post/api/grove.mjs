@@ -15,7 +15,20 @@ const FAILURE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 };
 
+const REQUEST_ERROR_HEADERS = {
+  "Cache-Control": "no-store",
+  "Content-Type": "application/json; charset=utf-8",
+  "X-Content-Type-Options": "nosniff",
+};
+
 export async function GET(request) {
+  if (request?.url && new URL(request.url).search) {
+    return new Response('{"error":"unsupported_query"}\n', {
+      status: 400,
+      headers: REQUEST_ERROR_HEADERS,
+    });
+  }
+
   try {
     const snapshot = await loadGroveSnapshot();
     const body = `${JSON.stringify(snapshot)}\n`;

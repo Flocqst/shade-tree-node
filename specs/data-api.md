@@ -78,15 +78,16 @@ The read-only observer passes the signed JSON to a separate minimal publisher;
 the publisher checks out no code and receives repository write permission only
 for that step. It creates a one-file, parentless commit on the generated
 `network-state` branch, so the branch itself carries no old commit chain. A
-dependency-free Vercel Function reads that snapshot from a fixed URL, caps the
-response at 64 KiB, checks its exact schema and publication signature, and
-serves it as JSON from `/api/v1/data/grove/sepolia/head`. `/api/grove` and the
-earlier `/grove/network.json` path are compatibility aliases to that same
-handler. A Grove visitor never contacts the bootnode or GitHub directly from
-their browser. The function asks Raw GitHub to revalidate the generated branch
-and adds a non-user-controlled, one-minute cache key to that same fixed path
-before applying its own edge policy. This prevents a regional branch cache from
-extending the intended freshness window.
+dependency-free Vercel Function reads that snapshot from a fixed, versioned
+GitHub Contents API URL, caps the response at 64 KiB, checks its exact schema
+and publication signature, and serves it as JSON from
+`/api/v1/data/grove/sepolia/head`. `/api/grove` and the earlier
+`/grove/network.json` path are compatibility aliases to that same handler. A
+Grove visitor never contacts the bootnode or GitHub directly from their
+browser. The function requests GitHub's raw representation without an upstream
+cache before applying its own edge policy. Unsupported query parameters are
+rejected before the upstream read, preventing caller-controlled cache variants
+from bypassing that policy.
 
 The API gives browsers a 60-second cache and sets a five-minute Vercel edge
 policy with one hour of stale-while-revalidate. It gives the upstream read four
@@ -164,6 +165,7 @@ read the public response.
 | --- | --- |
 | `200` | Exact verified signed envelope; cache and schema headers present |
 | `304` | The request's `If-None-Match` weakly matches the current response-byte ETag |
+| `400` | Query parameters are unsupported; body is only `{"error":"unsupported_query"}` |
 | `503` | Upstream unavailable, oversized, malformed, wrong content type, wrong schema, or bad signature; body is only `{"error":"network_snapshot_unavailable"}` |
 
 `/api/grove` and `/grove/network.json` remain aliases for existing clients. A

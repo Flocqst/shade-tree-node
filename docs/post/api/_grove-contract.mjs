@@ -1,6 +1,6 @@
 import { verify as verifyBytes } from "node:crypto";
 
-export const GROVE_SNAPSHOT_URL = "https://raw.githubusercontent.com/dmarzzz/shade-tree-node/network-state/grove.json";
+export const GROVE_SNAPSHOT_URL = "https://api.github.com/repos/dmarzzz/shade-tree-node/contents/grove.json?ref=network-state";
 export const GROVE_MAX_BYTES = 64 * 1024;
 export const GROVE_FETCH_TIMEOUT_MS = 4_000;
 export const GROVE_NETWORK = "sepolia";
@@ -164,14 +164,15 @@ async function boundedText(response) {
 export async function loadGroveSnapshot(fetchImpl = globalThis.fetch, { now = Date.now() } = {}) {
   let response;
   try {
-    const sourceUrl = new URL(GROVE_SNAPSHOT_URL);
-    sourceUrl.searchParams.set("minute", String(Math.floor(now / 60_000)));
-    response = await fetchImpl(sourceUrl, {
+    response = await fetchImpl(GROVE_SNAPSHOT_URL, {
       method: "GET",
       headers: {
-        Accept: "application/json, text/plain;q=0.9",
+        Accept: "application/vnd.github.raw+json",
         "Cache-Control": "no-cache",
+        "User-Agent": "shade-tree-grove-api",
+        "X-GitHub-Api-Version": "2022-11-28",
       },
+      cache: "no-store",
       redirect: "error",
       signal: AbortSignal.timeout(GROVE_FETCH_TIMEOUT_MS),
     });
@@ -182,7 +183,9 @@ export async function loadGroveSnapshot(fetchImpl = globalThis.fetch, { now = Da
 
   if (response.status !== 200) fail("upstream-http");
   const mediaType = (response.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
-  if (mediaType !== "application/json" && mediaType !== "text/plain") fail("upstream-content-type");
+  if (mediaType !== "application/json"
+    && mediaType !== "text/plain"
+    && mediaType !== "application/vnd.github.raw+json") fail("upstream-content-type");
 
   let snapshot;
   try {
