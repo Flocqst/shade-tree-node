@@ -166,7 +166,10 @@ export async function loadGroveSnapshot(fetchImpl = globalThis.fetch, { now = Da
   try {
     response = await fetchImpl(GROVE_SNAPSHOT_URL, {
       method: "GET",
-      headers: { Accept: "application/json, text/plain;q=0.9" },
+      headers: {
+        Accept: "application/json, text/plain;q=0.9",
+        "Cache-Control": "no-cache",
+      },
       redirect: "error",
       signal: AbortSignal.timeout(GROVE_FETCH_TIMEOUT_MS),
     });

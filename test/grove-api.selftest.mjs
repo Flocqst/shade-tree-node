@@ -63,6 +63,7 @@ try {
   });
   check("API requests only the fixed signed-snapshot source", upstreamCall.url === GROVE_SNAPSHOT_URL);
   check("API fetch is bounded by a signal and refuses redirects", upstreamCall.options.signal instanceof AbortSignal && upstreamCall.options.redirect === "error");
+  check("API revalidates the generated branch before applying its own cache", upstreamCall.options.headers["Cache-Control"] === "no-cache");
   check("API returns a successful JSON response", success.status === 200 && success.headers.get("content-type") === "application/json; charset=utf-8");
   const successBody = await success.text();
   check("API returns the signed envelope unchanged", successBody === `${JSON.stringify(snapshot)}\n`);
