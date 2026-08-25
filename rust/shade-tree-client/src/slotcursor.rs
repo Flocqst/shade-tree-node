@@ -384,7 +384,7 @@ mod tests {
             }));
         }
         let got: BTreeSet<u64> = workers.into_iter().map(|w| w.join().unwrap()).collect();
-        assert_eq!(got, (0..n as u64).collect());
+        assert_eq!(got, (0..n as u64).collect::<BTreeSet<_>>());
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
