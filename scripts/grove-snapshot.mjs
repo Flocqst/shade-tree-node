@@ -10,6 +10,8 @@ import { createPublicKey } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { observeFleet } from "./uptime-probe.mjs";
 import { attestPublicGroveSnapshot, buildPublicGroveSnapshot } from "../lib/public-grove.mjs";
+import { fetchOverTor } from "../bootnode/fetch.mjs";
+import { publicRelayFromAggregate } from "../lib/relay-telemetry.mjs";
 
 function option(argv, name, fallback = null) {
   const exact = argv.indexOf(name);
@@ -23,12 +25,23 @@ async function readPrevious(path) {
   try { return JSON.parse(await readFile(resolve(path), "utf8")); } catch { return null; }
 }
 
+export async function observeRelayAggregate({
+  onion = process.env.SHADE_TREE_BOOTNODE_ONION,
+  torHost = process.env.SHADE_TREE_TOR_HOST || "127.0.0.1",
+  torPort = Number(process.env.SHADE_TREE_TOR_PORT || 9250),
+  fetchRelay = fetchOverTor,
+} = {}) {
+  if (!onion) throw new Error("relay aggregate observer requires bootnode onion");
+  return fetchRelay(onion, "/telemetry/aggregate", { torHost, torPort, maxBytes: 64 * 1024 });
+}
+
 export async function collectPublicGrove({
   previous = null,
   network = process.env.SHADE_TREE_NETWORK || "unknown",
   observedAt = new Date(),
   observe = observeFleet,
   signingKey = process.env.SHADE_TREE_GROVE_SIGNING_KEY,
+  relayAggregate = null,
 } = {}) {
   if (!signingKey) throw new Error("public Grove signing key required");
   const { result, directory } = await observe();
@@ -36,7 +49,8 @@ export async function collectPublicGrove({
     throw new Error("no verified bootnode directory available for public snapshot");
   }
   const previousPublicKey = createPublicKey(signingKey).export({ type: "spki", format: "pem" });
-  const snapshot = buildPublicGroveSnapshot({ directory, previous, previousPublicKey, observedAt, network });
+  const relay = relayAggregate === null ? null : publicRelayFromAggregate(relayAggregate, directory.signer);
+  const snapshot = buildPublicGroveSnapshot({ directory, previous, previousPublicKey, observedAt, network, relay });
   return attestPublicGroveSnapshot(snapshot, signingKey);
 }
 
@@ -45,7 +59,9 @@ async function main() {
   const outPath = resolve(option(argv, "--out", "grove.json"));
   const previous = await readPrevious(option(argv, "--previous"));
   const network = option(argv, "--network", process.env.SHADE_TREE_NETWORK || "unknown");
-  const snapshot = await collectPublicGrove({ previous, network });
+  const includeRelay = option(argv, "--relay", process.env.SHADE_TREE_GROVE_RELAY || "0") === "1";
+  const relayAggregate = includeRelay ? await observeRelayAggregate() : null;
+  const snapshot = await collectPublicGrove({ previous, network, relayAggregate });
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify(snapshot, null, 2) + "\n", "utf8");
   console.log("public Grove snapshot: signed aggregate written");

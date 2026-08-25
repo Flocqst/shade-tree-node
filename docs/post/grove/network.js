@@ -4,7 +4,7 @@ import { splitHistory, windowedHistory } from "./history.js";
 import { nextAgeRefreshDelay, snapshotFreshness } from "./freshness.js";
 import { grovePatchCount } from "./visual-model.js";
 
-const LIVE_URL = "/api/v1/data/grove/sepolia/head";
+const LIVE_URL = "/api/v2/data/grove/sepolia/head";
 const FALLBACK_URL = "/grove/network.fallback.json";
 const NETWORK = "sepolia";
 const FETCH_TIMEOUT_MS = 9_000;
@@ -30,14 +30,60 @@ let currentView = { bundled: false, refreshFailed: false };
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 const safeCount = (value) => Number.isInteger(value) && value >= 0 && value <= 100_000;
+const decimalU64 = (value) => {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(value)) return null;
+  try { const parsed = BigInt(value); return parsed <= (1n << 64n) - 1n ? parsed : null; } catch { return null; }
+};
 const isoMillis = (value) => {
   if (typeof value !== "string") return NaN;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : NaN;
 };
 
+function validRelayWindow(value, hours, relay) {
+  const available = value?.status === "available";
+  const start = isoMillis(value?.windowStart);
+  const end = isoMillis(value?.windowEnd);
+  const base = exactKeys(value, available
+    ? ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "roundedBytes"]
+    : ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "suppressionReason"])
+    && value.windowHours === hours
+    && Number.isFinite(start) && Number.isFinite(end)
+    && end - start === hours * 60 * 60_000
+    && end <= isoMillis(relay.generatedAt) - relay.delayHours * 60 * 60_000
+    && safeCount(value.reportingNodes);
+  if (!base) return false;
+  if (available) {
+    const rounded = decimalU64(value.roundedBytes);
+    const bucket = decimalU64(relay.rounding.bucketBytes);
+    return value.reportingNodes >= relay.minimumCohort && rounded !== null && bucket !== null
+      && rounded > 0n && rounded % bucket === 0n;
+  }
+  return value.status === "suppressed"
+    && ["minimum-cohort", "unavailable"].includes(value.suppressionReason)
+    && value.roundedBytes === undefined;
+}
+
+function validRelay(value, observedAt) {
+  const generatedAt = isoMillis(value?.generatedAt);
+  return exactKeys(value, ["definition", "unit", "generatedAt", "delayHours", "minimumCohort", "rounding", "windows"])
+    && value.definition === "payload-bytes-relayed"
+    && value.unit === "bytes"
+    && Number.isFinite(generatedAt)
+    && generatedAt >= observedAt - 60 * 60_000
+    && generatedAt <= observedAt + 5 * 60_000
+    && value.delayHours >= 6
+    && Number.isInteger(value.minimumCohort) && value.minimumCohort >= 5
+    && exactKeys(value.rounding, ["method", "bucketBytes"])
+    && value.rounding.method === "ceiling" && decimalU64(value.rounding.bucketBytes) > 0n
+    && exactKeys(value.windows, ["sixHour", "twentyFourHour"])
+    && validRelayWindow(value.windows.sixHour, 6, value)
+    && validRelayWindow(value.windows.twentyFourHour, 24, value);
+}
+
 function validSnapshot(value) {
   const observedAt = isoMillis(value?.observedAt);
+  const v2 = value?.schema === "shade-tree-public-grove-v2";
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
@@ -52,8 +98,10 @@ function validSnapshot(value) {
         && safeCount(sample.announced);
     });
   return value
-    && exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
-    && value.schema === "shade-tree-public-grove-v1"
+    && exactKeys(value, v2
+      ? ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"]
+      : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
+    && (value.schema === "shade-tree-public-grove-v1" || v2)
     && value.network === NETWORK
     && Number.isFinite(observedAt)
     && observedAt <= Date.now() + 5 * 60_000
@@ -77,6 +125,7 @@ function validSnapshot(value) {
     && value.privacy.futureSharedStatsMinReportingNodes === 5
     && historyValid
     && isoMillis(history.at(-1).at) === observedAt
+    && (!v2 || validRelay(value.relay, observedAt))
     && exactKeys(value.attestation, ["algorithm", "keyId", "signature"])
     && value.attestation.algorithm === "Ed25519"
     && value.attestation.keyId === KEY_ID
@@ -84,7 +133,7 @@ function validSnapshot(value) {
 }
 
 function signingPayload(snapshot) {
-  return {
+  const payload = {
     schema: snapshot.schema,
     network: snapshot.network,
     observedAt: snapshot.observedAt,
@@ -109,6 +158,24 @@ function signingPayload(snapshot) {
     },
     history: snapshot.history.map((sample) => ({ at: sample.at, announced: sample.announced })),
   };
+  if (snapshot.schema === "shade-tree-public-grove-v2") {
+    payload.relay = {
+      definition: snapshot.relay.definition,
+      unit: snapshot.relay.unit,
+      generatedAt: snapshot.relay.generatedAt,
+      delayHours: snapshot.relay.delayHours,
+      minimumCohort: snapshot.relay.minimumCohort,
+      rounding: {
+        method: snapshot.relay.rounding.method,
+        bucketBytes: snapshot.relay.rounding.bucketBytes,
+      },
+      windows: {
+        sixHour: { ...snapshot.relay.windows.sixHour },
+        twentyFourHour: { ...snapshot.relay.windows.twentyFourHour },
+      },
+    };
+  }
+  return payload;
 }
 
 function base64Bytes(value) {
@@ -207,6 +274,28 @@ function observationLabel(iso) {
   const hour = String(date.getUTCHours()).padStart(2, "0");
   const minute = String(date.getUTCMinutes()).padStart(2, "0");
   return `${month} ${day} · ${hour}:${minute} UTC`;
+}
+
+function formatPayloadBytes(value) {
+  const bytes = BigInt(value);
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let scale = 1n, unit = 0;
+  while (bytes >= scale * 1024n && unit < units.length - 1) { scale *= 1024n; unit += 1; }
+  const whole = bytes / scale;
+  if (unit === 0 || whole >= 10n) return `${(bytes + scale / 2n) / scale} ${units[unit]}`;
+  const tenths = (bytes * 10n + scale / 2n) / scale;
+  return `${tenths / 10n}.${tenths % 10n} ${units[unit]}`;
+}
+
+function renderRelay(snapshot) {
+  const row = document.querySelector("[data-relay-row]");
+  const window24 = snapshot.relay?.windows?.twentyFourHour;
+  const visible = snapshot.schema === "shade-tree-public-grove-v2" && window24?.status === "available";
+  if (!row) return;
+  row.hidden = !visible;
+  if (!visible) return;
+  setText("[data-relay-value]", formatPayloadBytes(window24.roundedBytes));
+  setText("[data-relay-coverage]", `${window24.reportingNodes} reporting nodes · ≥${snapshot.relay.minimumCohort} required`);
 }
 
 function updateFreshness() {
@@ -316,6 +405,7 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   setText("[data-network]", snapshot.network);
   setText("[data-snapshot-cadence]", `${cadence} min`);
   drawHistory(snapshot);
+  renderRelay(snapshot);
   drawFallback(snapshot);
 
   if (!mounted) {
