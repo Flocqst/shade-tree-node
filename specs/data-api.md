@@ -60,7 +60,7 @@ node heartbeat
     -> generated network-state snapshot
     -> Vercel Grove API schema + signature verification
     -> /api/v1/data/grove/sepolia/head (count-only v1, unchanged)
-    -> /api/v2/data/grove/sepolia/head (v2 with isolated relay aggregate)
+    -> /api/v2/data/grove/sepolia/head (v2 with isolated relay and optional onchain aggregates)
     -> browser signature verification
 ```
 
@@ -189,11 +189,15 @@ GET /api/v2/data/grove/sepolia/head
 Accept: application/json
 ```
 
-Its envelope is `shade-tree-public-grove-v2` and adds exactly one independent
+Its envelope is `shade-tree-public-grove-v2` and requires the independent
 top-level `relay` object. Each fixed 6-hour and 24-hour window includes its
 start/end, reporting-node coverage, and either a positive rounded byte string or
 a suppression reason. `roundedBytes` is absent for `minimum-cohort` and
-`unavailable`; unavailable is never encoded as zero. The v2 handler additionally
+`unavailable`; unavailable is never encoded as zero. A second optional top-level `onchain`
+object appears only after a current v4 target, runtime code, delayed finalized block, counters,
+event index, and registrar attribution all verify. It keeps admission and slash classes separate
+and suppresses exact values below a five-commitment contract cohort. See
+[`docs/GROVE-ONCHAIN-ACTIVITY.md`](../docs/GROVE-ONCHAIN-ACTIVITY.md). The v2 handler additionally
 rejects a head or relay generation time older than one hour. Its machine-readable contract is served from
 `/api/v2/openapi.json` and checked into `docs/post/api/openapi-v2.json`.
 
@@ -354,7 +358,8 @@ only reviewed aggregate-usage exception.
 
 V1 remains count-only and exact-key. Relay telemetry is carried by the reviewed
 `shade-tree-public-grove-v2` envelope at the v2 endpoint under the isolated
-top-level `relay` field; it was not silently appended to v1.
+top-level `relay` field; it was not silently appended to v1. Optional `onchain` composes beside
+`relay` and is signed with it. Relay-only v2 envelopes remain valid.
 
 The following changes also require a new contract and implementation rather
 than copy changes:

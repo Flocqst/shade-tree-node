@@ -7,7 +7,8 @@ info:
     identifier: MIT
   description: >-
     Read-only access to the signed Sepolia Grove v1 and v2 heads. V1 remains
-    count-only; v2 adds only the delayed minimum-cohort relay aggregate.
+    count-only; v2 adds the delayed minimum-cohort relay aggregate and may add
+    an independently validated delayed v4 onchain ledger.
     This specification intentionally excludes proposed publisher endpoints and
     all unimplemented traffic, health, implementation, and per-node metrics.
 servers:
@@ -17,14 +18,13 @@ paths:
     get:
       operationId: getSepoliaGroveV2Head
       summary: Get the latest fresh verified Grove v2 aggregate
-      tags: [Relay telemetry]
+      tags: [Relay telemetry, Onchain activity]
       security: []
       description: >-
         Returns the exact shade-tree-public-grove-v2 envelope. The server
         validates exact keys, Ed25519 publication attestation, head and relay
-        generation ages of at most one hour, six-hour delayed fixed windows,
-        fixed rounding, and a minimum cohort of five. Suppressed windows omit
-        roundedBytes.
+        generation ages of at most one hour, delayed fixed windows, fixed
+        rounding, and minimum cohorts of five. Suppressed values are omitted.
       parameters:
         - name: If-None-Match
           in: header

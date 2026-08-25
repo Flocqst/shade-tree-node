@@ -42,6 +42,7 @@ export async function collectPublicGrove({
   observe = observeFleet,
   signingKey = process.env.SHADE_TREE_GROVE_SIGNING_KEY,
   relayAggregate = null,
+  onchainActivity = null,
 } = {}) {
   if (!signingKey) throw new Error("public Grove signing key required");
   const { result, directory } = await observe();
@@ -50,7 +51,7 @@ export async function collectPublicGrove({
   }
   const previousPublicKey = createPublicKey(signingKey).export({ type: "spki", format: "pem" });
   const relay = relayAggregate === null ? null : publicRelayFromAggregate(relayAggregate, directory.signer);
-  const snapshot = buildPublicGroveSnapshot({ directory, previous, previousPublicKey, observedAt, network, relay });
+  const snapshot = buildPublicGroveSnapshot({ directory, previous, previousPublicKey, observedAt, network, relay, onchain: onchainActivity });
   return attestPublicGroveSnapshot(snapshot, signingKey);
 }
 
@@ -61,7 +62,9 @@ async function main() {
   const network = option(argv, "--network", process.env.SHADE_TREE_NETWORK || "unknown");
   const includeRelay = option(argv, "--relay", process.env.SHADE_TREE_GROVE_RELAY || "0") === "1";
   const relayAggregate = includeRelay ? await observeRelayAggregate() : null;
-  const snapshot = await collectPublicGrove({ previous, network, relayAggregate });
+  const onchainActivity = await readPrevious(option(argv, "--onchain"));
+  if (onchainActivity !== null && !includeRelay) throw new Error("--onchain requires --relay 1");
+  const snapshot = await collectPublicGrove({ previous, network, relayAggregate, onchainActivity });
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify(snapshot, null, 2) + "\n", "utf8");
   console.log("public Grove snapshot: signed aggregate written");

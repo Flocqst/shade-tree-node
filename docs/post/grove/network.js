@@ -3,6 +3,7 @@
 import { splitHistory, windowedHistory } from "./history.js";
 import { nextAgeRefreshDelay, snapshotFreshness } from "./freshness.js";
 import { grovePatchCount } from "./visual-model.js";
+import { onchainSigningPayload, renderOnchainLedger, validPublicOnchain } from "./onchain.js";
 
 const LIVE_URL = "/api/v2/data/grove/sepolia/head";
 const FALLBACK_URL = "/grove/network.fallback.json";
@@ -84,6 +85,7 @@ function validRelay(value, observedAt) {
 function validSnapshot(value) {
   const observedAt = isoMillis(value?.observedAt);
   const v2 = value?.schema === "shade-tree-public-grove-v2";
+  const hasOnchain = v2 && value?.onchain !== undefined;
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
@@ -99,7 +101,9 @@ function validSnapshot(value) {
     });
   return value
     && exactKeys(value, v2
-      ? ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"]
+      ? (hasOnchain
+        ? ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "onchain", "attestation"]
+        : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"])
       : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
     && (value.schema === "shade-tree-public-grove-v1" || v2)
     && value.network === NETWORK
@@ -126,6 +130,7 @@ function validSnapshot(value) {
     && historyValid
     && isoMillis(history.at(-1).at) === observedAt
     && (!v2 || validRelay(value.relay, observedAt))
+    && (!hasOnchain || validPublicOnchain(value.onchain, observedAt))
     && exactKeys(value.attestation, ["algorithm", "keyId", "signature"])
     && value.attestation.algorithm === "Ed25519"
     && value.attestation.keyId === KEY_ID
@@ -174,6 +179,7 @@ function signingPayload(snapshot) {
         twentyFourHour: { ...snapshot.relay.windows.twentyFourHour },
       },
     };
+    if (snapshot.onchain !== undefined) payload.onchain = onchainSigningPayload(snapshot.onchain);
   }
   return payload;
 }
@@ -328,6 +334,7 @@ function showUnavailable() {
   setText("[data-snapshot-state]", "Unavailable");
   setText("[data-view-time]", "Unavailable");
   setText("[data-network]", "Unavailable");
+  renderOnchainLedger(document, {});
 }
 
 function drawHistory(snapshot) {
@@ -406,6 +413,7 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   setText("[data-snapshot-cadence]", `${cadence} min`);
   drawHistory(snapshot);
   renderRelay(snapshot);
+  renderOnchainLedger(document, snapshot);
   drawFallback(snapshot);
 
   if (!mounted) {

@@ -26,18 +26,53 @@ const relay = {
     twentyFourHour: { status: "available", windowHours: 24, windowStart: "2026-08-24T06:00:00.000Z", windowEnd: "2026-08-25T06:00:00.000Z", reportingNodes: 5, roundedBytes: "1073741824" },
   },
 };
-const unsigned = buildPublicGroveSnapshot({ directory, observedAt: NOW, network: "sepolia", relay });
+const onchain = {
+  definition: "finalized-v4-onchain-activity",
+  generatedAt: NOW.toISOString(),
+  delayHours: 6,
+  minimumCohort: 5,
+  source: {
+    chainId: 11155111,
+    finalizedBlock: "12345678",
+    finalizedBlockHash: `0x${"ab".repeat(32)}`,
+    finalizedBlockTime: "2026-08-25T06:00:00.000Z",
+    finalityConfirmations: 64,
+  },
+  membership: {
+    definition: "active-commitments-at-finalized-block",
+    duplicatePolicy: "separate-contract-classes-no-cross-set-dedup",
+    staked: { status: "available", activeCommitments: 9 },
+    paid: { status: "suppressed", suppressionReason: "minimum-cohort" },
+  },
+  settlements: {
+    definition: "finalized-settlement-linked-to-finalized-insert",
+    attributionRule: "signed-registrar-chain-verified-v1",
+    status: "unavailable",
+    unavailableReason: "attribution-unavailable",
+  },
+  enforcement: {
+    definition: "finalized-contract-slash-events",
+    staked: { status: "suppressed", suppressionReason: "minimum-cohort" },
+    paid: { status: "available", finalizedSlashes: 5 },
+  },
+};
+const unsigned = buildPublicGroveSnapshot({ directory, observedAt: NOW, network: "sepolia", relay, onchain });
 const snapshot = attestPublicGroveSnapshot(unsigned, privateKey);
 
 assert.equal(validGroveV2Snapshot(snapshot, { now: NOW.getTime() }), true);
 assert.equal(verifyGroveV2Snapshot(snapshot, publicKey), true);
 assert.deepEqual(groveV2SigningPayload(snapshot).relay, relay);
+assert.deepEqual(groveV2SigningPayload(snapshot).onchain, onchain);
 assert.equal("roundedBytes" in snapshot.relay.windows.sixHour, false, "suppressed window omits a value instead of publishing zero");
 assert.equal(validGroveV2Snapshot({ ...snapshot, relay: { ...relay, nodeId: "forbidden" } }, { now: NOW.getTime() }), false, "exact keys reject per-node metadata");
 assert.equal(validGroveV2Snapshot({ ...snapshot, observedAt: "2026-08-25T10:45:00.000Z", history: [{ at: "2026-08-25T10:45:00.000Z", announced: 5 }] }, { now: NOW.getTime() }), false, "stale v2 head fails closed");
 const staleRelay = { ...snapshot, relay: { ...relay, generatedAt: "2026-08-25T10:45:00.000Z" } };
 assert.equal(validGroveV2Snapshot(staleRelay, { now: NOW.getTime() }), false, "stale relay aggregate fails closed independently of the Grove head");
 assert.equal(verifyGroveV2Snapshot({ ...snapshot, relay: { ...relay, minimumCohort: 6 } }, publicKey), false, "relay metadata is signed");
+assert.equal(verifyGroveV2Snapshot({ ...snapshot, onchain: { ...onchain, delayHours: 7 } }, publicKey), false, "onchain metadata is signed");
+assert.equal(validGroveV2Snapshot({ ...snapshot, onchain: { ...onchain, payer: "forbidden" } }, { now: NOW.getTime() }), false, "onchain exact keys reject identity metadata");
+const relayOnly = attestPublicGroveSnapshot(buildPublicGroveSnapshot({ directory, observedAt: NOW, network: "sepolia", relay }), privateKey);
+assert.equal(validGroveV2Snapshot(relayOnly, { now: NOW.getTime() }), true, "relay-only v2 remains compatible");
 assert.equal(JSON.stringify(snapshot).includes("nodeId"), false);
 assert.equal(JSON.stringify(snapshot).includes("destination"), false);
 

@@ -1,4 +1,5 @@
 import { verify as verifyBytes } from "node:crypto";
+import { publicOnchainSigningPayload, validPublicOnchain } from "./_grove-onchain-contract.mjs";
 
 export const GROVE_V2_SNAPSHOT_URL = "https://api.github.com/repos/dmarzzz/shade-tree-node/contents/grove-v2.json?ref=network-state";
 export const GROVE_V2_MAX_BYTES = 64 * 1024;
@@ -73,6 +74,7 @@ function validRelay(value, observedAt) {
 
 export function validGroveV2Snapshot(value, { now = Date.now(), maxAgeMs = 60 * 60_000 } = {}) {
   const observedAt = isoMillis(value?.observedAt);
+  const hasOnchain = value?.onchain !== undefined;
   const history = value?.history;
   const historyValid = Array.isArray(history) && history.length >= 1 && history.length <= 97
     && history.every((sample, index) => {
@@ -80,7 +82,9 @@ export function validGroveV2Snapshot(value, { now = Date.now(), maxAgeMs = 60 * 
       const prior = index > 0 ? isoMillis(history[index - 1].at) : -Infinity;
       return exactKeys(sample, ["at", "announced"]) && at > prior && at <= observedAt && safeCount(sample.announced);
     });
-  return exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"])
+  return exactKeys(value, hasOnchain
+    ? ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "onchain", "attestation"]
+    : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"])
     && value.schema === "shade-tree-public-grove-v2"
     && value.network === GROVE_V2_NETWORK
     && Number.isFinite(observedAt)
@@ -102,13 +106,14 @@ export function validGroveV2Snapshot(value, { now = Date.now(), maxAgeMs = 60 * 
     && value.privacy.stablePositions === false && value.privacy.futureSharedStatsMinReportingNodes === 5
     && historyValid && isoMillis(history.at(-1).at) === observedAt
     && validRelay(value.relay, observedAt)
+    && (!hasOnchain || validPublicOnchain(value.onchain, observedAt))
     && exactKeys(value.attestation, ["algorithm", "keyId", "signature"])
     && value.attestation.algorithm === "Ed25519" && value.attestation.keyId === GROVE_KEY_ID
     && /^[A-Za-z0-9+/]{86}==$/.test(value.attestation.signature);
 }
 
 export function groveV2SigningPayload(snapshot) {
-  return {
+  const payload = {
     schema: snapshot.schema,
     network: snapshot.network,
     observedAt: snapshot.observedAt,
@@ -148,6 +153,8 @@ export function groveV2SigningPayload(snapshot) {
       },
     },
   };
+  if (snapshot.onchain !== undefined) payload.onchain = publicOnchainSigningPayload(snapshot.onchain);
+  return payload;
 }
 
 export function verifyGroveV2Snapshot(snapshot, publicKey = GROVE_PUBLIC_KEY) {
