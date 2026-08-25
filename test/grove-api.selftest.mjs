@@ -61,7 +61,9 @@ try {
     upstreamCall = { url, options };
     return upstream(snapshot);
   });
-  check("API requests only the fixed signed-snapshot source", upstreamCall.url === GROVE_SNAPSHOT_URL);
+  const upstreamUrl = new URL(upstreamCall.url);
+  const fixedSource = new URL(GROVE_SNAPSHOT_URL);
+  check("API requests only the fixed signed-snapshot source", upstreamUrl.origin === fixedSource.origin && upstreamUrl.pathname === fixedSource.pathname && /^\d+$/.test(upstreamUrl.searchParams.get("minute") || "") && [...upstreamUrl.searchParams].length === 1);
   check("API fetch is bounded by a signal and refuses redirects", upstreamCall.options.signal instanceof AbortSignal && upstreamCall.options.redirect === "error");
   check("API revalidates the generated branch before applying its own cache", upstreamCall.options.headers["Cache-Control"] === "no-cache");
   check("API returns a successful JSON response", success.status === 200 && success.headers.get("content-type") === "application/json; charset=utf-8");

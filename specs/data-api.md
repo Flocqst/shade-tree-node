@@ -84,8 +84,9 @@ serves it as JSON from `/api/v1/data/grove/sepolia/head`. `/api/grove` and the
 earlier `/grove/network.json` path are compatibility aliases to that same
 handler. A Grove visitor never contacts the bootnode or GitHub directly from
 their browser. The function asks Raw GitHub to revalidate the generated branch
-before applying its own edge policy, so two independent caches do not extend
-the intended freshness window.
+and adds a non-user-controlled, one-minute cache key to that same fixed path
+before applying its own edge policy. This prevents a regional branch cache from
+extending the intended freshness window.
 
 The API gives browsers a 60-second cache and sets a five-minute Vercel edge
 policy with one hour of stale-while-revalidate. It gives the upstream read four

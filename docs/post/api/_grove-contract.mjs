@@ -164,7 +164,9 @@ async function boundedText(response) {
 export async function loadGroveSnapshot(fetchImpl = globalThis.fetch, { now = Date.now() } = {}) {
   let response;
   try {
-    response = await fetchImpl(GROVE_SNAPSHOT_URL, {
+    const sourceUrl = new URL(GROVE_SNAPSHOT_URL);
+    sourceUrl.searchParams.set("minute", String(Math.floor(now / 60_000)));
+    response = await fetchImpl(sourceUrl, {
       method: "GET",
       headers: {
         Accept: "application/json, text/plain;q=0.9",
