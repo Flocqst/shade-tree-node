@@ -850,6 +850,8 @@ img {
     font-size: 0.72rem;
   }
   .home-hero { min-height: 43rem; }
+  .grove-stage canvas,
+  .forest-fallback { transform: translateY(1.25rem); }
   .home-copy { top: 7.5rem; }
 
   .home-copy h1 {
