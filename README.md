@@ -86,6 +86,14 @@ if the Proxy is down. Software that ignores proxy variables can use
 connection profile yet. Obtain enrollment, member-set inputs, the Elder onion,
 and its signer pin from the operator you intend to use.
 
+Prefer the prebuilt Rust client binary? One line installs it into
+`~/.local/bin` after verifying its published checksum; options and caveats are
+in [`rust/INSTALL.md`](rust/INSTALL.md):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh | sh
+```
+
 ## How it works
 
 ![Shade Tree reputation gate and network path](docs/post/fig/shade-tree-readme.svg)

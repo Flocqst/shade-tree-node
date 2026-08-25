@@ -182,6 +182,10 @@ Read only by the one-command droplet bring-up (not by any `shade-tree` process).
 | `SHADE_TREE_REGISTRAR` | `0` | `1` = render + start `shade-tree-registrar.service` (the 402 registrar), publish it as an extra `HiddenServicePort SHADE_TREE_REGISTRAR_PORT` of an onion this box runs — the BOOTNODE onion (bootnode+gateway box; the bootnode advertises it in `/health`) or, T-FEAT-9, the GATEWAY onion (gateway-only box, `SHADE_TREE_BOOTNODE_ONION` set) — and make the heartbeat advertise it as signed `caps.pay`. Companions (all required with `1`): `SHADE_TREE_PAID_ACCESS_CONTRACT`, `SHADE_TREE_PAY_ASSET`, `SHADE_TREE_PAY_PRICES`, `SHADE_TREE_RPC_URL`, `paid` in `SHADE_TREE_ADMIT`; optional `SHADE_TREE_PAY_PROTOCOLS` (default `x402,mpp`; rendered into the registrar unit + both adverts), `SHADE_TREE_PAY_TO`, `SHADE_TREE_REGISTRAR_PORT`, `SHADE_TREE_PAY_CHAIN_ID`. The operator key is a secret → a 0600 drop-in, never a tunable (`docs/OPERATOR.md` "Selling access via 402"). |
 | `SHADE_TREE_RENDER_ONLY` | (unset) | `<dir>`: render the torrc + units under `<dir>/etc/…` and exit (no root, nothing installed); `--render <dir>` is the same. |
 
+## Installer (`scripts/install.sh`)
+
+Read only by the one-line installer for the prebuilt Rust client, not by any `shade-tree` process: `SHADE_TREE_VERSION`, `SHADE_TREE_LIVE`, `SHADE_TREE_INSTALL_DIR`, `SHADE_TREE_FORCE`, `SHADE_TREE_TARGET`, `SHADE_TREE_LIBC`, `SHADE_TREE_RELEASE_BASE`. Defaults and meaning: `rust/INSTALL.md` "One-line install".
+
 ## Demo / test only
 
 Not part of the core protocol; set only when running the demo page or the Sepolia integration script.
