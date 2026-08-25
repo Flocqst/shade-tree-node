@@ -200,12 +200,22 @@ function setText(selector, value) {
   document.querySelectorAll(selector).forEach((element) => { element.textContent = value; });
 }
 
+function observationLabel(iso) {
+  const date = new Date(iso);
+  const month = date.toLocaleString("en", { month: "short", timeZone: "UTC" });
+  const day = date.getUTCDate();
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${month} ${day} · ${hour}:${minute} UTC`;
+}
+
 function updateFreshness() {
   if (!currentSnapshot) return;
   const status = snapshotFreshness(currentSnapshot, currentView);
   document.body.classList.toggle("is-stale", status.stale);
   document.body.classList.toggle("is-unavailable", currentView.refreshFailed);
   setText("[data-view-age]", status.age.short);
+  setText("[data-snapshot-state]", status.snapshotState);
   setText("[data-view-state]", status.viewState);
 }
 
@@ -226,6 +236,9 @@ function showUnavailable() {
   document.body.classList.add("is-unavailable");
   setText("[data-view-state]", "Public view unavailable");
   setText("[data-view-age]", "Unavailable");
+  setText("[data-snapshot-state]", "Unavailable");
+  setText("[data-view-time]", "Unavailable");
+  setText("[data-network]", "Unavailable");
 }
 
 function drawHistory(snapshot) {
@@ -292,12 +305,16 @@ function drawHistory(snapshot) {
 
 async function renderSnapshot(snapshot, { bundled = false } = {}) {
   const count = snapshot.nodes.announced;
+  const cadence = Number(snapshot.source.cadenceMinutes) || 15;
   currentSnapshot = snapshot;
   currentView = { bundled, refreshFailed: false };
   updateFreshness();
   scheduleAgeRefresh();
   setText("[data-node-count]", String(count));
   setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "n/a" : String(snapshot.growth.announcedNodeHours));
+  setText("[data-view-time]", observationLabel(snapshot.observedAt));
+  setText("[data-network]", snapshot.network);
+  setText("[data-snapshot-cadence]", `${cadence} min`);
   drawHistory(snapshot);
   drawFallback(snapshot);
 

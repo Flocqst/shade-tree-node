@@ -22,6 +22,7 @@ export function snapshotFreshness(snapshot, {
     return {
       age,
       stale,
+      snapshotState: "Reference",
       viewState: `Signed pre-v4 reference · ${age.long}`,
     };
   }
@@ -30,6 +31,7 @@ export function snapshotFreshness(snapshot, {
     return {
       age,
       stale,
+      snapshotState: stale ? "Stale" : "Update delayed",
       viewState: `Update unavailable · last verified ${age.long}`,
     };
   }
@@ -37,6 +39,7 @@ export function snapshotFreshness(snapshot, {
   return {
     age,
     stale,
+    snapshotState: stale ? "Stale" : "Verified",
     viewState: stale
       ? `${researchFleet ? "Pre-v4 network snapshot" : "Signed snapshot"} · ${age.long} · stale`
       : `${researchFleet ? "Network snapshot" : "Snapshot"} verified · ${age.long}`,

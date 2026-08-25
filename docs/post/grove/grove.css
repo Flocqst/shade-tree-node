@@ -56,10 +56,9 @@
   display: grid;
   width: var(--page);
   min-height: clamp(34rem, calc(100svh - 11.5rem), 46rem);
-  grid-template-columns: minmax(14rem, 25rem) minmax(28rem, 43rem);
+  grid-template-columns: minmax(14rem, 0.78fr) minmax(28rem, 1.65fr) minmax(14rem, 0.82fr);
   gap: clamp(1rem, 2vw, 2.5rem);
   align-items: center;
-  justify-content: space-between;
   margin: 0 auto;
   padding: 1.5rem 0 7rem;
 }
@@ -292,6 +291,60 @@
   transform: translateX(-50%);
 }
 
+.provenance-panel {
+  position: relative;
+  z-index: 4;
+  padding: 1rem;
+  background: rgba(10, 20, 14, 0.56);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+}
+
+.provenance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.provenance-head strong {
+  color: var(--pulse);
+  font-weight: 500;
+}
+
+.provenance-panel dl {
+  margin: 0;
+}
+
+.provenance-panel dl div {
+  display: grid;
+  grid-template-columns: 0.7fr 1.3fr;
+  gap: 0.8rem;
+  padding: 0.72rem 0;
+  border-bottom: 1px solid rgba(147, 164, 134, 0.12);
+}
+
+.provenance-panel dl div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.provenance-panel dt {
+  color: rgba(227, 233, 221, 0.6);
+  font-size: 0.74rem;
+}
+
+.provenance-panel dd {
+  margin: 0;
+  color: var(--leaf);
+  font-size: 0.76rem;
+  text-align: right;
+}
+
 .network-data {
   position: absolute;
   z-index: 8;
@@ -439,6 +492,14 @@
     grid-template-columns: minmax(16rem, 0.78fr) minmax(26rem, 1.25fr);
   }
 
+  .network-visual {
+    grid-row: span 2;
+  }
+
+  .provenance-panel {
+    grid-column: 1;
+  }
+
   .history-panel {
     grid-template-columns: minmax(12rem, 0.6fr) minmax(20rem, 1.4fr);
   }
@@ -501,6 +562,11 @@
     padding: 0 0.5rem;
   }
 
+  .provenance-panel {
+    grid-column: auto;
+    width: 100%;
+  }
+
   .network-data {
     position: relative;
     right: auto;
@@ -542,6 +608,10 @@
   .network-stage {
     width: calc(100% + 1rem);
     margin-left: -0.5rem;
+  }
+
+  .provenance-panel dl div {
+    grid-template-columns: 0.9fr 1.1fr;
   }
 
   .network-data div {
