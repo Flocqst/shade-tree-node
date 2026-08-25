@@ -13,9 +13,9 @@
   <meta property="og:image:alt" content="A low-poly grove crossed by a private data path">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/site.css">
-  <script type="module" src="/site.js"></script>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./site.css">
+  <script type="module" src="./site.js"></script>
   <title>Shade Tree Grove</title>
 </head>
 <body class="home-page">
@@ -23,16 +23,16 @@
 
   <header class="home-hero" aria-labelledby="home-title">
     <nav class="site-nav" aria-label="Primary navigation">
-      <a class="wordmark" href="/" aria-label="Shade Tree Grove home">
+      <a class="wordmark" href="./" aria-label="Shade Tree Grove home">
         <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>Shade Tree Grove</span>
       </a>
       <div class="nav-links">
         <a href="#proxy">Agent</a>
         <a href="#node">Node</a>
-        <a href="/lab/">Lab</a>
-        <a href="/grove/">Grove</a>
-        <a href="/research/">Research</a>
+        <a href="./lab/">Lab</a>
+        <a href="./grove/">Grove</a>
+        <a href="./research/">Research</a>
         <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
       </div>
     </nav>
@@ -58,7 +58,7 @@
   <main id="roles" class="home-main">
     <section class="about-panel" aria-labelledby="about-title">
       <h2 id="about-title">About</h2>
-      <p>The grove of Shade Trees gives agents anonymous egress when the clearnet <a href="/research/">won’t let them through</a>.</p>
+      <p>The grove of Shade Trees gives agents anonymous egress when the clearnet <a href="./research/">won’t let them through</a>.</p>
     </section>
 
     <section class="role-trails" aria-label="Ways to use Shade Tree Grove">
@@ -66,7 +66,7 @@
         <header class="role-intro">
           <p class="route-label"><span>Seek cover</span> Primary route</p>
           <h2>For agents</h2>
-          <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
+          <a class="role-link" href="./agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
           <p class="tool-label">01 · Install the CLI</p>
@@ -90,7 +90,7 @@
         <header class="role-intro">
           <p class="route-label"><span>Provide cover</span> Side branch</p>
           <h2>Run a Shade Tree node</h2>
-          <a class="role-link" href="/operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
+          <a class="role-link" href="./operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
           <p class="tool-label">Start a node</p>
@@ -111,8 +111,8 @@
             <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
           </div>
           <picture class="how-visual reputation-figure">
-            <source media="(max-width: 900px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="570">
-            <img src="/fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
+            <source media="(max-width: 900px)" srcset="./fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="570">
+            <img src="./fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
           </picture>
         </article>
         <article class="how-mechanism">
@@ -121,8 +121,8 @@
             <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through <a href="https://www.torproject.org/">Tor</a> to the node’s <a href="https://community.torproject.org/onion-services/overview/">onion service</a>. The node verifies the proof before dialing the destination. The Elder Tree handles discovery and stays off the traffic path.</p>
           </div>
           <picture class="how-visual network-figure">
-            <source media="(max-width: 900px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="820">
-            <img src="/fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
+            <source media="(max-width: 900px)" srcset="./fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="820">
+            <img src="./fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
           </picture>
           <p class="boundary">Tor exit addresses are public. Shade Tree Grove gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
         </article>
@@ -137,7 +137,7 @@
       <span>Research preview</span>
     </div>
     <nav aria-label="Project links">
-      <a href="/research/">Research</a>
+      <a href="./research/">Research</a>
       <a href="https://github.com/dmarzzz/shade-tree-node/discussions">Discuss</a>
       <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/THREAT-MODEL.md">Threat model</a>
       <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
