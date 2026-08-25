@@ -132,6 +132,8 @@ fn g2_json(p: &G2Affine) -> serde_json::Value {
 }
 
 fn main() {
+    shade_tree_rln::prover::ensure_probestack_linked();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() != 3 {
         eprintln!("usage: shade-tree-rln-probe <fixture.json> <out.json> <circuits-dir>");
@@ -297,4 +299,12 @@ fn main() {
     });
     std::fs::write(out_path, serde_json::to_string_pretty(&out).unwrap()).expect("write out");
     println!("[6] wrote {out_path}");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn package_probestack_shim_links_into_probe_tests() {
+        shade_tree_rln::prover::ensure_probestack_linked();
+    }
 }

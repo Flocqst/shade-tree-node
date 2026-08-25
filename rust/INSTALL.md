@@ -39,7 +39,7 @@ Get-FileHash .\shade-tree-0.3.0-x86_64-pc-windows-msvc.exe -Algorithm SHA256
 
 ## Build from source
 
-Use the current stable Rust toolchain and a C compiler:
+Use the repository's pinned Rust toolchain and a C compiler:
 
 ```sh
 git clone https://github.com/dmarzzz/shade-tree-node.git

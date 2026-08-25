@@ -186,6 +186,8 @@ fn g2_json(p: &G2Affine) -> serde_json::Value {
 /// that does not verify against the repo VK, or public signals that disagree with the
 /// natively-computed root/x/externalNullifier) fail loud rather than shipping a bad envelope.
 pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
+    ensure_probestack_linked();
+
     // Artifact source: `Some(dir)` = external files under that dir; `None` = the artifacts
     // EMBEDDED into this binary via `include_bytes!` (T-RUST-4, `embedded-artifacts` feature),
     // so a released `live` client proves with no external circuit files.
@@ -410,13 +412,29 @@ pub fn build_envelope(input: &EnvelopeInput) -> Result<BuiltEnvelope, String> {
 // Scope: x86_64 only (LLVM only probes on x86/x86_64; aarch64 wasmer uses an empty probe),
 // not Windows (wasmer uses `__chkstk` there). Mach-O spells the symbol `___rust_probestack`.
 // It lives in THIS module (next to `build_envelope`, the only wasmer caller) rather than in
-// its own file so the codegen unit that defines the symbol is always the one already
-// pulled into the link (an rlib is an archive; a member holding only `global_asm!` and no
-// otherwise-referenced item can be skipped by a single-pass linker). Under the release
-// profile (fat LTO) it is one module anyway. Any rustc <1.89 (which still exports the
-// symbol) cannot build `live` at all (arti-client 0.45 needs rustc >= 1.91), so there is no
-// duplicate-definition case to worry about.
+// its own file so the link anchor and definition stay in one assembly object. The package's
+// standalone probe duplicates the historical proving path instead of calling this library,
+// so it explicitly calls `ensure_probestack_linked` too. Any rustc <1.89 (which still
+// exports the symbol) cannot build `live` at all (arti-client 0.45 needs rustc >= 1.91), so
+// there is no duplicate-definition case to worry about.
 // ---------------------------------------------------------------------------------------
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+unsafe extern "C" {
+    fn shade_tree_probestack_link_anchor();
+}
+
+/// Force the archive member containing the Wasmer 4 stack-probe compatibility symbol into
+/// x86_64 non-Windows links. Other targets either use their platform probe or need no probe.
+#[doc(hidden)]
+pub fn ensure_probestack_linked() {
+    #[cfg(all(target_arch = "x86_64", not(windows)))]
+    // SAFETY: the anchor is a conventional no-argument function defined in the assembly
+    // block below. It exists only to make the linker retain that same assembly object.
+    unsafe {
+        shade_tree_probestack_link_anchor();
+    }
+}
+
 #[cfg(all(target_arch = "x86_64", not(windows), not(target_vendor = "apple")))]
 core::arch::global_asm!(
     "
@@ -458,6 +476,12 @@ __rust_probestack:
     ret
     .cfi_endproc
     .size __rust_probestack, . - __rust_probestack
+
+    .globl shade_tree_probestack_link_anchor
+    .type  shade_tree_probestack_link_anchor, @function
+shade_tree_probestack_link_anchor:
+    ret
+    .size shade_tree_probestack_link_anchor, . - shade_tree_probestack_link_anchor
     .popsection
     ",
     options(att_syntax)
@@ -495,6 +519,10 @@ ___rust_probestack:
     .cfi_adjust_cfa_offset -8
     ret
     .cfi_endproc
+
+    .globl _shade_tree_probestack_link_anchor
+_shade_tree_probestack_link_anchor:
+    ret
     ",
     options(att_syntax)
 );
