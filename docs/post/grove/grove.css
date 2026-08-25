@@ -155,22 +155,8 @@
 }
 
 .network-foot {
-  display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) minmax(14rem, 0.9fr);
-  gap: 1rem;
-  align-items: start;
   margin-top: 1.8rem;
-}
-
-.network-caption {
-  max-width: 25rem;
-  justify-self: end;
-  margin: 0;
-  color: rgba(227, 233, 221, 0.58);
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  text-align: right;
 }
 
 .network-stage::before,
@@ -572,15 +558,8 @@
   }
 
   .network-foot {
-    grid-template-columns: 1fr;
-    gap: 0.65rem;
     margin-top: 1.25rem;
     padding: 0 0.5rem;
-  }
-
-  .network-caption {
-    justify-self: start;
-    text-align: left;
   }
 
   .provenance-panel {
