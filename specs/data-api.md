@@ -288,12 +288,15 @@ illustration of announcements, not observed traffic.
 ## Safe derivations
 
 Consumers may derive snapshot age, windowed minimum/maximum/mean announced
-count, sample coverage, missing intervals, and net announced-count change from
-the signed history. They must filter samples to the requested time window first;
-the bounded history can span more than 24 hours after collector gaps.
+count, sample coverage, and missing intervals from the signed history. They
+must filter samples to the requested time window first; the bounded history can
+span more than 24 hours after collector gaps. Subtracting the first observed
+count from the last is only an endpoint delta across available samples. It must
+not be presented as exact windowed change when the boundary or intervening
+samples are missing.
 
-These remain count statistics. A net change is not unique churn, joins, or
-departures, and node-hours are not uptime or successful traffic. V1 cannot
+These remain count statistics. An endpoint delta is not unique churn, joins,
+or departures, and node-hours are not uptime or successful traffic. V1 cannot
 derive implementation language or version, Rust-versus-Node population,
 operators, reachability, capacity, usage, latency, geography, admission mix, or
 stake. In particular, directory `operator` and `staked` labels are not covered
