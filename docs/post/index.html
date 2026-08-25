@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Add Shade Tree to an agent, or run a node to provide cover.">
+  <meta name="description" content="Add Shade Tree Grove to an agent, or run a node to provide cover.">
   <meta name="theme-color" content="#07100c">
-  <meta property="og:title" content="Shade Tree">
+  <meta property="og:title" content="Shade Tree Grove">
   <meta property="og:description" content="The best shade asks for proof, not a name.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/">
@@ -16,16 +16,16 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/site.css">
   <script type="module" src="/site.js"></script>
-  <title>Shade Tree</title>
+  <title>Shade Tree Grove</title>
 </head>
 <body class="home-page">
   <a class="skip-link" href="#roles">Skip to the overview</a>
 
   <header class="home-hero" aria-labelledby="home-title">
     <nav class="site-nav" aria-label="Primary navigation">
-      <a class="wordmark" href="/" aria-label="Shade Tree home">
+      <a class="wordmark" href="/" aria-label="Shade Tree Grove home">
         <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>Shade Tree</span>
+        <span>Shade Tree Grove</span>
       </a>
       <div class="nav-links">
         <a href="#proxy">Agent</a>
@@ -56,27 +56,27 @@
   <main id="roles" class="home-main">
     <section class="about-panel" aria-labelledby="about-title">
       <h2 id="about-title">About</h2>
-      <p>Shade Tree gives agents anonymous egress when the clearnet <a href="/research/">won’t let them through</a>.</p>
+      <p>The grove of Shade Trees gives agents anonymous egress when the clearnet <a href="/research/">won’t let them through</a>.</p>
     </section>
 
-    <section class="role-trails" aria-label="Ways to use Shade Tree">
+    <section class="role-trails" aria-label="Ways to use Shade Tree Grove">
       <article id="proxy" class="role">
         <header class="role-intro">
           <h2>Install the Proxy</h2>
           <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
-          <div class="command" aria-label="Install Shade Tree for an agent">
+          <div class="command" aria-label="Install Shade Tree Grove for an agent">
             <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
             <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
           </div>
           <div class="handoff">
             <span>Hermes, OpenClaw, or another agent</span>
-            <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" aria-label="Copy Shade Tree setup brief for an AI agent">copy setup task</button>
+            <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" aria-label="Copy Shade Tree Grove setup brief for an AI agent">copy setup task</button>
           </div>
           <details class="task-preview">
             <summary>Read the setup task</summary>
-            <code id="agent-setup-task">Add Shade Tree to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
+            <code id="agent-setup-task">Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
           </details>
         </div>
       </article>
@@ -104,22 +104,23 @@
             <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
           </div>
           <picture class="how-visual reputation-figure">
-            <source media="(max-width: 560px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="900">
+            <source media="(max-width: 900px)" srcset="/fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="570">
             <img src="/fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
           </picture>
         </article>
         <article class="how-mechanism">
           <div class="how-copy">
             <h3>Network path</h3>
-            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree never carries agent traffic.</p>
+            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree handles discovery and stays off the traffic path.</p>
           </div>
           <picture class="how-visual network-figure">
-            <source media="(max-width: 560px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="1250">
+            <source media="(max-width: 900px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="820">
             <img src="/fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
           </picture>
-          <p class="boundary">Tor exit addresses are public. Shade Tree gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
+          <p class="boundary">Tor exit addresses are public. Shade Tree Grove gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
         </article>
       </div>
+      <p class="protocol-link"><a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PROTOCOL.md">Full protocol specification</a></p>
     </section>
   </main>
 

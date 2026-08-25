@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Install Shade Tree and route one local agent through the Grove.">
+  <meta name="description" content="Install Shade Tree Grove and route one local agent through the Grove.">
   <meta name="theme-color" content="#07100c">
-  <meta property="og:title" content="Agent guide · Shade Tree">
-  <meta property="og:description" content="Add Shade Tree to one local agent.">
+  <meta property="og:title" content="Agent guide · Shade Tree Grove">
+  <meta property="og:description" content="Add Shade Tree Grove to one local agent.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/agent/">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
@@ -15,15 +15,15 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/site.css">
   <script type="module" src="/site.js"></script>
-  <title>Agent guide · Shade Tree</title>
+  <title>Agent guide · Shade Tree Grove</title>
 </head>
 <body class="guide-page">
   <a class="skip-link" href="#guide">Skip to the guide</a>
 
   <nav class="site-nav" aria-label="Primary navigation">
-    <a class="wordmark" href="/" aria-label="Shade Tree home">
+    <a class="wordmark" href="/" aria-label="Shade Tree Grove home">
       <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>Shade Tree</span>
+      <span>Shade Tree Grove</span>
     </a>
     <div class="nav-links">
       <a href="/operator/">Operators</a>
@@ -34,7 +34,7 @@
 
   <main id="guide" class="guide-main">
     <header class="guide-intro">
-      <h1>Add Shade Tree to an agent.</h1>
+      <h1>Add Shade Tree Grove to an agent.</h1>
       <p>Run one local Proxy, then give its route to one agent process.</p>
     </header>
 
@@ -42,7 +42,7 @@
       <section class="guide-step" aria-labelledby="agent-install">
         <h2 id="agent-install">1. Install</h2>
         <p>Requires Node.js 20 or newer, npm, and a local Tor SOCKS port.</p>
-        <div class="command" aria-label="Install the Shade Tree agent CLI">
+        <div class="command" aria-label="Install the Shade Tree Grove agent CLI">
           <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
           <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy agent installation command">copy</button>
         </div>
@@ -71,7 +71,7 @@
 
       <section class="guide-step" aria-labelledby="agent-run">
         <h2 id="agent-run">4. Launch the agent</h2>
-        <div class="command" aria-label="Run one agent with Shade Tree routing">
+        <div class="command" aria-label="Run one agent with Shade Tree Grove routing">
           <code>shade-tree run -- your-agent</code>
           <button class="copy-command" type="button" data-copy="shade-tree run -- your-agent" aria-label="Copy agent launch command">copy</button>
         </div>

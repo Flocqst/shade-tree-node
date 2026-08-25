@@ -147,7 +147,7 @@ async function loadGrove() {
     mountGrove({ stage, canvas, reducedMotion });
   } catch (error) {
     stage.classList.remove("is-live");
-    console.warn("Shade Tree grove fell back to its still image.", error);
+    console.warn("Shade Tree Grove fell back to its still image.", error);
   }
 }
 

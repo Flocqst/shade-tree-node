@@ -1,10 +1,10 @@
 ![A low-poly grove crossed by an amber network path](assets/shade-tree-readme-banner.webp)
 
-# Shade Tree
+# Shade Tree Grove
 
 Cover for local agents.
 
-Shade Tree gives agents anonymous egress when the clearnet [won’t let them
+The grove of Shade Trees gives agents anonymous egress when the clearnet [won’t let them
 through][research-note].
 
 [![CI][ci-badge]][ci-url]
