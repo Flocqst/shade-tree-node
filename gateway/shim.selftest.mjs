@@ -21,7 +21,7 @@
 // so it needs no real lib and edits nothing under lib/.
 
 import { register } from "node:module";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -200,7 +200,7 @@ await test("the explicit unsafe test seam can exercise deliberate slot reuse", a
 await test("envelope is a coherent v4 bundle; share bound to requestSignal(target,nonce)", async () => {
   const calls = [];
   const prove = mockProve(calls);
-  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup, slotStatePath: join(work, "envelope-slots.json") });
   const { envelope, signal, slot } = await buildEnvelope({ secret: "sek", target: "example.com:443", pool, prove });
 
   assert.equal(envelope.v, 4);
@@ -220,7 +220,7 @@ await test("envelope is a coherent v4 bundle; share bound to requestSignal(targe
 await test("each request gets a fresh nonce (distinct signals across requests)", async () => {
   const calls = [];
   const prove = mockProve(calls);
-  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup });
+  const pool = makeSlotPool({ secret: "sek", prove, epochOf: () => 7n, K: 4, loadGroupFn: noGroup, slotStatePath: join(work, "nonce-slots.json") });
   const a = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
   const b = await buildEnvelope({ secret: "sek", target: "a.com:443", pool, prove });
   assert.notEqual(a.signal, b.signal, "fresh per-request nonce => distinct signals");
@@ -229,7 +229,9 @@ await test("each request gets a fresh nonce (distinct signals across requests)",
 
 console.log("");
 if (failures) {
+  await rm(work, { recursive: true, force: true });
   console.log(`SELFTEST FAILED: ${failures} failing case(s)`);
   process.exit(1);
 }
+await rm(work, { recursive: true, force: true });
 console.log("SELFTEST PASSED: all cases green");

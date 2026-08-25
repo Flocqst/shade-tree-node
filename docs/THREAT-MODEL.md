@@ -148,6 +148,17 @@ so a lying envelope cannot desync accounting. At the proof layer the gateway lea
 nullifier per slot and no stable leaf identifier. Target, timing, volume, account, and cookie data
 may still correlate uses. Adversary A1 (including a colluding set).
 
+The client allocates each slot through `client/slot-state.mjs` before proving.
+The versioned `{epoch,nextSlot}` state is serialized by an atomic directory lock
+shared with the Rust client, durably replaced, and namespaced by the public
+member leaf; no bearer secret is written. Restart, local proof failure, and a
+crash after allocation therefore burn capacity rather than reuse a nullifier.
+Missing state is accepted only as first use; corrupt, unavailable, locked, or
+future-epoch state is refused, and the cursor resets only on a strictly newer
+protocol epoch. The sole bypass deliberately wraps slots and is explicitly
+named `unsafeAllowSlotReuseForTests` /
+`--unsafe-allow-slot-reuse-for-slashing-tests` for isolated slashing tests.
+
 **Reputation tiers (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** `K` is per LEAF, not
 global: the leaf is `Poseidon2(Poseidon1(identitySecret), userMessageLimit)` and the circuit
 range-checks `messageId < userMessageLimit` with both PRIVATE, so a tier-32 member gets 32

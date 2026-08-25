@@ -20,9 +20,8 @@ use shade_tree_proto::{pick_gateway, selection_order, verify_directory, verify_r
 mod capability;
 mod dircache;
 mod health;
-// The persisted K-slot cursor is used only by the `live` egress path (see the `live`
-// module); its unit tests run on the default build under `test`. Gating the module to
-// those two cfgs keeps the default NON-test build from compiling it at all.
+// The crash-safe K-slot coordinator is used by the `live` egress path; its unit
+// tests run on the default build under `test`.
 #[cfg(any(feature = "live", test))]
 mod slotcursor;
 
@@ -241,7 +240,7 @@ SUBCOMMANDS:
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
     egress <TRANSPORT> --identity <f> --members <f> --target <host:port>
-           [--circuits <dir>] [--epoch <n>] [--slot <i>] [--slot-cursor <f>]
+           [--circuits <dir>] [--epoch <n>] [--slot-cursor <f>]
            [--rln-identifier <n>] [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
         in Rust (native depth-20 Poseidon tree + Groth16 proof over the repo's
@@ -285,11 +284,15 @@ SUBCOMMANDS:
                       (signed caps.artifacts) that exclude ours, egress fails closed with
                       `no-mutual-artifact:...` BEFORE proving.
           --epoch     epoch to prove for (default: floor(now/SHADE_TREE_EPOCH_SECONDS), K=120s)
-          --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit / tier (default:
-                      the identity file's `limit`, else 8; must be the leaf's enrolled limit)
-          --slot-cursor  persist a per-epoch slot cursor (or SHADE_TREE_SLOT_CURSOR) so
-                      consecutive egress runs in one epoch advance 0,1,…,K-1 (distinct
-                      nullifiers) and reset on epoch roll; --slot overrides it
+          --k         userMessageLimit / tier (default: the identity file's `limit`, else 8;
+                      must be the leaf's enrolled limit)
+          --slot-cursor  exact state-file override (or SHADE_TREE_SLOT_CURSOR). Persistence is
+                      default-on under SHADE_TREE_SLOT_STATE_DIR / XDG_STATE_HOME / ~/.local/state,
+                      namespaced by the public member leaf. JS and Rust processes atomically
+                      share it, stop at K, and reset only when the epoch advances.
+          --unsafe-allow-slot-reuse-for-slashing-tests --slot <i>
+                      bypass persistent allocation ONLY for an isolated slashing test; never
+                      use with a funded/live member secret
           --rln-identifier  group id (default 1)     --nonce  32-hex per-request nonce
         Without the feature: prints an honest not-built error.
 
@@ -691,20 +694,28 @@ mod live {
         now / epoch_seconds()
     }
 
-    // Where to persist the K-slot cursor (opt-in, like --health-cache): the
-    // `--slot-cursor <f>` flag wins, else the SHADE_TREE_SLOT_CURSOR env, else none (no
-    // persistence -> slot 0, the historical default, so existing harnesses are
-    // unchanged). An empty/"off"/"0" env value is an explicit OFF.
-    fn slot_cursor_path(rest: &[String]) -> Option<PathBuf> {
+    // Exact override first; otherwise use the JS-compatible default under the public leaf.
+    // Empty/off is rejected: only the explicit slashing-test flag below can bypass safety.
+    fn slot_cursor_path(rest: &[String], leaf: &str) -> Result<PathBuf, slotcursor::Error> {
         if let Some(f) = take_flag(rest, "--slot-cursor") {
-            return Some(PathBuf::from(f));
+            let f = f.trim();
+            if f.is_empty() || f == "0" || f.eq_ignore_ascii_case("off") {
+                return Err(slotcursor::Error::Unavailable(
+                    "--slot-cursor cannot disable safety".into(),
+                ));
+            }
+            return Ok(PathBuf::from(f));
         }
-        let v = std::env::var("SHADE_TREE_SLOT_CURSOR").ok()?;
-        let v = v.trim();
-        if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
-            return None;
+        if let Ok(v) = std::env::var("SHADE_TREE_SLOT_CURSOR") {
+            let v = v.trim();
+            if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
+                return Err(slotcursor::Error::Unavailable(
+                    "SHADE_TREE_SLOT_CURSOR cannot disable safety".into(),
+                ));
+            }
+            return Ok(PathBuf::from(v));
         }
-        Some(PathBuf::from(v))
+        slotcursor::default_path(leaf)
     }
 
     // Per-step embedded-Tor timeout (bootstrap + connect each), SHADE_TREE_TOR_TIMEOUT_SECS.
@@ -1227,18 +1238,50 @@ mod live {
             );
             return ExitCode::from(2);
         }
-        // Slot resolution (parity with makeSlotPool, client/shade-tree-client.mjs):
-        //   1. explicit `--slot <i>` always wins and leaves any cursor untouched.
-        //   2. otherwise, if a persisted cursor is configured (`--slot-cursor <f>` or
-        //      SHADE_TREE_SLOT_CURSOR), advance it: consecutive egress runs in one epoch get
-        //      distinct slots 0,1,…,K-1 (distinct nullifiers), resetting on epoch roll.
-        //   3. with no cursor and no `--slot`, preserve the historical default of slot 0.
-        let slot = match take_flag(rest, "--slot").and_then(|s| s.parse::<u64>().ok()) {
-            Some(explicit) => explicit,
-            None => match slot_cursor_path(rest) {
-                Some(path) => slotcursor::next_slot(Some(&path), epoch, k),
+        // Default-on persistent allocation is durably committed BEFORE proof construction.
+        // This intentionally burns a slot on a crash/local failure rather than allowing a
+        // restarted process to reuse a nullifier. Manual slots are test-only and gated by an
+        // unmistakable flag so production callers cannot casually disable the coordinator.
+        let unsafe_reuse = rest
+            .iter()
+            .any(|s| s == "--unsafe-allow-slot-reuse-for-slashing-tests");
+        let explicit_slot = take_flag(rest, "--slot");
+        if explicit_slot.is_some() && !unsafe_reuse {
+            eprintln!("egress (live): --slot bypasses crash-safe allocation; it requires --unsafe-allow-slot-reuse-for-slashing-tests and is only for isolated slashing tests");
+            return ExitCode::from(2);
+        }
+        let slot = if unsafe_reuse {
+            match explicit_slot {
+                Some(s) => match s.parse::<u64>() {
+                    Ok(slot) => slot,
+                    Err(_) => {
+                        eprintln!("egress (live): --slot must be an integer (got {s:?})");
+                        return ExitCode::from(2);
+                    }
+                },
                 None => 0,
-            },
+            }
+        } else {
+            let path = match slot_cursor_path(rest, &identity.leaf) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("egress (live): REFUSING to prove — {e}");
+                    return ExitCode::from(3);
+                }
+            };
+            match slotcursor::allocate(&path, epoch, k) {
+                Ok(allocation) if !allocation.exhausted() => {
+                    allocation.slot.expect("checked non-exhausted")
+                }
+                Ok(_) => {
+                    eprintln!("egress (live): epoch budget exhausted: used {k}/{k} slots in epoch {epoch}; wait for the protocol epoch to advance");
+                    return ExitCode::from(4);
+                }
+                Err(e) => {
+                    eprintln!("egress (live): REFUSING to prove — {e}");
+                    return ExitCode::from(3);
+                }
+            }
         };
         if slot >= k {
             eprintln!("egress (live): --slot {slot} >= K {k} (out of this member's tier; the circuit would reject it)");

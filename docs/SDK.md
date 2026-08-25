@@ -53,6 +53,7 @@ an environment fallback is listed below; test injection hooks such as
 | `torPort` | `SHADE_TREE_TOR_PORT` | `9250` | Tor SOCKS port. The bundled client script uses `9260`. |
 | `socksIsolation` | `SHADE_TREE_SOCKS_ISOLATION` | enabled | Give each CONNECT tunnel distinct SOCKS credentials. This isolates Tor streams only when the Tor endpoint enables `IsolateSOCKSAuth`. |
 | `limit` | `SHADE_TREE_LIMIT` | `SHADE_TREE_SLOTS`, usually `8` | The private rate tier used when the member leaf was enrolled. |
+| `slotStateDir` | `SHADE_TREE_SLOT_STATE_DIR` | `$XDG_STATE_HOME/shade-tree/rln-slots` or `~/.local/state/shade-tree/rln-slots` | Parent for default-on, per-public-leaf RLN allocation state. |
 | `leafSource` | `SHADE_TREE_LEAF_SOURCE` | `auto` | Pin `invited`, `staked`, or `paid` membership discovery. |
 | `maxAnon` | `SHADE_TREE_MAX_ANON` | disabled | Restrict selection to invited-only gateways; requires an invited leaf. |
 
@@ -74,10 +75,18 @@ responses, and tunnels acquired by that call are closed.
 `SHADE_TREE_BOOTNODE_ONION` is environment-only dynamic discovery; it requires
 the pinned directory signer and takes precedence over a static directory.
 
-Slot accounting is process-local. Never create two clients with one member
-secret. After any CONNECT attempt, wait for the next epoch before restarting a
-client with that secret. Persistent coordination is tracked in
-[issue #75](https://github.com/dmarzzz/shade-tree-node/issues/75).
+Slot allocation is persistent and atomic across Proxy and SDK processes using
+the same member leaf. The file contains exactly `{version, epoch, nextSlot}`;
+it never contains the bearer secret, identity secret, nullifier, proof, or
+target. `slotStatePath` is an exact constructor-only path override and
+`slotLockTimeoutMs` changes the bounded lock wait. Corrupt, unavailable,
+future-epoch, or persistently locked state fails closed. A slot is durably
+consumed before local proving, including when proving later fails or the process
+crashes. Never delete or rewind the state to recover capacity inside an epoch.
+
+`unsafeAllowSlotReuseForTests: true` is the only persistence opt-out. It wraps
+slots deliberately and exists solely for isolated slashing tests; using it with
+a live or funded member can create slashable evidence.
 
 Node resolution for each tunnel is: call-level onion pin, client-level onion
 pin, signed directory selection, then the local development onion. If none can

@@ -32,6 +32,11 @@ import * as rln from "../lib/rln.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
 import { configuredContracts, loadGroupFromContract } from "../lib/root-provider.mjs";
 import { admitPathOfSource, parseLeafSource, envFlag, ADMIT_ORDER } from "../lib/admission.mjs";
+import {
+  ShadeTreeSlotStateError,
+  allocatePersistentSlot,
+  defaultSlotStatePath,
+} from "./slot-state.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Namespace access keeps lightweight module-loader tests compatible with older semaphore mocks
@@ -138,16 +143,20 @@ export function makeSlotPool({
   // distinct signal for one slot. Production callers must never enable this: honest clients
   // stop at K and wait for the next epoch instead of manufacturing slashable evidence.
   unsafeAllowSlotReuseForTests = false,
+  // Default-on durable state. `slotStatePath` is an exact advanced override;
+  // `slotStateDir` changes only the parent while retaining per-public-leaf namespacing.
+  // There is intentionally no production "off" value. The unsafe reuse seam above is
+  // the sole opt-out and exists only for isolated slashing tests.
+  slotStatePath,
+  slotStateDir,
+  slotLockTimeoutMs,
   epochSeconds = CLIENT_EPOCH_SECONDS,
   now = Date.now,
 }) {
   K = Number(normLimit(K));
   let epoch = null;
-  let cursor = 0; // next never-before-reserved slot in this epoch
-  let committed = 0;
-  let generation = 0;
-  let freeSlots = [];
-  const reservations = new Map();
+  let cursor = 0; // durable nextSlot observed after this process's latest allocation
+  let resolvedStatePath;
   let group = null;
   let groupPromise = null;
   let source = null; // the discovered leaf-source label ("members.json" | "staked(0x..)" | "paid(0x..)"), T-FEAT-9
@@ -161,13 +170,28 @@ export function makeSlotPool({
   // did not label its result (a bare loadGroup / a test fake) -- treated as "unknown" by the client.
   async function leafSource() { await ensureGroup(); return admitPathOfSource(source); }
 
+  function statePath() {
+    if (resolvedStatePath) return resolvedStatePath;
+    if (slotStatePath !== undefined) {
+      if (typeof slotStatePath !== "string" || !slotStatePath.trim() || ["0", "off"].includes(slotStatePath.trim().toLowerCase())) {
+        throw new ShadeTreeSlotStateError(
+          "SHADE_TREE_SLOT_STATE_UNAVAILABLE",
+          "persistent slot state cannot be disabled; use unsafeAllowSlotReuseForTests only in an isolated slashing test",
+        );
+      }
+      resolvedStatePath = slotStatePath;
+      return resolvedStatePath;
+    }
+    // The rate commitment is public enrollment data and is already K-bound. It gives
+    // JS and Rust a common per-member filename without storing the bearer secret.
+    const leaf = rln.rateCommitmentOf(rln.identityFor(secret), K).toString();
+    resolvedStatePath = defaultSlotStatePath({ leaf, dir: slotStateDir });
+    return resolvedStatePath;
+  }
+
   function rollover(ep) {
     epoch = ep;
     cursor = 0;
-    committed = 0;
-    generation += 1;
-    freeSlots = [];
-    reservations.clear();
     group = null;
     groupPromise = null;
     // Background warm: cache the group + prime the prover so tunnel-time proving is as
@@ -196,31 +220,18 @@ export function makeSlotPool({
       cursor += 1;
       return { epoch: ep, slot: i, commit: () => false, release: () => false };
     }
-    const used = committed + reservations.size;
-    if (freeSlots.length === 0 && cursor >= K) {
-      throw new ShadeTreeEpochBudgetError({ epoch: ep, limit: K, used, epochSeconds, nowMs: now() });
+    const allocated = allocatePersistentSlot({ path: statePath(), epoch: ep, limit: K, lockTimeoutMs: slotLockTimeoutMs });
+    cursor = allocated.nextSlot;
+    if (allocated.exhausted) {
+      throw new ShadeTreeEpochBudgetError({ epoch: ep, limit: K, used: allocated.used, epochSeconds, nowMs: now() });
     }
-    const slot = freeSlots.length ? freeSlots.pop() : cursor++;
-    const token = {};
-    const reservation = { epoch: ep, slot, generation };
-    reservations.set(token, reservation);
-    let settled = false;
-    const settle = (release) => {
-      if (settled) return false;
-      settled = true;
-      const active = reservations.get(token);
-      // A stale completion from the previous epoch must never alter the new epoch's pool.
-      if (!active || active.generation !== generation || active.epoch !== epoch) return false;
-      reservations.delete(token);
-      if (release) freeSlots.push(active.slot);
-      else committed += 1;
-      return true;
-    };
     return {
       epoch: ep,
-      slot,
-      commit: () => settle(false),
-      release: () => settle(true),
+      slot: allocated.slot,
+      // Allocation is committed before it is returned. A crash or local proof error burns
+      // capacity; releasing it could let a restarted process manufacture the same nullifier.
+      commit: () => false,
+      release: () => false,
     };
   }
 
@@ -230,8 +241,9 @@ export function makeSlotPool({
     leafSource,
     nextSlot,
     K,
+    statePath: unsafeAllowSlotReuseForTests ? () => null : statePath,
     state: () => {
-      const used = unsafeAllowSlotReuseForTests ? cursor : committed + reservations.size;
+      const used = cursor;
       return { epoch, cursor: used, remaining: Math.max(0, K - used), source };
     },
   };
@@ -304,9 +316,9 @@ export async function buildEnvelope({ secret, target, pool, prove = proveForSlot
     reservation.commit?.();
     return { envelope, signal, slot, artifact: artifactId };
   } catch (error) {
-    // Nothing can have reached a socket while the local envelope is still being built. Returning
-    // this reservation is therefore safe, and prevents repeated local prover failures from
-    // consuming the entire epoch. The tokenized pool makes release idempotent and epoch-scoped.
+    // Persistent allocations are deliberately not returned. The state advance happened before
+    // proving, so a process crash at any point cannot make a restart reuse this nullifier. Local
+    // failures therefore consume capacity; safety wins over availability.
     reservation.release?.();
     throw error;
   }
@@ -628,7 +640,15 @@ export class ShadeTreeClient {
     if (this.maxAnon && this.leafSourcePin !== "auto" && this.leafSourcePin !== "invited") {
       throw new Error(`ShadeTreeClient: --max-anon requires an invited (members.json) leaf, but SHADE_TREE_LEAF_SOURCE=${this.leafSourcePin} pins a ${this.leafSourcePin} leaf; an invited-only gateway would reject it (wrong-group-root). Drop --max-anon or use an invited leaf.`);
     }
-    this.pool = makeSlotPool({ secret: this.secret, K: this.limit, loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit, only: this.leafSourcePin }) });
+    this.pool = makeSlotPool({
+      secret: this.secret,
+      K: this.limit,
+      loadGroupFn: opts.loadGroupFn || makeLeafSourceLoader({ secret: this.secret, limit: this.limit, only: this.leafSourcePin }),
+      slotStatePath: opts.slotStatePath,
+      slotStateDir: opts.slotStateDir,
+      slotLockTimeoutMs: opts.slotLockTimeoutMs,
+      unsafeAllowSlotReuseForTests: opts.unsafeAllowSlotReuseForTests === true,
+    });
     this.pool.ensureEpoch(); // warm the current epoch in the background
   }
 
@@ -1101,3 +1121,4 @@ export class ShadeTreeClient {
 }
 
 export { cleanUp };
+export { ShadeTreeSlotStateError };

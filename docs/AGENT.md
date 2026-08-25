@@ -74,13 +74,12 @@ The operator must give you the enrolled tier. Use `8` only when the operator
 confirms the default tier; a mismatched tier derives a different leaf and fails
 membership verification.
 
-Run only one Proxy process per member secret. Slot accounting is currently
-process-local. Starting a second Proxy can reuse a slot and create slashable
-RLN evidence. So can restarting during the same epoch if any CONNECT attempt
-might have reached a node. Never run two Proxy processes with one secret. After a
-CONNECT attempt, wait for the next epoch before restarting. Persistent
-cross-process coordination is
-tracked in [issue #75](https://github.com/dmarzzz/shade-tree-node/issues/75).
+RLN slot allocation is default-on, durable, and atomic across Proxy/SDK/Rust
+processes using the same public member leaf. It stores no bearer secret and
+fails closed on corrupt, unavailable, or locked state. A crash or local proof
+failure burns the already-reserved slot, so restart is safe but may reach the
+epoch budget sooner. Do not delete or edit the state to reclaim capacity inside
+an epoch.
 
 Tor Browser normally uses port 9150. The repository helper
 `scripts/start-tor-client.sh` uses 9260. If the operator gives you one pinned
@@ -133,7 +132,7 @@ values apply. Read the [SDK reference](SDK.md) and the tested
 - TLS hides the application path and body from the node when the agent uses HTTPS.
 - Tor does not prevent timing correlation by an observer who can watch both ends.
 - One proof admits one CONNECT tunnel, not every HTTP request inside it.
-- Slot accounting is process-local; do not share one member secret across Proxy processes.
+- RLN slot state is local and fail-closed; back it up only as opaque state and never rewind it inside an epoch.
 
 Read [Adapters](ADAPTERS.md) for proxy-aware tools and the
 [threat model](THREAT-MODEL.md) for the exact guarantees.

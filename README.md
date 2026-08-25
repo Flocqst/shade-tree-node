@@ -157,9 +157,11 @@ use structured JSON logs and separate loopback metrics for each role. See the
 - Replay and rate accounting are strongest per node. The optional cross-node
   tally is fail-open and suppresses later replays only after propagation, so
   concurrent attempts can still pass on different nodes.
-- Client slot accounting is process-local. Never run two Proxy processes with
-  one member secret. After any CONNECT attempt, wait for the next epoch before
-  restarting that Proxy.
+- Client RLN slots are durably coordinated across Proxy, SDK, and Rust processes
+  under the member's public leaf. The state contains only `{version, epoch,
+  nextSlot}` and fails closed if it is corrupt, unavailable, or remains locked.
+  Allocation happens before proving, so a crash or local proof failure consumes a
+  slot; state resets only when the protocol epoch advances.
 
 One proof admits one CONNECT tunnel, not one HTTP request. HTTP/2 and keep-alive
 can carry many requests inside it. Read the [protocol](specs/protocol.md) and

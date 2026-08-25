@@ -81,3 +81,9 @@ shade-tree identity --limit "$SHADE_TREE_LIMIT" --out identity.json
 
 Keep `identity.json` local; it contains secret material. Run
 `shade-tree --help` for discovery, cache, capability, and transport options.
+Live egress automatically coordinates RLN slots with JS clients under the
+public leaf in `SHADE_TREE_SLOT_STATE_DIR` (or the OS user-state directory).
+`--slot-cursor <file>` is an exact state-path override, not an opt-in. The
+manual `--slot` bypass requires
+`--unsafe-allow-slot-reuse-for-slashing-tests` and must never be used with a
+live or funded member.
