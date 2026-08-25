@@ -87,13 +87,14 @@ const shareButton = document.querySelector("[data-share]");
 const copyButton = document.querySelector("[data-copy-link]");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let runToken = 0;
+const canonicalLabUrl = "https://shade-tree-node.vercel.app/lab/";
 
 function selectedScenario() {
   return form?.elements.scenario.value || "invited-success";
 }
 
 function fixtureUrl(name = selectedScenario()) {
-  const url = new URL("/lab/", window.location.origin);
+  const url = new URL(canonicalLabUrl);
   url.searchParams.set("scenario", name);
   return url.toString();
 }
@@ -118,7 +119,7 @@ function resetTrace(name) {
   for (const step of steps) delete step.dataset.state;
   result.hidden = true;
   result.removeAttribute("data-outcome");
-  history.replaceState(null, "", `/lab/?scenario=${encodeURIComponent(name)}`);
+  history.replaceState(null, "", `?scenario=${encodeURIComponent(name)}`);
 }
 
 function sleep(ms, token) {
