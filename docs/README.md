@@ -1,7 +1,8 @@
 # Docs index
 
-Every document in `docs/`, one line each, grouped by what you are trying to do. The
-[README](../README.md) is the short front door; [`OVERVIEW.md`](OVERVIEW.md) is the long one.
+The documentation and canonical specifications, one line each, grouped by what
+you are trying to do. The [README](../README.md) is the short front door;
+[`OVERVIEW.md`](OVERVIEW.md) is the long one.
 A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`](../docs-site/README.md)).
 
 > **Network status:** the current implementation speaks envelope v4 only. The checked-in
@@ -40,7 +41,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`OPERATOR.md`](OPERATOR.md) | Shade Tree node and Elder Tree runbook, including current deployment blocks, day-2 health, keys, slash response, and retirement |
 | [`../bootnode/deploy/README.md`](../bootnode/deploy/README.md) | The one-command droplet bootstrap and every tunable it accepts |
 | [`BOOTNODE.md`](BOOTNODE.md) | Elder Tree discovery: announce, signed Canopy, per-node signed capabilities, and the trust boundary |
-| [`PUBLIC-GROVE.md`](PUBLIC-GROVE.md) | The read-only view of the old fleet: verified aggregate counts, bounded history, stale behavior, and fields that never leave the observer |
+| [`data-api.md`](../specs/data-api.md) | The canonical public Grove Data API: verified aggregate counts, publisher/observer surfaces, privacy, bounded history, caching, and evolution |
 | [`FLEET.md`](FLEET.md) | Per-tunnel gateway selection, weights, failover, fleet budget |
 | [`INCIDENT.md`](INCIDENT.md) | Incident playbook |
 | [`SLO.md`](SLO.md) | Service-level objectives and error budget (proposals, recalibrated on live data) |
@@ -62,7 +63,7 @@ A browsable HTML build of all of this: `node docs-site/build.mjs` ([`docs-site/`
 | [`CONTRACTS-AUDIT.md`](CONTRACTS-AUDIT.md) | Contract invariants and the Foundry evidence |
 | [`adversarial-review.md`](adversarial-review.md) | Per-party worst case |
 | [`CEREMONY.md`](CEREMONY.md) | The trusted-setup runbook (not run; [issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6)) |
-| [`PROTOCOL.md`](PROTOCOL.md) (+ [`PROTOCOL.html`](PROTOCOL.html)) | The anonymous-paid-access design write-up |
+| [`protocol.md`](../specs/protocol.md) | The canonical anonymous-paid-access protocol specification |
 | [`PROTOCOL-API.md`](PROTOCOL-API.md) | Wire formats and the bootnode HTTP API |
 | [`MUTATION-TESTING.md`](MUTATION-TESTING.md) | Mutation-testing setup and surviving mutants |
 | [`adr/`](adr/README.md) | Decision records: context, decision, consequences, rejected alternatives |

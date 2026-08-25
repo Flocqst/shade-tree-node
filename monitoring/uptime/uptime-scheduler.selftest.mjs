@@ -156,6 +156,7 @@ function main() {
     ok(/scripts\/grove-snapshot\.mjs/.test(runs), "builds the public Grove snapshot with the allowlisting collector");
     const groveStep = steps.find((s) => s.id === "grove");
     ok(/secrets\.SHADE_TREE_GROVE_SIGNING_KEY/.test(groveStep?.env?.SHADE_TREE_GROVE_SIGNING_KEY || ""), "signing key is scoped to the aggregate-build step");
+    ok(/SHADE_TREE_NETWORK:-.* != "sepolia"/.test(groveStep?.run || "") && /--network sepolia/.test(groveStep?.run || ""), "public publisher is bound to the versioned Sepolia Data API");
     ok(/::error/.test(runs), "a CRITICAL probe surfaces as an ::error::");
     ok(!/echo .*\$\{\{ ?secrets\./.test(wf) && !/echo "\$SHADE_TREE_DIR_SIGNER|echo "\$SHADE_TREE_BOOTNODE_ONION/.test(wf), "no secret / onion / signer is echoed");
     const probeStep = steps.find((s) => /probe \(over Tor/.test(s.name || ""));

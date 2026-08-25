@@ -19,7 +19,7 @@ at a time.
 *The best shade asks for proof, not a name.*
 
 [Site][site] · [Grove][grove] · [Research][research-note] · [Docs](docs/README.md) ·
-[Protocol](docs/PROTOCOL.md) · [Security](SECURITY.md)
+[Protocol](specs/protocol.md) · [Security](SECURITY.md)
 
 > [!WARNING]
 > Research preview. The code is unaudited and the included ZK artifacts are for
@@ -162,7 +162,7 @@ use structured JSON logs and separate loopback metrics for each role. See the
   restarting that Proxy.
 
 One proof admits one CONNECT tunnel, not one HTTP request. HTTP/2 and keep-alive
-can carry many requests inside it. Read the [protocol](docs/PROTOCOL.md) and
+can carry many requests inside it. Read the [protocol](specs/protocol.md) and
 [threat model](docs/THREAT-MODEL.md) for the exact guarantees.
 
 ## Repository
@@ -175,6 +175,7 @@ can carry many requests inside it. Read the [protocol](docs/PROTOCOL.md) and
 | [`rust/`](rust/) | Rust client, protocol crate, and RLN prover |
 | [`contracts/`](contracts/) | Optional Sepolia membership and operator sets |
 | [`network/`](network/) | Signed test-network records |
+| [`specs/`](specs/) | Canonical protocol and public Data API contracts |
 
 ```bash
 npm ci

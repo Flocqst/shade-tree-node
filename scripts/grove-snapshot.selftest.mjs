@@ -44,6 +44,28 @@ assert.equal(aggregateAnnouncedNodeHours([
   { at: "2026-08-23T11:30:00.000Z", announced: 2 },
   { at: "2026-08-23T12:00:00.000Z", announced: 2 },
 ], { now: NOW }), 2);
+assert.equal(aggregateAnnouncedNodeHours([
+  { at: "2026-08-22T11:00:00.000Z", announced: 10 },
+  { at: "2026-08-22T12:10:00.000Z", announced: 0 },
+], { now: NOW }), 0, "a sample that expired before the 24h window contributes no node-hours");
+
+const oneNodeDirectory = { ...directory, gateways: [gateways[0]] };
+let fullWindow = null;
+for (let interval = GROVE_HISTORY_CAP - 1; interval >= 0; interval -= 1) {
+  const observedAt = new Date(NOW.getTime() - interval * 15 * 60_000);
+  const unsigned = buildPublicGroveSnapshot({
+    directory: oneNodeDirectory,
+    previous: fullWindow,
+    previousPublicKey: publicKey,
+    observedAt,
+    network: "sepolia",
+  });
+  fullWindow = attestPublicGroveSnapshot(unsigned, privateKey);
+}
+assert.equal(fullWindow.history.length, 97, "24h at 15m retains both boundary samples");
+assert.equal(fullWindow.history[0].at, "2026-08-22T12:00:00.000Z");
+assert.equal(fullWindow.history.at(-1).at, NOW.toISOString());
+assert.equal(fullWindow.growth.announcedNodeHours, 24, "one announced node over a full window yields 24 node-hours");
 
 const serialized = JSON.stringify(snapshot);
 for (const secret of [gateways[0].onion, gateways[1].onion, gateways[0].pubkey, gateways[0].operator, "region", "caps", "markedDown", "MUST_NOT_PUBLISH", "requests", "bytes", "private.example"]) {

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A signed, delayed count of the Shade Tree Grove. No identities, locations, or traffic.">
+  <meta name="description" content="A signed aggregate view of the Shade Tree Grove. No identities, locations, or traffic.">
   <meta name="theme-color" content="#07100c">
   <meta property="og:title" content="The Grove · Shade Tree Grove">
-  <meta property="og:description" content="A living, privacy-aware view of the Grove.">
+  <meta property="og:description" content="A privacy-preserving view of the Grove's signed Canopy census.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
-  <meta property="og:image:alt" content="A low-poly grove crossed by a private data path">
+  <meta property="og:image:alt" content="An abstract canopy sphere made of small groves and census signals">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -19,7 +19,7 @@
   <script type="module" src="/grove/network.js"></script>
   <title>The Grove · Shade Tree Grove</title>
 </head>
-<body class="network-page">
+<body class="network-page is-checking">
   <a class="skip-link" href="#grove-main">Skip to Grove details</a>
 
   <header class="network-hero" aria-labelledby="grove-title">
@@ -35,36 +35,113 @@
       </div>
     </nav>
 
-    <div class="network-stage" id="network-stage">
-      <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true"></div>
-      <canvas id="network-canvas" aria-hidden="true"></canvas>
-    </div>
-    <div class="elder-label"><span class="elder-leader" aria-hidden="true"></span><span data-elder-label>Elder Tree · discovery · not counted</span></div>
+    <div class="network-dashboard">
+      <div class="network-copy">
+        <h1 id="grove-title">The Grove,<br><span>observed.</span></h1>
+        <p>A signed census of the pre-v4 research fleet. The abstract canopy has no map, identities, or one-to-one positions. Census arcs are not traffic, and this is not a connection profile.</p>
+        <div class="snapshot-state" role="status" aria-live="polite">
+          <span class="state-pulse" aria-hidden="true"></span>
+          <span data-view-state>Checking signed aggregate</span>
+        </div>
+      </div>
 
-    <div class="network-copy">
-      <h1 id="grove-title"><span data-hero-count>Last</span> <span data-hero-tree-word>view</span> <span data-hero-tail>of the Grove.</span></h1>
-      <p>A full pulse marks a newly signed research census verified over Tor.</p>
-      <div class="snapshot-state" role="status" aria-live="polite">
-        <span class="state-pulse" aria-hidden="true"></span>
-        <span data-view-state>Checking signed view</span>
+      <div class="network-stage" id="network-stage">
+        <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true">
+          <span class="fallback-orbit fallback-orbit-a"></span>
+          <span class="fallback-orbit fallback-orbit-b"></span>
+        </div>
+        <canvas id="network-canvas" aria-hidden="true"></canvas>
+        <div class="scene-key">
+          <span>Census field</span>
+          <span>No geography</span>
+        </div>
+        <div class="elder-label">
+          <span class="elder-signal" aria-hidden="true"></span>
+          <span data-elder-label>Elder Tree · discovery only · off traffic path</span>
+        </div>
       </div>
-      <div class="hero-actions">
-        <a class="solid-action" href="/operator/">Run a node</a>
-        <a class="line-action" href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PUBLIC-GROVE.md">Data contract</a>
-      </div>
+
+      <aside class="provenance-panel" aria-label="Snapshot provenance">
+        <div class="provenance-head">
+          <span>Signed view</span>
+          <strong data-snapshot-state>Verifying</strong>
+        </div>
+        <dl>
+          <div><dt>Network</dt><dd data-network>…</dd></div>
+          <div><dt>Scope</dt><dd>Pre-v4 research fleet</dd></div>
+          <div><dt>Definition</dt><dd>Announced within TTL</dd></div>
+          <div><dt>Observed</dt><dd data-view-time>…</dd></div>
+          <div><dt>Cadence</dt><dd data-snapshot-cadence>15 min</dd></div>
+        </dl>
+      </aside>
     </div>
 
     <dl class="network-data">
-      <div><dt>Shade Trees</dt><dd data-node-count>…</dd></div>
+      <div><dt>Announced identities</dt><dd data-node-count>…</dd></div>
       <div><dt>Observed</dt><dd data-view-age>…</dd></div>
-      <div><dt>Node-hours</dt><dd data-node-hours>…</dd></div>
+      <div><dt>24h node-hours</dt><dd data-node-hours>…</dd></div>
+      <div><dt>Observed change</dt><dd data-change>…</dd></div>
     </dl>
   </header>
 
   <main id="grove-main" class="grove-main">
-    <section class="grove-contract" aria-label="Public Grove boundary">
-      <p>Counts and rounded time remain. Node records do not.</p>
-      <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PUBLIC-GROVE.md">How the view forgets ↗</a>
+    <section class="history-panel" aria-labelledby="history-title">
+      <div class="section-copy">
+        <h2 id="history-title">24 hours of shade</h2>
+        <p>Signed aggregate counts only. Coverage and gaps stay visible.</p>
+      </div>
+      <div class="history-chart" data-history-chart role="img" aria-label="No signed count history loaded">
+        <svg viewBox="0 0 960 260" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="history-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#e2be67" stop-opacity="0.28"></stop>
+              <stop offset="1" stop-color="#e2be67" stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+          <g class="chart-grid">
+            <path d="M0 40H960M0 130H960M0 220H960"></path>
+          </g>
+          <path class="history-area" data-history-area d=""></path>
+          <path class="history-line" data-history-line d=""></path>
+          <g data-history-points></g>
+        </svg>
+        <div class="chart-axis" aria-hidden="true"><span>24h ago</span><span>Now</span></div>
+      </div>
+      <dl class="history-summary">
+        <div><dt>Low</dt><dd data-history-low>…</dd></div>
+        <div><dt>High</dt><dd data-history-high>…</dd></div>
+        <div><dt>Samples</dt><dd data-history-samples>…</dd></div>
+        <div><dt>Coverage</dt><dd data-history-coverage>…</dd></div>
+      </dl>
+    </section>
+
+    <section class="boundary-panel" aria-labelledby="boundary-title">
+      <div class="section-copy">
+        <h2 id="boundary-title">A view with boundaries</h2>
+        <p>The browser receives a signed aggregate, not a directory.</p>
+      </div>
+      <div class="boundary-columns">
+        <div>
+          <h3>Signed view</h3>
+          <ul>
+            <li>Observer attests: Elder reached over Tor</li>
+            <li>Observer attests: Canopy verified and fresh</li>
+            <li>Browser verifies: publication signature</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Never published</h3>
+          <ul>
+            <li>Node identities</li>
+            <li>Locations or ASNs</li>
+            <li>Traffic or destinations</li>
+          </ul>
+        </div>
+      </div>
+      <div class="boundary-links">
+        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/data-api.md">Data API specification ↗</a>
+        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">Protocol specification ↗</a>
+      </div>
     </section>
   </main>
 

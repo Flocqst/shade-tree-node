@@ -27,6 +27,7 @@
     "network/",
     "payments/",
     "scripts/",
+    "specs/",
     "circuits/",
     "contracts/",
     "docs/*.md",

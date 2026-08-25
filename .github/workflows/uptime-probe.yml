@@ -163,8 +163,12 @@ jobs:
             echo "::notice title=public Grove skipped::SHADE_TREE_GROVE_SIGNING_KEY is not configured; uptime probe completed without publishing a snapshot."
             exit 0
           fi
+          if [ "${SHADE_TREE_NETWORK:-}" != "sepolia" ]; then
+            echo "::notice title=public Grove skipped::SHADE_TREE_NETWORK must be sepolia for the versioned Sepolia Data API; the uptime probe completed without replacing the last valid snapshot."
+            exit 0
+          fi
           node scripts/grove-snapshot.mjs \
-            --network "${SHADE_TREE_NETWORK:-unknown}" \
+            --network sepolia \
             --previous "$RUNNER_TEMP/grove.previous.json" \
             --out "$RUNNER_TEMP/grove.json"
           echo "snapshot=$(base64 -w0 "$RUNNER_TEMP/grove.json")" >> "$GITHUB_OUTPUT"

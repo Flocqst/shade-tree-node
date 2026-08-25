@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GET } from "../docs/post/api/grove.mjs";
 import {
   GROVE_MAX_BYTES,
+  GROVE_NETWORK,
   GROVE_SNAPSHOT_URL,
   validGroveSnapshot,
   verifyGroveSnapshot,
@@ -29,14 +31,15 @@ function upstream(body, { status = 200, contentType = "text/plain; charset=utf-8
   });
 }
 
-async function requestWith(fetchImpl) {
+async function requestWith(fetchImpl, request) {
   globalThis.fetch = fetchImpl;
-  return GET();
+  return GET(request);
 }
 
 try {
   check("reference snapshot passes API schema validation", validGroveSnapshot(snapshot));
   check("reference snapshot passes API attestation verification", verifyGroveSnapshot(snapshot));
+  check("versioned API contract is bound to Sepolia", GROVE_NETWORK === "sepolia" && !validGroveSnapshot({ ...snapshot, network: "mainnet" }));
   check("network label cannot pass through regular-expression coercion", !validGroveSnapshot({ ...snapshot, network: null }));
   check("numeric timestamps cannot pass through Date.parse coercion", !validGroveSnapshot({
     ...snapshot,
@@ -59,10 +62,42 @@ try {
   check("API requests only the fixed signed-snapshot source", upstreamCall.url === GROVE_SNAPSHOT_URL);
   check("API fetch is bounded by a signal and refuses redirects", upstreamCall.options.signal instanceof AbortSignal && upstreamCall.options.redirect === "error");
   check("API returns a successful JSON response", success.status === 200 && success.headers.get("content-type") === "application/json; charset=utf-8");
-  check("API returns the signed envelope unchanged", JSON.stringify(await success.json()) === JSON.stringify(snapshot));
+  const successBody = await success.text();
+  check("API returns the signed envelope unchanged", successBody === `${JSON.stringify(snapshot)}\n`);
   check("API gives browsers a short cache", success.headers.get("cache-control") === "public, max-age=60");
   check("API gives Vercel a five-minute stale-while-revalidate cache", success.headers.get("vercel-cdn-cache-control") === "public, max-age=300, stale-while-revalidate=3600");
+  const expectedEtag = `"${createHash("sha256").update(successBody).digest("base64url")}"`;
+  check("API identifies its signed schema and hashes the exact response bytes", success.headers.get("x-shade-tree-schema") === snapshot.schema && success.headers.get("etag") === expectedEtag);
   check("API does not opt into cross-origin browser reads", success.headers.get("access-control-allow-origin") === null);
+
+  const reorderedSnapshot = Object.fromEntries(Object.entries(snapshot).reverse());
+  const reordered = await requestWith(async () => upstream(reorderedSnapshot));
+  const reorderedBody = await reordered.text();
+  check("byte-distinct valid envelopes receive distinct strong validators", reorderedBody !== successBody && reordered.headers.get("etag") !== expectedEtag);
+
+  const conditional = await requestWith(
+    async () => upstream(snapshot),
+    new Request("https://shade-tree-node.vercel.app/api/v1/data/grove/sepolia/head", {
+      headers: { "If-None-Match": success.headers.get("etag") },
+    }),
+  );
+  check("API honors a matching snapshot validator", conditional.status === 304 && await conditional.text() === "");
+
+  const weakListConditional = await requestWith(
+    async () => upstream(snapshot),
+    new Request("https://shade-tree-node.vercel.app/api/v1/data/grove/sepolia/head", {
+      headers: { "If-None-Match": `"unrelated", W/${expectedEtag}` },
+    }),
+  );
+  check("API weakly matches validators in an If-None-Match list", weakListConditional.status === 304);
+
+  const wildcardConditional = await requestWith(
+    async () => upstream(snapshot),
+    new Request("https://shade-tree-node.vercel.app/api/v1/data/grove/sepolia/head", {
+      headers: { "If-None-Match": "*" },
+    }),
+  );
+  check("API honors the If-None-Match wildcard", wildcardConditional.status === 304);
 
   console.error = () => {};
   for (const [name, body, options] of [

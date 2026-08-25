@@ -1,7 +1,11 @@
 /* global AbortController, atob, crypto, document, navigator, TextEncoder, window */
 
-const LIVE_URL = "/api/grove";
+import { splitHistory, windowedHistory } from "./history.js";
+import { grovePatchCount } from "./visual-model.js";
+
+const LIVE_URL = "/api/v1/data/grove/sepolia/head";
 const FALLBACK_URL = "/grove/network.fallback.json";
+const NETWORK = "sepolia";
 const FETCH_TIMEOUT_MS = 9_000;
 const POLL_INTERVAL_MS = 5 * 60 * 1_000;
 const PUBLIC_KEY_RAW = "377fAP+xg5aKu7AzQa7yB3NMpFpquPSIgs3TcQtVSYI=";
@@ -32,7 +36,7 @@ function validSnapshot(value) {
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
-    && history.length <= 96
+    && history.length <= 97
     && history.every((sample, index) => {
       const at = isoMillis(sample?.at);
       const prior = index > 0 ? isoMillis(history[index - 1].at) : -Infinity;
@@ -45,8 +49,7 @@ function validSnapshot(value) {
   return value
     && exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
     && value.schema === "shade-tree-public-grove-v1"
-    && typeof value.network === "string"
-    && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value.network)
+    && value.network === NETWORK
     && Number.isFinite(observedAt)
     && observedAt <= Date.now() + 5 * 60_000
     && exactKeys(value.source, ["bootnodeReachable", "directoryVerified", "definition", "cadenceMinutes"])
@@ -175,27 +178,103 @@ function randomFrom(seed) {
 }
 
 function drawFallback(snapshot) {
-  fallback.replaceChildren();
-  const count = Math.min(snapshot.nodes.announced, 28);
+  fallback.querySelectorAll(".fallback-grove").forEach((element) => element.remove());
+  const count = snapshot.nodes.announced;
+  const patchCount = Math.min(30, grovePatchCount(count, "high"));
   const random = randomFrom(hashSeed(`${snapshot.observedAt}:${count}`));
-  for (let index = 0; index < count; index += 1) {
-    const angle = index * 2.399963 + random() * 0.8;
-    const progress = Math.sqrt((index + 0.7) / Math.max(1, count));
-    const x = 41 + Math.cos(angle) * progress * 31 + (random() - 0.5) * 8;
-    const y = 48 + Math.sin(angle) * progress * 34 + (random() - 0.5) * 8;
-    const size = Math.max(17, 36 - Math.sqrt(count) * 2 + random() * 9);
-    const tree = document.createElement("span");
-    tree.className = "fallback-tree";
-    tree.style.setProperty("--x", `${x}%`);
-    tree.style.setProperty("--y", `${y}%`);
-    tree.style.setProperty("--size", `${size}%`);
-    tree.style.setProperty("--turn", `${Math.round((random() - 0.5) * 12)}deg`);
-    fallback.append(tree);
+  for (let index = 0; index < patchCount; index += 1) {
+    const vertical = 1 - (2 * (index + 0.5)) / patchCount;
+    const radius = Math.sqrt(1 - vertical * vertical);
+    const angle = index * 2.399963 + random() * 0.22;
+    const horizontal = Math.cos(angle) * radius;
+    const depth = Math.sin(angle) * radius;
+    const grove = document.createElement("span");
+    grove.className = "fallback-grove";
+    grove.style.setProperty("--x", `${50 + horizontal * 39}%`);
+    grove.style.setProperty("--y", `${50 - vertical * 39}%`);
+    grove.style.setProperty("--scale", (0.58 + (depth + 1) * 0.32).toFixed(2));
+    grove.style.setProperty("--alpha", (0.34 + (depth + 1) * 0.31).toFixed(2));
+    grove.style.setProperty("--depth", String(Math.round(2 + (depth + 1) * 4)));
+    grove.style.setProperty("--turn", `${Math.round((random() - 0.5) * 13)}deg`);
+    fallback.append(grove);
   }
 }
 
 function setText(selector, value) {
   document.querySelectorAll(selector).forEach((element) => { element.textContent = value; });
+}
+
+function observationLabel(iso) {
+  const date = new Date(iso);
+  const month = date.toLocaleString("en", { month: "short", timeZone: "UTC" });
+  const day = date.getUTCDate();
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${month} ${day} · ${hour}:${minute} UTC`;
+}
+
+function drawHistory(snapshot) {
+  const chart = document.querySelector("[data-history-chart]");
+  const line = document.querySelector("[data-history-line]");
+  const area = document.querySelector("[data-history-area]");
+  const pointGroup = document.querySelector("[data-history-points]");
+  if (!chart || !line || !area || !pointGroup) return;
+
+  const observedAt = Date.parse(snapshot.observedAt);
+  const startAt = observedAt - 24 * 60 * 60_000;
+  const samplesInWindow = windowedHistory(snapshot.history, snapshot.observedAt);
+  const samples = samplesInWindow.length ? samplesInWindow : [snapshot.history.at(-1)];
+  const counts = samples.map((sample) => sample.announced);
+  const low = Math.min(...counts);
+  const high = Math.max(...counts);
+  const chartTop = 32;
+  const chartBottom = 220;
+  const spread = Math.max(1, high - low);
+  const yLow = Math.max(0, low - spread * 0.18);
+  const yHigh = high + spread * 0.18;
+  const x = (sample) => Math.max(0, Math.min(960, ((Date.parse(sample.at) - startAt) / (24 * 60 * 60_000)) * 960));
+  const y = (sample) => chartBottom - ((sample.announced - yLow) / Math.max(1, yHigh - yLow)) * (chartBottom - chartTop);
+  const segments = splitHistory(samples, snapshot.source.cadenceMinutes);
+  const expectedSamples = Math.floor((24 * 60) / snapshot.source.cadenceMinutes) + 1;
+  const coverage = Math.min(100, Math.round((samples.length / expectedSamples) * 100));
+  const lineParts = [];
+  const areaParts = [];
+
+  segments.forEach((segment) => {
+    if (segment.length === 1) {
+      const pointX = x(segment[0]);
+      lineParts.push(`M${Math.max(0, pointX - 5).toFixed(1)} ${y(segment[0]).toFixed(1)}H${Math.min(960, pointX + 5).toFixed(1)}`);
+      return;
+    }
+    const points = segment.map((sample) => `${x(sample).toFixed(1)} ${y(sample).toFixed(1)}`);
+    lineParts.push(`M${points.join("L")}`);
+    areaParts.push(`M${x(segment[0]).toFixed(1)} ${chartBottom}L${points.join("L")}L${x(segment.at(-1)).toFixed(1)} ${chartBottom}Z`);
+  });
+
+  line.setAttribute("d", lineParts.join(""));
+  area.setAttribute("d", areaParts.join(""));
+  pointGroup.replaceChildren();
+  const stride = Math.max(1, Math.ceil(samples.length / 18));
+  samples.forEach((sample, index) => {
+    if (index !== samples.length - 1 && index % stride !== 0) return;
+    const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    point.setAttribute("class", "history-point");
+    point.setAttribute("cx", x(sample).toFixed(1));
+    point.setAttribute("cy", y(sample).toFixed(1));
+    point.setAttribute("r", index === samples.length - 1 ? "4" : "2.5");
+    pointGroup.append(point);
+  });
+
+  const change = samples.length > 1 ? samples.at(-1).announced - samples[0].announced : null;
+  setText("[data-history-low]", String(low));
+  setText("[data-history-high]", String(high));
+  setText("[data-history-samples]", String(samples.length));
+  setText("[data-history-coverage]", `${coverage}%`);
+  setText("[data-change]", change == null ? "n/a" : `${change > 0 ? "+" : ""}${change}`);
+  chart.setAttribute(
+    "aria-label",
+    `${samples.length} signed aggregate ${samples.length === 1 ? "sample" : "samples"} in the 24-hour window, ${coverage}% coverage. Low ${low}, high ${high}, latest ${samples.at(-1).announced}.`,
+  );
 }
 
 async function renderSnapshot(snapshot, { bundled = false } = {}) {
@@ -207,28 +286,19 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.remove("is-unavailable");
   setText("[data-node-count]", String(count));
-  const renderCap = window.matchMedia("(max-width: 700px), (pointer: coarse)").matches ? 24 : 48;
-  const compactLabel = window.matchMedia("(max-width: 360px)").matches;
-  let elderLabel = compactLabel ? "Elder Tree · not counted" : "Elder Tree · discovery · not counted";
-  if (count > renderCap) {
-    elderLabel = compactLabel
-      ? `Elder · not counted · ${renderCap}/${count} shown`
-      : `Elder Tree · discovery · not counted · ${renderCap} of ${count} nodes shown`;
-  }
-  setText("[data-elder-label]", elderLabel);
-  setText("[data-hero-count]", String(count));
-  setText("[data-hero-tree-word]", count === 1 ? "tree" : "trees");
-  setText("[data-hero-tail]", researchFleet ? "in the research Grove." : "in the Grove.");
-  setText("[data-canopy-label]", stale ? "Last verified canopy" : "Current canopy");
   setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "n/a" : String(snapshot.growth.announcedNodeHours));
   setText("[data-view-age]", age.short);
-  setText("[data-snapshot-cadence]", `${cadence}-minute snapshots`);
+  setText("[data-view-time]", observationLabel(snapshot.observedAt));
+  setText("[data-network]", snapshot.network);
+  setText("[data-snapshot-cadence]", `${cadence} min`);
+  setText("[data-snapshot-state]", bundled ? "Reference" : stale ? "Stale" : "Verified");
   const state = bundled
     ? `Signed pre-v4 reference · ${age.long}`
     : stale
       ? `${researchFleet ? "Pre-v4 research census" : "Signed census"} · ${age.long} · stale`
-      : `${researchFleet ? "Research census" : "Census"} verified · ${age.long}`;
+      : `${researchFleet ? "Research census" : "Snapshot"} verified · ${age.long}`;
   setText("[data-view-state]", state);
+  drawHistory(snapshot);
   drawFallback(snapshot);
 
   if (!mounted) {

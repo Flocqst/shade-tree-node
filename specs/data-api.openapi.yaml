@@ -1,0 +1,245 @@
+openapi: 3.1.0
+info:
+  title: Shade Tree Grove Data API
+  version: 1.0.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: >-
+    Read-only access to the currently implemented signed Sepolia Grove head.
+    This specification intentionally excludes proposed publisher endpoints and
+    all unimplemented traffic, health, implementation, and per-node metrics.
+servers:
+  - url: https://shade-tree-node.vercel.app
+paths:
+  /api/v1/data/grove/sepolia/head:
+    get:
+      operationId: getSepoliaGroveHead
+      summary: Get the latest verified signed Grove aggregate
+      security: []
+      description: >-
+        Returns the exact shade-tree-public-grove-v1 envelope after the server
+        verifies its exact schema and Ed25519 publication attestation. The
+        signed observedAt field, not HTTP cache age, determines freshness.
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: >-
+            ETag from an earlier successful response. Weak validators,
+            comma-separated lists, and the wildcard follow HTTP matching rules.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verified signed aggregate.
+          headers:
+            Cache-Control:
+              description: Browser cache policy.
+              schema:
+                type: string
+                const: public, max-age=60
+            ETag:
+              description: Strong validator derived from SHA-256 of the exact response bytes.
+              schema:
+                type: string
+                pattern: '^"[A-Za-z0-9_-]{43}"$'
+            X-Shade-Tree-Schema:
+              schema:
+                type: string
+                const: shade-tree-public-grove-v1
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicGroveV1"
+        "304":
+          description: The supplied If-None-Match weakly matches the current ETag.
+          headers:
+            Cache-Control:
+              description: Browser cache policy inherited from the successful response.
+              schema:
+                type: string
+                const: public, max-age=60
+            ETag:
+              schema:
+                type: string
+                pattern: '^"[A-Za-z0-9_-]{43}"$'
+            X-Shade-Tree-Schema:
+              schema:
+                type: string
+                const: shade-tree-public-grove-v1
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+        "503":
+          description: No valid upstream snapshot is available; never represents a zero count.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            Retry-After:
+              schema:
+                type: string
+                const: "60"
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                    const: network_snapshot_unavailable
+components:
+  schemas:
+    PublicGroveV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - network
+        - observedAt
+        - source
+        - nodes
+        - growth
+        - privacy
+        - history
+        - attestation
+      properties:
+        schema:
+          type: string
+          const: shade-tree-public-grove-v1
+        network:
+          type: string
+          const: sepolia
+        observedAt:
+          type: string
+          format: date-time
+          description: >-
+            Canonical JavaScript ISO timestamp, no more than five minutes in the
+            future at validation time, and equal to the final history timestamp.
+        source:
+          $ref: "#/components/schemas/SourceV1"
+        nodes:
+          $ref: "#/components/schemas/NodesV1"
+        growth:
+          $ref: "#/components/schemas/GrowthV1"
+        privacy:
+          $ref: "#/components/schemas/PrivacyV1"
+        history:
+          type: array
+          description: >-
+            Strictly increasing canonical timestamps no later than observedAt;
+            the final timestamp equals observedAt.
+          minItems: 1
+          maxItems: 97
+          items:
+            $ref: "#/components/schemas/HistorySampleV1"
+        attestation:
+          $ref: "#/components/schemas/AttestationV1"
+    SourceV1:
+      type: object
+      additionalProperties: false
+      required: [bootnodeReachable, directoryVerified, definition, cadenceMinutes]
+      properties:
+        bootnodeReachable:
+          type: boolean
+          const: true
+        directoryVerified:
+          type: boolean
+          const: true
+        definition:
+          type: string
+          const: announced-within-ttl
+        cadenceMinutes:
+          type: integer
+          const: 15
+    NodesV1:
+      type: object
+      additionalProperties: false
+      required: [announced]
+      properties:
+        announced:
+          type: integer
+          minimum: 0
+          maximum: 100000
+    GrowthV1:
+      type: object
+      additionalProperties: false
+      required: [windowHours, announcedNodeHours, samples]
+      properties:
+        windowHours:
+          type: integer
+          const: 24
+        announcedNodeHours:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 2400000
+        samples:
+          type: integer
+          description: Exactly the number of entries in history.
+          minimum: 1
+          maximum: 97
+    PrivacyV1:
+      type: object
+      additionalProperties: false
+      required:
+        - identities
+        - locations
+        - traffic
+        - stablePositions
+        - futureSharedStatsMinReportingNodes
+      properties:
+        identities:
+          type: boolean
+          const: false
+        locations:
+          type: boolean
+          const: false
+        traffic:
+          type: boolean
+          const: false
+        stablePositions:
+          type: boolean
+          const: false
+        futureSharedStatsMinReportingNodes:
+          type: integer
+          const: 5
+    HistorySampleV1:
+      type: object
+      additionalProperties: false
+      required: [at, announced]
+      properties:
+        at:
+          type: string
+          format: date-time
+          description: Canonical JavaScript ISO timestamp.
+        announced:
+          type: integer
+          minimum: 0
+          maximum: 100000
+    AttestationV1:
+      type: object
+      additionalProperties: false
+      required: [algorithm, keyId, signature]
+      properties:
+        algorithm:
+          type: string
+          const: Ed25519
+        keyId:
+          type: string
+          const: grove-2026-08
+        signature:
+          type: string
+          pattern: '^[A-Za-z0-9+/]{86}==$'

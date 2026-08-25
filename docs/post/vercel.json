@@ -8,6 +8,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/v1/data/grove/sepolia/head",
+      "destination": "/api/grove"
+    },
+    {
       "source": "/grove/network.json",
       "destination": "/api/grove"
     }

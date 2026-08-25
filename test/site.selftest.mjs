@@ -54,7 +54,7 @@ const currentGuideShellBlocks = currentGuides.flatMap((guide) =>
   [...guide.matchAll(/```(?:bash)?\n([\s\S]*?)```/g)].map((match) => match[1]),
 );
 const payGuideOutput = readFileSync(join(ROOT, "group", "pay.mjs"), "utf8");
-const protocol = readFileSync(join(ROOT, "docs", "PROTOCOL.md"), "utf8");
+const protocol = readFileSync(join(ROOT, "specs", "protocol.md"), "utf8");
 const deploymentPlan = readFileSync(join(ROOT, "docs", "DEPLOYMENT-PLAN.md"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const loader = read("site.js");
@@ -63,6 +63,8 @@ const grovePage = read("grove/index.html");
 const groveCss = read("grove/grove.css");
 const groveLoader = read("grove/network.js");
 const groveScene = read("grove/scene.js");
+const groveHistory = read("grove/history.js");
+const groveVisualModel = read("grove/visual-model.js");
 const groveApi = read("api/grove.mjs");
 const groveApiContract = read("api/_grove-contract.mjs");
 const pathGraphic = read("fig/shade-tree-path.svg");
@@ -78,9 +80,9 @@ const handoffBriefWords = (handoffBrief.match(/[A-Za-z0-9][A-Za-z0-9'-]*/g) || [
 const pngMagic = "89504e470d0a1a0a";
 
 check("landing stays compact beside the full research note", landing.length < 9_000 && visibleWords(landing) <= 210 && research.length > 40_000);
-check("Grove is one-third-length copy", grovePage.length < 6_000 && visibleWords(grovePage) <= 66);
+check("Grove stays concise while exposing useful aggregate context", grovePage.length < 7_500 && visibleWords(grovePage) <= 155);
 check("landing has one H1 and one decorative canvas", (landing.match(/<h1\b/g) || []).length === 1 && (landing.match(/<canvas[^>]+aria-hidden="true"/g) || []).length === 1);
-check("Grove has one H1, one main section, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<main[\s\S]*?<section\b/g) || []).length === 1 && /role="status" aria-live="polite"/.test(grovePage));
+check("Grove has one H1, two focused detail sections, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<section\b/g) || []).length === 2 && /role="status" aria-live="polite"/.test(grovePage));
 
 for (const [name, page] of [["landing", landing], ["agent guide", agentPage], ["operator guide", operatorPage], ["Grove", grovePage]]) {
   check(`${name} has no eyebrow, tiny semantic text, or em dash`, !/eyebrow|preview-label|preview-note|<small\b|<sup\b|<sub\b|<figcaption\b|\u2014/.test(page));
@@ -114,12 +116,12 @@ check("Git install payload carries every routed CLI runtime", ["bin/", "bootnode
 check("deployment plan includes the Elder Tree and safety gates", /Elder Tree \(`bootnode` in source\)/.test(deploymentPlan) && /\[#73\]/.test(deploymentPlan) && /untrusted development Groth16 setup/.test(deploymentPlan) && /Add the actual Elder and node hosts to Ansible inventory/.test(deploymentPlan));
 check("existing Discussions provide lightweight support", /shade-tree-node\/discussions/.test(landing));
 check("landing uses tablet-safe mobile diagrams and README uses its compact flow", /media="\(max-width: 900px\)"[^>]+shade-tree-reputation-mobile\.svg[^>]+width="720" height="570"/.test(landing) && /media="\(max-width: 900px\)"[^>]+shade-tree-path-mobile\.svg[^>]+width="720" height="820"/.test(landing) && /<img src="\/fig\/shade-tree-path\.svg"/.test(landing) && /docs\/post\/fig\/shade-tree-readme\.svg/.test(readme));
-check("landing links once to the full protocol after both diagrams", (landing.match(/href="https:\/\/github\.com\/dmarzzz\/shade-tree-node\/blob\/main\/docs\/PROTOCOL\.md"/g) || []).length === 1 && /class="protocol-link"[\s\S]*Full protocol specification/.test(landing));
+check("landing links once to the full protocol after both diagrams", (landing.match(/href="https:\/\/github\.com\/dmarzzz\/shade-tree-node\/blob\/main\/specs\/protocol\.md"/g) || []).length === 1 && /class="protocol-link"[\s\S]*Full protocol specification/.test(landing));
 check("Tor boundary copy is precise and qualified", /Tor exit addresses are public/.test(landing) && /publishes no egress-IP list/.test(landing) && /Destinations still see and can block a node IP/.test(landing) && /Destinations still see and can block a node IP/.test(readme));
 check("public vocabulary stays paired with protocol names", /Elder Tree/.test(readme) && /bootnode/.test(readme) && /Canopy/.test(readme) && /controls discovery/.test(readme) && /\| Proxy \| client \|/.test(protocol));
 
-check("Grove names the research census pulse without claiming browser bootnode contact", /full pulse marks a newly signed research census verified over Tor/i.test(grovePage) && /Counts and rounded time remain\. Node records do not\./.test(grovePage) && !/browser.{0,30}(queries|contacts|fetches).{0,30}(bootnode|Elder)/i.test(grovePage));
-check("Grove links to the public data contract", /docs\/PUBLIC-GROVE\.md/.test(grovePage));
+check("Grove clearly scopes its abstract research census", /signed census of the pre-v4 research fleet/i.test(grovePage) && /no map, identities, or one-to-one positions/i.test(grovePage) && /not a connection profile/i.test(grovePage) && /No geography/.test(grovePage));
+check("Grove links to canonical data and protocol specifications", /specs\/data-api\.md/.test(grovePage) && /specs\/protocol\.md/.test(grovePage));
 
 check("path graphic has accessible text and separates the two planes", /<title[^>]*>[^<]+<\/title>/.test(pathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(pathGraphic) && /Discovery plane/i.test(pathGraphic) && /Traffic path/i.test(pathGraphic) && /target-bound RLN proof \+ nullifier/.test(pathGraphic) && /stays out of this path/i.test(pathGraphic) && !/<script\b|\u2014/.test(pathGraphic));
 check("mobile path graphic is accessible, short, and traffic-only", /<svg[^>]+width="720"[^>]+height="820"[^>]+role="img"[^>]+aria-labelledby="title desc"/.test(mobilePathGraphic) && /<title[^>]*>[^<]+<\/title>/.test(mobilePathGraphic) && /<desc[^>]*>[^<]+<\/desc>/.test(mobilePathGraphic) && /Agent[\s\S]*Proxy[\s\S]*Tor[\s\S]*Shade Tree node[\s\S]*Destination/.test(mobilePathGraphic) && /proof-gated tunnel/.test(mobilePathGraphic) && !/Discovery plane|signed heartbeat|signed Canopy|epoch nullifier/.test(mobilePathGraphic) && /Elder Tree handles discovery and stays off the traffic path/.test(landing) && /Destinations still see and can block a node IP/.test(landing) && !/<script\b|\u2014/.test(mobilePathGraphic));
@@ -129,8 +131,10 @@ const mobileDiagramFontSizes = [mobilePathGraphic, mobileReputationGraphic]
   .flatMap((graphic) => [...graphic.matchAll(/font-size:\s*(\d+)px/g)].map((match) => Number(match[1])));
 check("mobile diagram labels remain readable after responsive scaling", mobileDiagramFontSizes.length >= 5 && Math.min(...mobileDiagramFontSizes) >= 34);
 
-check("Grove exposes the uncounted Elder label to assistive technology", /<div class="elder-label"><span class="elder-leader" aria-hidden="true"><\/span><span data-elder-label>Elder Tree · discovery · not counted<\/span><\/div>/.test(grovePage) && !/<div class="elder-label"[^>]+aria-hidden/.test(grovePage));
-check("compact navigation and controls keep full touch targets", /\.wordmark\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.nav-links a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.copy-command\s*\{[\s\S]*?min-width:\s*7\.6rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.site-footer a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.grove-contract a\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(groveCss));
+check("Grove exposes the off-path Elder label to assistive technology", /<div class="elder-label">[\s\S]*?<span data-elder-label>Elder Tree · discovery only · off traffic path<\/span>[\s\S]*?<\/div>/.test(grovePage) && !/<div class="elder-label"[^>]+aria-hidden/.test(grovePage));
+check("compact navigation and controls keep full touch targets", /\.wordmark\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.nav-links a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.copy-command\s*\{[\s\S]*?min-width:\s*7\.6rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.site-footer a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.boundary-links a\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(groveCss));
+check("Grove labels distinguish observer attestations from browser verification", /Observer attests: Elder reached over Tor/.test(grovePage) && /Observer attests: Canopy verified and fresh/.test(grovePage) && /Browser verifies: publication signature/.test(grovePage));
+check("Grove semantic overlays stay legible without blocking pinch zoom", !/touch-action\s*:/.test(groveCss) && /\.scene-key,\s*\.elder-label\s*\{[\s\S]*?font-size:\s*0\.75rem/.test(groveCss) && /\.provenance-panel dt\s*\{[\s\S]*?font-size:\s*0\.74rem/.test(groveCss) && /\.provenance-panel dd\s*\{[\s\S]*?font-size:\s*0\.76rem/.test(groveCss));
 
 check("full research article is preserved at /research", /id="references"/.test(research) && /id="further-reading"/.test(research));
 check("landing and research canonical URLs are distinct", /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/"/.test(landing) && /rel="canonical" href="https:\/\/shade-tree-node\.vercel\.app\/research\/"/.test(research));
@@ -158,6 +162,8 @@ for (const asset of [
   "grove/grove.css",
   "grove/network.js",
   "grove/scene.js",
+  "grove/history.js",
+  "grove/visual-model.js",
   "grove/network.fallback.json",
   "api/grove.mjs",
   "api/_grove-contract.mjs",
@@ -192,12 +198,15 @@ check("both scenes handle reduced motion, visibility, DPR, and context loss", [l
 check("both scenes stop frame scheduling offscreen and resume from BFCache", [landingScene, groveScene].every((scene) => /function stopFrames\(\)/.test(scene) && /function scheduleFrame\(\)/.test(scene) && /if \(event\.persisted\) \{\s*stopFrames\(\)/.test(scene) && /addEventListener\("pageshow", onPageShow\)/.test(scene) && /addEventListener\("visibilitychange", onVisibilityChange\)/.test(scene) && (scene.match(/requestAnimationFrame\(tick\)/g) || []).length === 1));
 check("home scene uses the supported shadow filter without console fallback", /renderer\.shadowMap\.type = THREE\.PCFShadowMap/.test(landingScene) && !/PCFSoftShadowMap/.test(landingScene));
 
-check("network scene draws literal trees and one uncounted Elder", /CylinderGeometry/.test(groveScene) && /branchTransform/.test(groveScene) && /crownGeometry/.test(groveScene) && /elder-tree-uncounted/.test(groveScene));
-check("announced trees grow with deterministic stagger", /growthCurve/.test(groveScene) && /groveBornAt/.test(groveScene) && /index \* \(lowQuality/.test(groveScene));
+check("network scene builds an abstract canopy sphere from small tree groves", /non-geographic-canopy-sphere/.test(groveScene) && /IcosahedronGeometry\(SPHERE_RADIUS/.test(groveScene) && /CylinderGeometry/.test(groveScene) && /InstancedMesh/.test(groveScene) && /aggregate-canopy-field/.test(groveScene));
+check("network scene crosses a nonempty canopy in several census directions", /groveArcCount\(field\.patchCount, quality\)/.test(groveScene) && /quality === "low" \? 3 : 6/.test(groveVisualModel) && /QuadraticBezierCurve3/.test(groveScene) && /TubeGeometry/.test(groveScene) && /aggregate-observation-signal/.test(groveScene) && /elder-discovery-satellite/.test(groveScene));
+check("abstract canopy density is deterministic, aggregate, and empty at zero", /grovePatchCount\(announced, quality\)/.test(groveScene) && /hashSeed\(`\$\{snapshot\.observedAt\}:\$\{announced\}`\)/.test(groveScene) && /announced <= 0\) return 0/.test(groveVisualModel) && /Math\.log2\(announced \+ 1\)/.test(groveVisualModel));
 check("scene controller exposes the complete query lifecycle", /return \{[\s\S]*beginQuery,[\s\S]*failQuery,[\s\S]*finishQuery,[\s\S]*updateSnapshot: replaceSnapshot/.test(groveScene));
 check("loader emits soft checks and strong new-census pulses", /sceneController\?\.beginQuery\(\)/.test(groveLoader) && /sceneController\?\.finishQuery\(snapshot, \{ freshCensus \}\)/.test(groveLoader) && /sceneController\?\.failQuery\(\)/.test(groveLoader) && /lastLiveObservedAt !== snapshot\.observedAt/.test(groveLoader));
 check("Grove resumes signed-view polling after BFCache restore", /function onPageHide\(\)\s*\{\s*window\.clearTimeout\(pollTimer\)/.test(groveLoader) && /function onPageShow\(event\)\s*\{\s*if \(!event\.persisted\) return;\s*load\(\)/.test(groveLoader) && /addEventListener\("pageshow", onPageShow\)/.test(groveLoader));
 check("Grove geometry is aggregate-only", /snapshot\.observedAt/.test(groveScene) && /snapshot\.nodes\.announced/.test(groveScene) && !/onion|pubkey|operator|wallet|region|location|asn/i.test(groveScene));
+check("Grove dashboard stays inside the signed aggregate contract", ["data-node-count", "data-view-age", "data-node-hours", "data-change", "data-history-low", "data-history-high", "data-history-samples", "data-history-coverage"].every((field) => grovePage.includes(field)) && !/sessions|throughput|latency|bandwidth|success rate|reputation band/i.test(grovePage));
+check("24-hour trends use tested window and gap helpers", /windowedHistory\(snapshot\.history, snapshot\.observedAt\)/.test(groveLoader) && /splitHistory\(samples, snapshot\.source\.cadenceMinutes\)/.test(groveLoader) && /cadenceMinutes \* 1\.5 \* 60_000/.test(groveHistory));
 
 const headingIds = [...research.matchAll(/<h[1-6][^>]+id="([^"]+)"/g)].map((match) => match[1]);
 check("legacy article bookmarks are forwarded", headingIds.length >= 15 && headingIds.every((id) => loader.includes(`"${id}"`)));
@@ -210,13 +219,13 @@ check("copy controls stack before mobile commands can clip", /@media \(max-width
 
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));
 check("CSP limits reads and closes objects and workers", csp.includes("connect-src 'self'") && csp.includes("object-src 'none'") && csp.includes("worker-src 'none'"));
-check("browser reads only the same-origin API and bundled fallback", /const LIVE_URL = "\/api\/grove"/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
+check("browser reads only the versioned same-origin Sepolia Data API and bundled fallback", /const LIVE_URL = "\/api\/v1\/data\/grove\/sepolia\/head"/.test(groveLoader) && /const NETWORK = "sepolia"/.test(groveLoader) && /value\.network === NETWORK/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
 check("browser polling allows the API response to use edge caching", !/cache:\s*"no-store"/.test(groveLoader));
 check("browser verifies a pinned Ed25519 snapshot before rendering", /crypto\.subtle\.verify/.test(groveLoader) && /invalid public snapshot/.test(groveLoader) && groveLoader.includes(grovePublicKeyRawBase64(grovePublicKey)));
-check("Vercel keeps the old aggregate path as an internal API alias", config.rewrites?.length === 1 && config.rewrites[0].source === "/grove/network.json" && config.rewrites[0].destination === "/api/grove");
+check("Vercel exposes a versioned Data API and keeps the old aggregate alias", config.rewrites?.length === 2 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
 check("Vercel deploys a bounded Grove function instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
-check("Grove API validates a fixed, bounded, signed source", /GROVE_SNAPSHOT_URL = "https:\/\/raw\.githubusercontent\.com\/dmarzzz\/shade-tree-node\/network-state\/grove\.json"/.test(groveApiContract) && /GROVE_MAX_BYTES = 64 \* 1024/.test(groveApiContract) && /verifyBytes/.test(groveApiContract));
-check("Grove API controls success and failure caching without CORS", /Vercel-CDN-Cache-Control/.test(groveApi) && /"Cache-Control": "no-store"/.test(groveApi) && !/Access-Control-Allow-Origin/i.test(groveApi));
+check("Grove API validates a fixed, bounded, signed Sepolia source", /GROVE_SNAPSHOT_URL = "https:\/\/raw\.githubusercontent\.com\/dmarzzz\/shade-tree-node\/network-state\/grove\.json"/.test(groveApiContract) && /GROVE_NETWORK = "sepolia"/.test(groveApiContract) && /value\.network === GROVE_NETWORK/.test(groveApiContract) && /GROVE_MAX_BYTES = 64 \* 1024/.test(groveApiContract) && /verifyBytes/.test(groveApiContract));
+check("Grove API controls caching and byte validators without CORS", /Vercel-CDN-Cache-Control/.test(groveApi) && /createHash\("sha256"\)/.test(groveApi) && /matchesIfNoneMatch/.test(groveApi) && /"Cache-Control": "no-store"/.test(groveApi) && /if-none-match/.test(groveApi) && /ETag/.test(groveApi) && !/Access-Control-Allow-Origin/i.test(groveApi));
 
 check("bundled snapshot uses the public aggregate schema", fallbackSnapshot.schema === "shade-tree-public-grove-v1" && fallbackSnapshot.source?.directoryVerified === true && fallbackSnapshot.source?.definition === "announced-within-ttl");
 check("bundled snapshot top level is allowlisted", Object.keys(fallbackSnapshot).sort().join(",") === "attestation,growth,history,network,nodes,observedAt,privacy,schema,source");
@@ -227,7 +236,7 @@ check("tampering with the bundled count breaks its signature", !verifyPublicGrov
 const fallbackText = JSON.stringify(fallbackSnapshot);
 check("bundled snapshot contains no identity, place, activity, or pulse field", !/\.onion|pubkey|operator|wallet|address|region|country|coordinates?|asn|destination|tunnels?|bytes|requests?|queries|pulse/i.test(fallbackText));
 
-for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
+for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "grove/history.js", "grove/visual-model.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
   const result = spawnSync(process.execPath, ["--check", join(SITE, script)], { encoding: "utf8" });
   check(`${script} parses as JavaScript`, result.status === 0);
 }

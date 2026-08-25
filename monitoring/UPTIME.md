@@ -129,11 +129,14 @@ from `SHADE_TREE_NETWORK`: a different fleet must never inherit legacy verificat
 The option only authenticates old signed capability documents for the census; v4 clients and
 nodes do not read it.
 
-The public Grove also requires the `SHADE_TREE_GROVE_SIGNING_KEY` Actions **secret**. Its public
-half is pinned in `network/grove-signing-public.pem`. The read-only probe job signs only the
-allowlisted aggregate; a separate minimal publisher job receives temporary `contents: write`,
-checks out no code, and force-updates a one-file, parentless `network-state` commit. See
-[`docs/PUBLIC-GROVE.md`](../docs/PUBLIC-GROVE.md).
+The public Grove also requires `SHADE_TREE_NETWORK=sepolia` and the
+`SHADE_TREE_GROVE_SIGNING_KEY` Actions **secret**. Other network selectors can
+still run the uptime probe, but they do not replace the snapshot behind the
+versioned Sepolia Data API. The key's public half is pinned in
+`network/grove-signing-public.pem`. The read-only probe job signs only the
+allowlisted aggregate; a separate minimal publisher job receives temporary
+`contents: write`, checks out no code, and force-updates a one-file, parentless
+`network-state` commit. See [`specs/data-api.md`](../specs/data-api.md).
 
 ### cron
 

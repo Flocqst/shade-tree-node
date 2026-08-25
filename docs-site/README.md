@@ -15,11 +15,14 @@ This scans:
 
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md` (repo root)
 - every `*.md` under `docs/` (including `docs/adr/` and `docs/post/`)
+- every `*.md` under `specs/`
 
 and writes one HTML page per doc plus an `index.html` landing page into
 `docs-site/out/`. `.md` links between docs are rewritten to the generated
-`.html` pages; anchors are preserved. Console output reports how many pages were
-rendered and lists any doc that failed to convert.
+`.html` pages; anchors are preserved. The compact Data API OpenAPI artifact is
+copied alongside those pages and linked from the generated specification pages.
+Console output reports how many pages were rendered and lists any doc that
+failed to convert.
 
 Re-run the command any time the docs change; `out/` is rebuilt from scratch.
 

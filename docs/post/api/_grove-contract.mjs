@@ -3,6 +3,7 @@ import { verify as verifyBytes } from "node:crypto";
 export const GROVE_SNAPSHOT_URL = "https://raw.githubusercontent.com/dmarzzz/shade-tree-node/network-state/grove.json";
 export const GROVE_MAX_BYTES = 64 * 1024;
 export const GROVE_FETCH_TIMEOUT_MS = 4_000;
+export const GROVE_NETWORK = "sepolia";
 
 const GROVE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA377fAP+xg5aKu7AzQa7yB3NMpFpquPSIgs3TcQtVSYI=
@@ -43,7 +44,7 @@ export function validGroveSnapshot(value, { now = Date.now() } = {}) {
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
-    && history.length <= 96
+    && history.length <= 97
     && history.every((sample, index) => {
       const at = isoMillis(sample?.at);
       const prior = index > 0 ? isoMillis(history[index - 1].at) : -Infinity;
@@ -56,8 +57,7 @@ export function validGroveSnapshot(value, { now = Date.now() } = {}) {
 
   return exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
     && value.schema === "shade-tree-public-grove-v1"
-    && typeof value.network === "string"
-    && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value.network)
+    && value.network === GROVE_NETWORK
     && Number.isFinite(observedAt)
     && observedAt <= now + 5 * 60_000
     && exactKeys(value.source, ["bootnodeReachable", "directoryVerified", "definition", "cadenceMinutes"])

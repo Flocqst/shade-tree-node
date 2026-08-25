@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { GroveSnapshotError, loadGroveSnapshot } from "./_grove-contract.mjs";
 
 const SUCCESS_HEADERS = {
@@ -14,12 +15,18 @@ const FAILURE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 };
 
-export async function GET() {
+export async function GET(request) {
   try {
     const snapshot = await loadGroveSnapshot();
-    return new Response(`${JSON.stringify(snapshot)}\n`, {
+    const body = `${JSON.stringify(snapshot)}\n`;
+    const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
+    const headers = { ...SUCCESS_HEADERS, ETag: etag, "X-Shade-Tree-Schema": snapshot.schema };
+    if (matchesIfNoneMatch(request?.headers?.get("if-none-match"), etag)) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(body, {
       status: 200,
-      headers: SUCCESS_HEADERS,
+      headers,
     });
   } catch (error) {
     const reason = error instanceof GroveSnapshotError ? error.code : "internal";
@@ -29,4 +36,13 @@ export async function GET() {
       headers: FAILURE_HEADERS,
     });
   }
+}
+
+export function matchesIfNoneMatch(header, etag) {
+  if (!header) return false;
+  return header.split(",").some((candidate) => {
+    const token = candidate.trim();
+    if (token === "*") return true;
+    return token.replace(/^W\//, "") === etag;
+  });
 }

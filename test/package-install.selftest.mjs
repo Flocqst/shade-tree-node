@@ -41,7 +41,13 @@ try {
     "gateway/gateway.mjs",
     "group/join.mjs",
     "scripts/doctor.mjs",
-  ]) assert.ok(existsSync(join(installed, path)), `packed runtime is missing ${path}`);
+    "specs/README.md",
+    "specs/protocol.md",
+    "specs/data-api.md",
+    "specs/data-api.openapi.yaml",
+    "docs/PROTOCOL.md",
+    "docs/PUBLIC-GROVE.md",
+  ]) assert.ok(existsSync(join(installed, path)), `packed install is missing ${path}`);
 
   const imports = [
     "lib/rln.mjs",
