@@ -42,7 +42,10 @@ The repository observer variables now point at this v4 Elder and signer, with
 pre-v4 capability compatibility disabled. GitHub Actions run
 [`32908979132`](https://github.com/dmarzzz/shade-tree-node/actions/runs/32908979132)
 passed its Tor probe and minimal publisher job, replacing the parentless
-`network-state` head with signed v1 and v2 aggregate snapshots.
+`network-state` head with signed v1 and v2 aggregate snapshots. Default-branch
+run [`32910049456`](https://github.com/dmarzzz/shade-tree-node/actions/runs/32910049456)
+then passed the same probe and publisher path with the repository's ongoing
+scheduled-workflow source.
 
 The production Vercel endpoint returned `200`, schema
 `shade-tree-public-grove-v2`, a fresh signed observation, and
