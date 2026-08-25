@@ -5,7 +5,7 @@ This was the plan + runbook for deploying the next version (docs/NEXT-VERSION.md
 Ethereum testnet and a DigitalOcean gateway fleet, using the `~/agent-devops` OpenTofu +
 Ansible repo. Grounded in live recon, not aspiration. The current bring-up path is the
 one-command `bootnode/deploy/bootstrap.sh` (see `docs/OPERATOR.md`, `docs/QUICKSTART.md`)
-and the human-gated first live deployment is `docs/GO-LIVE.md`; the live contract
+and the human-gated first deployment record is `docs/GO-LIVE.md`; the retired historical contract
 addresses are in `network/sepolia/contracts.json` (release `rln-v4-tiers`, 2026-08-17; rln-v3 under `superseded`), which supersedes the
 addresses this file's checklist was written against.
 

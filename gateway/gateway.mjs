@@ -49,6 +49,7 @@ import { registry as metrics, installRuntimeMetrics, listenMetrics, safeMetricsP
 import { createLogger } from "../lib/log.mjs";
 import { printOperatorBanner } from "../lib/operator-ui.mjs";
 import { jsonRpcCall, makeBoundedJsonRpcProvider, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
+import { makeRelayByteCounter } from "../lib/relay-telemetry.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LISTEN_HOST = "127.0.0.1";
@@ -79,6 +80,8 @@ const M = {
   // sources it has: last-known-good roots + members.json), 0 once it reads again. Alert on it.
   rootDegraded: metrics.gauge("shade_tree_gateway_root_source_degraded", "1 = this bounded root source failed its last refresh; 0 = healthy."),
   paidLeaves: metrics.gauge("shade_tree_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet; no contract label is exposed."),
+  agentToDestinationBytes: metrics.counter("shade_tree_gateway_agent_to_destination_payload_bytes_total", "Application payload bytes read from agents after tunnel establishment. No traffic labels are recorded."),
+  destinationToAgentBytes: metrics.counter("shade_tree_gateway_destination_to_agent_payload_bytes_total", "Application payload bytes read from destinations after tunnel establishment. No traffic labels are recorded."),
 };
 
 const DROP_LABELS = new Set([
@@ -1206,6 +1209,7 @@ export function makeHandler(spentSet, {
   limiter = makeConnLimiter(),
   onTunnelOpen = () => {},
   onTunnelClose = () => {},
+  relayCounter = null,
 } = {}) {
   return async function handle(socket) {
     socket.setNoDelay(true);
@@ -1393,7 +1397,24 @@ export function makeHandler(spentSet, {
           // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
           // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
           reply(socket, successAck(makeReceipt));
-          if (env.__rest && env.__rest.length) candidateSocket.write(env.__rest);
+          // Relay-byte accounting starts only after the destination connection is established.
+          // `__rest` is application payload that arrived in the same TCP read as the proof
+          // envelope; it was buffered pre-connect but is counted exactly once here, at the point
+          // it is first relayed. Later chunks are counted once on their source socket's `data`
+          // event. No flow/destination/member/nullifier label is retained.
+          socket.on("data", (chunk) => {
+            relayCounter?.addAgentToDestination(chunk);
+            M.agentToDestinationBytes.inc({}, chunk.length);
+          });
+          candidateSocket.on("data", (chunk) => {
+            relayCounter?.addDestinationToAgent(chunk);
+            M.destinationToAgentBytes.inc({}, chunk.length);
+          });
+          if (env.__rest && env.__rest.length) {
+            relayCounter?.addAgentToDestination(env.__rest);
+            M.agentToDestinationBytes.inc({}, env.__rest.length);
+            candidateSocket.write(env.__rest);
+          }
           socket.pipe(candidateSocket);
           candidateSocket.pipe(socket);
         });
@@ -1538,10 +1559,18 @@ async function main() {
   const makeReceipt = await makeReceiptSigner();
 
   const limiter = makeConnLimiter();
+  const relayTelemetryEnabled = process.env.SHADE_TREE_RELAY_TELEMETRY === "1";
+  const relayCounter = makeRelayByteCounter({
+    enabled: relayTelemetryEnabled,
+    path: relayTelemetryEnabled
+      ? process.env.SHADE_TREE_RELAY_TELEMETRY_STATE || join(HERE, "..", "tor", "hs", "relay-telemetry.local.json")
+      : null,
+  });
   let activeTunnels = 0;
   const server = net.createServer(makeHandler(spentSet, {
     makeReceipt,
     limiter,
+    relayCounter,
     onTunnelOpen: () => { activeTunnels += 1; },
     onTunnelClose: () => { activeTunnels = Math.max(0, activeTunnels - 1); },
   }));
@@ -1572,6 +1601,7 @@ async function main() {
       ["listen", `${LISTEN_HOST}:${LISTEN_PORT}`],
       ["admission", roots.admits?.join(",") || process.env.SHADE_TREE_ADMIT || "invited"],
       ["egress", process.env.SHADE_TREE_EGRESS_ALLOW || "*:443"],
+      ["relay telemetry", relayTelemetryEnabled ? "private reports on" : "off"],
       ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
       ["logs", `${process.env.SHADE_TREE_LOG_LEVEL || "info"} / ${process.env.SHADE_TREE_LOG_FORMAT || "auto"}`],
     ] });
@@ -1601,6 +1631,7 @@ async function main() {
         ["spent sweep", () => clearInterval(sweepTimer)],
         ["root polling", () => roots.close?.()],
         ["fleet tally", () => sharedTally?.close?.()],
+        ["relay telemetry", () => relayCounter.close()],
         ["metrics", () => metricsServer?.close?.()],
       ];
       for (const [resource, close] of cleanup) {

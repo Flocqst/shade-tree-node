@@ -22,7 +22,7 @@ path = "src/main.rs"
 # (`--circuits` becomes optional; omit it to use the embedded artifacts). The ~8MB of
 # artifacts land only in the `live` build — the default deterministic binary never pulls
 # shade-tree-rln at all, so it stays small.
-live = ["dep:shade-tree-rln", "shade-tree-rln/embedded-artifacts", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio"]
+live = ["dep:shade-tree-rln", "shade-tree-rln/embedded-artifacts", "dep:arti-client", "dep:tor-rtcompat", "dep:tokio", "dep:reqwest", "dep:num-bigint"]
 
 [dependencies]
 shade-tree-proto = { path = "../shade-tree-proto" }
@@ -54,7 +54,11 @@ hex = "0.4"
 # the `live` binary is self-contained on every runner OS — the whole point of the client.
 arti-client = { version = "0.45", default-features = false, features = ["tokio", "rustls", "onion-service-client", "static-sqlite"], optional = true }
 tor-rtcompat = { version = "0.45", default-features = false, features = ["tokio", "rustls"], optional = true }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util", "net", "time"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "io-util", "io-std", "net", "time"], optional = true }
+# Native on-chain membership discovery (`shade-tree leaves` and egress
+# `--contract`) uses direct JSON-RPC over HTTP(S); no Node.js exporter required.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+num-bigint = { version = "0.4", optional = true }
 # arg parsing is hand-rolled (no clap) to keep the dep tree tiny; a small seeded PRNG
 # (mulberry32, in-crate) drives `select` so no `rand` runtime dep is needed either.
 

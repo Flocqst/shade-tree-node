@@ -148,6 +148,17 @@ so a lying envelope cannot desync accounting. At the proof layer the gateway lea
 nullifier per slot and no stable leaf identifier. Target, timing, volume, account, and cookie data
 may still correlate uses. Adversary A1 (including a colluding set).
 
+The client allocates each slot through `client/slot-state.mjs` before proving.
+The versioned `{epoch,nextSlot}` state is serialized by an atomic directory lock
+shared with the Rust client, durably replaced, and namespaced by the public
+member leaf; no bearer secret is written. Restart, local proof failure, and a
+crash after allocation therefore burn capacity rather than reuse a nullifier.
+Missing state is accepted only as first use; corrupt, unavailable, locked, or
+future-epoch state is refused, and the cursor resets only on a strictly newer
+protocol epoch. The sole bypass deliberately wraps slots and is explicitly
+named `unsafeAllowSlotReuseForTests` /
+`--unsafe-allow-slot-reuse-for-slashing-tests` for isolated slashing tests.
+
 **Reputation tiers (T-FEAT-8, `docs/adr/0006-reputation-tiers.md`).** `K` is per LEAF, not
 global: the leaf is `Poseidon2(Poseidon1(identitySecret), userMessageLimit)` and the circuit
 range-checks `messageId < userMessageLimit` with both PRIVATE, so a tier-32 member gets 32
@@ -443,10 +454,10 @@ These are documented limitations, not new findings. Cross-referenced to `docs/SH
   channel), but it is **opt-in and fail-open**: a fleet without it lets a malicious gateway fan a
   captured envelope to peers (each accepts it once), and a member spreading requests across `N`
   gateways gets up to `N`× its intended budget.
-- **Exit-auth verifier — real since rln-v4-tiers (2026-08-17).** The live Sepolia set
+- **Exit-auth verifier — real in the historical rln-v4-tiers experiment (2026-08-17).** The retired Sepolia set
   (`0xFe48De8b…9d25`) wires the real Groth16 `WithdrawVerifier` (`contracts/WithdrawVerifier.sol`,
   taking the member's recorded tier); only its VK is still the untrusted dev phase-2 (T-HARD-1),
-  and the superseded rln-v3 set (`0xdAE242AE…20FC`, still the fleet's slash target) keeps the
+  and the superseded rln-v3 set (`0xdAE242AE…20FC`, the experiment's earlier slash target) keeps the
   mock.
 - **RLN leaf-removal parity (T-DEV-2) — closed.** `reconstructRoot` now follows the contract's
   zero-in-place convention (`lib/root-provider.mjs`, three-way JS/Solidity/Rust proof); listed so

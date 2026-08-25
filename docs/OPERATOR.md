@@ -510,6 +510,7 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
 | `SHADE_TREE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
 | `SHADE_TREE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
+| `SHADE_TREE_SLOT_STATE_DIR` | (none) | Proxy/SDK/Rust client state root for atomic RLN slot allocation. Defaults to the OS user-state directory and is namespaced by public member leaf. Empty/`off` is rejected; state corruption, unavailability, or a stale lock fails closed. |
 | `SHADE_TREE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `SHADE_TREE_SLOTS`. See "Reputation tiers" below. |
 | `SHADE_TREE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
 | `SHADE_TREE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `SHADE_TREE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |

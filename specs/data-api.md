@@ -59,7 +59,8 @@ node heartbeat
     -> aggregate-only snapshot signed by the observer
     -> generated network-state snapshot
     -> Vercel Grove API schema + signature verification
-    -> /api/v1/data/grove/sepolia/head
+    -> /api/v1/data/grove/sepolia/head (count-only v1, unchanged)
+    -> /api/v2/data/grove/sepolia/head (v2 with isolated relay and optional onchain aggregates)
     -> browser signature verification
 ```
 
@@ -74,10 +75,11 @@ refuses an unsigned, malformed, future-dated, or incorrectly signed payload.
 It accepts an older valid snapshot so the last verified count can remain visible,
 then labels that view stale as it ages.
 
-The read-only observer passes the signed JSON to a separate minimal publisher;
+The read-only observer passes the two versioned signed JSON envelopes to a separate minimal publisher;
 the publisher checks out no code and receives repository write permission only
-for that step. It creates a one-file, parentless commit on the generated
-`network-state` branch, so the branch itself carries no old commit chain. A
+for that step. It creates a two-file, parentless commit (`grove.json` and
+`grove-v2.json`) on the generated `network-state` branch, so the branch itself
+carries no old commit chain. A
 dependency-free Vercel Function reads that snapshot from a fixed, versioned
 GitHub Contents API URL, caps the response at 64 KiB, checks its exact schema
 and publication signature, and serves it as JSON from
@@ -127,6 +129,13 @@ discovery protocol defined in
 API. They can expose node-level records and must not be mirrored onto the Grove
 website.
 
+Opt-in relay telemetry uses a different signed plane: nodes send
+`shade-tree-relay-report-v1` to `POST /telemetry/relay` only after their normal
+announcement is accepted. It is never a field of `/announce` or `/directory`.
+`GET /telemetry/aggregate` exposes only an Elder-signed delayed cohort aggregate;
+there is no route for raw contributions. The full accounting and rejection rules
+are in [`docs/RELAY-TELEMETRY.md`](../docs/RELAY-TELEMETRY.md).
+
 ### Aggregate publisher plane
 
 There is no HTTP aggregate-publisher endpoint today. The implemented publisher
@@ -144,8 +153,9 @@ identical retry idempotently, and reject a timestamp rollback or conflicting
 same-time body. A valid signature alone is insufficient to prevent replay of an
 old public snapshot.
 
-Optional node statistics are a different, future protocol. They must not be
-added to `/announce` or inferred from loopback Prometheus scrapes.
+Any optional node statistics beyond the relay-byte protocol are a different,
+future protocol. They must not be added to `/announce` or inferred from
+loopback Prometheus scrapes.
 
 ### Public observer plane
 
@@ -170,6 +180,26 @@ read the public response.
 
 `/api/grove` and `/grove/network.json` remain aliases for existing clients. A
 missing observation never produces a synthetic `200` with a zero count.
+
+V2 is additive at a new endpoint and leaves that v1 contract byte-for-byte
+unchanged:
+
+```http
+GET /api/v2/data/grove/sepolia/head
+Accept: application/json
+```
+
+Its envelope is `shade-tree-public-grove-v2` and requires the independent
+top-level `relay` object. Each fixed 6-hour and 24-hour window includes its
+start/end, reporting-node coverage, and either a positive rounded byte string or
+a suppression reason. `roundedBytes` is absent for `minimum-cohort` and
+`unavailable`; unavailable is never encoded as zero. A second optional top-level `onchain`
+object appears only after a current v4 target, runtime code, delayed finalized block, counters,
+event index, and registrar attribution all verify. It keeps admission and slash classes separate
+and suppresses exact values below a five-commitment contract cohort. See
+[`docs/GROVE-ONCHAIN-ACTIVITY.md`](../docs/GROVE-ONCHAIN-ACTIVITY.md). The v2 handler additionally
+rejects a head or relay generation time older than one hour. Its machine-readable contract is served from
+`/api/v2/openapi.json` and checked into `docs/post/openapi-v2.json`.
 
 There is no public history-query or pagination endpoint. V1 carries its bounded
 history inside the signed head. An immutable snapshot store and a separately
@@ -270,7 +300,7 @@ not a field supplied by the directory. An old but correctly signed head remains
 valid and is presented as stale; clients must use signed `observedAt`, not HTTP
 cache age, for freshness.
 
-The collector must never publish:
+The v1 collector projection must never publish:
 
 - onion addresses or prefixes, gateway or signer public keys, operator
   addresses, or stable pseudonyms;
@@ -302,33 +332,34 @@ operators, reachability, capacity, usage, latency, geography, admission mix, or
 stake. In particular, directory `operator` and `staked` labels are not covered
 by the directory's canonical signature and are never an aggregate source.
 
-## Shared statistics later, not now
+## Shared relay statistics
 
-Nodes do not currently send optional public statistics. If that experiment is
-added, it must use a separate opt-in report rather than the persisted directory
-announcement. The threshold below applies only to those future shared
-statistics. It does not suppress the existing exact base census, whose small
-cohort disclosure is the explicit tradeoff described above. The minimum
-contract is:
+Nodes may now opt into the relay-byte protocol described above. It uses a
+separate report rather than the persisted directory announcement. The threshold
+applies only to relay usage; it does not suppress the existing exact base census,
+whose small-cohort disclosure is the explicit tradeoff described above. The
+enforced contract is:
 
 - publish no aggregate below five reporting nodes; this threshold would not
   prove five independent operators;
 - delay publication by at least six hours and use coarse, fixed buckets;
-- retain reports in memory only, with no raw reporting endpoint, logs,
+- retain reports in Elder memory only, with no raw query endpoint, logs,
   federation, or individual contribution view;
 - heavily round any released total and label it self-reported; and
 - reassess differencing attacks across repeated snapshots before release.
 
-Until those conditions have an implementation and a separate review, the Grove
-collects no per-node usage metrics. Local operator metrics do not change this
-contract. Small groves stay quiet.
+The Grove receives only the signed aggregate bin and contains no per-node usage
+record. Local operator metrics do not enter this path. Small groves stay quiet.
+The inherited `privacy.traffic: false` flag continues to mean that no traffic
+path, event, or per-node record is present; the isolated `relay` section is the
+only reviewed aggregate-usage exception.
 
 ## Versioning and evolution
 
-The path version and envelope schema are both `v1`. Current server and browser
-validators require an exact key set, so new fields require a new envelope such
-as `shade-tree-public-grove-v2` and a new reviewed endpoint; they cannot be
-silently appended to v1.
+V1 remains count-only and exact-key. Relay telemetry is carried by the reviewed
+`shade-tree-public-grove-v2` envelope at the v2 endpoint under the isolated
+top-level `relay` field; it was not silently appended to v1. Optional `onchain` composes beside
+`relay` and is signed with it. Relay-only v2 envelopes remain valid.
 
 The following changes also require a new contract and implementation rather
 than copy changes:
@@ -336,8 +367,8 @@ than copy changes:
 - a second network or a network selector;
 - immutable or paginated historical snapshots;
 - publication-key rotation or a multi-key overlap window;
-- any health, capability, implementation, stake, traffic, latency, or usage
-  aggregate; and
+- any health, capability, implementation, stake, latency, or usage aggregate
+  beyond the exact reviewed `relay` section; and
 - an authenticated HTTP publisher or optional-statistics report endpoint.
 
 A v2 validator should enforce internal relationships that v1 currently trusts
@@ -357,6 +388,12 @@ SHADE_TREE_GROVE_SIGNING_KEY="$(< /path/to/grove-private.pem)" \
   --network sepolia \
   --previous ./grove.previous.json \
   --out ./grove.json
+SHADE_TREE_GROVE_SIGNING_KEY="$(< /path/to/grove-private.pem)" \
+  node scripts/grove-snapshot.mjs \
+  --network sepolia \
+  --previous ./grove-v2.previous.json \
+  --relay 1 \
+  --out ./grove-v2.json
 node scripts/grove-snapshot.selftest.mjs
 ```
 

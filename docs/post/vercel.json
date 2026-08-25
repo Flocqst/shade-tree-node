@@ -4,12 +4,23 @@
   "functions": {
     "api/grove.mjs": {
       "maxDuration": 5
+    },
+    "api/grove-v2.mjs": {
+      "maxDuration": 5
     }
   },
   "rewrites": [
     {
       "source": "/api/v1/data/grove/sepolia/head",
       "destination": "/api/grove"
+    },
+    {
+      "source": "/api/v2/data/grove/sepolia/head",
+      "destination": "/api/grove-v2"
+    },
+    {
+      "source": "/api/v2/openapi.json",
+      "destination": "/openapi-v2.json"
     },
     {
       "source": "/grove/network.json",

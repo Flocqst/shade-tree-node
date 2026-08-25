@@ -16,8 +16,8 @@ name: uptime-probe
 # The onion and signer are not secret, so plain variables are the right home; the same names are
 # also read from SECRETS as a fallback. The Grove signing key is secret. The hosted probe never
 # prints the count and scrubs onions from error text. After a fresh, verified
-# probe, the workflow force-updates the generated network-state branch with one allowlisted
-# signed aggregate snapshot for the public Grove. No directory rows are written to that branch.
+# probe, the workflow force-updates the generated network-state branch with versioned allowlisted
+# signed aggregate snapshots for the public Grove. No directory rows are written to that branch.
 #
 # NO-OP GUARD: if none of the variables/secrets is set, the job writes a ::notice:: and exits
 # green without installing anything, so an unconfigured fork/repo never red-flags. Only a real
@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 12
     outputs:
       grove_snapshot: ${{ steps.grove.outputs.snapshot }}
+      grove_v2_snapshot: ${{ steps.grove.outputs.snapshot_v2 }}
     env:
       SHADE_TREE_BOOTNODE_ONION: ${{ vars.SHADE_TREE_BOOTNODE_ONION || secrets.SHADE_TREE_BOOTNODE_ONION }}
       SHADE_TREE_DIR_SIGNER: ${{ vars.SHADE_TREE_DIR_SIGNER || secrets.SHADE_TREE_DIR_SIGNER }}
@@ -149,8 +150,10 @@ jobs:
         if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
         run: |
           : > "$RUNNER_TEMP/grove.previous.json"
+          : > "$RUNNER_TEMP/grove-v2.previous.json"
           if git fetch --quiet --no-tags origin refs/heads/network-state:refs/remotes/origin/network-state 2>/dev/null; then
             git show refs/remotes/origin/network-state:grove.json > "$RUNNER_TEMP/grove.previous.json" 2>/dev/null || true
+            git show refs/remotes/origin/network-state:grove-v2.json > "$RUNNER_TEMP/grove-v2.previous.json" 2>/dev/null || true
           fi
 
       - name: build aggregate-only public Grove snapshot
@@ -171,22 +174,29 @@ jobs:
             --network sepolia \
             --previous "$RUNNER_TEMP/grove.previous.json" \
             --out "$RUNNER_TEMP/grove.json"
+          node scripts/grove-snapshot.mjs \
+            --network sepolia \
+            --previous "$RUNNER_TEMP/grove-v2.previous.json" \
+            --relay 1 \
+            --out "$RUNNER_TEMP/grove-v2.json"
           echo "snapshot=$(base64 -w0 "$RUNNER_TEMP/grove.json")" >> "$GITHUB_OUTPUT"
+          echo "snapshot_v2=$(base64 -w0 "$RUNNER_TEMP/grove-v2.json")" >> "$GITHUB_OUTPUT"
 
   publish:
     name: publish signed aggregate
     needs: probe
-    if: needs.probe.outputs.grove_snapshot != ''
+    if: needs.probe.outputs.grove_snapshot != '' && needs.probe.outputs.grove_v2_snapshot != ''
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
       contents: write
     steps:
-      # This job deliberately checks out no code and runs no action. It receives only a signed,
-      # base64-encoded JSON blob and constructs a one-file, parentless commit through GitHub's API.
+      # This job deliberately checks out no code and runs no action. It receives only signed,
+      # base64-encoded JSON blobs and constructs a two-file, parentless commit through GitHub's API.
       - name: publish generated network state
         env:
           GROVE_SNAPSHOT_B64: ${{ needs.probe.outputs.grove_snapshot }}
+          GROVE_V2_SNAPSHOT_B64: ${{ needs.probe.outputs.grove_v2_snapshot }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -197,7 +207,9 @@ jobs:
 
           blob_payload="$(jq -n --arg content "$GROVE_SNAPSHOT_B64" '{content:$content,encoding:"base64"}')"
           blob_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$blob_payload" | jq -er .sha)"
-          tree_payload="$(jq -n --arg sha "$blob_sha" '{tree:[{path:"grove.json",mode:"100644",type:"blob",sha:$sha}]}')"
+          blob_v2_payload="$(jq -n --arg content "$GROVE_V2_SNAPSHOT_B64" '{content:$content,encoding:"base64"}')"
+          blob_v2_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$blob_v2_payload" | jq -er .sha)"
+          tree_payload="$(jq -n --arg sha "$blob_sha" --arg sha_v2 "$blob_v2_sha" '{tree:[{path:"grove.json",mode:"100644",type:"blob",sha:$sha},{path:"grove-v2.json",mode:"100644",type:"blob",sha:$sha_v2}]}')"
           tree_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/trees" -d "$tree_payload" | jq -er .sha)"
           commit_payload="$(jq -n --arg tree "$tree_sha" '{message:"data: update public Grove snapshot",tree:$tree,parents:[]}')"
           commit_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/commits" -d "$commit_payload" | jq -er .sha)"

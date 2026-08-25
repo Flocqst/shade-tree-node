@@ -32,6 +32,8 @@ hs_ed25519_secret_key
 # bootnode write-through persistence (runtime state, not source)
 bootnode/bootnode-state.json
 **/bootnode-state.json
+**/relay-telemetry-state.local.json
+**/relay-report.local.json
 # 402 registrar order store (runtime state + the MPP challenge-binding secret)
 payments/registrar-state.local.json
 **/registrar-state.json

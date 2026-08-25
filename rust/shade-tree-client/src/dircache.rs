@@ -25,7 +25,7 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use shade_tree_proto::{verify_directory, Caps, Directory, GatewayEntry, ProtoCaps};
+use shade_tree_proto::{verify_directory_with_signers, Caps, Directory, GatewayEntry, ProtoCaps};
 
 // --------------------------------------------------------------------------
 // Untrusted-JSON DTOs (serde) -> shade-tree-proto Directory (trust-critical checks)
@@ -141,6 +141,76 @@ pub struct DirectoryDto {
     pub signatures: Option<Vec<String>>,
     #[serde(default)]
     pub threshold: Option<i64>,
+    /// Issue #67: unsigned demo routing advert.  Keep it as a raw value so a
+    /// malformed optional advert is ignored without making the signed directory
+    /// itself unparsable.
+    #[serde(default)]
+    pub demo: Option<serde_json::Value>,
+}
+
+/// Validated, unsigned demo advert from the bootnode directory.  It is never
+/// included in canonical directory bytes and never treated as an admission
+/// signature; it only narrows `--leaf-source demo` routing candidates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DemoAdvert {
+    pub port: u16,
+    pub pow_bits: u32,
+    pub limit: u64,
+    pub contract: String,
+    pub chain: String,
+    pub gateways: Vec<String>,
+    pub onion: Option<String>,
+}
+
+fn normalize_onion(value: &str) -> Option<String> {
+    let full = if value.to_ascii_lowercase().ends_with(".onion") {
+        value.to_ascii_lowercase()
+    } else {
+        format!("{}.onion", value.to_ascii_lowercase())
+    };
+    shade_tree_proto::onion_to_pubkey(&full).ok()?;
+    Some(full)
+}
+
+/// Parse the issue-#67 demo block leniently: any malformed field drops the
+/// whole unsigned advert while leaving the signed directory usable.
+fn parse_demo(value: Option<&serde_json::Value>) -> Option<DemoAdvert> {
+    let obj = value?.as_object()?;
+    let port = u16::try_from(obj.get("port")?.as_u64()?)
+        .ok()
+        .filter(|p| *p > 0)?;
+    let pow_bits = u32::try_from(obj.get("powBits")?.as_u64()?).ok()?;
+    let limit = obj.get("limit")?.as_u64().filter(|n| *n > 0)?;
+    let contract = obj.get("contract")?.as_str()?.to_ascii_lowercase();
+    if contract.len() != 42 || !contract.starts_with("0x") || hex::decode(&contract[2..]).is_err() {
+        return None;
+    }
+    let chain = obj.get("chain")?.as_str()?.to_ascii_lowercase();
+    let chain_id = chain.strip_prefix("eip155:")?;
+    if chain_id.is_empty() || !chain_id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let raw_gateways = obj.get("gateways")?.as_array()?;
+    let mut gateways = Vec::with_capacity(raw_gateways.len());
+    for item in raw_gateways {
+        let normalized = normalize_onion(item.as_str()?)?;
+        if !gateways.contains(&normalized) {
+            gateways.push(normalized);
+        }
+    }
+    let onion = match obj.get("onion") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => Some(normalize_onion(v.as_str()?)?),
+    };
+    Some(DemoAdvert {
+        port,
+        pow_bits,
+        limit,
+        contract,
+        chain,
+        gateways,
+        onion,
+    })
 }
 
 impl DirectoryDto {
@@ -179,6 +249,20 @@ impl DirectoryDto {
             threshold: self.threshold,
         }
     }
+
+    fn into_document(self) -> DirectoryDocument {
+        let demo = parse_demo(self.demo.as_ref());
+        DirectoryDocument {
+            dir: self.into_proto(),
+            demo,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DirectoryDocument {
+    pub dir: Directory,
+    pub demo: Option<DemoAdvert>,
 }
 
 /// Parse untrusted directory JSON into a proto `Directory` (no verification yet).
@@ -188,12 +272,28 @@ pub fn parse_directory(raw: &str) -> Result<Directory, String> {
     Ok(dto.into_proto())
 }
 
+pub fn parse_document(raw: &str) -> Result<DirectoryDocument, String> {
+    let dto: DirectoryDto =
+        serde_json::from_str(raw).map_err(|e| format!("directory parse: {e}"))?;
+    Ok(dto.into_document())
+}
+
 /// Parse + verify (pinned signer + onion<->key binding). Never returns an
 /// unverified directory.
 pub fn parse_and_verify(raw: &str, signer: &str) -> Result<Directory, String> {
-    let dir = parse_directory(raw)?;
-    verify_directory(&dir, signer).map_err(|e| format!("directory rejected: {e}"))?;
-    Ok(dir)
+    Ok(parse_and_verify_document(raw, signer)?.dir)
+}
+
+pub fn parse_and_verify_document(raw: &str, signers: &str) -> Result<DirectoryDocument, String> {
+    let document = parse_document(raw)?;
+    let pins: Vec<&str> = signers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    verify_directory_with_signers(&document.dir, &pins)
+        .map_err(|e| format!("directory rejected: {e}"))?;
+    Ok(document)
 }
 
 /// Where the accepted directory came from.
@@ -209,6 +309,7 @@ pub enum Source {
 #[derive(Debug)]
 pub struct LoadOutcome {
     pub dir: Directory,
+    pub demo: Option<DemoAdvert>,
     pub source: Source,
     /// Why the fresh path was not used, when `source == Cache`.
     pub fresh_error: Option<String>,
@@ -224,9 +325,9 @@ pub struct MaxAge {
 /// Read + verify the on-disk cache. Best-effort: any error (missing/corrupt/
 /// unverifiable) yields `None`, so a broken cache never serves an unverified
 /// directory (verify runs here too).
-fn read_verified_cache(cache_path: Option<&Path>, signer: &str) -> Option<Directory> {
+fn read_verified_cache(cache_path: Option<&Path>, signer: &str) -> Option<DirectoryDocument> {
     let raw = std::fs::read_to_string(cache_path?).ok()?;
-    parse_and_verify(&raw, signer).ok()
+    parse_and_verify_document(&raw, signer).ok()
 }
 
 /// Best-effort write-through of an accepted fresh directory to the LKG cache.
@@ -260,12 +361,13 @@ pub fn resolve_directory(
 ) -> Result<LoadOutcome, String> {
     // The LKG cache doubles as the monotonic `issued` floor for the rollback guard.
     let cached = read_verified_cache(cache_path, signer);
-    let floor = cached.as_ref().map(|d| d.issued).unwrap_or(0);
+    let floor = cached.as_ref().map(|d| d.dir.issued).unwrap_or(0);
 
     // Reason the fresh path was rejected (drives the cache-fallback message).
     let fresh_reject: String = match fresh {
-        Ok(raw) => match parse_and_verify(&raw, signer) {
-            Ok(dir) => {
+        Ok(raw) => match parse_and_verify_document(&raw, signer) {
+            Ok(document) => {
+                let dir = document.dir;
                 // Rollback guard: a fresh directory must not move `issued` BACKWARD
                 // relative to the last-known-good we already accepted.
                 if dir.issued < floor {
@@ -288,6 +390,7 @@ pub fn resolve_directory(
                         write_cache(cache_path, &raw);
                         return Ok(LoadOutcome {
                             dir,
+                            demo: document.demo,
                             source: Source::Fresh,
                             fresh_error: None,
                         });
@@ -296,6 +399,7 @@ pub fn resolve_directory(
                     write_cache(cache_path, &raw);
                     return Ok(LoadOutcome {
                         dir,
+                        demo: document.demo,
                         source: Source::Fresh,
                         fresh_error: None,
                     });
@@ -308,8 +412,9 @@ pub fn resolve_directory(
 
     // Fresh path unusable -> fall back to the last-known-good cache (verified above).
     match cached {
-        Some(dir) => Ok(LoadOutcome {
-            dir,
+        Some(document) => Ok(LoadOutcome {
+            dir: document.dir,
+            demo: document.demo,
             source: Source::Cache,
             fresh_error: Some(fresh_reject),
         }),
@@ -577,5 +682,26 @@ mod tests {
         assert_eq!(parse_http_body(ok).unwrap(), "{}");
         let notfound = b"HTTP/1.1 404 Not Found\r\n\r\nnope";
         assert!(parse_http_body(notfound).is_err());
+    }
+
+    #[test]
+    fn demo_advert_is_parsed_outside_signed_bytes_and_malformed_is_ignored() {
+        let raw = signed_dir(100);
+        let demo = format!(
+            "\"demo\":{{\"port\":8878,\"powBits\":18,\"limit\":8,\"contract\":\"0x1111111111111111111111111111111111111111\",\"chain\":\"eip155:11155111\",\"gateways\":[\"ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad\"]}},\"signer\""
+        );
+        let with_demo = raw.replace("\"signer\"", &demo);
+        let parsed = parse_and_verify_document(&with_demo, SIGNER.trim()).unwrap();
+        let advert = parsed.demo.expect("valid unsigned demo advert");
+        assert_eq!(advert.port, 8878);
+        assert_eq!(advert.gateways.len(), 1);
+        assert!(advert.gateways[0].ends_with(".onion"));
+
+        let malformed = with_demo.replace("\"powBits\":18", "\"powBits\":\"eighteen\"");
+        let parsed = parse_and_verify_document(&malformed, SIGNER.trim()).unwrap();
+        assert!(
+            parsed.demo.is_none(),
+            "bad optional advert does not poison directory"
+        );
     }
 }

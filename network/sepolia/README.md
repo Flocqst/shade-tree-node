@@ -45,8 +45,8 @@ current client; use contract and RPC values explicitly supplied by a v4 operator
   `0x08F9a754D2cBdfB7805cFF2475632BEC4612ae6D`, MockWithdrawVerifier
   `0x5A6FD01d009989ff9E567fa2bC55253500ddbDB2`. No on-chain tree (slot 3 = 0, so the light
   provider yielded no root — the finding that filed T-DEV-9c) and no tiers. Superseded by
-  rln-v4-tiers; **the LIVE fleet gateways' slashing (`SHADE_TREE_SLASH_CONTRACT`) still points here
-  until their units are flipped** (`docs/ONCHAIN-DEPLOY.md` §8). Its live integration:
+  rln-v4-tiers; during the experiment the fleet gateways' slashing (`SHADE_TREE_SLASH_CONTRACT`)
+  pointed here until their units were flipped (`docs/ONCHAIN-DEPLOY.md` §8). Its integration record:
   [`integration-report-rln.md`](integration-report-rln.md); kept under `superseded.rln-v3` in
   `contracts.json`.
 - the pre-RLN deployment at block 11274471 — StakedReputationSet

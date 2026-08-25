@@ -57,6 +57,12 @@ import { applyNetworkEnv } from "../lib/network-record.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { makeRegistry, installRuntimeMetrics, isLoopbackMetricsHost, listenMetrics, safeMetricsPort } from "../lib/metrics.mjs";
 import { printOperatorBanner } from "../lib/operator-ui.mjs";
+import {
+  buildRelayReport,
+  readRelayCounterState,
+  readRelayReportState,
+  writeRelayReportState,
+} from "../lib/relay-telemetry.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const heartbeatLog = createLogger("heartbeat");
@@ -234,6 +240,35 @@ export async function announceOnce({ id, bootnode, op, weight, torHost, torPort,
   return post(bootnode, "/announce", rec, { torHost, torPort });
 }
 
+// Private relay telemetry uses a distinct opt-in request path. It is deliberately not part of
+// buildAnnounce/caps or /directory: clients and public directory observers never receive node byte
+// totals. Reporter state advances only after the Elder accepts a report, so a transport failure is
+// retried with the same monotonic baseline rather than silently dropping an interval.
+export async function reportRelayOnce({
+  id,
+  bootnode,
+  torHost,
+  torPort,
+  counterPath,
+  reportStatePath,
+  post = postOverTor,
+  now = Date.now(),
+} = {}) {
+  const counter = readRelayCounterState(counterPath);
+  const previous = readRelayReportState(reportStatePath);
+  const { report, nextState } = buildRelayReport({
+    counter,
+    previous,
+    onion: id.onion,
+    onionSeedHex: id.seed,
+    now,
+  });
+  const response = await post(bootnode, "/telemetry/relay", report, { torHost, torPort });
+  if (!response || response.ok !== true) throw new Error("Elder rejected relay telemetry");
+  writeRelayReportState(reportStatePath, nextState);
+  return response;
+}
+
 // ---- egress-gated announce (T-FEAT-16) --------------------------------------
 // Before EACH announce, probe this host's clearnet egress (a metadata-only TCP connect to a
 // well-known :443 host — see checkEgress in gateway/gateway.mjs). If egress is DOWN, SKIP the
@@ -323,6 +358,7 @@ export async function runHeartbeat({
   log = heartbeatLog,
   schedule = setInterval,
   announce = announceOnce,
+  reportRelay = reportRelayOnce,
   egress = checkEgress,
   identity = null,       // pre-resolved { onion, seed } (else loadIdentity(env))
   operator = null,       // pre-resolved { operator, operatorSig } (else resolveOperator(onion, env))
@@ -343,15 +379,33 @@ export async function runHeartbeat({
   else writeLog(log, "warn", "admission policy is not advertised", { reason: "SHADE_TREE_ADMIT-unset" }, "admission policy: NOT advertised (SHADE_TREE_ADMIT unset here); clients assume this gateway may admit any leaf source; set SHADE_TREE_ADMIT to the gateway's policy");
   if (caps?.pay) writeLog(log, "debug", "payment offer advertised", { protocols: caps.pay.protocols, port: caps.pay.port }, `payment advert: protocols=${caps.pay.protocols.join(",")} port=${caps.pay.port}${caps.pay.onion ? " onion=" + caps.pay.onion.slice(0, 16) + ".." : " (this onion)"}`);
 
-  const beat = makeBeat({
+  const announceBeat = makeBeat({
     announce: () => announce({ id, bootnode, op, weight, torHost, torPort, caps }),
     egress: () => egress(),
     enabled,
     log,
   });
+  const relayEnabled = env.SHADE_TREE_RELAY_TELEMETRY === "1";
+  const counterPath = env.SHADE_TREE_RELAY_TELEMETRY_STATE || join(HERE, "..", "tor", "hs", "relay-telemetry.local.json");
+  const reportStatePath = env.SHADE_TREE_RELAY_REPORT_STATE || join(HERE, "..", "tor", "hs", "relay-report.local.json");
+  const beat = async () => {
+    const result = await announceBeat();
+    // Bind reports to an already-authenticated live announcement: only report after this cycle's
+    // /announce was accepted. Telemetry remains best-effort and cannot make the liveness heartbeat
+    // fail; the Elder independently verifies the onion signature and live registry membership.
+    if (relayEnabled && result?.ok === true) {
+      try {
+        await reportRelay({ id, bootnode, torHost, torPort, counterPath, reportStatePath });
+        writeLog(log, "debug", "private relay telemetry accepted", { published: "aggregate-input" }, "private relay telemetry accepted");
+      } catch (error) {
+        writeLog(log, "warn", "private relay telemetry deferred", { reason: "telemetry-unavailable", errorType: error?.name || "Error" }, "private relay telemetry unavailable; will retry next interval");
+      }
+    }
+    return result;
+  };
   const first = await beat();
   const timer = schedule(beat, intervalSec * 1000);
-  return { beat, first, timer, id: { onion: id.onion }, op: { operator: op.operator }, caps };
+  return { beat, first, timer, id: { onion: id.onion }, op: { operator: op.operator }, caps, relayTelemetry: relayEnabled };
 }
 
 async function main() {
@@ -378,6 +432,7 @@ async function main() {
   printOperatorBanner({ role: "heartbeat", rows: [
     ["interval", `${heartbeatConfig().intervalSec}s`],
     ["egress", egressCheckEnabled() ? "checked" : "unchecked"],
+    ["relay telemetry", process.env.SHADE_TREE_RELAY_TELEMETRY === "1" ? "private reports on" : "off"],
     ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
   ] });
   heartbeatLog.info("heartbeat ready", { event: "service.ready", first: running.first?.ok === true ? "accepted" : running.first?.skipped ? "skipped" : "retrying", metricsPort });

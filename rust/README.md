@@ -60,6 +60,11 @@ The `live` path also validates the embedded ZK artifact lock before proving.
 It does not make the artifact ceremony more trustworthy: provenance remains a
 separate deployment requirement.
 
+Live RLN slots are allocated through the same default-on `{version, epoch,
+nextSlot}` file and directory-lock protocol as the JavaScript Proxy/SDK. The
+file is keyed by the public member leaf, contains no secret, never wraps at K,
+and fails closed on corrupt, unavailable, or locked state.
+
 ## Client commands
 
 ```text

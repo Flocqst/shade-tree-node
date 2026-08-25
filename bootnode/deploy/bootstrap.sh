@@ -82,6 +82,12 @@
 #     SHADE_TREE_PAID_ACCESS_CONTRACT  PaidAccessSet address (`paid`)                                (REQUIRED with paid)
 #     SHADE_TREE_RPC_URL               execution JSON-RPC the gateway reads those roots through   (REQUIRED with staked/paid)
 #                    all three land in the gateway unit verbatim.
+#   SHADE_TREE_ZK_ARTIFACTS <id>=<verification-key-path>[,...]  explicit verification-key set
+#                    accepted by the gateway and advertised by the heartbeat. Paths are absolute
+#                    or relative to SHADE_TREE_DIR. Production automation should always set this;
+#                    an empty value preserves the built-in development artifact behavior.
+#   SHADE_TREE_ZK_ARTIFACT_LEGACY <id>  artifact implied by envelopes that omit `artifact` during
+#                    a dual-key rollout. When set it must use the same bounded artifact-id grammar.
 #   SHADE_TREE_REGISTRAR   1 | 0              (default: 0) OPT-IN 402 registrar (T-FEAT-7, docs/PAYMENTS.md
 #                    "Shipped 2026-08-17"): sell membership leaves for a stablecoin over x402 / MPP.
 #                    =1 renders + starts a hardened shade-tree-registrar.service (payments/registrar.mjs on
@@ -161,6 +167,8 @@ SHADE_TREE_REGISTRAR_PORT="${SHADE_TREE_REGISTRAR_PORT:-8878}"
 SHADE_TREE_PAY_CHAIN_ID="${SHADE_TREE_PAY_CHAIN_ID:-11155111}"
 SHADE_TREE_FROM_BLOCK="${SHADE_TREE_FROM_BLOCK:-}"
 SHADE_TREE_FROM_BLOCKS="${SHADE_TREE_FROM_BLOCKS:-}"
+SHADE_TREE_ZK_ARTIFACTS="${SHADE_TREE_ZK_ARTIFACTS:-}"
+SHADE_TREE_ZK_ARTIFACT_LEGACY="${SHADE_TREE_ZK_ARTIFACT_LEGACY:-}"
 SHADE_TREE_LOG_LEVEL="${SHADE_TREE_LOG_LEVEL:-info}"
 SHADE_TREE_LOG_FORMAT="${SHADE_TREE_LOG_FORMAT:-json}"
 SHADE_TREE_BANNER="${SHADE_TREE_BANNER:-never}"
@@ -367,6 +375,19 @@ fi
   || die "SHADE_TREE_FROM_BLOCK must be a block number (0x-hex or decimal; got '$SHADE_TREE_FROM_BLOCK')"
 { [ -z "$SHADE_TREE_FROM_BLOCKS" ] || [[ "$SHADE_TREE_FROM_BLOCKS" =~ ^0x[0-9a-fA-F]{40}=(0x[0-9a-fA-F]{1,16}|[0-9]{1,16})(,0x[0-9a-fA-F]{40}=(0x[0-9a-fA-F]{1,16}|[0-9]{1,16}))*$ ]]; } \
   || die "SHADE_TREE_FROM_BLOCKS must be <0xaddress>=<block>[,...] (got '$SHADE_TREE_FROM_BLOCKS')"
+
+# Explicit proof artifacts are part of the signed capability surface. Keep this shell-side guard
+# deliberately narrower than lib/zk-artifacts.mjs: only bounded ids and plain file paths may enter
+# a systemd Environment= line. Runtime startup then verifies each id against the vkey bytes.
+if [ -n "$SHADE_TREE_ZK_ARTIFACTS" ]; then
+  [[ "$SHADE_TREE_ZK_ARTIFACTS" =~ ^[a-z0-9][a-z0-9._-]{0,63}=[A-Za-z0-9._/+:-]+(,[a-z0-9][a-z0-9._-]{0,63}=[A-Za-z0-9._/+:-]+)*$ ]] \
+    || die "SHADE_TREE_ZK_ARTIFACTS must be <artifact-id>=<verification-key-path>[,...]"
+  case "/$SHADE_TREE_ZK_ARTIFACTS/" in *"/../"*|*"/./"*) die "SHADE_TREE_ZK_ARTIFACTS paths must not contain . or .. segments" ;; esac
+fi
+{ [ -z "$SHADE_TREE_ZK_ARTIFACT_LEGACY" ] || [[ "$SHADE_TREE_ZK_ARTIFACT_LEGACY" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; } \
+  || die "SHADE_TREE_ZK_ARTIFACT_LEGACY must be a bounded lowercase artifact id"
+[ -z "$SHADE_TREE_ZK_ARTIFACT_LEGACY" ] || [ -n "$SHADE_TREE_ZK_ARTIFACTS" ] \
+  || die "SHADE_TREE_ZK_ARTIFACT_LEGACY requires an explicit SHADE_TREE_ZK_ARTIFACTS set"
 
 # --- renderers: the ONLY places torrc / unit text is produced (live + render mode share them) ---
 # torrc include: one HiddenServiceDir block per onion this box publishes. The PoW line is a
@@ -579,6 +600,8 @@ EOF
     # eth_getLogs start block(s) for the on-chain root scan (only when given; unset = no line).
     [ -z "$SHADE_TREE_FROM_BLOCK" ]  || echo "Environment=SHADE_TREE_FROM_BLOCK=${SHADE_TREE_FROM_BLOCK}"
     [ -z "$SHADE_TREE_FROM_BLOCKS" ] || echo "Environment=SHADE_TREE_FROM_BLOCKS=${SHADE_TREE_FROM_BLOCKS}"
+    [ -z "$SHADE_TREE_ZK_ARTIFACTS" ] || echo "Environment=SHADE_TREE_ZK_ARTIFACTS=${SHADE_TREE_ZK_ARTIFACTS}"
+    [ -z "$SHADE_TREE_ZK_ARTIFACT_LEGACY" ] || echo "Environment=SHADE_TREE_ZK_ARTIFACT_LEGACY=${SHADE_TREE_ZK_ARTIFACT_LEGACY}"
     cat <<EOF
 ExecStart=${NODE_BIN} ${SHADE_TREE_DIR}/gateway/gateway.mjs
 Restart=always
@@ -654,6 +677,8 @@ Environment=SHADE_TREE_BANNER=${SHADE_TREE_BANNER}
 SyslogIdentifier=shade-tree-heartbeat
 EOF
     [ -z "$SHADE_TREE_GATEWAY_REGION" ] || echo "Environment=SHADE_TREE_GATEWAY_REGION=${SHADE_TREE_GATEWAY_REGION}"
+    # Heartbeat loads the same vkeys and advertises their content-derived ids in signed caps.
+    [ -z "$SHADE_TREE_ZK_ARTIFACTS" ] || echo "Environment=SHADE_TREE_ZK_ARTIFACTS=${SHADE_TREE_ZK_ARTIFACTS}"
     if [ "$SHADE_TREE_REGISTRAR" = "1" ]; then
       # Advertise the offer in the gateway's SIGNED caps (`caps.pay`, T-FEAT-9) -- the same
       # advert the bootnode puts in /health; SHADE_TREE_REGISTRAR_ONION names the onion it rides.

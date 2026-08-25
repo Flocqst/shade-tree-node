@@ -107,6 +107,27 @@
         <div><dt>Samples</dt><dd data-history-samples>…</dd></div>
         <div><dt>Coverage</dt><dd data-history-coverage>…</dd></div>
       </dl>
+      <div class="relay-ledger" data-relay-row hidden>
+        <div>
+          <a href="/api/v2/openapi.json#tag/Relay-telemetry" class="relay-label">Payload relayed, 24h</a>
+          <span data-relay-coverage></span>
+        </div>
+        <strong data-relay-value></strong>
+      </div>
+      <div class="onchain-ledger" data-onchain-ledger hidden>
+        <div class="onchain-head">
+          <div>
+            <a href="/api/v2/openapi.json#tag/Onchain-activity" class="relay-label">Onchain activity</a>
+            <span data-onchain-provenance></span>
+          </div>
+          <strong>V4 · finalized</strong>
+        </div>
+        <dl>
+          <div><dt>Membership</dt><dd data-onchain-membership></dd></div>
+          <div><dt>Settlements</dt><dd data-onchain-settlements></dd></div>
+          <div><dt>Enforcement</dt><dd data-onchain-enforcement></dd></div>
+        </dl>
+      </div>
     </section>
   </main>
 

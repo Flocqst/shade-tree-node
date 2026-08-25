@@ -34,6 +34,9 @@
 //      contracts + RPC into the gateway unit and is fail-closed on a missing companion; canonical
 //      order; SHADE_TREE_PAY_PROTOCOLS subset normalized into registrar + both adverts; SHADE_TREE_REGISTRAR=1
 //      requires `paid` admitted; a GATEWAY-ONLY box may run the registrar on the GATEWAY onion.
+//  10. SHADE_TREE_ZK_ARTIFACTS: an explicit accepted vkey set is rendered into the gateway and
+//      heartbeat (so verification and signed capability advertisement agree); the optional legacy
+//      id is gateway-only; malformed ids/paths and a legacy id without a set fail closed.
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -432,6 +435,36 @@ async function main() {
     const ruG = gwRegFiles.get("etc/systemd/system/shade-tree-registrar.service"), hbG = gwRegFiles.get("etc/systemd/system/shade-tree-heartbeat.service");
     ok(unitEnv(ruG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ADVERTISE") === "1" && unitEnv(hbG, "SHADE_TREE_BOOTNODE_ONION") === ONION + ".onion", "registrar + heartbeat name the GATEWAY onion as the registrar onion; heartbeat still announces to the remote bootnode");
     ok(unitEnv(gwRegFiles.get("etc/systemd/system/shade-tree-gateway.service"), "SHADE_TREE_ADMIT") === "invited,paid", "gateway-only gateway unit admits invited,paid");
+
+    console.log("explicit ZK artifact set:");
+    const artifactId = "rln-0b25f824a04da3a8";
+    const artifactPath = "circuits/rln/verification_key.json";
+    const artifactSpec = `${artifactId}=${artifactPath}`;
+    const artifacts = render(work, "zk-artifacts", {
+      SHADE_TREE_ZK_ARTIFACTS: artifactSpec,
+      SHADE_TREE_ZK_ARTIFACT_LEGACY: artifactId,
+    });
+    const artifactFiles = await readAll(artifacts.out);
+    const artifactGateway = artifactFiles.get("etc/systemd/system/shade-tree-gateway.service");
+    const artifactHeartbeat = artifactFiles.get("etc/systemd/system/shade-tree-heartbeat.service");
+    ok(artifacts.status === 0 && unitEnv(artifactGateway, "SHADE_TREE_ZK_ARTIFACTS") === artifactSpec && unitEnv(artifactHeartbeat, "SHADE_TREE_ZK_ARTIFACTS") === artifactSpec,
+      "gateway verifies and heartbeat advertises the same explicit artifact set");
+    ok(unitEnv(artifactGateway, "SHADE_TREE_ZK_ARTIFACT_LEGACY") === artifactId && unitEnv(artifactHeartbeat, "SHADE_TREE_ZK_ARTIFACT_LEGACY") === null,
+      "legacy envelope mapping is verifier-only and is not leaked into heartbeat configuration");
+    const stripArtifacts = (u) => u.split("\n").filter((l) => !/^Environment=SHADE_TREE_ZK_ARTIFACT/.test(l)).join("\n");
+    ok(stripArtifacts(artifactGateway) === got.get("etc/systemd/system/shade-tree-gateway.service") && stripArtifacts(artifactHeartbeat) === got.get("etc/systemd/system/shade-tree-heartbeat.service"),
+      "explicit artifact configuration otherwise leaves the default units byte-identical");
+    for (const [name, env, re] of [
+      ["bad-id", { SHADE_TREE_ZK_ARTIFACTS: "RLN-BAD=circuits/rln/verification_key.json" }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["missing-path", { SHADE_TREE_ZK_ARTIFACTS: `${artifactId}=` }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["unit-injection", { SHADE_TREE_ZK_ARTIFACTS: `${artifactSpec}\nEnvironment=BAD=1` }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["path-traversal", { SHADE_TREE_ZK_ARTIFACTS: `${artifactId}=circuits/../secret.json` }, /paths must not contain/],
+      ["legacy-without-set", { SHADE_TREE_ZK_ARTIFACT_LEGACY: artifactId }, /requires an explicit/],
+      ["bad-legacy", { SHADE_TREE_ZK_ARTIFACTS: artifactSpec, SHADE_TREE_ZK_ARTIFACT_LEGACY: "BAD ID" }, /bounded lowercase artifact id/],
+    ]) {
+      const rejected = render(work, `zk-artifacts-${name}`, env);
+      ok(rejected.status !== 0 && re.test(rejected.stderr), `explicit artifacts reject ${name}`);
+    }
 
     console.log("fleet tally onion route:");
     const tallyToken = "t".repeat(32);

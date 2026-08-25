@@ -60,6 +60,9 @@ const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
 const loader = read("site.js");
 const landingScene = read("grove.js");
 const grovePage = read("grove/index.html");
+const labPage = read("lab/index.html");
+const labCss = read("lab/lab.css");
+const labScript = read("lab/lab.js");
 const groveCss = read("grove/grove.css");
 const groveLoader = read("grove/network.js");
 const groveScene = read("grove/scene.js");
@@ -68,6 +71,11 @@ const groveHistory = read("grove/history.js");
 const groveVisualModel = read("grove/visual-model.js");
 const groveApi = read("api/grove.mjs");
 const groveApiContract = read("api/_grove-contract.mjs");
+const groveV2Api = read("api/grove-v2.mjs");
+const groveV2ApiContract = read("api/_grove-v2-contract.mjs");
+const groveOnchainApiContract = read("api/_grove-onchain-contract.mjs");
+const groveV2OpenApi = JSON.parse(read("openapi-v2.json"));
+const uptimeWorkflow = readFileSync(join(ROOT, ".github", "workflows", "uptime-probe.yml"), "utf8");
 const pathGraphic = read("fig/shade-tree-path.svg");
 const mobilePathGraphic = read("fig/shade-tree-path-mobile.svg");
 const reputationGraphic = read("fig/shade-tree-reputation.svg");
@@ -82,6 +90,13 @@ const pngMagic = "89504e470d0a1a0a";
 
 check("landing stays compact beside the full research note", landing.length < 10_500 && visibleWords(landing) <= 260 && research.length > 40_000);
 check("Grove stays concise while exposing useful aggregate context", grovePage.length < 7_500 && visibleWords(grovePage) <= 155);
+check("Protocol Lab is a fixture-driven single-purpose experience", (labPage.match(/<h1\b/g) || []).length === 1 && /Protocol fixture\.<\/strong> No public Grove traffic is created/.test(labPage) && /Zero live requests/.test(labPage) && !/fetch\s*\(/.test(labScript));
+check("Protocol Lab covers success and rejection paths", ["invited-success", "staked-success", "paid-success", "outsider-denied", "budget-exhausted"].every((name) => labPage.includes(`value="${name}"`) && labScript.includes(`"${name}"`)) && /failAt: 3/.test(labScript) && /failAt: 5/.test(labScript));
+check("Protocol Lab shares only replayable fixture state", /url\.searchParams\.set\("scenario", name\)/.test(labScript) && /navigator\.share/.test(labScript) && /twitter\.com\/intent\/tweet/.test(labScript) && !/(?:sourceIp|egressIp|targetHostname|onionIdentity|walletAddress|commitmentValue|rawProof|receiptBytes|exactTimestamp)\s*:/.test(labScript));
+check("Protocol Lab keeps sensitive fields out of its public card", /IP, target, onion, wallet, commitment, root, nullifier, proof, receipt bytes, or exact time/.test(labPage) && /not a cryptographic receipt for a person, tunnel, or destination/.test(labPage));
+check("Protocol Lab route is responsive and reduced-motion safe", /@media \(max-width: 650px\)[\s\S]*?\.route-stages\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(labCss) && /@media \(prefers-reduced-motion: reduce\)/.test(labCss) && /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/.test(labScript));
+check("Protocol Lab has replay, local-run, and post-success share actions", /Walk this route/.test(labPage) && /data-share>Share this route/.test(labPage) && /data-copy-link>Copy route link/.test(labPage) && /href="\/agent\/">Run locally/.test(labPage) && /result\.hidden = true/.test(labScript) && /result\.hidden = false/.test(labScript));
+check("Protocol Lab has a dedicated static social image", /og:image" content="https:\/\/shade-tree-node\.vercel\.app\/fig\/shade-tree-lab-og\.png"/.test(labPage));
 check("landing has one H1 and one decorative canvas", (landing.match(/<h1\b/g) || []).length === 1 && (landing.match(/<canvas[^>]+aria-hidden="true"/g) || []).length === 1);
 check("Grove has one H1, one focused detail section, and one live status", (grovePage.match(/<h1\b/g) || []).length === 1 && (grovePage.match(/<main\b/g) || []).length === 1 && (grovePage.match(/<section\b/g) || []).length === 1 && /role="status" aria-live="polite"/.test(grovePage));
 
@@ -139,10 +154,10 @@ check("mobile diagram labels remain readable after responsive scaling", mobileDi
 check("Grove keeps only snapshot status below the globe", /<canvas id="network-canvas" aria-hidden="true"><\/canvas>\s*<\/div>\s*<div class="network-foot">\s*<div class="snapshot-state" role="status" aria-live="polite">[\s\S]*?<span data-view-state>Checking signed aggregate<\/span>\s*<\/div>\s*<\/div>/.test(grovePage) && !/network-caption|Elder Tree handles discovery and stays off the traffic path|class="(?:scene-key|elder-label)"|data-elder-label|Census field/.test(grovePage));
 check("Grove snapshot rail collapses cleanly on desktop and mobile", /\.network-foot\s*\{\s*width:\s*100%;\s*margin-top:\s*1\.8rem;\s*\}/.test(groveCss) && /@media \(max-width: 760px\)[\s\S]*?\.network-foot\s*\{\s*margin-top:\s*1\.25rem;\s*padding:\s*0 0\.5rem;\s*\}/.test(groveCss) && !/\.network-foot\s*\{[^}]*(?:grid-template-columns|gap):|\.network-caption/.test(groveCss));
 check("compact navigation and controls keep full touch targets", /\.wordmark\s*\{[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.nav-links a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.copy-command\s*\{[\s\S]*?min-width:\s*7\.6rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss) && /\.site-footer a\s*\{[\s\S]*?min-width:\s*2\.75rem;[\s\S]*?min-height:\s*2\.75rem/.test(landingCss));
-check("Grove ends cleanly after the history section", /<main id="grove-main" class="grove-main">[\s\S]*?<section class="history-panel"[\s\S]*?<\/section>\s*<\/main>/.test(grovePage) && (grovePage.match(/<section\b/g) || []).length === 1 && !/public-ledger|ledger-|What’s public|<h3>Published<\/h3>|Never published|Technical specifications/.test(grovePage));
-check("Grove restores the signed snapshot detail table minus only its retired definition row", /<aside class="provenance-panel" aria-label="Snapshot provenance">[\s\S]*?<span>Snapshot<\/span>[\s\S]*?<strong data-snapshot-state>Verifying<\/strong>[\s\S]*?<div><dt>Network<\/dt><dd data-network>…<\/dd><\/div>\s*<div><dt>Scope<\/dt><dd>Pre-v4 research fleet<\/dd><\/div>\s*<div><dt>Observed<\/dt><dd data-view-time>…<\/dd><\/div>\s*<div><dt>Refresh target<\/dt><dd data-snapshot-cadence>15 min<\/dd><\/div>[\s\S]*?<\/aside>/.test(grovePage) && (grovePage.match(/<aside class="provenance-panel"/g) || []).length === 1 && (grovePage.match(/<dt>/g) || []).length === 11 && !/A view with boundaries|Signed view|Observer attests|Browser verifies|A scheduled observer|<dt>Definition<\/dt>|Announced within TTL/.test(grovePage));
+check("Grove ends cleanly after the history section with conditional aggregate ledgers", /<main id="grove-main" class="grove-main">[\s\S]*?<section class="history-panel"[\s\S]*?data-relay-row hidden[\s\S]*?data-onchain-ledger hidden[\s\S]*?<\/section>\s*<\/main>/.test(grovePage) && (grovePage.match(/<section\b/g) || []).length === 1 && !/public-ledger|What’s public|<h3>Published<\/h3>|Never published|Technical specifications/.test(grovePage));
+check("Grove restores the signed snapshot detail table minus only its retired definition row", /<aside class="provenance-panel" aria-label="Snapshot provenance">[\s\S]*?<span>Snapshot<\/span>[\s\S]*?<strong data-snapshot-state>Verifying<\/strong>[\s\S]*?<div><dt>Network<\/dt><dd data-network>…<\/dd><\/div>\s*<div><dt>Scope<\/dt><dd>Pre-v4 research fleet<\/dd><\/div>\s*<div><dt>Observed<\/dt><dd data-view-time>…<\/dd><\/div>\s*<div><dt>Refresh target<\/dt><dd data-snapshot-cadence>15 min<\/dd><\/div>[\s\S]*?<\/aside>/.test(grovePage) && (grovePage.match(/<aside class="provenance-panel"/g) || []).length === 1 && (grovePage.match(/<dt>/g) || []).length === 14 && !/A view with boundaries|Signed view|Observer attests|Browser verifies|A scheduled observer|<dt>Definition<\/dt>|Announced within TTL/.test(grovePage));
 check("Grove keeps the restored detail table left of the globe on desktop and stacked on mobile", /\.network-dashboard\s*\{[^}]*grid-template-columns:\s*minmax\(14rem, 25rem\) minmax\(28rem, 43rem\);[^}]*justify-content:\s*space-between;/.test(groveCss) && /\.network-visual\s*\{[^}]*grid-row:\s*span 2;/.test(groveCss) && /\.provenance-panel\s*\{[^}]*grid-column:\s*1;/.test(groveCss) && /@media \(max-width: 760px\)[\s\S]*?\.network-visual\s*\{[\s\S]*?grid-row:\s*auto;[\s\S]*?\}[\s\S]*?\.provenance-panel\s*\{\s*grid-column:\s*auto;\s*width:\s*100%;\s*\}/.test(groveCss));
-check("Grove removes every ledger style and phantom section gap", !/\.public-ledger|\.ledger-/.test(groveCss) && /\.grove-main\s*\{[\s\S]*?margin:\s*clamp\(2\.5rem, 6vw, 5rem\) auto clamp\(2rem, 4vw, 3rem\)/.test(groveCss) && !/\.grove-main\s*\{[^}]*\bgap:/.test(groveCss));
+check("Grove uses one restrained conditional relay row without a phantom section gap", !/\.public-ledger/.test(groveCss) && /\.relay-ledger\[hidden\]\s*\{\s*display:\s*none/.test(groveCss) && /\.grove-main\s*\{[\s\S]*?margin:\s*clamp\(2\.5rem, 6vw, 5rem\) auto clamp\(2rem, 4vw, 3rem\)/.test(groveCss) && !/\.grove-main\s*\{[^}]*\bgap:/.test(groveCss));
 check("Grove inline Data API link has visible hover and keyboard focus", /\.network-copy p a:hover,[\s\S]*?\.network-copy p a:focus-visible\s*\{[\s\S]*?color:\s*var\(--lichen\);[\s\S]*?text-decoration-color:\s*var\(--pulse\)/.test(groveCss) && /:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--pulse\)/.test(landingCss));
 check("Grove removes globe overlays without blocking pinch zoom", !/touch-action\s*:|\.scene-key|\.elder-label|\.network-caption/.test(groveCss) && /\.snapshot-state\s*\{[\s\S]*?font-size:\s*0\.75rem/.test(groveCss) && /\.provenance-panel dt\s*\{[\s\S]*?font-size:\s*0\.74rem/.test(groveCss) && /\.provenance-panel dd\s*\{[\s\S]*?font-size:\s*0\.76rem/.test(groveCss));
 
@@ -160,6 +175,7 @@ for (const asset of [
   "grove.js",
   "fig/shade-tree-banner.webp",
   "fig/shade-tree-og.png",
+  "fig/shade-tree-lab-og.png",
   "fig/shade-tree-path.svg",
   "fig/shade-tree-path-mobile.svg",
   "fig/shade-tree-reputation.svg",
@@ -175,9 +191,17 @@ for (const asset of [
   "grove/freshness.js",
   "grove/history.js",
   "grove/visual-model.js",
+  "grove/onchain.js",
   "grove/network.fallback.json",
+  "lab/index.html",
+  "lab/lab.css",
+  "lab/lab.js",
   "api/grove.mjs",
   "api/_grove-contract.mjs",
+  "api/grove-v2.mjs",
+  "api/_grove-v2-contract.mjs",
+  "api/_grove-onchain-contract.mjs",
+  "openapi-v2.json",
   "agent/index.html",
   "operator/index.html",
   "sitemap.xml",
@@ -185,6 +209,7 @@ for (const asset of [
 
 check("Open Graph images are real PNG files", [
   join(SITE, "fig/shade-tree-og.png"),
+  join(SITE, "fig/shade-tree-lab-og.png"),
   join(ROOT, "assets", "shade-tree-og.png"),
 ].every((path) => existsSync(path) && readFileSync(path).subarray(0, 8).toString("hex") === pngMagic));
 
@@ -220,7 +245,8 @@ check("Grove updates relative age on minute boundaries without redrawing the sce
 check("Grove catches up after a hidden tab becomes visible", /function onVisibilityChange\(\)[\s\S]*?if \(document\.hidden\) return;[\s\S]*?updateFreshness\(\);[\s\S]*?Date\.now\(\) - lastLoadFinishedAt >= POLL_INTERVAL_MS\) load\(\)/.test(groveLoader) && /document\.addEventListener\("visibilitychange", onVisibilityChange\)/.test(groveLoader));
 check("Grove preserves the last verified live view when refresh fails", /if \(currentSnapshot && !currentView\.bundled\)[\s\S]*?refreshFailed: true[\s\S]*?updateFreshness\(\)/.test(groveLoader) && /Update unavailable · last verified/.test(groveFreshness) && /showUnavailable\(\)/.test(groveLoader));
 check("Grove geometry is aggregate-only", /snapshot\.observedAt/.test(groveScene) && /snapshot\.nodes\.announced/.test(groveScene) && !/onion|pubkey|operator|wallet|region|location|asn/i.test(groveScene));
-check("Grove dashboard stays inside the signed aggregate contract", ["data-node-count", "data-view-age", "data-node-hours", "data-snapshot-state", "data-network", "data-view-time", "data-snapshot-cadence", "data-history-low", "data-history-high", "data-history-samples", "data-history-coverage"].every((field) => grovePage.includes(field)) && !/data-change|Observed changes?|sessions|throughput|latency|bandwidth|success rate|reputation band/i.test(grovePage));
+check("Grove dashboard stays inside the signed aggregate contract", ["data-node-count", "data-view-age", "data-node-hours", "data-snapshot-state", "data-network", "data-view-time", "data-snapshot-cadence", "data-history-low", "data-history-high", "data-history-samples", "data-history-coverage", "data-relay-row", "data-relay-value", "data-relay-coverage"].every((field) => grovePage.includes(field)) && !/data-change|Observed changes?|sessions|throughput|latency|bandwidth|success rate|reputation band/i.test(grovePage));
+check("relay usage is hidden unless the signed 24h aggregate is available", /row\.hidden = !visible/.test(groveLoader) && /window24\?\.status === "available"/.test(groveLoader) && /if \(!visible\) return/.test(groveLoader) && /Payload relayed, 24h/.test(grovePage));
 check("24-hour trends use tested window and gap helpers", /windowedHistory\(snapshot\.history, snapshot\.observedAt\)/.test(groveLoader) && /splitHistory\(samples, snapshot\.source\.cadenceMinutes\)/.test(groveLoader) && /cadenceMinutes \* 1\.5 \* 60_000/.test(groveHistory));
 
 const headingIds = [...research.matchAll(/<h[1-6][^>]+id="([^"]+)"/g)].map((match) => match[1]);
@@ -236,13 +262,16 @@ check("copy controls stack before mobile commands can clip", /@media \(max-width
 
 check("CSP permits only self-hosted scripts", csp.includes("default-src 'none'") && csp.includes("script-src 'self'") && !csp.includes("unsafe-eval") && !/https?:/.test(csp));
 check("CSP limits reads and closes objects and workers", csp.includes("connect-src 'self'") && csp.includes("object-src 'none'") && csp.includes("worker-src 'none'"));
-check("browser reads only the versioned same-origin Sepolia Data API and bundled fallback", /const LIVE_URL = "\/api\/v1\/data\/grove\/sepolia\/head"/.test(groveLoader) && /const NETWORK = "sepolia"/.test(groveLoader) && /value\.network === NETWORK/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
+check("browser reads only the versioned same-origin Sepolia Data API and bundled fallback", /const LIVE_URL = "\/api\/v2\/data\/grove\/sepolia\/head"/.test(groveLoader) && /const NETWORK = "sepolia"/.test(groveLoader) && /value\.network === NETWORK/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
 check("browser polling uses normal HTTP cache revalidation for API ETags", /const POLL_INTERVAL_MS = 5 \* 60 \* 1_000/.test(groveLoader) && /cache:\s*"default"/.test(groveLoader) && !/cache:\s*"no-store"/.test(groveLoader));
 check("browser verifies a pinned Ed25519 snapshot before rendering", /crypto\.subtle\.verify/.test(groveLoader) && /invalid public snapshot/.test(groveLoader) && groveLoader.includes(grovePublicKeyRawBase64(grovePublicKey)));
-check("Vercel exposes a versioned Data API and keeps the old aggregate alias", config.rewrites?.length === 2 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
-check("Vercel deploys a bounded Grove function instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
+check("Vercel exposes v1 unchanged and adds signed Grove v2 plus OpenAPI", config.rewrites?.length === 4 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/data/grove/sepolia/head" && rewrite.destination === "/api/grove-v2") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/openapi.json" && rewrite.destination === "/openapi-v2.json") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
+check("Vercel deploys bounded Grove functions instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && config.functions?.["api/grove-v2.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
 check("Grove API validates a fixed, bounded, signed Sepolia source", /GROVE_SNAPSHOT_URL = "https:\/\/api\.github\.com\/repos\/dmarzzz\/shade-tree-node\/contents\/grove\.json\?ref=network-state"/.test(groveApiContract) && /GROVE_NETWORK = "sepolia"/.test(groveApiContract) && /value\.network === GROVE_NETWORK/.test(groveApiContract) && /GROVE_MAX_BYTES = 64 \* 1024/.test(groveApiContract) && /verifyBytes/.test(groveApiContract));
 check("Grove API controls caching and byte validators without CORS", /Vercel-CDN-Cache-Control/.test(groveApi) && /createHash\("sha256"\)/.test(groveApi) && /matchesIfNoneMatch/.test(groveApi) && /"Cache-Control": "no-store"/.test(groveApi) && /if-none-match/.test(groveApi) && /ETag/.test(groveApi) && !/Access-Control-Allow-Origin/i.test(groveApi));
+check("Grove v2 validates exact relay and optional onchain keys, freshness, cohort suppression, and signed bytes", /GROVE_V2_SNAPSHOT_URL = "https:\/\/api\.github\.com\/repos\/dmarzzz\/shade-tree-node\/contents\/grove-v2\.json\?ref=network-state"/.test(groveV2ApiContract) && /exactKeys\(value, hasOnchain/.test(groveV2ApiContract) && /observedAt >= now - maxAgeMs/.test(groveV2ApiContract) && /minimumCohort\) && value\.minimumCohort >= 5/.test(groveV2ApiContract) && /validPublicOnchain/.test(groveV2ApiContract) && /finalizedBlockTime/.test(groveOnchainApiContract) && /verifyBytes/.test(groveV2ApiContract) && /Vercel-CDN-Cache-Control/.test(groveV2Api) && /matchesIfNoneMatch/.test(groveV2Api));
+check("scheduled publisher preserves v1 and emits the separately signed v2 head", /--out "\$RUNNER_TEMP\/grove\.json"/.test(uptimeWorkflow) && /--relay 1/.test(uptimeWorkflow) && /--out "\$RUNNER_TEMP\/grove-v2\.json"/.test(uptimeWorkflow) && /path:"grove\.json"/.test(uptimeWorkflow) && /path:"grove-v2\.json"/.test(uptimeWorkflow));
+check("Grove v2 OpenAPI excludes per-node telemetry and defines unavailable as omission", groveV2OpenApi.paths?.["/api/v2/data/grove/sepolia/head"] && groveV2OpenApi.components?.schemas?.Relay?.additionalProperties === false && /No node identities or per-node records/.test(groveV2OpenApi.components.schemas.Relay.description) && !JSON.stringify(groveV2OpenApi).includes("nodeId"));
 
 check("bundled snapshot uses the public aggregate schema", fallbackSnapshot.schema === "shade-tree-public-grove-v1" && fallbackSnapshot.source?.directoryVerified === true && fallbackSnapshot.source?.definition === "announced-within-ttl");
 check("bundled snapshot top level is allowlisted", Object.keys(fallbackSnapshot).sort().join(",") === "attestation,growth,history,network,nodes,observedAt,privacy,schema,source");
@@ -253,7 +282,7 @@ check("tampering with the bundled count breaks its signature", !verifyPublicGrov
 const fallbackText = JSON.stringify(fallbackSnapshot);
 check("bundled snapshot contains no identity, place, activity, or pulse field", !/\.onion|pubkey|operator|wallet|address|region|country|coordinates?|asn|destination|tunnels?|bytes|requests?|queries|pulse/i.test(fallbackText));
 
-for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "grove/freshness.js", "grove/history.js", "grove/visual-model.js", "api/grove.mjs", "api/_grove-contract.mjs"]) {
+for (const script of ["site.js", "grove.js", "grove/network.js", "grove/scene.js", "grove/freshness.js", "grove/history.js", "grove/visual-model.js", "grove/onchain.js", "api/grove.mjs", "api/_grove-contract.mjs", "api/grove-v2.mjs", "api/_grove-v2-contract.mjs", "api/_grove-onchain-contract.mjs"]) {
   const result = spawnSync(process.execPath, ["--check", join(SITE, script)], { encoding: "utf8" });
   check(`${script} parses as JavaScript`, result.status === 0);
 }

@@ -17,6 +17,10 @@ num-bigint = "0.4"    # big-endian keccak digest -> BigUint >> 8 -> decimal (cal
 # SAME hash testdata/zk-artifacts.lock.json pins. sha2 is already in the tree via ed25519-dalek,
 # so this adds no new transitive dependency.
 sha2 = "0.11"
+# EIP-191 `personal_sign` recovery for gateway operator authorization.  The
+# implementation hashes the prefixed message with the existing `sha3` Keccak256
+# and uses k256 only for recoverable secp256k1 verification.
+k256 = { version = "0.13", features = ["ecdsa"] }
 # NOTE: canonical_*_bytes are hand-built in fixed key order (see the encoders below),
 # NEVER via a serializer — serde is intentionally NOT a dependency of the canonical path.
 
