@@ -446,7 +446,7 @@
       esac
       ufw status | awk -v port='{{ shade_tree_ssh_port | int }}/tcp' -v cidr="$admin_cidr" -v display_cidr="$display_cidr" '
         $2 == "ALLOW" {
-          if ($1 == port && ($4 == cidr || $4 == display_cidr)) expected=1
+          if ($1 == port && ($3 == cidr || $3 == display_cidr)) expected=1
           else { print "unexpected inbound allow rule: " $0 > "/dev/stderr"; bad=1 }
         }
         END {
