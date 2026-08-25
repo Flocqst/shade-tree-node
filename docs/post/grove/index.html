@@ -6,11 +6,11 @@
   <meta name="description" content="A signed aggregate view of the Shade Tree Grove. No identities, locations, or traffic.">
   <meta name="theme-color" content="#07100c">
   <meta property="og:title" content="The Grove · Shade Tree Grove">
-  <meta property="og:description" content="A privacy-preserving view of the Grove's signed Canopy census.">
+  <meta property="og:description" content="A privacy-preserving view of the Grove, built from signed aggregate reports.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
-  <meta property="og:image:alt" content="An abstract canopy sphere made of small groves and census signals">
+  <meta property="og:image:alt" content="An abstract canopy sphere made of small groves and aggregate signals">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -38,27 +38,22 @@
     <div class="network-dashboard">
       <div class="network-copy">
         <h1 id="grove-title">The Grove,<br><span>observed.</span></h1>
-        <p>A signed census of the pre-v4 research fleet. The abstract canopy has no map, identities, or one-to-one positions. Census arcs are not traffic, and this is not a connection profile.</p>
+        <p>A privacy-preserving view of the Grove, built from signed aggregate reports without publishing node identities or locations.</p>
         <div class="snapshot-state" role="status" aria-live="polite">
           <span class="state-pulse" aria-hidden="true"></span>
           <span data-view-state>Checking signed aggregate</span>
         </div>
       </div>
 
-      <div class="network-stage" id="network-stage">
-        <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true">
-          <span class="fallback-orbit fallback-orbit-a"></span>
-          <span class="fallback-orbit fallback-orbit-b"></span>
+      <div class="network-visual">
+        <div class="network-stage" id="network-stage">
+          <div class="canopy-fallback" id="canopy-fallback" aria-hidden="true">
+            <span class="fallback-orbit fallback-orbit-a"></span>
+            <span class="fallback-orbit fallback-orbit-b"></span>
+          </div>
+          <canvas id="network-canvas" aria-hidden="true"></canvas>
         </div>
-        <canvas id="network-canvas" aria-hidden="true"></canvas>
-        <div class="scene-key">
-          <span>Census field</span>
-          <span>No geography</span>
-        </div>
-        <div class="elder-label">
-          <span class="elder-signal" aria-hidden="true"></span>
-          <span data-elder-label>Elder Tree · discovery only · off traffic path</span>
-        </div>
+        <p class="network-caption">Elder Tree handles discovery and stays off the traffic path.</p>
       </div>
 
       <aside class="provenance-panel" aria-label="Snapshot provenance">

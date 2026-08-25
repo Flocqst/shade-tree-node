@@ -295,8 +295,8 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   const state = bundled
     ? `Signed pre-v4 reference · ${age.long}`
     : stale
-      ? `${researchFleet ? "Pre-v4 research census" : "Signed census"} · ${age.long} · stale`
-      : `${researchFleet ? "Research census" : "Snapshot"} verified · ${age.long}`;
+      ? `${researchFleet ? "Pre-v4 network snapshot" : "Signed snapshot"} · ${age.long} · stale`
+      : `${researchFleet ? "Network snapshot" : "Snapshot"} verified · ${age.long}`;
   setText("[data-view-state]", state);
   drawHistory(snapshot);
   drawFallback(snapshot);
