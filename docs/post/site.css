@@ -329,11 +329,33 @@ img {
 
 .home-copy h1 span { display: block; }
 
+.hero-tagline {
+  max-width: 33rem;
+  margin: 1.35rem 0 0;
+  color: var(--muted);
+  font-size: clamp(1rem, 1.35vw, 1.16rem);
+  line-height: 1.45;
+}
+
+.hero-tagline a {
+  color: var(--lichen);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.22em;
+  white-space: nowrap;
+  transition: color 160ms ease, text-decoration-color 160ms ease;
+}
+
+.hero-tagline a:hover {
+  color: var(--pulse);
+  text-decoration-color: var(--pulse);
+}
+
 .home-hero .hero-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem 2rem;
-  margin-top: 2.6rem;
+  margin-top: 1.65rem;
 }
 
 .home-hero .hero-actions a {
@@ -764,7 +786,7 @@ img {
   }
 
   .home-hero .nav-links a:nth-child(-n + 2) { display: none; }
-  .nav-links { gap: 1.2rem; }
+  .nav-links { gap: clamp(0.4rem, 2.8vw, 0.9rem); }
   .home-hero { min-height: 43rem; }
   .home-copy { top: 7.5rem; }
 

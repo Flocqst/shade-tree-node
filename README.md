@@ -2,7 +2,8 @@
 
 # Shade Tree
 
-Cover for local agents.
+Shade Tree gives agents anonymous egress when the clearnet [won’t let them
+through][research-note].
 
 [![CI][ci-badge]][ci-url]
 [![real Tor E2E][e2e-badge]][e2e-url]
