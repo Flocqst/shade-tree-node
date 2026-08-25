@@ -28,6 +28,7 @@ ok(/services\.node/.test(TASKS) && /version: "\{\{ shade_tree_service_pin\.commi
 ok(!/version:\s*(main|master|HEAD)\b/.test(TASKS + DEFAULTS), "role has no floating git ref fallback");
 
 console.log("identity and admission:");
+ok(/shade_tree_target_mode in \['elder', 'elder-and-node', 'node'\]/.test(TASKS) && /SHADE_TREE_ELDER_ONLY/.test(TASKS), "dedicated Elder targets select bootstrap Elder-only mode");
 ok(/onion-identity\.mjs[\s\S]*derive/.test(TASKS) && /canopySigner/.test(TASKS), "restored onion and Canopy signer are checked before cutover");
 ok(/membersSha256/.test(TASKS) && /checksum_algorithm: sha256/.test(TASKS), "invited member bytes must match the reviewed root hash");
 ok(/shade_tree_slash_key is match/.test(TASKS) && /shade_tree_gateway_operator_key is match/.test(TASKS), "on-chain private keys are syntactically required before mutation");
@@ -45,4 +46,3 @@ ok(/hosts: shade_tree_v4/.test(PLAYBOOK) && !/(ansible_host|[0-9]{1,3}(?:\.[0-9]
 
 console.log(failures ? `\n${failures} FAILED` : "\nall v4 Ansible safety checks passed");
 process.exit(failures ? 1 : 0);
-

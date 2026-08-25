@@ -34,6 +34,8 @@
 
 - name: Derive deployment policy facts
   ansible.builtin.set_fact:
+    shade_tree_runs_elder: "{{ shade_tree_target_mode in ['elder', 'elder-and-node'] }}"
+    shade_tree_runs_node: "{{ shade_tree_target_mode in ['node', 'elder-and-node'] }}"
     shade_tree_onchain_admission: "{{ ('staked' in shade_tree_deployment.admission.paths) or ('paid' in shade_tree_deployment.admission.paths) }}"
     shade_tree_invited_admission: "{{ 'invited' in shade_tree_deployment.admission.paths }}"
     shade_tree_admit: "{{ shade_tree_deployment.admission.paths | join(',') }}"
@@ -55,16 +57,17 @@
          else (shade_tree_deployment.admission.roots.paid.contract
                if shade_tree_deployment.admission.roots.paid is not none else '') }}
     shade_tree_expected_identity_files: >-
-      {{ ['gateway-hs/identity.local.json', 'gateway-hs/hostname',
-          'gateway-hs/hs_ed25519_secret_key', 'gateway-hs/hs_ed25519_public_key']
+      {{ (['gateway-hs/identity.local.json', 'gateway-hs/hostname',
+           'gateway-hs/hs_ed25519_secret_key', 'gateway-hs/hs_ed25519_public_key']
+          if shade_tree_runs_node else [])
          + (['bootnode-hs/identity.local.json', 'bootnode-hs/hostname',
              'bootnode-hs/hs_ed25519_secret_key', 'bootnode-hs/hs_ed25519_public_key',
-             'bootnode-signer.key'] if shade_tree_target_mode == 'elder-and-node' else []) }}
+             'bootnode-signer.key'] if shade_tree_runs_elder else []) }}
 
 - name: Validate all operator choices before the first remote mutation
   ansible.builtin.assert:
     that:
-      - shade_tree_target_mode in ['elder-and-node', 'node']
+      - shade_tree_target_mode in ['elder', 'elder-and-node', 'node']
       - shade_tree_admin_cidr | length > 0
       - shade_tree_admin_cidr is match('^[0-9A-Fa-f:.]+/[0-9]{1,3}$')
       - shade_tree_admin_cidr not in ['0.0.0.0/0', '::/0']
@@ -79,7 +82,7 @@
       - (shade_tree_deployment.elder.admission != 'stake') or (shade_tree_rpc_url | length > 0)
       - (shade_tree_deployment.elder.admission != 'stake') or (shade_tree_gateway_operator_key | length > 0)
       - (shade_tree_deployment.elder.admission != 'stake') or (shade_tree_gateway_operator_key is match('^0x[0-9A-Fa-f]{64}$'))
-      - (not shade_tree_invited_admission | bool) or (shade_tree_members_file | length > 0)
+      - (not shade_tree_runs_node | bool) or (not shade_tree_invited_admission | bool) or (shade_tree_members_file | length > 0)
     fail_msg: >-
       Deployment is fail-closed. Supply an exact admin CIDR and restored identities; invited
       admission needs the operator member set; any on-chain path needs explicit authorization,
@@ -133,6 +136,7 @@
   register: shade_tree_gateway_onion
   changed_when: false
   no_log: true
+  when: shade_tree_runs_node | bool
 
 - name: Derive the restored Elder onion on the controller
   ansible.builtin.command:
@@ -141,7 +145,7 @@
       - "{{ shade_tree_controller_repo_root }}/scripts/onion-identity.mjs"
       - derive
       - "{{ shade_tree_identity_source }}/bootnode-hs/hs_ed25519_secret_key"
-  when: shade_tree_target_mode == 'elder-and-node'
+  when: shade_tree_runs_elder | bool
   delegate_to: localhost
   become: false
   register: shade_tree_elder_onion
@@ -151,9 +155,9 @@
 - name: Verify restored public identities against the record before cutover
   ansible.builtin.assert:
     that:
-      - shade_tree_gateway_onion.stdout | trim == (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/gateway-hs/hostname') | trim)
-      - shade_tree_target_mode != 'elder-and-node' or (shade_tree_elder_onion.stdout | trim == shade_tree_deployment.elder.onion)
-      - shade_tree_target_mode != 'elder-and-node' or ((lookup('ansible.builtin.file', shade_tree_identity_source ~ '/bootnode-signer.key') | from_json).pub == shade_tree_deployment.elder.canopySigner)
+      - (not shade_tree_runs_node | bool) or (shade_tree_gateway_onion.stdout | trim == (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/gateway-hs/hostname') | trim))
+      - (not shade_tree_runs_elder | bool) or (shade_tree_elder_onion.stdout | trim == shade_tree_deployment.elder.onion)
+      - (not shade_tree_runs_elder | bool) or ((lookup('ansible.builtin.file', shade_tree_identity_source ~ '/bootnode-signer.key') | from_json).pub == shade_tree_deployment.elder.canopySigner)
     fail_msg: "Restored onion or Canopy signer does not match the reviewed deployment record."
   no_log: true
 
@@ -161,7 +165,9 @@
   ansible.builtin.stat:
     path: "{{ shade_tree_members_file }}"
     checksum_algorithm: sha256
-  when: shade_tree_invited_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_invited_admission | bool
   delegate_to: localhost
   become: false
   register: shade_tree_members_stat
@@ -174,7 +180,9 @@
       - shade_tree_members_stat.stat.isreg
       - shade_tree_members_stat.stat.checksum == shade_tree_deployment.admission.roots.invited.membersSha256
     fail_msg: "Operator member-set bytes do not match admission.roots.invited.membersSha256."
-  when: shade_tree_invited_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_invited_admission | bool
   no_log: true
 
 - name: Require the supported target platform
@@ -253,7 +261,9 @@
     owner: root
     group: root
     mode: "0600"
-  when: shade_tree_invited_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_invited_admission | bool
   register: shade_tree_members_copy
   no_log: true
 
@@ -281,10 +291,10 @@
   ansible.builtin.stat:
     path: "{{ item }}"
   loop: >-
-    {{ ['/etc/tor/torrc.d-shade-tree',
-        '/etc/systemd/system/shade-tree-gateway.service',
-        '/etc/systemd/system/shade-tree-heartbeat.service']
-       + (['/etc/systemd/system/shade-tree-bootnode.service'] if shade_tree_target_mode == 'elder-and-node' else []) }}
+    {{ ['/etc/tor/torrc.d-shade-tree']
+       + (['/etc/systemd/system/shade-tree-gateway.service',
+           '/etc/systemd/system/shade-tree-heartbeat.service'] if shade_tree_runs_node else [])
+       + (['/etc/systemd/system/shade-tree-bootnode.service'] if shade_tree_runs_elder else []) }}
   register: shade_tree_rendered_files
 
 - name: Record whether rendered service files need repair
@@ -302,6 +312,7 @@
     SHADE_TREE_REF: "{{ shade_tree_service_pin.commit }}"
     SHADE_TREE_DIR: "{{ shade_tree_install_dir }}"
     SHADE_TREE_ADMISSION: "{{ shade_tree_deployment.elder.admission }}"
+    SHADE_TREE_ELDER_ONLY: "{{ '1' if shade_tree_target_mode == 'elder' else '0' }}"
     SHADE_TREE_BOOTNODE_ONION: "{{ shade_tree_deployment.elder.onion if shade_tree_target_mode == 'node' else '' }}"
     SHADE_TREE_BOOTNODE_SIGNER: "{{ shade_tree_deployment.elder.canopySigner if shade_tree_target_mode == 'node' else '' }}"
     SHADE_TREE_ADMIT: "{{ shade_tree_admit }}"
@@ -337,7 +348,9 @@
     owner: root
     group: root
     mode: "0755"
-  when: shade_tree_onchain_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_onchain_admission | bool
 
 - name: Install on-chain slashing authorization
   ansible.builtin.template:
@@ -346,7 +359,9 @@
     owner: root
     group: root
     mode: "0600"
-  when: shade_tree_onchain_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_onchain_admission | bool
   no_log: true
   notify: Restart Shade Tree node
 
@@ -354,7 +369,9 @@
   ansible.builtin.file:
     path: /etc/systemd/system/shade-tree-gateway.service.d/v4-secrets.conf
     state: absent
-  when: not shade_tree_onchain_admission | bool
+  when:
+    - shade_tree_runs_node | bool
+    - not shade_tree_onchain_admission | bool
   notify: Restart Shade Tree node
 
 - name: Create Elder and heartbeat drop-in directories
@@ -364,9 +381,9 @@
     owner: root
     group: root
     mode: "0755"
-  loop:
-    - shade-tree-bootnode
-    - shade-tree-heartbeat
+  loop: >-
+    {{ (['shade-tree-bootnode'] if shade_tree_runs_elder else [])
+       + (['shade-tree-heartbeat'] if shade_tree_runs_node else []) }}
   when: shade_tree_deployment.elder.admission == 'stake'
 
 - name: Install stake-gated Elder configuration
@@ -377,7 +394,7 @@
     group: root
     mode: "0600"
   when:
-    - shade_tree_target_mode == 'elder-and-node'
+    - shade_tree_runs_elder | bool
     - shade_tree_deployment.elder.admission == 'stake'
   no_log: true
   notify: Restart Elder Tree
@@ -389,7 +406,9 @@
     owner: root
     group: root
     mode: "0600"
-  when: shade_tree_deployment.elder.admission == 'stake'
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_deployment.elder.admission == 'stake'
   no_log: true
   notify: Restart Shade Tree heartbeat
 
@@ -397,14 +416,18 @@
   ansible.builtin.file:
     path: /etc/systemd/system/shade-tree-bootnode.service.d/v4-stake.conf
     state: absent
-  when: shade_tree_deployment.elder.admission != 'stake'
+  when:
+    - shade_tree_runs_elder | bool
+    - shade_tree_deployment.elder.admission != 'stake'
   notify: Restart Elder Tree
 
 - name: Remove stale heartbeat operator authorization
   ansible.builtin.file:
     path: /etc/systemd/system/shade-tree-heartbeat.service.d/v4-operator.conf
     state: absent
-  when: shade_tree_deployment.elder.admission != 'stake'
+  when:
+    - shade_tree_runs_node | bool
+    - shade_tree_deployment.elder.admission != 'stake'
   notify: Restart Shade Tree heartbeat
 
 - name: Reconcile the dedicated-host firewall
@@ -433,8 +456,8 @@
     state: started
     daemon_reload: true
   loop: >-
-    {{ ['shade-tree-gateway', 'shade-tree-heartbeat']
-       + (['shade-tree-bootnode'] if shade_tree_target_mode == 'elder-and-node' else []) }}
+    {{ (['shade-tree-gateway', 'shade-tree-heartbeat'] if shade_tree_runs_node else [])
+       + (['shade-tree-bootnode'] if shade_tree_runs_elder else []) }}
 
 - name: Verify the checked-out commit
   ansible.builtin.command:
@@ -454,19 +477,21 @@
       - is-active
       - "{{ item }}"
   loop: >-
-    {{ ['shade-tree-gateway', 'shade-tree-heartbeat']
-       + (['shade-tree-bootnode'] if shade_tree_target_mode == 'elder-and-node' else []) }}
+    {{ (['shade-tree-gateway', 'shade-tree-heartbeat'] if shade_tree_runs_node else [])
+       + (['shade-tree-bootnode'] if shade_tree_runs_elder else []) }}
   changed_when: false
 
 - name: Verify every service uses JSON logs and the explicit artifact set
   ansible.builtin.shell:
     cmd: |
       set -eu
-      for unit in shade-tree-gateway shade-tree-heartbeat{% if shade_tree_target_mode == 'elder-and-node' %} shade-tree-bootnode{% endif %}; do
+      for unit in{% if shade_tree_runs_node %} shade-tree-gateway shade-tree-heartbeat{% endif %}{% if shade_tree_runs_elder %} shade-tree-bootnode{% endif %}; do
         systemctl show "$unit" --property=Environment --value | grep -q 'SHADE_TREE_LOG_FORMAT=json'
       done
+      {% if shade_tree_runs_node %}
       systemctl show shade-tree-gateway --property=Environment --value | grep -Fq {{ ('SHADE_TREE_ZK_ARTIFACTS=' ~ (shade_tree_artifact_specs | join(','))) | quote }}
       systemctl show shade-tree-heartbeat --property=Environment --value | grep -Fq {{ ('SHADE_TREE_ZK_ARTIFACTS=' ~ (shade_tree_artifact_specs | join(','))) | quote }}
+      {% endif %}
   args:
     executable: /bin/bash
   changed_when: false
@@ -488,13 +513,13 @@
 - name: Build remote onion continuity checks
   ansible.builtin.set_fact:
     shade_tree_remote_identity_checks: >-
-      {{ [
+      {{ ([
            {'path': shade_tree_install_dir ~ '/deploy-state/gateway-hs/hs_ed25519_secret_key', 'onion': (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/gateway-hs/hostname') | trim)},
            {'path': '/var/lib/tor/shade-tree-gateway/hs_ed25519_secret_key', 'onion': (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/gateway-hs/hostname') | trim)}
-         ] + ([
+         ] if shade_tree_runs_node else []) + ([
            {'path': shade_tree_install_dir ~ '/deploy-state/bootnode-hs/hs_ed25519_secret_key', 'onion': shade_tree_deployment.elder.onion},
            {'path': '/var/lib/tor/shade-tree-bootnode/hs_ed25519_secret_key', 'onion': shade_tree_deployment.elder.onion}
-         ] if shade_tree_target_mode == 'elder-and-node' else []) }}
+         ] if shade_tree_runs_elder else []) }}
 
 - name: Derive deployed and Tor-active onion identities
   ansible.builtin.command:
@@ -525,7 +550,7 @@
       - -e
       - "console.log(JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).pub)"
       - "{{ shade_tree_install_dir }}/deploy-state/bootnode-signer.key"
-  when: shade_tree_target_mode == 'elder-and-node'
+  when: shade_tree_runs_elder | bool
   register: shade_tree_deployed_signer
   changed_when: false
 
@@ -533,8 +558,8 @@
   ansible.builtin.assert:
     that:
       - shade_tree_deployed_head.stdout | trim == shade_tree_service_pin.commit
-      - shade_tree_target_mode != 'elder-and-node' or (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/bootnode-hs/hostname') | trim == shade_tree_deployment.elder.onion)
-      - shade_tree_target_mode != 'elder-and-node' or (shade_tree_deployed_signer.stdout | trim == shade_tree_deployment.elder.canopySigner)
+      - (not shade_tree_runs_elder | bool) or (lookup('ansible.builtin.file', shade_tree_identity_source ~ '/bootnode-hs/hostname') | trim == shade_tree_deployment.elder.onion)
+      - (not shade_tree_runs_elder | bool) or (shade_tree_deployed_signer.stdout | trim == shade_tree_deployment.elder.canopySigner)
     fail_msg: "Post-deploy identity or immutable source verification failed."
 
 - name: Record successful reconciliation only after every check passes
