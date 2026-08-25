@@ -47,8 +47,9 @@
     <div class="home-copy">
       <h1 id="home-title"><span>Cover for</span><span>local agents.</span></h1>
       <div class="hero-actions">
-        <a href="#proxy">Install the Proxy <span aria-hidden="true">&#8595;</span></a>
+        <a href="#proxy">For agents <span aria-hidden="true">&#8595;</span></a>
         <a href="#node">Run a Shade Tree node <span aria-hidden="true">&#8595;</span></a>
+        <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">How it works <span aria-hidden="true">&#8599;</span></a>
       </div>
     </div>
   </header>
@@ -62,22 +63,23 @@
     <section class="role-trails" aria-label="Ways to use Shade Tree Grove">
       <article id="proxy" class="role">
         <header class="role-intro">
-          <h2>Install the Proxy</h2>
+          <h2>For agents</h2>
           <a class="role-link" href="/agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
         </header>
         <div class="role-tools">
-          <div class="command" aria-label="Install Shade Tree Grove for an agent">
+          <p class="tool-label">CLI</p>
+          <div class="command agent-install" aria-label="Install Shade Tree Grove for an agent">
             <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
             <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
           </div>
-          <div class="handoff">
-            <span>Hermes, OpenClaw, or another agent</span>
-            <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" aria-label="Copy Shade Tree Grove setup brief for an AI agent">copy setup task</button>
+          <div class="handoff" aria-label="Let another agent handle setup">
+            <div class="handoff-copy">
+              <strong>Let your agent handle setup</strong>
+              <span>Using Hermes, OpenClaw, or another agent? Copy the brief and send it over.</span>
+            </div>
+            <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" data-copy-noun="Setup brief" aria-label="Copy Shade Tree Grove setup brief for an AI agent">copy agent brief</button>
           </div>
-          <details class="task-preview">
-            <summary>Read the setup task</summary>
-            <code id="agent-setup-task">Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
-          </details>
+          <code id="agent-setup-task" class="copy-fallback" hidden>Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
         </div>
       </article>
 
@@ -111,7 +113,7 @@
         <article class="how-mechanism">
           <div class="how-copy">
             <h3>Network path</h3>
-            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through Tor. The node verifies the proof before dialing the destination. The Elder Tree handles discovery and stays off the traffic path.</p>
+            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through <a href="https://www.torproject.org/">Tor</a> to the node’s <a href="https://community.torproject.org/onion-services/overview/">onion service</a>. The node verifies the proof before dialing the destination. The Elder Tree handles discovery and stays off the traffic path.</p>
           </div>
           <picture class="how-visual network-figure">
             <source media="(max-width: 900px)" srcset="/fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="820">

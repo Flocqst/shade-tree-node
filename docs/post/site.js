@@ -50,12 +50,13 @@ for (const button of copyButtons) {
     if (!command) return;
 
     const idleLabel = button.textContent;
+    const copyNoun = button.dataset.copyNoun || "Command";
     let resetDelay = 1800;
     let restoreCodeTabIndex = null;
     try {
       await navigator.clipboard.writeText(command);
       button.textContent = "copied";
-      copyStatus.textContent = "Command copied to clipboard.";
+      copyStatus.textContent = `${copyNoun} copied to clipboard.`;
     } catch {
       const copyTarget = button.dataset.copyTarget
         ? document.getElementById(button.dataset.copyTarget)
@@ -81,8 +82,10 @@ for (const button of copyButtons) {
 
       if (legacyCopied) {
         button.textContent = "copied";
-        copyStatus.textContent = "Command copied to clipboard.";
+        copyStatus.textContent = `${copyNoun} copied to clipboard.`;
       } else if (visibleCode) {
+        const wasHidden = visibleCode.hidden;
+        visibleCode.hidden = false;
         visibleCode.closest("details")?.setAttribute("open", "");
         const previousTabIndex = visibleCode.getAttribute("tabindex");
         visibleCode.setAttribute("tabindex", "-1");
@@ -97,13 +100,14 @@ for (const button of copyButtons) {
         restoreCodeTabIndex = () => {
           if (previousTabIndex === null) visibleCode.removeAttribute("tabindex");
           else visibleCode.setAttribute("tabindex", previousTabIndex);
+          if (wasHidden) visibleCode.hidden = true;
         };
         button.textContent = "selected";
-        copyStatus.textContent = "Command selected. Press Control+C or Command+C to copy.";
+        copyStatus.textContent = `${copyNoun} selected. Press Control+C or Command+C to copy.`;
         resetDelay = 6000;
       } else {
         button.textContent = "copy manually";
-        copyStatus.textContent = "Automatic copy failed. Select the command and copy it.";
+        copyStatus.textContent = `Automatic copy failed. Select the ${copyNoun.toLowerCase()} and copy it.`;
         resetDelay = 6000;
       }
     }

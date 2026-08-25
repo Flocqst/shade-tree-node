@@ -8,6 +8,10 @@
   --muted: rgba(227, 233, 221, 0.66);
   --line: rgba(147, 164, 134, 0.2);
   --line-strong: rgba(147, 164, 134, 0.42);
+  --clearing-about: #0a1912;
+  --clearing-agent: #0e2017;
+  --clearing-node: #0b1c14;
+  --clearing-how: #0d1f16;
   --display: Optima, Candara, "Noto Sans", "Avenir Next", sans-serif;
   --serif: Optima, Candara, "Noto Sans", "Avenir Next", sans-serif;
   --sans: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -349,7 +353,7 @@ img {
   transition: color 180ms ease, border-color 180ms ease, transform 180ms ease;
 }
 
-.home-hero .hero-actions a:last-child { color: var(--muted); }
+.home-hero .hero-actions a:nth-child(n + 2) { color: var(--muted); }
 
 .home-hero .hero-actions a:hover {
   color: var(--pulse);
@@ -358,8 +362,8 @@ img {
 }
 
 .home-main {
-  width: var(--page);
-  margin: 0 auto;
+  width: 100%;
+  --section-gutter: max(1.5rem, calc((100% - 74rem) / 2));
 }
 
 .about-panel {
@@ -367,7 +371,8 @@ img {
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
   gap: clamp(2rem, 7vw, 7rem);
   margin-top: clamp(3.5rem, 7vw, 6.5rem);
-  padding: clamp(2.5rem, 5vw, 4.5rem) 0;
+  padding: clamp(2.5rem, 5vw, 4.5rem) var(--section-gutter);
+  background: var(--clearing-about);
   border-top: 1px solid var(--line);
 }
 
@@ -409,11 +414,13 @@ img {
   display: grid;
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
   gap: clamp(2rem, 7vw, 7rem);
-  padding: clamp(2.5rem, 5vw, 4.5rem) 0;
+  padding: clamp(2.5rem, 5vw, 4.5rem) var(--section-gutter);
   border-top: 1px solid var(--line);
   scroll-margin-top: 2rem;
 }
 
+.role:first-child { background: var(--clearing-agent); }
+.role:last-child { background: var(--clearing-node); }
 .role:last-child { border-bottom: 1px solid var(--line); }
 
 .role-intro {
@@ -450,6 +457,15 @@ img {
   align-content: start;
 }
 
+.tool-label {
+  margin: 0 0 -0.75rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .command {
   display: grid;
   width: 100%;
@@ -469,6 +485,11 @@ img {
   line-height: 1.7;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.agent-install code {
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 .copy-command {
@@ -492,16 +513,32 @@ img {
 
 .handoff {
   display: flex;
-  gap: 1.5rem;
+  gap: 1.1rem;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.3rem 0 1.2rem;
+  justify-content: center;
+  padding: 1.5rem clamp(1rem, 4vw, 2.5rem);
+  text-align: center;
+  background: rgba(226, 190, 103, 0.045);
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+}
+
+.handoff-copy {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+}
+
+.handoff strong {
+  color: var(--lichen);
+  font-family: var(--display);
+  font-size: 1.05rem;
+  font-weight: 620;
 }
 
 .handoff span {
   color: var(--muted);
-  font-size: 0.91rem;
+  font-size: 0.82rem;
 }
 
 .handoff .task-copy {
@@ -518,35 +555,11 @@ img {
   background: transparent;
 }
 
-.task-preview {
-  width: 100%;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.task-preview summary {
-  display: inline-flex;
-  width: max-content;
-  min-height: 2.75rem;
-  align-items: center;
-  cursor: pointer;
-  list-style: none;
-}
-
-.task-preview summary::before {
-  margin-right: 0.42rem;
-  content: "▸";
-}
-
-.task-preview[open] summary::before {
-  content: "▾";
-}
-
-.task-preview code {
+.copy-fallback {
   display: block;
-  margin-top: 1rem;
+  width: 100%;
   padding: 1rem;
-  color: var(--leaf);
+  color: var(--muted);
   background: rgba(16, 34, 25, 0.54);
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -554,8 +567,12 @@ img {
   overflow-wrap: anywhere;
 }
 
+.copy-fallback[hidden] { display: none; }
+
 .how-panel {
-  margin: clamp(4.5rem, 8vw, 7rem) 0 clamp(3.5rem, 6vw, 5rem);
+  margin: 0;
+  padding: clamp(4.5rem, 8vw, 7rem) var(--section-gutter) clamp(3.5rem, 6vw, 5rem);
+  background: var(--clearing-how);
 }
 
 .how-panel > h2 {
@@ -601,6 +618,21 @@ img {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.72;
+}
+
+.how-copy a,
+.boundary a {
+  color: var(--lichen);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.2em;
+  transition: color 160ms ease, text-decoration-color 160ms ease;
+}
+
+.how-copy a:hover,
+.boundary a:hover {
+  color: var(--pulse);
+  text-decoration-color: var(--pulse);
 }
 
 .how-visual {
@@ -780,6 +812,8 @@ img {
 @media (max-width: 900px) {
   :root { --page: min(100% - 2rem, 46rem); }
 
+  .home-main { --section-gutter: 1rem; }
+
   .home-hero { min-height: 44rem; }
 
   .home-hero::after {
@@ -871,12 +905,12 @@ img {
   .about-panel {
     gap: 1.25rem;
     margin-top: 2.5rem;
-    padding: 2.5rem 0;
+    padding-block: 2.5rem;
   }
 
   .role {
     gap: 1.5rem;
-    padding: 2.5rem 0;
+    padding-block: 2.5rem;
   }
 
   .role-intro {
@@ -906,7 +940,7 @@ img {
   .handoff .task-copy { width: 100%; }
 
   .how-panel {
-    margin-top: 5rem;
+    padding-block: 5rem 3.5rem;
   }
 
   .how-panel > h2 {
