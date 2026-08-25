@@ -9,6 +9,12 @@ const LEAF_COLORS = [0x294a37, 0x365b42, 0x456a4b, 0x55785a, 0x314f3b];
 const STREAM = 0xe2ba5a;
 const TRAIL = 0x71846d;
 const UP = new THREE.Vector3(0, 1, 0);
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const FLAT_PLANE = new THREE.Quaternion().setFromAxisAngle(X_AXIS, -Math.PI / 2);
+
+export function orientGroundBeam(object, angle) {
+  object.quaternion.setFromAxisAngle(UP, angle).multiply(FLAT_PLANE);
+}
 
 function seededRandom(seed) {
   let value = seed >>> 0;
@@ -135,13 +141,13 @@ function createShadePatch(scene, mobile) {
   scene.add(patch);
 
   const beamSpecs = mobile ? [
-    { width: 1.2, length: 48, angle: -0.08, x: centerX + 0.2, z: centerZ - 0.6, strength: 0.07, core: 0.022 },
-    { width: 0.86, length: 48, angle: 0.3, x: centerX - 2.8, z: centerZ + 1.2, strength: 0.045, core: 0.014 },
-    { width: 0.68, length: 46, angle: -0.45, x: centerX + 3.2, z: centerZ + 2.2, strength: 0.034, core: 0.01 },
+    { width: 1.2, length: 48, angle: -0.78, x: centerX + 0.6, z: centerZ - 0.8, strength: 0.078, core: 0.025 },
+    { width: 0.86, length: 48, angle: 0.24, x: centerX - 2.5, z: centerZ + 1.6, strength: 0.058, core: 0.018 },
+    { width: 0.68, length: 46, angle: 0.72, x: centerX + 3.2, z: centerZ - 0.7, strength: 0.046, core: 0.014 },
   ] : [
-    { width: 1.8, length: 66, angle: -0.26, x: centerX, z: centerZ, strength: 0.064, core: 0.021 },
-    { width: 1.15, length: 64, angle: 0.13, x: centerX + 3.8, z: centerZ - 0.9, strength: 0.041, core: 0.014 },
-    { width: 0.8, length: 60, angle: -0.51, x: centerX - 4.4, z: centerZ + 2.6, strength: 0.031, core: 0.01 },
+    { width: 1.55, length: 66, angle: -0.58, x: centerX + 1.2, z: centerZ - 0.8, strength: 0.064, core: 0.02 },
+    { width: 0.95, length: 64, angle: 0.14, x: centerX - 3.8, z: centerZ + 1.5, strength: 0.044, core: 0.014 },
+    { width: 0.7, length: 62, angle: 0.58, x: centerX + 5.2, z: centerZ + 0.8, strength: 0.034, core: 0.011 },
   ];
 
   beamSpecs.forEach((spec, index) => {
@@ -159,7 +165,7 @@ function createShadePatch(scene, mobile) {
         blending: THREE.AdditiveBlending,
       }),
     );
-    beam.rotation.set(-Math.PI / 2, 0, spec.angle);
+    orientGroundBeam(beam, spec.angle);
     beam.position.set(spec.x, 0.026 + index * 0.001, spec.z);
     scene.add(beam);
   });

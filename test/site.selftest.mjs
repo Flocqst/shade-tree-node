@@ -7,6 +7,8 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grovePublicKeyRawBase64, verifyPublicGroveAttestation } from "../lib/public-grove.mjs";
+import * as THREE from "../docs/post/vendor/three-0.185.1/three.module.min.js";
+import { orientGroundBeam } from "../docs/post/grove.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "docs", "post");
@@ -149,7 +151,18 @@ check("Three.js is pinned locally with its license", /three-0\.185\.1\/three\.mo
 check("home scene uses WebGL when available, including mobile", /connection\?\.saveData/.test(loader) && /getContext\("webgl2"/.test(loader) && /import\("\.\/grove\.js"\)/.test(loader) && !/compactOrCoarse/.test(loader));
 check("home scene camera follows the stacked-layout breakpoint", /matchMedia\("\(max-width: 900px\)"\)/.test(landingScene) && /@media \(max-width: 900px\)/.test(landingCss));
 check("home scene is an irregular canopy map with one through-running pixel route", /targetCount = mobile \? 18 : 29/.test(landingScene) && /crowded = trees\.some/.test(landingScene) && /SphereGeometry\(1, 7, 5\)/.test(landingScene) && /CatmullRomCurve3/.test(landingScene) && /segmentCount = mobile \? 36 : 52/.test(landingScene) && /new THREE\.Vector3\(-0\.7, 0\.34, 13\.5\)/.test(landingScene) && /new THREE\.Vector3\(18\.0, 0\.34, -7\.4\)/.test(landingScene) && /const destination = new THREE\.Mesh/.test(landingScene) && /positionPacket/.test(landingScene));
-check("home scene uses larger trees, a feathered shade field, and three crossing sunbeams", /treeScale = mobile \? 1\.08 : 1\.07/.test(landingScene) && /height = \(2\.5 \+ random\(\) \* 1\.8\) \* treeScale/.test(landingScene) && /inCopyClearing/.test(landingScene) && /new THREE\.PlaneGeometry\(mobile \? 17 : 34, mobile \? 27 : 23\)/.test(landingScene) && /new THREE\.ShaderMaterial/.test(landingScene) && /smoothstep\(0\.56 \+ edge, 0\.99 \+ edge/.test(landingScene) && /const beamSpecs = mobile \? \[/.test(landingScene) && /\{ width: 1\.2, length: 48, angle: -0\.08/.test(landingScene) && /\{ width: 1\.8, length: 66, angle: -0\.26/.test(landingScene) && /beamSpecs\.forEach/.test(landingScene) && /beamStrength: \{ value: spec\.strength \}/.test(landingScene) && !/new THREE\.ShapeGeometry\(shape\)/.test(landingScene) && /new THREE\.Fog\(NIGHT, 35, 60\)/.test(landingScene) && /new THREE\.Vector3\(mobile \? 8 : 14, mobile \? 31 : 28, mobile \? 18 : 18\)/.test(landingScene) && /desktopViewHeight = Math\.min\(35, Math\.max\(22, 35 \/ aspect\)\)/.test(landingScene) && /viewHeight = mobile \? 28 : desktopViewHeight/.test(landingScene) && /renderer\.shadowMap\.enabled = !mobile/.test(landingScene));
+check("home scene uses larger trees, a feathered shade field, and three crossing sunbeams", /treeScale = mobile \? 1\.08 : 1\.07/.test(landingScene) && /height = \(2\.5 \+ random\(\) \* 1\.8\) \* treeScale/.test(landingScene) && /inCopyClearing/.test(landingScene) && /new THREE\.PlaneGeometry\(mobile \? 17 : 34, mobile \? 27 : 23\)/.test(landingScene) && /new THREE\.ShaderMaterial/.test(landingScene) && /smoothstep\(0\.56 \+ edge, 0\.99 \+ edge/.test(landingScene) && /const beamSpecs = mobile \? \[/.test(landingScene) && /\{ width: 1\.2, length: 48, angle: -0\.78/.test(landingScene) && /\{ width: 0\.68, length: 46, angle: 0\.72/.test(landingScene) && /\{ width: 1\.55, length: 66, angle: -0\.58/.test(landingScene) && /\{ width: 0\.7, length: 62, angle: 0\.58/.test(landingScene) && /beamSpecs\.forEach/.test(landingScene) && /beamStrength: \{ value: spec\.strength \}/.test(landingScene) && /orientGroundBeam\(beam, spec\.angle\)/.test(landingScene) && !/new THREE\.ShapeGeometry\(shape\)/.test(landingScene) && /new THREE\.Fog\(NIGHT, 35, 60\)/.test(landingScene) && /new THREE\.Vector3\(mobile \? 8 : 14, mobile \? 31 : 28, mobile \? 18 : 18\)/.test(landingScene) && /desktopViewHeight = Math\.min\(35, Math\.max\(22, 35 \/ aspect\)\)/.test(landingScene) && /viewHeight = mobile \? 28 : desktopViewHeight/.test(landingScene) && /renderer\.shadowMap\.enabled = !mobile/.test(landingScene));
+
+const beamAngles = [-0.78, 0.24, 0.72, -0.58, 0.14, 0.58];
+const beamDirections = beamAngles.map((angle) => {
+  const beam = new THREE.Object3D();
+  orientGroundBeam(beam, angle);
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(beam.quaternion);
+  const direction = new THREE.Vector3(0, 1, 0).applyQuaternion(beam.quaternion);
+  const expected = new THREE.Vector3(-Math.sin(angle), 0, -Math.cos(angle));
+  return { normal, direction, expected };
+});
+check("ground-beam rotations stay flat and produce distinct directions", beamDirections.every(({ normal, direction, expected }) => normal.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-6 && direction.distanceTo(expected) < 1e-6) && new Set(beamDirections.map(({ direction }) => `${direction.x.toFixed(4)},${direction.z.toFixed(4)}`)).size === beamAngles.length);
 check("Grove lowers quality on mobile instead of disabling WebGL", /const lowQuality = window\.matchMedia/.test(groveLoader) && /quality: lowQuality \? "low" : "high"/.test(groveLoader) && /getContext\("webgl2"/.test(groveLoader) && /import\("\.\/scene\.js"\)/.test(groveLoader));
 check("both scenes handle reduced motion, visibility, DPR, and context loss", [landingScene, groveScene].every((scene) => /reducedMotion/.test(scene) && /IntersectionObserver/.test(scene) && /devicePixelRatio/.test(scene) && /webglcontextlost/.test(scene)));
 
