@@ -23,7 +23,10 @@ import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 export const SLOT_STATE_VERSION = 1;
-export const DEFAULT_SLOT_LOCK_TIMEOUT_MS = 2_000;
+// Durable fsyncs can serialize slowly on loaded or network-backed home volumes.
+// Ten seconds still fails closed on a stale lock while allowing a bounded burst of
+// Proxy/Rust allocators to drain without sacrificing slot uniqueness.
+export const DEFAULT_SLOT_LOCK_TIMEOUT_MS = 10_000;
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
 export class ShadeTreeSlotStateError extends Error {

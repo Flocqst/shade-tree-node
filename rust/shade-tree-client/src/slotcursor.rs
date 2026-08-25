@@ -20,7 +20,10 @@ use serde::{Deserialize, Serialize};
 pub const K_SLOTS: u64 = 8;
 pub const MAX_LIMIT: u64 = 65535;
 pub const STATE_VERSION: u64 = 1;
-pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+// Durable fsyncs can serialize slowly on loaded or network-backed home volumes.
+// Ten seconds still fails closed on a stale lock while allowing a bounded burst of
+// JavaScript/Rust allocators to drain without sacrificing slot uniqueness.
+pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Allocation {
