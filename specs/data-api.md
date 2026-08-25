@@ -199,7 +199,7 @@ event index, and registrar attribution all verify. It keeps admission and slash 
 and suppresses exact values below a five-commitment contract cohort. See
 [`docs/GROVE-ONCHAIN-ACTIVITY.md`](../docs/GROVE-ONCHAIN-ACTIVITY.md). The v2 handler additionally
 rejects a head or relay generation time older than one hour. Its machine-readable contract is served from
-`/api/v2/openapi.json` and checked into `docs/post/api/openapi-v2.json`.
+`/api/v2/openapi.json` and checked into `docs/post/openapi-v2.json`.
 
 There is no public history-query or pagination endpoint. V1 carries its bounded
 history inside the signed head. An immutable snapshot store and a separately

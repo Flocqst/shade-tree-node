@@ -45,7 +45,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "../docs/post/api/openapi-v2.json#/components/schemas/PublicGroveV2"
+                $ref: "../docs/post/openapi-v2.json#/components/schemas/PublicGroveV2"
         "304":
           description: The supplied If-None-Match weakly matches the current ETag.
         "400":

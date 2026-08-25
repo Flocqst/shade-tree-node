@@ -74,7 +74,7 @@ const groveApiContract = read("api/_grove-contract.mjs");
 const groveV2Api = read("api/grove-v2.mjs");
 const groveV2ApiContract = read("api/_grove-v2-contract.mjs");
 const groveOnchainApiContract = read("api/_grove-onchain-contract.mjs");
-const groveV2OpenApi = JSON.parse(read("api/openapi-v2.json"));
+const groveV2OpenApi = JSON.parse(read("openapi-v2.json"));
 const uptimeWorkflow = readFileSync(join(ROOT, ".github", "workflows", "uptime-probe.yml"), "utf8");
 const pathGraphic = read("fig/shade-tree-path.svg");
 const mobilePathGraphic = read("fig/shade-tree-path-mobile.svg");
@@ -201,7 +201,7 @@ for (const asset of [
   "api/grove-v2.mjs",
   "api/_grove-v2-contract.mjs",
   "api/_grove-onchain-contract.mjs",
-  "api/openapi-v2.json",
+  "openapi-v2.json",
   "agent/index.html",
   "operator/index.html",
   "sitemap.xml",
@@ -265,7 +265,7 @@ check("CSP limits reads and closes objects and workers", csp.includes("connect-s
 check("browser reads only the versioned same-origin Sepolia Data API and bundled fallback", /const LIVE_URL = "\/api\/v2\/data\/grove\/sepolia\/head"/.test(groveLoader) && /const NETWORK = "sepolia"/.test(groveLoader) && /value\.network === NETWORK/.test(groveLoader) && /const FALLBACK_URL = "\/grove\/network\.fallback\.json"/.test(groveLoader) && !/raw\.githubusercontent|fetch\([^)]*\.onion/i.test(groveLoader));
 check("browser polling uses normal HTTP cache revalidation for API ETags", /const POLL_INTERVAL_MS = 5 \* 60 \* 1_000/.test(groveLoader) && /cache:\s*"default"/.test(groveLoader) && !/cache:\s*"no-store"/.test(groveLoader));
 check("browser verifies a pinned Ed25519 snapshot before rendering", /crypto\.subtle\.verify/.test(groveLoader) && /invalid public snapshot/.test(groveLoader) && groveLoader.includes(grovePublicKeyRawBase64(grovePublicKey)));
-check("Vercel exposes v1 unchanged and adds signed Grove v2 plus OpenAPI", config.rewrites?.length === 4 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/data/grove/sepolia/head" && rewrite.destination === "/api/grove-v2") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/openapi.json" && rewrite.destination === "/api/openapi-v2.json") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
+check("Vercel exposes v1 unchanged and adds signed Grove v2 plus OpenAPI", config.rewrites?.length === 4 && config.rewrites.some((rewrite) => rewrite.source === "/api/v1/data/grove/sepolia/head" && rewrite.destination === "/api/grove") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/data/grove/sepolia/head" && rewrite.destination === "/api/grove-v2") && config.rewrites.some((rewrite) => rewrite.source === "/api/v2/openapi.json" && rewrite.destination === "/openapi-v2.json") && config.rewrites.some((rewrite) => rewrite.source === "/grove/network.json" && rewrite.destination === "/api/grove"));
 check("Vercel deploys bounded Grove functions instead of an external rewrite", config.functions?.["api/grove.mjs"]?.maxDuration === 5 && config.functions?.["api/grove-v2.mjs"]?.maxDuration === 5 && !/raw\.githubusercontent/.test(JSON.stringify(config)));
 check("Grove API validates a fixed, bounded, signed Sepolia source", /GROVE_SNAPSHOT_URL = "https:\/\/api\.github\.com\/repos\/dmarzzz\/shade-tree-node\/contents\/grove\.json\?ref=network-state"/.test(groveApiContract) && /GROVE_NETWORK = "sepolia"/.test(groveApiContract) && /value\.network === GROVE_NETWORK/.test(groveApiContract) && /GROVE_MAX_BYTES = 64 \* 1024/.test(groveApiContract) && /verifyBytes/.test(groveApiContract));
 check("Grove API controls caching and byte validators without CORS", /Vercel-CDN-Cache-Control/.test(groveApi) && /createHash\("sha256"\)/.test(groveApi) && /matchesIfNoneMatch/.test(groveApi) && /"Cache-Control": "no-store"/.test(groveApi) && /if-none-match/.test(groveApi) && /ETag/.test(groveApi) && !/Access-Control-Allow-Origin/i.test(groveApi));
