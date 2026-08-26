@@ -89,11 +89,13 @@ elif command -v openssl >/dev/null 2>&1; then SHA_TOOL=openssl
 else die "no sha256 tool found (need sha256sum, shasum, or openssl); refusing to install unverified"
 fi
 
+# Each tool prints the digest in a different frame: "<hex>  <file>" for the first two,
+# "SHA256(<file>)= <hex>" for openssl. Only the hex is returned.
 sha256_of() {
   case "$SHA_TOOL" in
-    sha256sum) set -- $(sha256sum "$1"); printf '%s' "$1" ;;
-    shasum)    set -- $(shasum -a 256 "$1"); printf '%s' "$1" ;;
-    openssl)   set -- $(openssl dgst -sha256 "$1"); eval "printf '%s' \"\$$#\"" ;;
+    sha256sum) sha256sum "$1" | { read -r hex _; printf '%s' "$hex"; } ;;
+    shasum)    shasum -a 256 "$1" | { read -r hex _; printf '%s' "$hex"; } ;;
+    openssl)   openssl dgst -sha256 "$1" | sed 's/^.*= *//' | tr -d '\n' ;;
   esac
 }
 
@@ -104,8 +106,8 @@ sha256_of() {
 # user-info (curl would connect to whatever follows the "@"), the exact host, an optional
 # numeric port, nothing else.
 case "$BASE" in
-  https://*) PROTO=https ;;
-  file://*)  PROTO=file ;;
+  https://*) PROTO="https" ;;
+  file://*)  PROTO="file" ;;
   http://*)
     AUTHORITY="${BASE#http://}"
     AUTHORITY="${AUTHORITY%%/*}"
