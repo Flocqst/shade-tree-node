@@ -17,8 +17,10 @@ rules that OpenAPI cannot express.
 The exact number counts gateway identities in the bootnode directory at
 observation time. The observer fetches `/directory` over Tor and verifies its
 signature against the pinned directory signer before counting entries. The
-visual canopy regenerates aggregate tree clusters from only that count and the
-rounded observation time. Its trees are not one-to-one node markers.
+visual canopy regenerates one tree for each unit in that aggregate count, using
+only the count and rounded observation time. A tree does not reveal or persist
+the identity of a particular node; all non-geographic positions regenerate on
+each observation.
 
 Public copy calls the bootnode the **Elder Tree** and its signed directory the
 **Canopy**. These names do not change the observer input or the signed schema.
@@ -355,8 +357,9 @@ The v1 collector projection must never publish:
 - the signed directory or any other raw bootnode response.
 
 The canopy is regenerated from only the aggregate count and rounded snapshot
-time, with density capped for rendering performance. Its roots are an
-illustration of announcements, not observed traffic.
+time. It renders exactly one non-geographic tree for each announced identity;
+positions are not stable across observations. Its roots are an illustration of
+announcements, not observed traffic.
 
 ## Safe derivations
 
