@@ -51,9 +51,9 @@ node deploy/v4/preflight.mjs \
 
 ## 2. Prepare secret inputs outside Git
 
-Restore each host's identity backup into a controller directory. The role requires complete
-`gateway-hs/` material; an Elder host also requires `bootnode-hs/` and
-`bootnode-signer.key`. Before any remote mutation it derives the onions from the Tor secret keys
+Restore each host's identity backup into a controller directory. A `node` target requires complete
+`gateway-hs/` material; an `elder` target requires `bootnode-hs/` and `bootnode-signer.key`;
+the backward-compatible `elder-and-node` mode requires both. Before any remote mutation it derives the onions from the Tor secret keys
 and compares the Elder onion and Canopy signer to the public record.
 
 Keep the operator member file, slashing key, gateway-operator key, and credentialed RPC URL in
@@ -77,7 +77,7 @@ replace its placeholders. Set host variables there or in encrypted vars:
 
 ```yaml
 shade_tree_deployment_record: /absolute/controller/path/network/research-v4/deployment.json
-shade_tree_target_mode: elder-and-node # or node
+shade_tree_target_mode: elder # or node; elder-and-node remains available for a colocated test host
 shade_tree_admin_cidr: 198.51.100.24/32
 shade_tree_identity_source: /absolute/controller/path/restored-host-identity
 shade_tree_members_file: /absolute/controller/path/operator-members.json

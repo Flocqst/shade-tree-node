@@ -13,6 +13,8 @@
 //   3. SHADE_TREE_BOOTNODE_ONION=<onion> (GAP-6, gateway-only): NO shade-tree-bootnode unit, NO bootnode HS
 //      block, the heartbeat announces to the REMOTE onion (with/without .onion suffix accepted),
 //      the gateway unit is byte-identical to the default one, a malformed onion is rejected.
+//   3b. SHADE_TREE_ELDER_ONLY=1: ONLY the Elder hidden service + unit are rendered; no gateway
+//      identity, gateway unit, or heartbeat exists, and incompatible gateway tunables fail closed.
 //   4. SHADE_TREE_GATEWAY_REGION passthrough into the heartbeat unit; invalid bucket rejected.
 //   5. Nothing outside <dir> is touched (the render dir is the only side effect).
 //   6. SHADE_TREE_HELIOS=1 (T-DEV-9b, opt-in): a 4th unit shade-tree-helios.service (hardened, loopback-only,
@@ -119,7 +121,7 @@ async function main() {
     ok(/MEMBERS_DEST="\/etc\/shade-tree\/members\.json"/.test(bootstrapSource) && /install -o root -g "\$RUN_USER" -m 0640 "\$MEMBERS_SOURCE" "\$MEMBERS_DEST"/.test(bootstrapSource), "live bootstrap installs the invited admission root as root-owned and node-readable");
     ok(!/chown "\$RUN_USER:\$RUN_USER" "\$MEMBERS_DEST"/.test(bootstrapSource) && /ProtectSystem=strict/.test(bootstrapSource) && /ReadWritePaths=\$\{SHADE_TREE_DIR\}\/deploy-state/.test(bootstrapSource), "the node cannot make its trusted member set service-writable through the systemd sandbox");
     ok(/else\s+# An omitted peer list is the off switch[\s\S]*?rm -f "\$FLEET_TALLY_ENV_FILE"\s+fi/.test(bootstrapSource), "disabling the optional fleet tally removes its stale bearer-token file");
-    ok(/systemctl is-active --quiet shade-tree-gateway/.test(bootstrapSource) && /elif \[ "\$GATEWAY_WAS_ACTIVE" = "1" \]; then\s+systemctl restart shade-tree-gateway/.test(bootstrapSource), "an idempotent re-run restarts an already-running gateway so tally rotation or disablement takes effect");
+    ok(/systemctl is-active --quiet shade-tree-gateway/.test(bootstrapSource) && /elif \[ "\$WITH_GATEWAY" = "1" \] && \[ "\$GATEWAY_WAS_ACTIVE" = "1" \]; then\s+systemctl restart shade-tree-gateway/.test(bootstrapSource), "an idempotent re-run restarts an already-running gateway so tally rotation or disablement takes effect");
     ok(/mktemp \/etc\/shade-tree\/\.fleet-tally\.env\.XXXXXX/.test(bootstrapSource) && /mv -f "\$FLEET_TALLY_ENV_TMP" "\$FLEET_TALLY_ENV_FILE"/.test(bootstrapSource), "fleet tally token rotation replaces the root-only environment file atomically");
     ok(/safe `shade-tree proxy` template/.test(deployReadme) && /exact\s+enrolled tier/.test(deployReadme) && !/shade-tree client/.test(deployReadme), "deploy README promises a template and names the operator values it cannot invent");
 
@@ -219,6 +221,32 @@ async function main() {
     // --render <dir> CLI form == env form.
     const cli = render(work, "cli", { SHADE_TREE_BOOTNODE_ONION: ONION }, ["--render", join(work, "cli")]);
     ok(cli.status === 0 && (await readAll(join(work, "cli"))).get("etc/systemd/system/shade-tree-heartbeat.service") === hb, "`--render <dir>` == SHADE_TREE_RENDER_ONLY=<dir>");
+
+    // ---------------------------------------------------------------- 3b. dedicated Elder mode
+    console.log("SHADE_TREE_ELDER_ONLY dedicated control plane:");
+    const elderOnly = render(work, "elder-only", { SHADE_TREE_ELDER_ONLY: "1" });
+    ok(elderOnly.status === 0 && /elder-only/.test(elderOnly.stdout), `Elder-only renders (${(elderOnly.stdout || "").trim()})`);
+    const elderFiles = await readAll(elderOnly.out);
+    ok([...elderFiles.keys()].join(",") === "etc/systemd/system/shade-tree-bootnode.service,etc/tor/torrc.d-shade-tree",
+      `emits torrc + Elder unit ONLY (${[...elderFiles.keys()].join(", ")})`);
+    const elderBlocks = hsBlocks(elderFiles.get("etc/tor/torrc.d-shade-tree"));
+    ok(elderBlocks.length === 1 && elderBlocks[0].dir === "/var/lib/tor/shade-tree-bootnode", "Elder-only torrc contains exactly the Elder hidden service");
+    ok(elderBlocks[0].lines[0] === "HiddenServicePort 80 127.0.0.1:8877" && elderBlocks[0].lines[1] === "HiddenServicePoWDefensesEnabled 0", "Elder-only backend remains loopback-only with PoW off by default");
+    ok(elderFiles.get("etc/systemd/system/shade-tree-bootnode.service") === elderDef, "Elder-only unit is byte-identical to the default Elder unit");
+    for (const alias of ["true", "yes", "on"]) {
+      const r = render(work, `elder-only-${alias}`, { SHADE_TREE_ELDER_ONLY: alias });
+      ok(r.status === 0 && (await readAll(r.out)).size === 2, `SHADE_TREE_ELDER_ONLY=${alias} == 1`);
+    }
+    for (const [name, env, message] of [
+      ["elder-remote", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_BOOTNODE_ONION: ONION }, /mutually exclusive/],
+      ["elder-region", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_GATEWAY_REGION: "na" }, /not valid in Elder-only mode/],
+      ["elder-helios", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_HELIOS: "1" }, /requires a gateway/],
+    ]) {
+      const r = render(work, name, env);
+      ok(r.status !== 0 && message.test(r.stderr), `${name} is rejected before rendering`);
+    }
+    const elderBad = render(work, "elder-bad", { SHADE_TREE_ELDER_ONLY: "maybe" });
+    ok(elderBad.status !== 0 && /SHADE_TREE_ELDER_ONLY must be 1 or 0/.test(elderBad.stderr), "invalid Elder-only toggle is rejected");
 
     // ---------------------------------------------------------------- 4. region passthrough
     console.log("SHADE_TREE_GATEWAY_REGION passthrough:");

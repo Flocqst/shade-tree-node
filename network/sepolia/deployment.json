@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "network": "sepolia",
+  "status": "live",
+  "protocol": {
+    "min": 4,
+    "max": 4
+  },
+  "security": {
+    "proofArtifacts": "untrusted-testnet",
+    "scope": "disposable-research",
+    "decisionRef": "operator-approved disposable v4 research Grove, 2026-08-25"
+  },
+  "services": {
+    "elder": {
+      "repository": "https://github.com/dmarzzz/shade-tree-node.git",
+      "commit": "4b141797cd4d4fd961190c0f9774f6f181e81181"
+    },
+    "node": {
+      "repository": "https://github.com/dmarzzz/shade-tree-node.git",
+      "commit": "4b141797cd4d4fd961190c0f9774f6f181e81181"
+    },
+    "heartbeat": {
+      "repository": "https://github.com/dmarzzz/shade-tree-node.git",
+      "commit": "4b141797cd4d4fd961190c0f9774f6f181e81181"
+    }
+  },
+  "elder": {
+    "onion": "a4xt55gef66pifqebadjobjpy2drsoa63bdok4toisvenmyehslaz4id.onion",
+    "canopySigner": "e0ce2892955b506c63d746ff61e06c0fdf446536c2b7b3dc68a3ba214608ca8c",
+    "admission": "open",
+    "gatewayRegistry": null
+  },
+  "admission": {
+    "paths": [
+      "invited"
+    ],
+    "roots": {
+      "invited": {
+        "membersSha256": "809d8fc762937c234650046bfdfa6cc6d9641e42762430a1961c4b8c7ab10898"
+      },
+      "staked": null,
+      "paid": null
+    },
+    "operatorAuthorization": null
+  },
+  "artifacts": {
+    "accepted": [
+      {
+        "id": "rln-0b25f824a04da3a8",
+        "verificationKeyPath": "circuits/rln/verification_key.json",
+        "sha256": "0b25f824a04da3a85f128baa6fdaa33d10baa7dd18c5e6f5935089661c68622c"
+      }
+    ],
+    "legacy": null
+  },
+  "created": "2026-08-25",
+  "note": "Disposable invited-only Protocol v4 research Grove: one dedicated Elder and three dedicated Shade Tree nodes. Current proof artifacts are explicitly untrusted testnet material."
+}

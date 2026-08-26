@@ -249,8 +249,9 @@ function randomFrom(seed) {
 function drawFallback(snapshot) {
   fallback.querySelectorAll(".fallback-grove").forEach((element) => element.remove());
   const count = snapshot.nodes.announced;
-  const patchCount = Math.min(30, grovePatchCount(count, "high"));
+  const patchCount = grovePatchCount(count, "high");
   const random = randomFrom(hashSeed(`${snapshot.observedAt}:${count}`));
+  const trees = document.createDocumentFragment();
   for (let index = 0; index < patchCount; index += 1) {
     const vertical = 1 - (2 * (index + 0.5)) / patchCount;
     const radius = Math.sqrt(1 - vertical * vertical);
@@ -259,14 +260,16 @@ function drawFallback(snapshot) {
     const depth = Math.sin(angle) * radius;
     const grove = document.createElement("span");
     grove.className = "fallback-grove";
+    grove.dataset.announcedIdentity = "";
     grove.style.setProperty("--x", `${50 + horizontal * 39}%`);
     grove.style.setProperty("--y", `${50 - vertical * 39}%`);
     grove.style.setProperty("--scale", (0.58 + (depth + 1) * 0.32).toFixed(2));
     grove.style.setProperty("--alpha", (0.34 + (depth + 1) * 0.31).toFixed(2));
     grove.style.setProperty("--depth", String(Math.round(2 + (depth + 1) * 4)));
     grove.style.setProperty("--turn", `${Math.round((random() - 0.5) * 13)}deg`);
-    fallback.append(grove);
+    trees.append(grove);
   }
+  fallback.append(trees);
 }
 
 function setText(selector, value) {
