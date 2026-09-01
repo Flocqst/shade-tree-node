@@ -27,10 +27,6 @@ function seededRandom(seed) {
   };
 }
 
-function easeOutCubic(value) {
-  return 1 - ((1 - value) ** 3);
-}
-
 function easeInOutCubic(value) {
   return value < 0.5
     ? 4 * value * value * value
@@ -269,7 +265,7 @@ function createGrove(scene, mobile) {
 
   const grove = new THREE.Group();
   grove.add(branches, crowns);
-  grove.scale.y = 0.02;
+  grove.scale.y = 1;
   scene.add(grove);
 
   const selectedTree = trees.at(-1);
@@ -524,8 +520,6 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   function render(time = startedAt) {
     if (disposed) return;
     const elapsed = Math.max(0, time - startedAt);
-    const growth = reducedMotion ? 1 : easeOutCubic(Math.min(1, elapsed / 900));
-    grove.scale.y = Math.max(0.02, growth);
 
     smoothX += (pointerX - smoothX) * 0.04;
     smoothY += (pointerY - smoothY) * 0.04;

@@ -200,6 +200,8 @@ img {
   color: var(--pulse);
 }
 
+.home-hero .nav-lab { display: none; }
+
 .home-hero {
   position: relative;
   min-height: clamp(43rem, 92svh, 56rem);
@@ -245,7 +247,7 @@ img {
 .forest-fallback {
   position: absolute;
   inset: 5% -3% 0 36%;
-  opacity: 0.84;
+  opacity: 0;
   transition: opacity 500ms ease;
 }
 
@@ -271,7 +273,7 @@ img {
   transform-origin: right;
 }
 
-.grove-stage.is-live .forest-fallback { opacity: 0; }
+.grove-stage.use-fallback .forest-fallback { opacity: 0.84; }
 
 .forest-fallback i {
   position: absolute;
