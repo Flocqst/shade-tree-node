@@ -1,3 +1,5 @@
+/* global document, IntersectionObserver, requestAnimationFrame, window */
+
 /* Glyph grove band: ascii trees behind the getting-started section.
    The canvas measures [data-clearing] elements and parts the glyphs
    around them with a feathered edge, so content sits in clearings. */

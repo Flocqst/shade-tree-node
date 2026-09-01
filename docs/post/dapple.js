@@ -1,3 +1,5 @@
+/* global document, IntersectionObserver, requestAnimationFrame, window */
+
 /* Dappled canopy light behind the how-it-works section: two drifting
    noise fields multiplied into sun-through-leaves patches, leaf-green
    warming to pulse gold, over the section's own clearing ground.
