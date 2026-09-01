@@ -15,7 +15,10 @@
   <link rel="canonical" href="https://shade-tree-node.vercel.app/">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./site.css">
+  <link rel="stylesheet" href="./fusion.css">
   <script type="module" src="./site.js"></script>
+  <script src="./glyphgrove.js" defer></script>
+  <script src="./dapple.js" defer></script>
   <title>Shade Tree Grove</title>
 </head>
 <body class="home-page">
@@ -61,86 +64,82 @@
       <p>The grove of Shade Trees gives agents anonymous egress when the clearnet <a href="./research/">won’t let them through</a>.</p>
     </section>
 
-    <section class="role-trails" aria-label="Ways to use Shade Tree Grove">
-      <article id="proxy" class="role">
-        <header class="role-intro">
-          <p class="route-label"><span>Seek cover</span> Primary route</p>
-          <h2>For agents</h2>
-          <a class="role-link" href="./agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
+    <section class="role-trails glyph-grove" aria-label="Ways to use Shade Tree Grove">
+      <canvas class="glyph-canvas" aria-hidden="true"></canvas>
+      <div class="grove-inner">
+        <header class="grove-title" data-clearing>
+          <p class="tool-label">cli &middot; agents &middot; operators</p>
+          <h2>Get started</h2>
         </header>
-        <div class="role-tools">
-          <p class="tool-label">01 · Install the CLI</p>
-          <div class="command agent-install" aria-label="Install Shade Tree Grove for an agent">
-            <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
-            <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
-          </div>
-          <div class="handoff" aria-label="Let another agent handle setup">
-            <div class="handoff-copy">
-              <span class="handoff-step">02 · Hand off setup</span>
-              <strong>Let your agent handle setup</strong>
-              <span>Using Hermes, OpenClaw, or another agent? Copy the brief and send it over.</span>
-            </div>
-            <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" data-copy-noun="Setup brief" aria-label="Copy Shade Tree Grove setup brief for an AI agent">copy agent brief</button>
-          </div>
-          <code id="agent-setup-task" class="copy-fallback" hidden>Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
-        </div>
-      </article>
 
-      <div class="trail-junction" aria-hidden="true">
-        <i></i>
-        <span>Shade Tree<br>Grove</span>
-        <i></i>
+        <article id="proxy" class="role" data-clearing>
+          <header class="role-head">
+            <h2>For agents</h2>
+          </header>
+          <div class="role-body">
+            <ol class="steps">
+              <li>
+                <span class="step-num" aria-hidden="true">01</span>
+                <div class="step-body">
+                  <p class="step-label">Install the CLI</p>
+                  <div class="command agent-install" aria-label="Install Shade Tree Grove for an agent">
+                    <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
+                    <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <span class="step-num" aria-hidden="true">02</span>
+                <div class="step-body">
+                  <p class="step-label">Agent setup</p>
+                  <button class="copy-command task-copy" type="button" data-copy="Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source." data-copy-target="agent-setup-task" data-copy-noun="Setup brief" aria-label="Copy Shade Tree Grove setup brief for an AI agent">copy agent brief</button>
+                </div>
+              </li>
+            </ol>
+            <code id="agent-setup-task" class="copy-fallback" hidden>Add Shade Tree Grove to this agent by following https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md. Install the CLI with npm install --global git+https://github.com/dmarzzz/shade-tree-node.git, configure only an operator-supplied v4 access profile, then launch this agent with shade-tree run -- &lt;agent-command&gt;. Do not use the retired Sepolia records or invent profile values. If anything is missing, ask me for the public profile values and have me load the member secret through the guide's hidden prompt. Never put the secret in arguments, logs, or source.</code>
+          </div>
+        </article>
+
+        <article id="node" class="role" data-clearing>
+          <header class="role-head">
+            <h2>For shade providers</h2>
+            <a class="role-link" href="./operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
+          </header>
+          <div class="role-body">
+            <ol class="steps">
+              <li>
+                <span class="step-num" aria-hidden="true">01</span>
+                <div class="step-body">
+                  <p class="step-label">Install from a checkout</p>
+                  <div class="command" aria-label="Install a Shade Tree node">
+                    <code>git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link</code>
+                    <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link" aria-label="Copy node installation commands">copy install</button>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <span class="step-num" aria-hidden="true">02</span>
+                <div class="step-body">
+                  <p class="step-label">Mint your node identity</p>
+                  <div class="command" aria-label="Create the node identity">
+                    <code>shade-tree join node</code>
+                    <button class="copy-command" type="button" data-copy="shade-tree join node" aria-label="Copy join command">copy join</button>
+                  </div>
+                </div>
+              </li>
+            </ol>
+          </div>
+        </article>
       </div>
-
-      <article id="node" class="role">
-        <header class="role-intro">
-          <p class="route-label"><span>Provide cover</span> Side branch</p>
-          <h2>Run a Shade Tree node</h2>
-          <a class="role-link" href="./operator/">Operator guide <span aria-hidden="true">&#8594;</span></a>
-        </header>
-        <div class="role-tools">
-          <p class="tool-label">Start a node</p>
-          <div class="command" aria-label="Install and prepare a Shade Tree node">
-            <code>git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node</code>
-            <button class="copy-command" type="button" data-copy="git clone https://github.com/dmarzzz/shade-tree-node.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link &amp;&amp; shade-tree join node" aria-label="Copy node operator installation commands">copy install</button>
-          </div>
-        </div>
-      </article>
     </section>
 
-    <div class="common-root" aria-label="Shared Shade Tree protocol">
-      <span>Common root</span>
-      <strong>Both paths meet in one protocol.</strong>
-      <em>Tor → private proof → local enforcement</em>
-      <a href="#how-title">How it works <span aria-hidden="true">&#8595;</span></a>
-    </div>
-
     <section class="how-panel" aria-labelledby="how-title">
+      <canvas class="shade-canvas" aria-hidden="true"></canvas>
       <h2 id="how-title">How it works</h2>
-      <div class="how-stack">
-        <article class="how-mechanism">
-          <div class="how-copy">
-            <h3>Reputation gate</h3>
-            <p>Reputation comes from the admission policy, not the proof. Operators admit invited, staked, or paid Merkle roots. The Proxy uses Groth16 RLN to prove its rate-commitment leaf belongs to one root without revealing which leaf. Epoch-scoped nullifiers let each node enforce its local tunnel budget.</p>
-          </div>
-          <picture class="how-visual reputation-figure">
-            <source media="(max-width: 900px)" srcset="./fig/shade-tree-reputation-mobile.svg" type="image/svg+xml" width="720" height="570">
-            <img src="./fig/shade-tree-reputation.svg" width="1600" height="600" loading="lazy" decoding="async" alt="An operator admits invited, staked, or paid Merkle roots. A Proxy proves membership of a hidden rate-commitment leaf with Groth16 RLN. A Shade Tree node checks an epoch-scoped nullifier against its local tunnel budget.">
-          </picture>
-        </article>
-        <article class="how-mechanism">
-          <div class="how-copy">
-            <h3>Network path</h3>
-            <p>The Proxy verifies a signed Canopy, selects a Shade Tree node, and sends a target-bound CONNECT tunnel through <a href="https://www.torproject.org/">Tor</a> to the node’s <a href="https://community.torproject.org/onion-services/overview/">onion service</a>. The node verifies the proof before dialing the destination. The Elder Tree handles discovery and stays off the traffic path.</p>
-          </div>
-          <picture class="how-visual network-figure">
-            <source media="(max-width: 900px)" srcset="./fig/shade-tree-path-mobile.svg" type="image/svg+xml" width="720" height="820">
-            <img src="./fig/shade-tree-path.svg" width="1600" height="760" loading="lazy" decoding="async" alt="The Proxy reads a signed Canopy from the Elder Tree, then sends a proof-gated tunnel through Tor to a Shade Tree node and the destination. The Elder Tree is outside the traffic path.">
-          </picture>
-          <p class="boundary">Tor exit addresses are public. Shade Tree Grove gates each tunnel and publishes no egress-IP list. Destinations still see and can block a node IP.</p>
-        </article>
-      </div>
-      <p class="protocol-link"><a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">Full protocol specification</a></p>
+      <p class="how-lede">Shade Tree is a Tor-based egress layer. The node sees <a href="https://www.torproject.org/">Tor</a>, not the Proxy host&rsquo;s source IP. Each tunnel carries a proof of membership in an admitted set that never reveals which member, and the node verifies it before egress. Read the <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">full protocol specification</a>.</p>
+      <figure class="how-figure">
+        <img src="./fig/shade-tree-readme.svg" width="1200" height="700" loading="lazy" decoding="async" alt="Top row, the reputation gate: an admitted set leads to a hidden leaf and proof, which a Shade Tree node verifies. Bottom row, the network path: an agent's local Proxy tunnels through Tor to a Shade Tree node and out to the destination. The Elder Tree only serves the signed Canopy for discovery and carries no agent traffic.">
+      </figure>
     </section>
   </main>
 
