@@ -4,17 +4,56 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <meta name="description" content="The Shade Tree Grove research note: access-gated onion egress for local AI." />
+  <meta name="description" content="Research on anonymous, proof-gated HTTPS egress for local AI agents using Tor onion services and rate-limited zero-knowledge membership proofs." />
   <meta name="theme-color" content="#f7f5ef" />
-  <meta property="og:title" content="Access-gated onion egress · Shade Tree Grove" />
-  <meta property="og:description" content="The design, measurements, and open questions behind Shade Tree Grove." />
+  <meta property="og:title" content="Anonymous AI Agent Egress over Tor · Shade Tree Grove" />
+  <meta property="og:description" content="Research on proof-gated Tor egress for AI agents, including measurements, privacy boundaries, and open questions." />
   <meta property="og:type" content="article" />
   <meta property="og:url" content="https://shade-tree-node.vercel.app/research/" />
+  <meta property="og:site_name" content="Shade Tree Grove" />
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="A sparse grove casting a patch of shade" />
   <meta name="twitter:card" content="summary_large_image" />
   <link rel="canonical" href="https://shade-tree-node.vercel.app/research/" />
-  <title>Access-gated onion egress · Shade Tree Grove</title>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": "Access-gated onion egress for local AI",
+      "description": "Research on anonymous, proof-gated HTTPS egress for local AI agents using Tor onion services and rate-limited zero-knowledge membership proofs.",
+      "image": "https://shade-tree-node.vercel.app/fig/shade-tree-og.png",
+      "datePublished": "2026-07-05",
+      "dateModified": "2026-09-01",
+      "author": {
+        "@type": "Person",
+        "name": "dmarz",
+        "url": "https://github.com/dmarzzz"
+      },
+      "mainEntityOfPage": "https://shade-tree-node.vercel.app/research/"
+    }
+  </script>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Shade Tree Grove",
+          "item": "https://shade-tree-node.vercel.app/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Research"
+        }
+      ]
+    }
+  </script>
+  <title>Anonymous AI Agent Egress over Tor · Shade Tree Grove</title>
   <style>
     html {
       color: #1a1a1a;
@@ -261,7 +300,7 @@
       width: min(25rem, 39%);
       transform: translateY(-50%);
     }
-    .shade-lockup h1 {
+    .shade-lockup .title {
       margin: 0.08em 0 0;
       font-size: clamp(3rem, 6vw, 5.75rem);
       font-weight: 500;
@@ -354,7 +393,7 @@
         padding: 1.4rem 0 1.6rem;
         transform: none;
       }
-      .shade-lockup h1 {
+      .shade-lockup .title {
         font-size: clamp(3rem, 17vw, 4.4rem);
       }
       .shade-dek {
@@ -379,13 +418,13 @@
 <img src="../fig/shade-tree-banner.webp" width="2172" height="724" alt="" />
 <div class="shade-lockup">
 <p class="shade-eyebrow">Research preview</p>
-<h1 class="title">Shade Tree Grove</h1>
+<p class="title">Shade Tree Grove</p>
 <p class="shade-tagline">A small grove for local AI.</p>
 <p class="shade-dek">Access-gated HTTPS tunnels through Tor onion services.</p>
-<p class="shade-links"><a href="/">Home</a> <a href="https://github.com/dmarzzz/shade-tree-node">Source</a> <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/OPERATOR.md">Run a node</a></p>
+<p class="shade-links"><a href="/">Home</a> <a href="/agent/">Agent guide</a> <a href="/operator/">Run a node</a> <a href="https://github.com/dmarzzz/shade-tree-node">Source</a></p>
 </div>
 </header>
-<p class="article-kicker">Research note · August 2026</p>
+<p class="article-kicker">Research note · <a href="https://github.com/dmarzzz">dmarz</a> · August 2026</p>
 <h1 id="access-gated-onion-egress" class="article-title">Access-gated
 onion egress for local AI</h1>
 <p class="article-lede">Shade Tree is an experiment in carrying HTTPS

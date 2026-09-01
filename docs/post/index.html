@@ -3,13 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Add Shade Tree Grove to an agent, or run a node to provide cover.">
+  <meta name="description" content="Tor-based HTTPS egress for local AI agents, with anonymous proof-gated access that avoids accounts and stable client identities.">
   <meta name="theme-color" content="#07100c">
-  <meta property="og:title" content="Shade Tree Grove">
-  <meta property="og:description" content="The best shade asks for proof, not a name.">
+  <meta property="og:title" content="Tor Egress for AI Agents · Shade Tree Grove">
+  <meta property="og:description" content="Tor-based HTTPS egress for local AI agents, with anonymous proof-gated access instead of accounts or stable client identities.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/">
+  <meta property="og:site_name" content="Shade Tree Grove">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="A low-poly grove crossed by a private data path">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/">
@@ -19,7 +22,16 @@
   <script type="module" src="./site.js"></script>
   <script src="./glyphgrove.js" defer></script>
   <script src="./dapple.js" defer></script>
-  <title>Shade Tree Grove</title>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Shade Tree Grove",
+      "alternateName": "Shade Tree",
+      "url": "https://shade-tree-node.vercel.app/"
+    }
+  </script>
+  <title>Tor Egress for AI Agents · Shade Tree Grove</title>
 </head>
 <body class="home-page">
   <a class="skip-link" href="#roles">Skip to the overview</a>
@@ -75,6 +87,7 @@
         <article id="proxy" class="role" data-clearing>
           <header class="role-head">
             <h2>For agents</h2>
+            <a class="role-link" href="./agent/">Agent guide <span aria-hidden="true">&#8594;</span></a>
           </header>
           <div class="role-body">
             <ol class="steps">
@@ -83,7 +96,7 @@
                 <div class="step-body">
                   <p class="step-label">Install the CLI</p>
                   <div class="command agent-install" aria-label="Install Shade Tree Grove for an agent">
-                    <code>npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
+                    <code tabindex="0" aria-label="npm installation command">npm install --global git+https://github.com/dmarzzz/shade-tree-node.git</code>
                     <button class="copy-command" type="button" data-copy="npm install --global git+https://github.com/dmarzzz/shade-tree-node.git" aria-label="Copy npm installation command">copy install</button>
                   </div>
                 </div>
@@ -137,7 +150,7 @@
       <canvas class="shade-canvas" aria-hidden="true"></canvas>
       <h2 id="how-title">How it works</h2>
       <p class="how-lede">Shade Tree is a Tor-based egress layer. The node sees <a href="https://www.torproject.org/">Tor</a>, not the Proxy host&rsquo;s source IP. Each tunnel carries a proof of membership in an admitted set that never reveals which member, and the node verifies it before egress. Read the <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/protocol.md">full protocol specification</a>.</p>
-      <figure class="how-figure">
+      <figure class="how-figure" role="region" aria-label="Shade Tree protocol diagram" tabindex="0">
         <img src="./fig/shade-tree-readme.svg" width="1200" height="700" loading="lazy" decoding="async" alt="Top row, the reputation gate: an admitted set leads to a hidden leaf and proof, which a Shade Tree node verifies. Bottom row, the network path: an agent's local Proxy tunnels through Tor to a Shade Tree node and out to the destination. The Elder Tree only serves the signed Canopy for discovery and carries no agent traffic.">
       </figure>
     </section>

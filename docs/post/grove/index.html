@@ -3,13 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A signed aggregate view of the Shade Tree Grove. No identities, locations, or traffic.">
+  <meta name="description" content="Signed aggregate stats for the Shade Tree AI agent egress network, without publishing identities, locations, or traffic.">
   <meta name="theme-color" content="#07100c">
-  <meta property="og:title" content="Shade Tree Grove Network Stats">
+  <meta property="og:title" content="Privacy-Preserving Network Stats · Shade Tree Grove">
   <meta property="og:description" content="A privacy-preserving view of the Grove, built from signed aggregate reports.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
+  <meta property="og:site_name" content="Shade Tree Grove">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="A non-geographic canopy with one tree per announced identity">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
@@ -18,7 +21,26 @@
   <link rel="stylesheet" href="./grove.css">
   <script type="module" src="./network.js"></script>
   <script src="./file-preview.js" defer></script>
-  <title>Shade Tree Grove Network Stats</title>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Shade Tree Grove",
+          "item": "https://shade-tree-node.vercel.app/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Network stats"
+        }
+      ]
+    }
+  </script>
+  <title>Privacy-Preserving Network Stats · Shade Tree Grove</title>
 </head>
 <body class="network-page">
   <a class="skip-link" href="#grove-main">Skip to Grove details</a>

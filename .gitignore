@@ -38,6 +38,9 @@ bootnode/bootnode-state.json
 payments/registrar-state.local.json
 **/registrar-state.json
 coverage/
+playwright-report/
+test-results/
+.lighthouseci/
 
 # Mutation testing (T-TEST-10) — Stryker sandbox + HTML report are disposable
 .stryker-tmp/

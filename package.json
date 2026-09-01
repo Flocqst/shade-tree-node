@@ -46,7 +46,12 @@
     "test": "node scripts/test-all.mjs",
     "test:fast": "SHADE_TREE_FAST=1 node scripts/test-all.mjs --no-contracts",
     "test:node": "node scripts/test-all.mjs --no-contracts",
+    "test:site": "node test/site.selftest.mjs",
+    "test:site:browser": "playwright test --config=playwright.config.mjs",
+    "test:site:production": "node scripts/site-smoke.mjs",
     "test:contracts": "forge test",
+    "site:serve": "node scripts/serve-site.mjs",
+    "site:lighthouse": "npx --yes @lhci/cli@0.15.1 autorun",
     "lint": "eslint .",
     "audit:ci": "npm audit --omit=dev --audit-level=high",
     "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --lines 60 --functions 63 --branches 78 node scripts/test-all.mjs --no-contracts",
@@ -60,6 +65,8 @@
     "socks": "^2.8.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
     "@semaphore-protocol/group": "^4.14.3",
     "@semaphore-protocol/identity": "^4.14.3",
     "@semaphore-protocol/proof": "^4.14.3",

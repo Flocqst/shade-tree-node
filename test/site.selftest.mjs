@@ -31,6 +31,11 @@ function visibleWords(html) {
   return (text.match(/[A-Za-z0-9][A-Za-z0-9'-]*/g) || []).length;
 }
 
+function structuredData(html) {
+  return [...html.matchAll(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/g)]
+    .map((match) => JSON.parse(match[1]));
+}
+
 const landing = read("index.html");
 const landingCss = read("site.css");
 const fusionCss = read("fusion.css");
@@ -39,6 +44,8 @@ const dapple = read("dapple.js");
 const agentPage = read("agent/index.html");
 const operatorPage = read("operator/index.html");
 const research = read("research/index.html");
+const notFoundPage = read("404.html");
+const sitemap = read("sitemap.xml");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
 const agentGuide = readFileSync(join(ROOT, "docs", "AGENT.md"), "utf8");
 const joinGuide = readFileSync(join(ROOT, "docs", "JOIN.md"), "utf8");
@@ -120,10 +127,10 @@ check("landing reveals fully formed trees and reserves its fallback for WebGL fa
 check("landing and README lead with the agent and provider outcomes", /<h2>For agents<\/h2>/.test(landing) && !/Install the Proxy/.test(landing) && /<h2>For shade providers<\/h2>/.test(landing) && /Add Shade Tree to an agent/.test(readme) && /Run a Shade Tree node to provide cover/.test(readme));
 check("landing hero jumps to both role starts and the canonical protocol", /href="#proxy">For agents/.test(landing) && /href="#node">Run a Shade Tree node/.test(landing) && /href="https:\/\/github\.com\/dmarzzz\/shade-tree-node\/blob\/main\/specs\/protocol\.md">How it works/.test(landing) && /class="role-link" href="\.\/operator\/">Operator guide/.test(landing));
 check("About and README carry the approved linked tagline", /<section class="about-panel"[\s\S]*?<h2 id="about-title">About<\/h2>[\s\S]*?<p>The grove of Shade Trees gives agents anonymous egress when the clearnet <a href="\.\/research\/">won’t let them through<\/a>\.<\/p>[\s\S]*?<\/section>/.test(landing) && /# Shade Tree Grove\s+Cover for local agents\.\s+The grove of Shade Trees gives agents anonymous egress when the clearnet \[won’t let them\s+through\]\[research-note\]\./.test(readme));
-check("public site branding names Shade Tree Grove without renaming protocol roles", /<title>Shade Tree Grove<\/title>/.test(landing) && /<span>Shade Tree Grove<\/span>/.test(landing) && /Agent guide · Shade Tree Grove/.test(agentPage) && /Operator guide · Shade Tree Grove/.test(operatorPage) && /<title>Shade Tree Grove Network Stats<\/title>/.test(grovePage) && /Access-gated onion egress · Shade Tree Grove/.test(research) && /<h2>For shade providers<\/h2>/.test(landing) && /Prepare a Shade Tree node/.test(operatorPage));
+check("public site branding names Shade Tree Grove without renaming protocol roles", /<title>Tor Egress for AI Agents · Shade Tree Grove<\/title>/.test(landing) && /<span>Shade Tree Grove<\/span>/.test(landing) && /<title>Tor Proxy Setup for AI Agents · Shade Tree Grove<\/title>/.test(agentPage) && /<title>Run a Proof-Gated Egress Node for AI Agents · Shade Tree Grove<\/title>/.test(operatorPage) && /<title>Privacy-Preserving Network Stats · Shade Tree Grove<\/title>/.test(grovePage) && /<title>Anonymous AI Agent Egress over Tor · Shade Tree Grove<\/title>/.test(research) && /<h2>For shade providers<\/h2>/.test(landing) && /Prepare a Shade Tree node/.test(operatorPage));
 check("primary navigation restores Research", /<div class="nav-links">[\s\S]*?<a href="\.\/grove\/">Grove<\/a>[\s\S]*?<a href="\.\/research\/">Research<\/a>[\s\S]*?<a href="https:\/\/github\.com\/dmarzzz\/shade-tree-node">Source<\/a>[\s\S]*?<\/div>/.test(landing));
 check("landing explains the gate and traffic path in one compact graphic", /Shade Tree is a Tor-based egress layer/.test(landing) && /proof of membership in an admitted set/.test(landing) && /<img src="\.\/fig\/shade-tree-readme\.svg"/.test(landing) && /reputation gate/i.test(readmeGraphic) && /network path/i.test(readmeGraphic) && /Elder Tree/.test(readmeGraphic));
-check("landing uses one compact protocol figure", /<figure class="how-figure">[\s\S]*shade-tree-readme\.svg[\s\S]*<\/figure>/.test(landing) && (landing.match(/class="how-figure"/g) || []).length === 1 && !/class="how-mechanism"/.test(landing));
+check("landing uses one compact keyboard-scrollable protocol figure", /<figure class="how-figure" role="region" aria-label="Shade Tree protocol diagram" tabindex="0">[\s\S]*shade-tree-readme\.svg[\s\S]*<\/figure>/.test(landing) && /<code tabindex="0" aria-label="npm installation command">/.test(landing) && (landing.match(/class="how-figure"/g) || []).length === 1 && !/class="how-mechanism"/.test(landing));
 check("landing has role-specific copyable installs", /<p class="step-label">Install the CLI<\/p>[\s\S]*?<div class="command agent-install"/.test(landing) && (landing.match(/data-copy="npm install --global git\+https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git/g) || []).length === 1 && /data-copy="git clone https:\/\/github\.com\/dmarzzz\/shade-tree-node\.git &amp;&amp; cd shade-tree-node &amp;&amp; npm ci &amp;&amp; npm link"/.test(landing) && /data-copy="shade-tree join node"/.test(landing) && /aria-label="Copy npm installation command"/.test(landing) && /aria-label="Copy node installation commands"/.test(landing) && !/npm install (?:--global )?shade-tree-node/.test(landing));
 check("landing places both role paths in animated grove clearings", /class="role-trails glyph-grove"/.test(landing) && /class="glyph-canvas"/.test(landing) && (landing.match(/class="role" data-clearing/g) || []).length === 2 && /class="grove-title" data-clearing/.test(landing) && /\.glyph-grove \.role/.test(fusionCss) && /prefers-reduced-motion/.test(glyphGrove));
 check("landing provides a compact safe handoff for existing agents", /<p class="step-label">Agent setup<\/p>/.test(landing) && /data-copy="Add Shade Tree Grove to this agent by following https:\/\/github\.com\/dmarzzz\/shade-tree-node\/blob\/main\/docs\/AGENT\.md/.test(landing) && /operator-supplied v4 access profile/.test(landing) && /Do not use the retired Sepolia records or invent profile values/.test(landing) && /hidden prompt/.test(landing) && /Never put the secret in arguments, logs, or source/.test(landing) && /data-copy-target="agent-setup-task" data-copy-noun="Setup brief"/.test(landing) && /aria-label="Copy Shade Tree Grove setup brief for an AI agent"/.test(landing) && /<code id="agent-setup-task" class="copy-fallback" hidden>/.test(landing));
@@ -221,6 +228,7 @@ for (const asset of [
   "openapi-v2.json",
   "agent/index.html",
   "operator/index.html",
+  "404.html",
   "sitemap.xml",
 ]) check(`site asset exists: ${asset}`, existsSync(join(SITE, asset)));
 
@@ -306,6 +314,23 @@ for (const script of ["site.js", "glyphgrove.js", "dapple.js", "grove.js", "grov
 }
 
 check("robots advertises the sitemap", /Sitemap: https:\/\/shade-tree-node\.vercel\.app\/sitemap\.xml/.test(read("robots.txt")));
-check("sitemap contains all public pages", ["/", "/research/", "/grove/", "/agent/", "/operator/"].every((path) => read("sitemap.xml").includes(`<loc>https://shade-tree-node.vercel.app${path}</loc>`)));
+const indexablePages = [
+  ["home", landing, "/", "WebSite"],
+  ["agent guide", agentPage, "/agent/", "BreadcrumbList"],
+  ["operator guide", operatorPage, "/operator/", "BreadcrumbList"],
+  ["Grove", grovePage, "/grove/", "BreadcrumbList"],
+  ["research", research, "/research/", "Article"],
+];
+for (const [name, page, path, schemaType] of indexablePages) {
+  const canonical = new URL(path, "https://shade-tree-node.vercel.app").href;
+  check(`${name} has one descriptive title, description, canonical URL, and H1`, (page.match(/<title>[^<]+<\/title>/g) || []).length === 1 && (page.match(/<meta name="description" content="[^"]+"/g) || []).length === 1 && page.includes(`<link rel="canonical" href="${canonical}"`) && (page.match(/<h1\b/g) || []).length === 1);
+  check(`${name} social metadata matches its canonical page`, page.includes(`<meta property="og:url" content="${canonical}"`) && /<meta property="og:site_name" content="Shade Tree Grove"/.test(page) && /<meta property="og:image:width" content="1200"/.test(page) && /<meta property="og:image:height" content="630"/.test(page) && /<meta property="og:image:alt" content="[^"]+"/.test(page));
+  check(`${name} structured data parses and includes ${schemaType}`, structuredData(page).some((item) => item["@type"] === schemaType));
+}
+check("research structured data records its author and current modification date", structuredData(research).some((item) => item["@type"] === "Article" && item.author?.name === "dmarz" && item.dateModified === "2026-09-01"));
+check("hidden and error routes stay out of search results", /<meta name="robots" content="noindex, follow">/.test(labPage) && /<meta name="robots" content="noindex, follow">/.test(notFoundPage));
+check("branded 404 gives visitors useful recovery routes", /<h1>This path leaves the grove\.<\/h1>/.test(notFoundPage) && /href="\/">Return home<\/a>/.test(notFoundPage) && /href="\/agent\/">Set up an agent<\/a>/.test(notFoundPage));
+const sitemapLocations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+check("sitemap contains only the five indexable public pages", sitemapLocations.length === indexablePages.length && indexablePages.every(([, , path]) => sitemapLocations.includes(new URL(path, "https://shade-tree-node.vercel.app").href)) && !sitemap.includes("/lab/") && !sitemap.includes("404"));
 
 console.log(`PASS: site selftest (${checks.length} checks)`);
