@@ -464,7 +464,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   scene.add(ground);
 
   createShadePatch(scene, mobile);
-  const grove = createGrove(scene, mobile);
+  createGrove(scene, mobile);
   const updateDataStream = createDataStream(scene, mobile);
 
   scene.add(new THREE.HemisphereLight(0xb8cab6, 0x07100c, 1.1));
