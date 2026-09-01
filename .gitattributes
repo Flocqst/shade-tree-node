@@ -1,0 +1,25 @@
+# Normalize source and documentation files across platforms.
+* text=auto eol=lf
+
+# Binary assets and cryptographic artifacts.
+*.gif binary -eol
+*.ico binary -eol
+*.jpeg binary -eol
+*.jpg binary -eol
+*.pdf binary -eol
+*.png binary -eol
+*.ttf binary -eol
+*.wasm binary -eol linguist-generated=true
+*.webp binary -eol
+*.woff binary -eol
+*.woff2 binary -eol
+*.zkey binary -eol linguist-generated=true
+*.zip binary -eol
+
+# Third-party and generated sources should not skew GitHub language statistics.
+docs/post/vendor/** linguist-vendored=true
+circuits/rln/Verifier.sol linguist-generated=true
+circuits/rln/*verification_key.json linguist-generated=true
+contracts/*Groth16Verifier.sol linguist-generated=true
+contracts/PoseidonT2.sol linguist-vendored=true
+contracts/PoseidonT3.sol linguist-vendored=true

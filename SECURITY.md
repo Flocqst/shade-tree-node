@@ -6,13 +6,15 @@ This is a research-preview reference implementation. The Sepolia fleet deployed
 on 2026-08-17 is retired, incompatible pre-v4 history. The public Grove observes
 that old fleet read-only; this repository does not publish a current v4 client
 profile. The code is **unaudited**, and its ZK artifacts (`circuits/rln/`) came
-from an **untrusted testnet phase-2 ceremony**
-(`circuits/rln/ARTIFACTS.md`; the ceremony has not been run,
-[issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6),
-`docs/CEREMONY.md`). The default egress policy also has an unresolved private-IP
-SSRF flaw ([issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73)). Do
-not deploy the node, put real funds on the contracts, or depend on this code for
-sensitive use until those blockers are fixed and independently reviewed.
+from an **untrusted testnet phase-2 setup**. The production trusted-setup ceremony
+has not been run (`circuits/rln/ARTIFACTS.md`,
+[issue #6](https://github.com/dmarzzz/shade-tree-node/issues/6), and
+`docs/CEREMONY.md`). The private-IP SSRF flaw in the default egress policy was
+fixed in [issue #73](https://github.com/dmarzzz/shade-tree-node/issues/73); nodes
+now resolve and reject non-public destinations before dialing the checked numeric
+address. Do not deploy the node, put real funds on the contracts, or depend on
+this code for sensitive use until the production ceremony is complete and the
+system has been independently reviewed.
 
 The full trust model, per-party threat model, and trust boundaries are in
 [`docs/AUDIT.md`](docs/AUDIT.md). Read it before reporting: several sharp edges

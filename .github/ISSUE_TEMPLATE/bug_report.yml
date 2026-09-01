@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible defect in Shade Tree
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        **Do not report security vulnerabilities here.** Use the repository's [private vulnerability reporting](https://github.com/dmarzzz/shade-tree-node/security/advisories/new) instead.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This report does not contain secrets, private infrastructure details, or a suspected security vulnerability.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reliable sequence of commands, configuration, or code that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the release, tag, or full commit SHA where this occurs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Node or gateway
+        - Proxy or client
+        - Elder Tree or discovery
+        - Contracts or payments
+        - Rust implementation
+        - Documentation or website
+        - Build, test, or tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system, Node or Rust version, Tor version when relevant, and any non-secret configuration needed to reproduce.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste concise logs or stack traces after removing secrets, addresses, and private infrastructure details.
+      render: shell
