@@ -81,9 +81,10 @@ first response to a delayed v2 observation.
 
 The read-only observer passes the two versioned signed JSON envelopes to a separate minimal publisher;
 the publisher checks out no code and receives repository write permission only
-for that step. It creates a two-file, parentless commit (`grove.json` and
-`grove-v2.json`) on the generated `network-state` branch, so the branch itself
-carries no old commit chain. A
+for that step. It creates a parentless commit containing `grove.json`,
+`grove-v2.json`, and a minimal `docs/post/vercel.json` that disables Vercel
+deployments for the generated `network-state` branch, so the branch itself
+carries no old commit chain and cannot create failed preview noise. A
 dependency-free Vercel Function reads that snapshot from a fixed, versioned
 GitHub Contents API URL, caps the response at 64 KiB, checks its exact schema
 and publication signature, and serves it as JSON from
@@ -191,8 +192,9 @@ are in [`docs/RELAY-TELEMETRY.md`](../docs/RELAY-TELEMETRY.md).
 There is no HTTP aggregate-publisher endpoint today. The implemented publisher
 is the scheduled workflow: a Tor-capable observer produces one signed,
 aggregate-only JSON object, then a separate minimal job force-updates the
-one-file, parentless `network-state` branch. The publisher receives no raw
-directory, operator metrics, or Grove signing key.
+parentless `network-state` branch with two signed snapshots and the branch-only
+deployment config. The publisher receives no raw directory, operator metrics,
+or Grove signing key.
 
 A future authenticated replacement may use a route such as
 `PUT /api/v1/publisher/grove/{network}/head`. That route is **proposed, not

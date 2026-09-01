@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
+  "git": {
+    "deploymentEnabled": {
+      "network-state": false
+    }
+  },
   "functions": {
     "api/grove.mjs": {
       "maxDuration": 5
