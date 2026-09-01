@@ -746,16 +746,6 @@ img {
   gap: 0.45rem;
 }
 
-.footer-signature p {
-  max-width: 24ch;
-  margin: 0;
-  color: rgba(227, 233, 221, 0.86);
-  font-family: var(--display);
-  font-size: clamp(1.05rem, 1.6vw, 1.4rem);
-  line-height: 1.08;
-  letter-spacing: -0.025em;
-}
-
 .footer-signature span {
   text-transform: uppercase;
   letter-spacing: 0.12em;
