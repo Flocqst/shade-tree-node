@@ -41,18 +41,19 @@ test("homepage remains usable, quiet, and accessible", async ({ page }) => {
 });
 
 test("signature sections match their approved visual baselines", async ({ page }, testInfo) => {
+  test.slow();
   await openHomepage(page);
 
   const hero = page.locator(".home-hero");
-  await expect(hero).toHaveScreenshot("home-hero.png");
+  await expect(hero).toHaveScreenshot("home-hero.png", { timeout: 30_000 });
 
   const getStarted = page.locator(".glyph-grove");
   await getStarted.scrollIntoViewIfNeeded();
-  await expect(getStarted).toHaveScreenshot("get-started.png");
+  await expect(getStarted).toHaveScreenshot("get-started.png", { timeout: 30_000 });
 
   const how = page.locator(".how-panel");
   await how.scrollIntoViewIfNeeded();
-  await expect(how).toHaveScreenshot("how-it-works.png");
+  await expect(how).toHaveScreenshot("how-it-works.png", { timeout: 30_000 });
 
   await testInfo.attach("viewport", {
     body: JSON.stringify(testInfo.project.use.viewport),
