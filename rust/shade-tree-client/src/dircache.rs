@@ -265,23 +265,10 @@ pub struct DirectoryDocument {
     pub demo: Option<DemoAdvert>,
 }
 
-/// Parse untrusted directory JSON into a proto `Directory` (no verification yet).
-pub fn parse_directory(raw: &str) -> Result<Directory, String> {
-    let dto: DirectoryDto =
-        serde_json::from_str(raw).map_err(|e| format!("directory parse: {e}"))?;
-    Ok(dto.into_proto())
-}
-
 pub fn parse_document(raw: &str) -> Result<DirectoryDocument, String> {
     let dto: DirectoryDto =
         serde_json::from_str(raw).map_err(|e| format!("directory parse: {e}"))?;
     Ok(dto.into_document())
-}
-
-/// Parse + verify (pinned signer + onion<->key binding). Never returns an
-/// unverified directory.
-pub fn parse_and_verify(raw: &str, signer: &str) -> Result<Directory, String> {
-    Ok(parse_and_verify_document(raw, signer)?.dir)
 }
 
 pub fn parse_and_verify_document(raw: &str, signers: &str) -> Result<DirectoryDocument, String> {
@@ -462,7 +449,7 @@ pub fn parse_http_body(buf: &[u8]) -> Result<String, String> {
     if status != 200 {
         return Err(format!(
             "bootnode HTTP {status}: {}",
-            &body.chars().take(200).collect::<String>()
+            body.chars().take(200).collect::<String>()
         ));
     }
     Ok(body)
@@ -687,10 +674,8 @@ mod tests {
     #[test]
     fn demo_advert_is_parsed_outside_signed_bytes_and_malformed_is_ignored() {
         let raw = signed_dir(100);
-        let demo = format!(
-            "\"demo\":{{\"port\":8878,\"powBits\":18,\"limit\":8,\"contract\":\"0x1111111111111111111111111111111111111111\",\"chain\":\"eip155:11155111\",\"gateways\":[\"ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad\"]}},\"signer\""
-        );
-        let with_demo = raw.replace("\"signer\"", &demo);
+        let demo = "\"demo\":{\"port\":8878,\"powBits\":18,\"limit\":8,\"contract\":\"0x1111111111111111111111111111111111111111\",\"chain\":\"eip155:11155111\",\"gateways\":[\"ucnkl5d2m5myal7zkx4nyljkcss4thjdx2l7qzasp74tqncvutypp3ad\"]},\"signer\"";
+        let with_demo = raw.replace("\"signer\"", demo);
         let parsed = parse_and_verify_document(&with_demo, SIGNER.trim()).unwrap();
         let advert = parsed.demo.expect("valid unsigned demo advert");
         assert_eq!(advert.port, 8878);

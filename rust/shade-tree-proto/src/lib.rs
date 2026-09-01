@@ -1092,7 +1092,7 @@ pub fn verify_announce(
     ann: &Announce,
     now: u64,
     skew: u64,
-    mut seen_nonce: Option<&mut HashSet<String>>,
+    seen_nonce: Option<&mut HashSet<String>>,
 ) -> Result<()> {
     if ann.v != ANNOUNCE_VERSION {
         return Err(Error::Reason(format!("bad-version:{}", ann.v)));
@@ -1142,7 +1142,7 @@ pub fn verify_announce(
         }
     }
 
-    if let Some(seen) = seen_nonce.as_deref_mut() {
+    if let Some(seen) = seen_nonce {
         seen.insert(replay_key);
     }
     Ok(())
@@ -1219,7 +1219,7 @@ pub fn verify_operator_sig(onion: &str, operator: &str, operator_sig: &str) -> b
     let Ok(key) = Secp256k1Key::recover_from_prehash(&digest, &sig, recovery_id) else {
         return false;
     };
-    let encoded = key.to_encoded_point(false);
+    let encoded = key.to_sec1_point(false);
     let pubkey = encoded.as_bytes();
     if pubkey.len() != 65 {
         return false;

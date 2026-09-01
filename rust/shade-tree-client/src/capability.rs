@@ -167,6 +167,7 @@ pub fn gateway_admits(entry: &GatewayEntry, adm: &Admission) -> bool {
 }
 
 /// Retain only entries passing `adm`; no-op when inactive. Returns the count retained.
+#[cfg(test)]
 pub fn filter_by_admission(gateways: &mut Vec<GatewayEntry>, adm: &Admission) -> usize {
     filter_by_admission_with_demo(gateways, adm, None)
 }

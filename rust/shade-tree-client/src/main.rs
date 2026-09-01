@@ -899,6 +899,12 @@ mod live {
         cache: health::HealthCache,
     }
 
+    type DirectoryCandidates = (
+        Vec<Transport>,
+        Option<HealthCtx>,
+        Option<dircache::DemoAdvert>,
+    );
+
     /// The full egress plan: the ordered candidates + optional health feedback.
     struct EgressPlan {
         transports: Vec<Transport>,
@@ -1017,14 +1023,7 @@ mod live {
         fresh: Result<String, String>,
         rest: &[String],
         signer: &str,
-    ) -> Result<
-        (
-            Vec<Transport>,
-            Option<HealthCtx>,
-            Option<dircache::DemoAdvert>,
-        ),
-        String,
-    > {
+    ) -> Result<DirectoryCandidates, String> {
         use shade_tree_proto::selection_order;
 
         let cache_path = take_flag(rest, "--cache").map(PathBuf::from);
@@ -1837,7 +1836,7 @@ mod live {
             },
             None => identity.limit.unwrap_or(slotcursor::K_SLOTS),
         };
-        if k < 1 || k > slotcursor::MAX_LIMIT {
+        if !(1..=slotcursor::MAX_LIMIT).contains(&k) {
             eprintln!(
                 "egress (live): K={k} out of range 1..{} (RLN(20,16) range check is 16-bit)",
                 slotcursor::MAX_LIMIT
