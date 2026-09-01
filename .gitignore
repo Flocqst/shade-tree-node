@@ -50,3 +50,5 @@ reports/mutation/
 golive/
 backups/
 contracts/paid-access.local.json
+.vercel
+.env*.local

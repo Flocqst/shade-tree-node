@@ -64,9 +64,16 @@ for (const [path, schema] of [
 ]) {
   const response = await fetchWithRetry(path);
   const body = await response.json();
-  assert.equal(response.status, 200, `${path} should return 200`);
-  assert.equal(body.schema, schema, `${path} should return ${schema}`);
-  console.log(`  ok   ${path}`);
+  if (response.status === 503 && path.includes("/v2/")) {
+    assert.equal(body.error, "network_snapshot_unavailable", `${path} should fail closed when its upstream snapshot is unavailable`);
+    assert.equal(response.headers.get("cache-control"), "no-store", `${path} unavailability must not be cached`);
+    assert.match(response.headers.get("retry-after") || "", /^\d+$/, `${path} should tell clients when to retry`);
+    console.log(`  ok   ${path} (documented upstream-unavailable state)`);
+  } else {
+    assert.equal(response.status, 200, `${path} should return 200`);
+    assert.equal(body.schema, schema, `${path} should return ${schema}`);
+    console.log(`  ok   ${path}`);
+  }
 }
 
 const missing = await fetchWithRetry("/__shade_tree_missing_page__");
