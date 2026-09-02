@@ -364,6 +364,9 @@ SUBCOMMANDS:
                                           in order (default port 80). Comma = failover list.
           --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
                                           (comma = failover list; used by the CI harness).
+        DIRECTORY ROTATION defaults to smooth weighted round-robin for the first gateway on every
+        new tunnel; the remaining failover order stays weighted-random. Use
+        --no-rotation-spread or SHADE_TREE_ROTATION_SPREAD=0 to restore a weighted-random first pick.
         Envelope options:
           --identity  JSON { identitySecret, leaf[, limit] } (the member's derived secret + leaf;
                       create it with Rust `shade-tree enroll`, or derive it from an existing
@@ -942,9 +945,11 @@ mod live {
     use std::net::TcpStream;
     use std::path::PathBuf;
     use std::process::ExitCode;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use serde::Deserialize;
+    use shade_tree_proto::{selection_order, spread_selection_order, SmoothWeightedState};
 
     use super::{
         admission_from_args, admission_refusal, capability, check_admission, default_discovery,
@@ -1147,6 +1152,42 @@ mod live {
         serde_json::from_str(&raw).map_err(|e| format!("parse {path}: {e}"))
     }
 
+    static ROTATION_STATE: OnceLock<Mutex<SmoothWeightedState>> = OnceLock::new();
+
+    fn parse_rotation_value(raw: &str) -> Option<bool> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    }
+
+    fn rotation_spread_setting(args: &[String], env: Option<&str>) -> bool {
+        if args.iter().any(|arg| arg == "--no-rotation-spread") {
+            return false;
+        }
+        if let Some(raw) = args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("--rotation-spread="))
+        {
+            return parse_rotation_value(raw).unwrap_or(true);
+        }
+        if let Some(index) = args.iter().position(|arg| arg == "--rotation-spread") {
+            return args
+                .get(index + 1)
+                .and_then(|raw| parse_rotation_value(raw))
+                .unwrap_or(true);
+        }
+        env.and_then(parse_rotation_value).unwrap_or(true)
+    }
+
+    fn rotation_spread_enabled(args: &[String]) -> bool {
+        rotation_spread_setting(
+            args,
+            std::env::var("SHADE_TREE_ROTATION_SPREAD").ok().as_deref(),
+        )
+    }
+
     // Turn a FRESH directory (a file read, or a bootnode fetch over Tor) into the ordered
     // onion candidate list for failover — the SAME LKG-cache + guards + weighted
     // selection_order the JS client runs (selection.mjs ensureLoaded -> selectCandidates):
@@ -1156,7 +1197,9 @@ mod live {
     //      (never an unverified list).
     //   2. When a --health-cache is given, seed each gateway's health from persisted
     //      cross-session liveness so a gateway that failed last session starts deprioritized.
-    //   3. selection_order yields the weighted pick first, then the rest as failover targets.
+    //   3. Smooth weighted round-robin chooses the first gateway by default on each new tunnel;
+    //      the existing weighted-random selection_order fills the failover tail. An explicit
+    //      --no-rotation-spread / SHADE_TREE_ROTATION_SPREAD=0 restores the old full ordering.
     // Returns the candidate transports + the health feedback context (recorded after each
     // dial so this session's failures deprioritize the gateway next session).
     fn directory_candidates(
@@ -1164,8 +1207,6 @@ mod live {
         rest: &[String],
         signer: &str,
     ) -> Result<DirectoryCandidates, String> {
-        use shade_tree_proto::selection_order;
-
         let cache_path = take_flag(rest, "--cache").map(PathBuf::from);
         let max_age = parse_max_age(rest);
         let out =
@@ -1217,7 +1258,15 @@ mod live {
             );
         }
         let mut rng = mulberry32(default_seed());
-        let order = selection_order(&dir, &mut rng);
+        let order = if rotation_spread_enabled(rest) {
+            let mutex = ROTATION_STATE.get_or_init(|| Mutex::new(SmoothWeightedState::default()));
+            let mut state = mutex
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            spread_selection_order(&dir, &mut state, &mut rng)
+        } else {
+            selection_order(&dir, &mut rng)
+        };
         if order.is_empty() {
             return Err("no gateways in directory".into());
         }
@@ -2302,6 +2351,21 @@ mod live {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn smooth_rotation_defaults_on_and_has_explicit_opt_outs() {
+            assert!(rotation_spread_setting(&[], None));
+            assert!(rotation_spread_setting(&[], Some("1")));
+            assert!(!rotation_spread_setting(&[], Some("off")));
+            assert!(!rotation_spread_setting(
+                &["--no-rotation-spread".into()],
+                Some("1")
+            ));
+            assert!(rotation_spread_setting(
+                &["--rotation-spread".into()],
+                Some("0")
+            ));
+        }
 
         #[test]
         fn empty_proxy_preflight_is_not_a_connect_attempt() {

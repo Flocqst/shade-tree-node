@@ -61,11 +61,10 @@ v4 configuration before running it.
 ## Egress selection and switching
 
 For each new CONNECT tunnel, the client filters the verified Canopy by admission policy and
-capabilities, then makes a weighted-random first choice among healthy nodes. Equal weights are a
-uniform random choice, so the same node may be chosen twice in a row. The remaining nodes form a
-weighted failover order for that tunnel. `--rotation-spread` / `SHADE_TREE_ROTATION_SPREAD=1`
-changes the JavaScript Proxy to smooth weighted round-robin: equal-weight nodes alternate evenly,
-while unequal weights retain their long-run share.
+capabilities, then uses smooth weighted round-robin for the first healthy node. Equal-weight nodes
+alternate evenly; unequal weights retain their long-run share. The remaining nodes form a weighted-
+random failover order for that tunnel. Set `--no-rotation-spread` or
+`SHADE_TREE_ROTATION_SPREAD=0` to opt out and make the first choice weighted-random too.
 
 The same proof, slot, and Tor isolation credential are reused within one tunnel's failover attempt.
 Dial/framing failures rotate to the next onion. Proof, policy, replay, and `payload-limit` refusals

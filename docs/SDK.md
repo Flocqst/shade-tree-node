@@ -59,6 +59,7 @@ an environment fallback is listed below; test injection hooks such as
 | `directory` | `SHADE_TREE_DIRECTORY` | none | Static signed directory path. Requires `dirSigner`. |
 | `dirSigner` | `SHADE_TREE_DIR_SIGNER` | bundled with the default Elder | Pinned directory signer public key. Explicit discovery must supply its matching signer; there is no trust-on-first-use fallback. |
 | `directoryRefreshMs` | `SHADE_TREE_DIRECTORY_REFRESH_MS` | `300000` | Base interval for active signed-Canopy refresh; each poll is jittered ±20%. |
+| `rotationSpread` | `SHADE_TREE_ROTATION_SPREAD` | `true` | Smooth weighted round-robin for each new tunnel's first gateway. Pass `false` for independent weighted-random choices. |
 | `torHost` | `SHADE_TREE_TOR_HOST` | `127.0.0.1` | Tor SOCKS host. |
 | `torPort` | `SHADE_TREE_TOR_PORT` | `9250` | Tor SOCKS port. The bundled client script uses `9260`. |
 | `socksIsolation` | `SHADE_TREE_SOCKS_ISOLATION` | enabled | Give each CONNECT tunnel distinct SOCKS credentials. This isolates Tor streams only when the Tor endpoint enables `IsolateSOCKSAuth`. |

@@ -607,6 +607,7 @@ export class ShadeTreeClient {
     // Gateway selection: a pinned onion, or a signed directory (fleet rotation).
     if (opts.network) process.env.SHADE_TREE_NETWORK = String(opts.network);
     if (opts.directoryRefreshMs != null) process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = String(opts.directoryRefreshMs);
+    if (opts.rotationSpread != null) process.env.SHADE_TREE_ROTATION_SPREAD = String(opts.rotationSpread);
     this.onion = (opts.onion || process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "") || null;
     const bootnode = opts.bootnode || process.env.SHADE_TREE_BOOTNODE_ONION || null;
     const dir = opts.directory || process.env.SHADE_TREE_DIRECTORY || null;

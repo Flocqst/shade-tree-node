@@ -139,6 +139,7 @@ async function main() {
   }
   ok(/flags, "quiet"[\s\S]*SHADE_TREE_LOG_LEVEL = "warn"/.test(src), "--quiet lowers routine output to warn unless a level is explicit");
   ok(/flags, "no-banner"[\s\S]*SHADE_TREE_BANNER = "never"/.test(src), "--no-banner suppresses terminal art");
+  ok(/flags, "no-rotation-spread"[\s\S]*SHADE_TREE_ROTATION_SPREAD = "0"/.test(src), "--no-rotation-spread opts out of the default smooth rotation");
 
   // --- --network / SHADE_TREE_NETWORK (lib/network-record.mjs) --------------------------------------
   // `record-deploy` has no config role and its --dry-run writes nothing, so it is the safe live

@@ -181,6 +181,7 @@ function proxyHelp(command = "proxy") {
   console.log("  shade-tree run -- your-agent\n");
   console.log(`Discovery defaults to the bundled current v4 ${DEFAULT_CLIENT_NETWORK} Elder and refreshes its signed Canopy about every five minutes.`);
   console.log("An explicit --bootnode/--dir-signer, --directory/--dir-signer, or --onion overrides discovery.");
+  console.log("New tunnels rotate smoothly across healthy weighted gateways by default; --no-rotation-spread restores weighted-random first picks.");
   console.log("Membership input and the exact tier still come from the Grove operator.");
   console.log("Guide: https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md");
 }
@@ -368,6 +369,10 @@ async function main() {
   if (Object.hasOwn(flags, "no-banner")) {
     env.SHADE_TREE_BANNER = "never";
     delete flags["no-banner"];
+  }
+  if (Object.hasOwn(flags, "no-rotation-spread")) {
+    env.SHADE_TREE_ROTATION_SPREAD = "0";
+    delete flags["no-rotation-spread"];
   }
   for (const [flag, val] of Object.entries(flags)) {
     // Heartbeat owns a dedicated metrics variable because it runs beside the node. Keep the

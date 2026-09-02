@@ -344,12 +344,12 @@ Integration seam: `client/selection.mjs` exposes `reportReceipt(onion, { valid }
 
 ## Client rotation / load spread (T-FEAT-4)
 
-Read by `client/selection.mjs`. OPTIONAL, OFF by default — leave `SHADE_TREE_ROTATION_SPREAD` unset and
-slot-0 selection is byte-for-byte today's independent weighted-random draw per CONNECT.
+Read by `client/selection.mjs` and the Rust live client. Smooth spread is ON by default, so successive
+CONNECT tunnels advance the weighted schedule instead of independently re-rolling the first gateway.
 
-By default each CONNECT re-rolls slot-0 (the gateway the shim actually dials) as a fresh weighted-random
-draw: memoryless, so the top-weight gateway keeps winning back-to-back and equal-weight peers see bursty,
-clumped load. With spread armed, slot-0 is chosen by a smooth weighted round-robin (SWRR) over the SAME
+With spread disabled, each CONNECT re-rolls slot-0 (the gateway the shim actually dials) as a fresh
+weighted-random draw: memoryless, so the top-weight gateway can win back-to-back and equal-weight peers
+see bursty, clumped load. By default, slot-0 is chosen by a smooth weighted round-robin (SWRR) over the SAME
 healthy, weight-clamped, receipt-adjusted pool the failover order already selects from. SWRR keeps a
 per-gateway in-memory "current deficit" that advances every CONNECT, giving two properties: (1) the
 just-used gateway drops below its peers and is not re-picked until they have had their proportional turn
@@ -365,4 +365,4 @@ selection order. Reuses the health (`"down"`) + receipt-adjusted weight signals 
 
 | Env var | Default | Controls | Component | Flag |
 |---|---|---|---|---|
-| `SHADE_TREE_ROTATION_SPREAD` | (unset → OFF) | Arm smooth weighted round-robin slot-0 spread: `1`/`on`/`true`/`yes` enables it; anything else (or unset) is OFF (today's weighted-random). | client selection | `--rotation-spread` |
+| `SHADE_TREE_ROTATION_SPREAD` | (unset → ON) | Smooth weighted round-robin for the first gateway on each new tunnel. Set `0`/`off`/`false`/`no` to restore weighted-random selection. | JS/Rust client selection | `--rotation-spread`, `--no-rotation-spread` |

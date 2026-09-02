@@ -2,10 +2,11 @@
 //
 // The client proxy stays the router; curl stays dumb. When SHADE_TREE_DIRECTORY points at a
 // signed directory JSON, the proxy asks here for a candidate ORDER per CONNECT:
-// a weighted-random pick first, then the rest of the fleet as failover targets.
+// a smooth weighted-round-robin pick first, then a weighted-random failover tail.
 // The membership proof is gateway-independent (same root + same epoch verifies at
-// any gateway loading the same members.json), so rotation reuses the cached proof
-// and just dials a different onion. No new proof per rotation.
+// any gateway loading the same members.json), so failover within one tunnel reuses
+// that tunnel's proof and just dials a different onion. Every new tunnel still mints
+// a fresh slot-bound proof.
 //
 // An explicit single-onion path (SHADE_TREE_ONION) bypasses directory selection. With no explicit
 // source, clients use the current-v4 Elder+signer pair from the bundled default network record.
@@ -304,14 +305,15 @@ export function reportReceipt(onion, { valid } = {}) {
 }
 
 // ---- quality-aware rotation / load spread (T-FEAT-4) ----------------------------
-// Today slot-0 (the gateway the client proxy actually dials) is a fresh independent weighted-random draw
-// each CONNECT. Over the long run that honors weight, but request-to-request it is memoryless: the
+// Slot-0 (the gateway the client proxy actually dials) uses smooth weighted round-robin by default.
+// A fresh independent weighted-random draw still exists as an explicit opt-out. Over the long run
+// weighted-random honors weight, but request-to-request it is memoryless: the
 // single top-weight gateway keeps winning the draw and gets hammered back-to-back, and equal-weight
 // peers see bursty, clumped load instead of an even spread — the opposite of what a rotation policy
 // wants for load balancing (and traffic concentration is a deanonymization lever this system already
 // clamps weight to fight).
 //
-// With SHADE_TREE_ROTATION_SPREAD armed, slot-0 is chosen by a SMOOTH weighted round-robin (SWRR, the
+// Unless SHADE_TREE_ROTATION_SPREAD is explicitly disabled, slot-0 is chosen by a SMOOTH weighted round-robin (SWRR, the
 // nginx/`ngx_http_upstream` scheduler) over the SAME healthy, weight-clamped, receipt-adjusted pool
 // selectionOrder already selects from. SWRR keeps a per-gateway "current deficit" that advances every
 // CONNECT: each step adds the gateway's effective weight to its deficit, picks the max, then subtracts
@@ -329,21 +331,22 @@ export function reportReceipt(onion, { valid } = {}) {
 //
 // The failover TAIL (slots 1..n, only consulted on a dial timeout) stays weighted-random via the
 // existing selectionOrder over the remaining fleet — spread only needs to govern the gateway actually
-// used. OFF BY DEFAULT: unset => selectCandidates takes the byte-identical `selectionOrder(view)` path
-// and behaves exactly as today. Reuses the health ("down") + receipt-adjusted weight signals already in
-// this module; adds no persistence store (the SWRR deficits are in-memory session state, like health).
+// used. ON BY DEFAULT: only an explicit false value takes the `selectionOrder(view)` weighted-random
+// path. Reuses the health ("down") + receipt-adjusted weight signals already in this module; adds no
+// persistence store (the SWRR deficits are in-memory session state, like health).
 //
-// SHADE_TREE_ROTATION_SPREAD : "1"/"on"/"true"/"yes" to arm smooth spread. Unset/anything else => OFF (default).
+// SHADE_TREE_ROTATION_SPREAD : unset/"1"/"on"/"true"/"yes" => smooth spread (default);
+//                              "0"/"off"/"false"/"no" => weighted-random first choice.
 function parseRotationSpread(raw) {
-  if (raw === undefined) return false;
+  if (raw === undefined || String(raw).trim() === "") return true;
   const v = String(raw).trim().toLowerCase();
-  return v === "1" || v === "on" || v === "true" || v === "yes";
+  return !["0", "off", "false", "no"].includes(v);
 }
 const ROTATION_SPREAD = parseRotationSpread(process.env.SHADE_TREE_ROTATION_SPREAD);
 export function rotationSpreadEnabled() { return ROTATION_SPREAD; }
 
 // Injectable rng for the spread path (jitter seed + failover-tail weighting), so distribution tests
-// are deterministic and don't flake. Only the SHADE_TREE_ROTATION_SPREAD path reads it; the default
+// are deterministic and don't flake. Only the spread path reads it; the explicitly disabled
 // weight-only path stays on selectionOrder's own Math.random, untouched. Test seam, additive.
 let _rng = Math.random;
 export function _setRng(fn) { _rng = typeof fn === "function" ? fn : Math.random; }
@@ -876,10 +879,9 @@ export async function selectCandidates(req = null, adm = null, opts = null) {
   // Run selection over the (possibly filtered/adjusted) fleet. Reuse the SAME entry objects so
   // reportHealth's in-place mutation (keyed by onion on dir.gateways) still lands on them.
   const view = gateways === dir.gateways ? dir : { ...dir, gateways };
-  // Rotation/spread policy (T-FEAT-4). OFF by default: selectionOrder(view) is the byte-identical
-  // weight-only path from before. With SHADE_TREE_ROTATION_SPREAD armed, slot-0 is chosen by smooth
-  // weighted round-robin so load spreads evenly across the healthy fleet (no back-to-back hammering
-  // of the top gateway) while the long-run weighted share is preserved exactly.
+  // Rotation/spread policy (T-FEAT-4). ON by default: slot-0 uses smooth weighted round-robin so
+  // load spreads across the healthy fleet without changing long-run weighted share. An explicit
+  // false SHADE_TREE_ROTATION_SPREAD restores the original fully weighted-random order.
   const order = ROTATION_SPREAD ? spreadSelectionOrder(view) : selectionOrder(view);
   // Each candidate carries the gateway's SIGNED accepted-ZK-artifact ad when it has one
   // (caps.artifacts, T-HARD-8) so the client can pick a mutual artifact set before proving.

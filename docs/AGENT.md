@@ -94,7 +94,9 @@ even on loopback: loopback is host-local, not user-local, and another OS account
 must not be able to spend this member's slots. It verifies the signed Canopy and
 reuses one successfully bootstrapped base Arti client. Each logical CONNECT gets
 an isolated Arti view that is reused only for that tunnel's gateway failover, so
-separate tunnels do not share circuits. Use
+separate tunnels do not share circuits. Successive tunnels rotate across healthy
+gateways with smooth weighted round-robin by default; `--no-rotation-spread`
+restores independent weighted-random first choices. Use
 `--directory directory.json --signer <hex>` for a static signed Canopy, or
 `--bootnode-onion <elder.onion> --signer <hex>` to override the bundled Elder,
 or `--onion <node.onion>:80` for one pinned node. Staked or paid profiles can use
