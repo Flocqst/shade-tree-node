@@ -91,10 +91,12 @@ read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
 read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT                           # exact enrolled tier
 ./shade-tree-0.4.1-<target>-live enroll --limit "$SHADE_TREE_LIMIT" --out identity.json
 shade-tree leaves --contract <v4-member-set-address> --rpc-url <operator-rpc-url> --out members.json
-./shade-tree-0.4.1-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
-  --signer <v4-directory-signer-hex> \
+./shade-tree-0.4.1-<target>-live egress \
   --identity identity.json --members members.json --target api.ipify.org:443
 ```
+
+That uses the bundled current-v4 Sepolia Elder+signer. Add `--bootnode-onion <elder.onion>
+--signer <matching-signer-hex>` to select an alternate Grove.
 
 ## The local loop
 

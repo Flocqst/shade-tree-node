@@ -7,8 +7,8 @@
 // any gateway loading the same members.json), so rotation reuses the cached proof
 // and just dials a different onion. No new proof per rotation.
 //
-// The single-onion path (SHADE_TREE_ONION / tor/hs/hostname) is untouched: if
-// SHADE_TREE_DIRECTORY is unset, directoryEnabled() is false and the client keeps pinning.
+// An explicit single-onion path (SHADE_TREE_ONION) bypasses directory selection. With no explicit
+// source, clients use the current-v4 Elder+signer pair from the bundled default network record.
 //
 // Integration is one line in the client proxy's CONNECT handler (see docs/FLEET.md):
 //   const candidates = await selectCandidates();   // [{ onion }, ...] in try order
@@ -23,17 +23,16 @@ import { loadDirectory, selectionOrder, reportHealth, verifyDirectory, MAX_WEIGH
 import { fetchOverTor } from "../bootnode/fetch.mjs";
 import { verifyAnnounce } from "../bootnode/announce.mjs";
 import { makeStakeVerifier } from "../lib/gateway-registry.mjs";
-import { applyNetworkEnv } from "../lib/network-record.mjs";
+import { applyClientNetworkEnv } from "../lib/network-record.mjs";
 import { createLogger } from "../lib/log.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const clientLog = createLogger("proxy");
 
-// SHADE_TREE_NETWORK=<name>: fill discovery inputs (SHADE_TREE_BOOTNODE_ONION / SHADE_TREE_DIR_SIGNER, or the static
-// SHADE_TREE_DIRECTORY fallback) from the committed network/<name>/bootnode.json BEFORE the constants below
-// snapshot the env. Explicit env always wins (applyNetworkEnv only fills unset keys). Done here, not
-// only in bin/shade-tree.mjs, so `node client/shim.mjs` and the SDK (client/shade-tree-client.mjs) honour it too.
-applyNetworkEnv(process.env);
+// Fill discovery inputs before the constants below snapshot the env. An explicit source wins;
+// SHADE_TREE_NETWORK selects a named record; otherwise clients use the bundled current-v4 default.
+// Done here, not only in bin/shade-tree.mjs, so direct shim and SDK imports get the same safe pin.
+applyClientNetworkEnv(process.env);
 
 // Two directory SOURCES, same signed shape and same pinned-signer verification:
 //   - SHADE_TREE_BOOTNODE_ONION : live discovery. Fetch /directory from the bootnode onion over Tor
@@ -403,10 +402,9 @@ function spreadSelectionOrder(view) {
   return [first, ...selectionOrder(rest, { rng: _rng })];
 }
 
-// The pinned directory signer(s). In a real bundle this is a hardcoded constant set
-// at build time; SHADE_TREE_DIR_SIGNER overrides for dev/testing. There is intentionally
-// NO default: an unpinned directory is trust-on-first-use, which is exactly the
-// poisoning surface the signature exists to close. Set it, or directory mode is off.
+// The pinned directory signer(s). The current v4 default comes from the bundled deployment
+// record; SHADE_TREE_DIR_SIGNER overrides it only when the caller also selects an explicit source.
+// An unpinned directory is never accepted: directory mode remains off without a source+pin pair.
 //
 // SHADE_TREE_DIR_SIGNER accepts a COMMA-SEPARATED list of pubkeys — the signer-rotation
 // OVERLAP SET. This is an allowlist (verifyDirectory accepts a directory signed by ANY
@@ -581,6 +579,7 @@ let loadedAt = 0;
 let lastAcceptedIssued = 0;
 export function _resetIssuedFloor() { lastAcceptedIssued = 0; }
 const REFRESH_MS = Number(process.env.SHADE_TREE_DIRECTORY_REFRESH_MS || 5 * 60 * 1000);
+const POLL_JITTER = 0.2; // spread clients over 80%-120% of the interval; avoids an Elder thundering herd
 
 // ---- optional absolute directory freshness bound (T-FEAT-21) --------------------
 // The monotonic issued FLOOR above only stops rollback WITHIN a session: it refuses a directory
@@ -609,13 +608,16 @@ const DIRECTORY_MAX_AGE_MS = parseMaxAgeMs(process.env.SHADE_TREE_DIRECTORY_MAX_
 // spuriously reject a just-issued directory. Only consulted when the bound is armed.
 const DIRECTORY_MAX_AGE_SKEW_MS = Math.max(0, Number(process.env.SHADE_TREE_DIRECTORY_MAX_AGE_SKEW_MS || 5 * 60 * 1000));
 
-async function ensureLoaded(onEvent) {
+let refreshInFlight = null;
+async function ensureLoaded(onEvent, { force = false } = {}) {
   const now = Date.now();
-  if (loaded && now - loadedAt < REFRESH_MS) return loaded;
-  try {
-    const next = BOOTNODE_ONION
-      ? await loadFromBootnode(onEvent)
-      : await loadDirectory({ path: DIRECTORY_PATH, pinnedSigner: PINNED_SIGNER, cachePath: CACHE_PATH });
+  if (!force && loaded && now - loadedAt < REFRESH_MS) return loaded;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const next = BOOTNODE_ONION
+        ? await loadFromBootnode(onEvent)
+        : await loadDirectory({ path: DIRECTORY_PATH, pinnedSigner: PINNED_SIGNER, cachePath: CACHE_PATH });
     // Rollback / stale-directory replay guard (audit loop-15 F2): a directory's `issued` must
     // never move BACKWARD. The bootnode signs its own directory and an ed25519 signature is
     // valid forever, so a hostile or replaying bootnode could serve an OLD signed directory to
@@ -664,17 +666,65 @@ async function ensureLoaded(onEvent) {
     if (next.source === "cache") {
       clientLog.warn("using last-known-good Canopy", { reason: "fresh-unavailable-or-invalid" });
     }
-  } catch (e) {
-    if (BOOTNODE_ONION && !e.canopyEventEmitted) {
-      emitCanopy(onEvent, "error", { reason: "unavailable-or-invalid" });
+    } catch (e) {
+      if (BOOTNODE_ONION && !e.canopyEventEmitted) {
+        emitCanopy(onEvent, "error", { reason: "unavailable-or-invalid" });
+      }
+      if (loaded) {
+        clientLog.warn("Canopy refresh failed; keeping in-memory fleet", { reason: "unavailable-or-invalid" });
+      } else {
+        throw e; // no fleet at all is fatal for directory mode
+      }
     }
-    if (loaded) {
-      clientLog.warn("Canopy refresh failed; keeping in-memory fleet", { reason: "unavailable-or-invalid" });
-    } else {
-      throw e; // no fleet at all is fatal for directory mode
-    }
+    return loaded;
+  })();
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
   }
-  return loaded;
+}
+
+// A long-lived Proxy should learn new gateway onions even while no CONNECT is arriving. Start a
+// single process-wide, unref'd polling loop after the first verified Canopy load. Every tick forces
+// a signed refresh; verification/rollback failure retains the in-memory last-known-good fleet.
+// SHADE_TREE_DIRECTORY_REFRESH_MS=0 keeps the existing test/dev "reload on every selection" meaning
+// and disables the background timer rather than creating a hot loop.
+let directoryPollTimer = null;
+let pollSetTimeout = setTimeout;
+let pollClearTimeout = clearTimeout;
+let pollRng = Math.random;
+
+function nextPollDelay() {
+  return Math.max(1, Math.round(REFRESH_MS * (1 - POLL_JITTER + 2 * POLL_JITTER * pollRng())));
+}
+
+function scheduleDirectoryPoll() {
+  if (directoryPollTimer || !BOOTNODE_ONION || REFRESH_MS <= 0) return;
+  directoryPollTimer = pollSetTimeout(async () => {
+    directoryPollTimer = null;
+    try { await ensureLoaded(null, { force: true }); }
+    catch { /* ensureLoaded already logs and preserves last-known-good state */ }
+    scheduleDirectoryPoll();
+  }, nextPollDelay());
+  directoryPollTimer?.unref?.();
+}
+
+export function startDirectoryPolling() {
+  scheduleDirectoryPoll();
+}
+
+export function stopDirectoryPolling() {
+  if (directoryPollTimer) pollClearTimeout(directoryPollTimer);
+  directoryPollTimer = null;
+}
+
+// Deterministic timer seam for the polling selftest. Production never calls this.
+export function _setDirectoryPollScheduler({ setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, rng = Math.random } = {}) {
+  stopDirectoryPolling();
+  pollSetTimeout = setTimeoutFn;
+  pollClearTimeout = clearTimeoutFn;
+  pollRng = rng;
 }
 
 // ---- capability-aware selection (T-FEAT-10) -------------------------------------
@@ -794,6 +844,7 @@ export function describeFleetAdmits(gateways) {
 // query, verified, cache, or error. It emits nothing for static files or an in-memory cache hit.
 export async function selectCandidates(req = null, adm = null, opts = null) {
   const { dir } = await ensureLoaded(opts?.onEvent);
+  startDirectoryPolling();
   let gateways = dir.gateways;
   if (VERIFY_STAKE) gateways = await filterReverified(gateways);
   // Admission-aware filter (T-FEAT-9). Runs FIRST so a policy mismatch is named precisely even

@@ -32,6 +32,74 @@ mod run;
 mod slotcursor;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const DEFAULT_CLIENT_NETWORK: &str = "sepolia";
+const DEFAULT_DEPLOYMENT: &str = include_str!("../../../network/sepolia/deployment.json");
+
+// Read the bundled deployment record instead of duplicating its trust pair in Rust source. The
+// signed Canopy remains the mutable gateway list; this record pins only the Elder used to fetch it
+// and the signer authorized to update it.
+fn default_discovery() -> Result<(String, String), String> {
+    let deployment: serde_json::Value = serde_json::from_str(DEFAULT_DEPLOYMENT)
+        .map_err(|e| format!("bundled {DEFAULT_CLIENT_NETWORK} deployment is invalid JSON: {e}"))?;
+    if deployment.get("status").and_then(serde_json::Value::as_str) != Some("live") {
+        return Err(format!(
+            "bundled {DEFAULT_CLIENT_NETWORK} deployment is not live"
+        ));
+    }
+    let protocol = deployment
+        .get("protocol")
+        .ok_or_else(|| "bundled deployment has no protocol range".to_string())?;
+    let min = protocol
+        .get("min")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "bundled deployment has no protocol.min".to_string())?;
+    let max = protocol
+        .get("max")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "bundled deployment has no protocol.max".to_string())?;
+    if !(min..=max).contains(&4) {
+        return Err("bundled deployment does not support protocol v4".into());
+    }
+    let elder = deployment
+        .get("elder")
+        .ok_or_else(|| "bundled deployment has no Elder".to_string())?;
+    let onion = elder
+        .get("onion")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "bundled deployment has no Elder onion".to_string())?;
+    // Parse the onion now, before Tor is involved. Directory verification validates the signer.
+    shade_tree_proto::onion_to_pubkey(onion)
+        .map_err(|e| format!("bundled deployment has an invalid Elder onion: {e}"))?;
+    let pins: Vec<&str> = match elder.get("canopySigner") {
+        Some(serde_json::Value::String(pin)) => vec![pin.as_str()],
+        Some(serde_json::Value::Array(pins)) => pins
+            .iter()
+            .map(|pin| {
+                pin.as_str()
+                    .ok_or_else(|| "bundled deployment has a non-string Canopy signer".to_string())
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err("bundled deployment has no Canopy signer".into()),
+    };
+    if pins.is_empty()
+        || pins
+            .iter()
+            .any(|pin| pin.len() != 64 || hex::decode(pin).map_or(true, |bytes| bytes.len() != 32))
+    {
+        return Err("bundled deployment has an invalid Canopy signer".into());
+    }
+    Ok((onion.to_string(), pins.join(",")))
+}
+
+#[cfg(test)]
+mod default_discovery_tests {
+    #[test]
+    fn bundled_v4_elder_and_signer_are_valid() {
+        let (onion, signer) = super::default_discovery().expect("bundled discovery profile");
+        assert!(onion.ends_with(".onion"));
+        assert_eq!(signer.len(), 64);
+    }
+}
 
 // --------------------------------------------------------------------------
 // Untrusted-JSON DTOs (serde) -> shade-tree-proto structs (trust-critical checks)
@@ -265,7 +333,7 @@ SUBCOMMANDS:
         from JSON-RPC event logs and emit the ordered, zero-in-place members.json
         consumed by egress. No Node.js exporter is required. Requires live.
 
-    egress <TRANSPORT> --identity <f> --target <host:port>
+    egress [TRANSPORT] --identity <f> --target <host:port>
            (--members <f> | --contract <0xaddress> [--rpc-url <url>])
            [--circuits <dir>] [--epoch <n>] [--slot <i>] [--slot-cursor <f>]
            [--rln-identifier <n>] [--k <n>] [--nonce <hex>]
@@ -276,12 +344,12 @@ SUBCOMMANDS:
         FAILOVER: the transport yields an ORDERED candidate list; the ONE envelope is
         built once and REUSED across candidates (deterministic-retry parity). On a
         dial failure the client rotates to the next candidate until one accepts; a
-        gate REFUSAL is terminal (matches client/shade-tree-client.mjs connect()).
-        Choose exactly one TRANSPORT:
+        gate REFUSAL is terminal, including payload-limit.
+        Choose at most one TRANSPORT; omitting it uses the bundled current v4 Sepolia Elder:
           --directory <f> --signer <hex>  Verify the signed directory (LKG-cached via
                                           --cache), pick the weighted failover ORDER,
                                           and dial each .onion over EMBEDDED TOR (arti;
-                                          no system tor daemon, no SOCKS). [default path]
+                                          no system tor daemon, no SOCKS).
                                           Optional: --cache <f> (LKG), --health-cache <f>
                                           (seed + record cross-session liveness),
                                           --max-age-ms <n>.
@@ -290,6 +358,8 @@ SUBCOMMANDS:
                                           EMBEDDED TOR, verify + LKG-cache it, then select
                                           + failover exactly as --directory. Same optional
                                           --cache/--health-cache/--max-age-ms.
+          (none)                          Fetch the signed Canopy from the bundled Elder and verify
+                                          it with the signer pinned in the bundled deployment.
           --onion <a[:p]>[,<a[:p]>...]    Dial these specific .onion(s) over embedded Tor,
                                           in order (default port 80). Comma = failover list.
           --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
@@ -877,8 +947,9 @@ mod live {
     use serde::Deserialize;
 
     use super::{
-        admission_from_args, admission_refusal, capability, check_admission, default_seed,
-        dircache, health, mulberry32, now_ms, parse_max_age, read_file, signer_spec, take_flag,
+        admission_from_args, admission_refusal, capability, check_admission, default_discovery,
+        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, signer_spec,
+        take_flag,
     };
 
     /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
@@ -1390,7 +1461,7 @@ mod live {
     }
 
     // Resolve the ordered FAILOVER plan from the CLI flags. Order of precedence:
-    //   --plain-tcp (escape hatch) > --onion > --bootnode-onion > --directory.
+    //   --plain-tcp (escape hatch) > --onion > --bootnode-onion > --directory > bundled Elder.
     // A comma-separated --plain-tcp/--onion is an explicit failover LIST (dead first,
     // live second, ...); --directory/--bootnode-onion derive the ordered list from the
     // signed directory's weighted selection_order (with LKG caching + health).
@@ -1460,12 +1531,14 @@ mod live {
                 demo,
             });
         }
-        Err(
-            "no transport: pass --directory <f> --signer <hex> or --bootnode-onion <onion> \
-             --signer <hex> (dial the selected onion(s) over Tor), --onion <addr[,addr...]> \
-             (dial specific onion(s) over Tor), or --plain-tcp <host:port[,host:port...]> (no Tor)"
-                .to_string(),
-        )
+        let (bootnode, signer) = default_discovery()?;
+        let fresh = fetch_directory_over_tor(&bootnode, client, runtime);
+        let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+        Ok(EgressPlan {
+            transports,
+            health,
+            demo,
+        })
     }
 
     // Fold one dial outcome into the health cache (reportResult parity). No-op unless a

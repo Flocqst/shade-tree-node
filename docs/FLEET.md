@@ -67,8 +67,9 @@ canonical serialization (fixed field order, whitespace-independent; see
 `canonicalDirectoryBytes`). The signer's **public key is pinned in the client** at
 bundle time. A swapped or edited file fails the check and is rejected, not trusted.
 There is deliberately no trust-on-first-use default: an unpinned directory is exactly
-the poisoning surface the signature exists to close, so directory mode is off until a
-pin is set (`SHADE_TREE_DIR_SIGNER`, or a hardcoded constant in a real bundle).
+the poisoning surface the signature exists to close. The current v4 Sepolia profile supplies a
+bundled pin; every explicit Elder or static directory must supply its matching
+`SHADE_TREE_DIR_SIGNER`.
 
 **Onion-control binding, two layers.** A poisoned or mis-signed directory must not be
 able to graft a hostile address:
@@ -233,7 +234,7 @@ implements.
 | Failure | Effect if unmitigated | Mitigation (built unless noted) |
 |---|---|---|
 | Directory file swapped | Client steered to hostile gateways | Pinned signer; bad signature rejected |
-| Signer key not pinned (TOFU) | First fetch trusted blindly | No default pin; directory mode off until pinned |
+| Explicit source lacks a signer pin | First fetch could be trusted blindly | Reject it; only the bundled profile supplies its own pin |
 | Poisoned list grafts hostile onion | Egress via attacker's IP | Static `pubkey == onionToPubkey(onion)` binding at load |
 | Listed onion an attacker briefly fronts | Egress via attacker | Live onion-control challenge (`verifyOnionControl`; wire into handshake) |
 | Directory onion dead / unreachable | Fleet unusable | Last-known-good cache; `loadDirectory` degrades to previous good list |

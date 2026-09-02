@@ -56,8 +56,8 @@ check(
 check(
   "Sepolia index says the current receipt is not a public access profile",
   /deployment\.json[\s\S]*live disposable Protocol v4/.test(sepoliaReadme)
-    && /No public access profile/.test(sepoliaReadme)
-    && /tier, secret, and matching member-set input/.test(sepoliaReadme),
+    && /Discovery, not public access/.test(sepoliaReadme)
+    && /does not publish[\s\S]*member secret or membership input/.test(sepoliaReadme),
 );
 check(
   "deployment plan records the research fleet while keeping production blocked on trusted setup",
