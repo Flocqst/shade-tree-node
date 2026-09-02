@@ -19,8 +19,8 @@ that abstraction explicit prevents the roadmap from accidentally baking properti
 of one egress implementation into the protocol definition.
 
 For detailed component designs, see [FLEET.md](FLEET.md), [ONCHAIN.md](ONCHAIN.md),
-[PAYMENTS.md](PAYMENTS.md), [LIGHT-CLIENT.md](LIGHT-CLIENT.md), and
-[adversarial-review.md](adversarial-review.md).
+[PAYMENTS.md](PAYMENTS.md), [SESSION-TICKETS.md](SESSION-TICKETS.md),
+[LIGHT-CLIENT.md](LIGHT-CLIENT.md), and [adversarial-review.md](adversarial-review.md).
 
 The original milestone design notes (1–5: unlinkable rate limiting, on-chain set, fleet,
 bootnode, productionization) live in [ROADMAP-v1.md](ROADMAP-v1.md); the checkable shipping
@@ -43,7 +43,8 @@ mapped onto the sections below, so the roadmap reads as *remaining* work rather 
 | 3.5 bootstrap v1 (mirrors) | **built** — bootnode federation with gossip; every gossiped gateway re-verified through the full announce path; M-of-N threshold-signed directory removes the single signer | `bootnode/federation.mjs`, `lib/directory.mjs` (threshold) |
 | 3.5 bootstrap v2 (on-chain registry + mirrors) | **built (registry)** — `GatewayRegistry` live on Sepolia; client can rebuild the *member* root from chain via EIP-1186 light-client proof; rebuilding the *gateway* set purely from chain is not yet a client path | `contracts/GatewayRegistry.sol`, `docs/LIGHT-CLIENT.md` |
 | 3.5 bootstrap v3 (DHT) | not planned | — |
-| 4–8 payments / x402 / MPP / zkAPI | **design only** | `docs/PAYMENTS.md`, sections below |
+| 4–8 payments / x402 / MPP / zkAPI | **partial + design** — paid-access 402 issuance is built; downstream payment adapters and zkAPI credits remain design-only | `docs/PAYMENTS.md`, sections below |
+| 7.5 gateway-bound session tickets | **detailed design** — one RLN proof authorizes a fixed book of cheap single-use CONNECT-stream tickets over one bounded HTTP/2/Tor session; no implementation yet | `docs/SESSION-TICKETS.md` |
 | Distributable client | **built for v0.4.0** — the checksummed Rust `-live` binary creates identities, wraps one agent process, serves a loopback CONNECT Proxy over embedded Arti, and exposes the reusable §2.6 client; npm remains an operator/contributor dependency, not an agent dependency | `rust/`, `docs/CLIENTS.md` |
 
 Not built and human-gated: the production trusted-setup ceremony and the first live
@@ -692,6 +693,30 @@ standards:
 That would let APIs keep one 402 negotiation surface while choosing among transparent
 stablecoin/card payments, bilateral sessions, or anonymous ZK credits.
 
+### 7.5 Gateway-bound session ticket books — scoped/P1-P2
+
+There is a smaller, buildable ticket mechanism between today's one-proof-per-tunnel v4
+transport and a future transferable zkAPI credit. A client can exchange one existing RLN
+proof for a fixed, short-lived book of random single-use tickets at one selected gateway,
+then spend one ticket for each logical HTTP/2 CONNECT stream over the same Tor connection.
+
+The complete design is [SESSION-TICKETS.md](SESSION-TICKETS.md). Its first policy class
+implements the provisional research envelope from ADR 0009: at most six target streams,
+40 MiB combined payload, a 90-second hard lifetime, bounded concurrency, and shared
+directional shaping. The proof binds the gateway onion, class, session nonce, and ticket-book
+digest; the gateway atomically reserves and commits each ticket before providing service.
+
+This is deliberately **not** called one ticket per HTTP request. Destination TLS remains
+end to end, so the gateway can enforce only one ticket per outer CONNECT stream. An honest
+`ShadeTreeClient.fetch()` can map one fetch to one stream, while a true LLM/RPC/API request
+credit must be verified by that API inside TLS. All child streams in one session are linkable
+to the serving gateway, and gateway-bound books avoid a distributed seer only because they
+cannot move across the fleet.
+
+The scoped implementation backlog is ST-SESSION-0 through ST-SESSION-10. The first version
+reuses the current RLN circuit, accepted roots, target policy, and paid/staked admission;
+it adds a separate HTTP/2 onion-service port and does not change Protocol v4 or any contract.
+
 ---
 
 ## 8. One payment adapter layer inside Shade Tree
@@ -756,7 +781,23 @@ GitHub directory update, and compromise of one boot node cannot insert a fake ga
 **Exit condition:** an agent can reach paid x402/MPP APIs through Shade Tree with an explicit,
 tested choice between direct payment identity and gateway-delegated payment identity.
 
-### Phase D — zkAPI research and prototype (research/P2+)
+### Phase D — gateway-bound session tickets (P1/P2)
+
+- lock the session-ticket protocol, fixed policy class, privacy label, and commit point;
+- prove ordinary HTTP/2 CONNECT multiplexing over one Tor/onion connection;
+- implement ticket-book commitments and the gateway-bound RLN session signal;
+- build the JavaScript node/client vertical slice with exact duplicate-spend prevention;
+- enforce shared byte, time, rate, pending-connect, and concurrent-stream limits;
+- advertise the separate session endpoint with onion-signed capabilities;
+- add Rust parity only after the JavaScript transport and adversarial semantics stabilize;
+- keep Protocol v4 as the explicit per-tunnel privacy/fallback mode.
+
+**Exit condition:** several target tunnels share one bounded onion session after one RLN
+proof; every upstream establishment consumes exactly one ticket; simultaneous duplicate
+spends cannot both receive service; TLS stays end to end; and session-level linkability is
+explicitly surfaced.
+
+### Phase E — zkAPI research and prototype (research/P2+)
 
 - standalone zkAPI spec;
 - formalize online-seer vs channel tradeoff;
@@ -768,7 +809,7 @@ tested choice between direct payment identity and gateway-delegated payment iden
 **Exit condition:** zkAPI has a threat model, a reproducible prototype, and a measured
 reason to exist relative to MPP sessions and ordinary x402 payments.
 
-### Phase E — harder privacy / decentralization (later)
+### Phase F — harder privacy / decentralization (later)
 
 - member-specific gateway subsets to limit fleet enumeration;
 - multiple independent bootstrap mirrors / optional gossip;
@@ -795,6 +836,8 @@ include at least:
 | Egress non-enumerability | public bootstrap output contains no clearnet egress IP mapping |
 | Payment privacy labeling | direct x402/MPP mode explicitly exposes payer identity semantics; delegated mode does not expose member wallet to destination |
 | TLS confidentiality | payment support does not require gateway TLS termination |
+| Session-ticket single use | two simultaneous spends of one connection-local ticket create at most one upstream socket; post-connect failure never refunds it |
+| Session-ticket truthfulness | one ticket is documented and tested as one outer CONNECT stream, not an invisible inner HTTP request; all streams share the advertised byte/rate/lifetime envelope |
 | Rust client lifecycle | two CONNECT tunnels share one bootstrapped base Arti client but use separate circuit-isolation views; crash/restart never rewinds the RLN slot cursor; the CLI Proxy and crate pass the same gateway acceptance vectors |
 | zkAPI safety | simultaneous duplicate credit spend cannot both receive service under the declared fault model |
 
