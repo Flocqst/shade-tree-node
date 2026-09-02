@@ -20,6 +20,12 @@ Read by `bootnode/server.mjs` (discovery service) and `bootnode/heartbeat.mjs` (
 | `SHADE_TREE_GW_OPERATOR_KEY` | (unset) | Operator EOA private key; signs the durable onion↔operator authorization (stake mode). Must be 64 hex (0x optional); a malformed value fails the heartbeat at startup with a message that never echoes the key. | heartbeat | `--operator-key` |
 | `SHADE_TREE_GW_OPERATOR` | (unset) | Pre-computed operator address (used with `SHADE_TREE_GW_OPERATOR_SIG` instead of the key; the pair takes precedence over `SHADE_TREE_GW_OPERATOR_KEY`). Setting one without the other is a startup error, not a silent onion-only downgrade. | heartbeat | `--operator` |
 | `SHADE_TREE_GW_OPERATOR_SIG` | (unset) | Pre-computed operator signature over `operatorAuthMessage(onion, operator)`. Verified locally at startup (same check the bootnode runs); a sig that does not recover `SHADE_TREE_GW_OPERATOR` for this onion fails fast. | heartbeat | `--operator-sig` |
+| `SHADE_TREE_RELAY_TELEMETRY` | (unset → off) | `1` opts the gateway into local payload counters and the heartbeat into the separate signed Elder report path. Set it on both services. It never changes `/announce`. | gateway, heartbeat | (none) |
+| `SHADE_TREE_RELAY_TELEMETRY_STATE` | `tor/hs/relay-telemetry.local.json` | Shared 0600 node-local counter state. The gateway writes; the heartbeat reads. | gateway, heartbeat | (none) |
+| `SHADE_TREE_RELAY_REPORT_STATE` | `tor/hs/relay-report.local.json` | 0600 heartbeat sequence/baseline state, advanced only after Elder acceptance. | heartbeat | (none) |
+| `SHADE_TREE_RELAY_ELDER_STATE` | `bootnode/relay-telemetry-state.local.json` | Private 0600 replay checkpoint (node identity, last sequence/boot/counters only). Raw interval contributions remain memory-only and become unavailable across Elder restart. | bootnode server | (none) |
+| `SHADE_TREE_RELAY_MIN_COHORT` | `5` | Elder aggregate publication floor. Values below five refuse startup. | bootnode server | (none) |
+| `SHADE_TREE_RELAY_DELAY_HOURS` | `6` | Elder fixed-window publication delay. Values below six refuse startup. | bootnode server | (none) |
 | `SHADE_TREE_BOOTNODE_MAX_ENTRIES` | `10000` | Registry size cap: a NEW onion is refused `registry-full` when full; resident onions still refresh. | bootnode server | (none) |
 | `SHADE_TREE_BOOTNODE_MIN_REANNOUNCE` | `5` | Per-onion re-announce throttle in seconds (`rate-limited`, before verify). | bootnode server | (none) |
 | `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` | `2 * maxEntries / SHADE_TREE_BOOTNODE_HEARTBEAT` (= `66.7`/s) | GLOBAL announce token-bucket refill (announces/second that may reach ed25519 verification, whoever sends them). Sized so a fleet at the registry cap heartbeating at the default cadence (`maxEntries/heartbeat` = 33.3/s) draws half the refill; see `docs/BOOTNODE.md` "Endpoint hardening". Overflow is `429 global-rate-limited` + `Retry-After`. `0` with burst `0` disables. | bootnode server | (none) |
@@ -51,6 +57,7 @@ Read by `gateway/gateway.mjs` (egress proxy). See also On-chain and Common group
 | `SHADE_TREE_SLASH_RECEIVER` | (unset → the slasher wallet's own address) | Address that receives the slashed bond. | gateway slasher | (none) |
 | `SHADE_TREE_ENVELOPE_TIMEOUT_MS` | `30000` | Absolute deadline (from connect, NOT re-armed by activity) for the newline-terminated envelope; a slow-loris client that never sends the newline or dribbles bytes is cut at the deadline (reply `bad-envelope:envelope timeout`, drop reason `envelope-timeout`). `0` disables. | gateway | (none) |
 | `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | `300000` (5 min) | Inactivity timeout on the ESTABLISHED relay: no bytes in either direction for this long => both ends closed (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). It is also the one aggregate deadline shared by every pinned upstream address during connect (`upstream-timeout`). `0` disables. | gateway | (none) |
+| `SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES` | `41943040` (40 MiB) | Combined opaque application payload allowed in both directions per `(externalNullifier, nullifier)` RLN epoch slot. Same-node retries share the allowance; the boundary chunk is truncated and both sockets close (`shade_tree_gateway_tunnel_closes_total{reason="payload-limit"}`). `0` disables. | gateway | (none) |
 | `SHADE_TREE_DNS_TIMEOUT_MS` | `5000` | Deadline for resolving an admitted target. The gateway checks every DNS answer, refuses the hostname if any answer is non-public, then pins at most eight validated numeric results in resolver order. `0` disables the DNS deadline, not address validation. | gateway | (none) |
 | `SHADE_TREE_ALLOW_PRIVATE_TARGETS` | (unset) | Unsafe local-development escape hatch. Only `1` permits private or special-purpose destination addresses; the gateway warns at startup. Never set on a network-connected node. | gateway | (none) |
 | `SHADE_TREE_MAX_CONNS` | `1024` | Max concurrent client connections, decided at accept BEFORE any byte is read; over => reply `too-many-connections` + close. `0` = unlimited. | gateway | (none) |
@@ -162,6 +169,25 @@ Read by `payments/registrar.mjs` (the operator's HTTP-402 service that sells mem
 | `SHADE_TREE_NO_PROXY` | (unset) | Extra comma-separated agent-local hosts appended to the fixed loopback bypass list. `*` is rejected because it would bypass Shade Tree. | `shade-tree run` | `--no-proxy` |
 | `SHADE_TREE_PROXY_CHECK_TIMEOUT_MS` | `2000` | TCP preflight deadline before the child is started; integer 1..30000 milliseconds. | `shade-tree run` | `--check-timeout-ms` |
 
+## Binary installer (`scripts/install.sh`)
+
+These variables are read only by the POSIX one-line installer, not by a running
+`shade-tree` process. Network release bases must use HTTPS; `file://` and
+loopback HTTP support exists only for its offline selftest.
+
+| Env var | Default | Controls |
+|---|---|---|
+| `SHADE_TREE_VERSION` | latest release | Pin a release tag, for example `v0.4.1` or `0.4.1`. |
+| `SHADE_TREE_LIVE` | `auto` | `auto` probes the selected release for `-live` and falls back only when its checksum or binary is absent; `1` requires live; `0` requests verifier-only. |
+| `SHADE_TREE_INSTALL_DIR` | `$HOME/.local/bin` | User-writable destination; the installer creates it without sudo. |
+| `SHADE_TREE_FORCE` | `0` | `1` permits replacing a destination symlink to a file; unsafe types and directory symlinks remain refused. |
+| `SHADE_TREE_TARGET` | detected | Exact published Rust target triple override. |
+| `SHADE_TREE_LIBC` | detected | Linux-only `gnu` or `musl` override when libc cannot be identified. |
+| `SHADE_TREE_RELEASE_BASE` | GitHub Releases | Alternate HTTPS release root; local schemes are test-only. |
+
+On macOS, the installer checks `sysctl.proc_translated` so an Apple Silicon
+machine running an x86_64 shell under Rosetta receives the native arm64 asset.
+
 ## Deploy (`bootnode/deploy/bootstrap.sh`)
 
 Read only by the one-command droplet bring-up (not by any `shade-tree` process). They shape the torrc include + systemd units the script writes; the units then carry the runtime `SHADE_TREE_*` values above as `Environment=` lines. Full table + rationale: `bootnode/deploy/README.md` "Tunables".
@@ -181,10 +207,6 @@ Read only by the one-command droplet bring-up (not by any `shade-tree` process).
 | `SHADE_TREE_FLEET_TALLY_PORT` | `8879` | Loopback tally backend and gateway-onion virtual port. Must not collide with a service, Tor, or metrics port. |
 | `SHADE_TREE_REGISTRAR` | `0` | `1` = render + start `shade-tree-registrar.service` (the 402 registrar), publish it as an extra `HiddenServicePort SHADE_TREE_REGISTRAR_PORT` of an onion this box runs — the BOOTNODE onion (bootnode+gateway box; the bootnode advertises it in `/health`) or, T-FEAT-9, the GATEWAY onion (gateway-only box, `SHADE_TREE_BOOTNODE_ONION` set) — and make the heartbeat advertise it as signed `caps.pay`. Companions (all required with `1`): `SHADE_TREE_PAID_ACCESS_CONTRACT`, `SHADE_TREE_PAY_ASSET`, `SHADE_TREE_PAY_PRICES`, `SHADE_TREE_RPC_URL`, `paid` in `SHADE_TREE_ADMIT`; optional `SHADE_TREE_PAY_PROTOCOLS` (default `x402,mpp`; rendered into the registrar unit + both adverts), `SHADE_TREE_PAY_TO`, `SHADE_TREE_REGISTRAR_PORT`, `SHADE_TREE_PAY_CHAIN_ID`. The operator key is a secret → a 0600 drop-in, never a tunable (`docs/OPERATOR.md` "Selling access via 402"). |
 | `SHADE_TREE_RENDER_ONLY` | (unset) | `<dir>`: render the torrc + units under `<dir>/etc/…` and exit (no root, nothing installed); `--render <dir>` is the same. |
-
-## Installer (`scripts/install.sh`)
-
-Read only by the one-line installer for the prebuilt Rust client, not by any `shade-tree` process: `SHADE_TREE_VERSION`, `SHADE_TREE_LIVE`, `SHADE_TREE_INSTALL_DIR`, `SHADE_TREE_FORCE`, `SHADE_TREE_TARGET`, `SHADE_TREE_LIBC`, `SHADE_TREE_RELEASE_BASE`. Defaults and meaning: `rust/INSTALL.md` "One-line install".
 
 ## Demo / test only
 

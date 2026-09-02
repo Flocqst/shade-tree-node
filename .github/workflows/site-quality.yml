@@ -1,0 +1,77 @@
+name: site-quality
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/site-quality.yml"
+      - ".lighthouserc.json"
+      - "docs/post/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.mjs"
+      - "scripts/serve-site.mjs"
+      - "test/site.selftest.mjs"
+      - "test/site-browser/**"
+  pull_request:
+    paths:
+      - ".github/workflows/site-quality.yml"
+      - ".lighthouserc.json"
+      - "docs/post/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.mjs"
+      - "scripts/serve-site.mjs"
+      - "test/site.selftest.mjs"
+      - "test/site-browser/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: site quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run static site checks
+        run: npm run test:site
+
+      - name: Run browser, accessibility, and visual checks
+        run: npm run test:site:browser
+
+      - name: Run Lighthouse budgets
+        run: npm run site:lighthouse
+
+      - name: Upload browser and Lighthouse evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-quality-${{ github.run_id }}
+          path: |
+            .lighthouseci/
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14

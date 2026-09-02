@@ -27,10 +27,6 @@ function seededRandom(seed) {
   };
 }
 
-function easeOutCubic(value) {
-  return 1 - ((1 - value) ** 3);
-}
-
 function easeInOutCubic(value) {
   return value < 0.5
     ? 4 * value * value * value
@@ -269,7 +265,7 @@ function createGrove(scene, mobile) {
 
   const grove = new THREE.Group();
   grove.add(branches, crowns);
-  grove.scale.y = 0.02;
+  grove.scale.y = 1;
   scene.add(grove);
 
   const selectedTree = trees.at(-1);
@@ -468,7 +464,7 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   scene.add(ground);
 
   createShadePatch(scene, mobile);
-  const grove = createGrove(scene, mobile);
+  createGrove(scene, mobile);
   const updateDataStream = createDataStream(scene, mobile);
 
   scene.add(new THREE.HemisphereLight(0xb8cab6, 0x07100c, 1.1));
@@ -507,12 +503,14 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
     const height = Math.max(1, stage.clientHeight);
     const aspect = width / height;
     const tabletClearing = mobile && width > 600;
-    // Stack the grove below the hero actions; phones keep a wider crop plus the CSS lowering.
+    // Stack the grove below the hero actions; tablets lift the full footprint clear of the fade
+    // and bias it right, while phones keep their wider established crop plus the CSS lowering.
     const desktopViewHeight = Math.min(35, Math.max(22, 35 / aspect));
     const viewHeight = mobile ? (tabletClearing ? 34 : 36) : desktopViewHeight;
-    const verticalOffset = mobile ? (tabletClearing ? 9.5 : 8.5) : 0;
-    camera.left = -(viewHeight * aspect) / 2;
-    camera.right = (viewHeight * aspect) / 2;
+    const horizontalOffset = tabletClearing ? -2.25 : 0;
+    const verticalOffset = mobile ? (tabletClearing ? 7 : 8.5) : 0;
+    camera.left = -(viewHeight * aspect) / 2 + horizontalOffset;
+    camera.right = (viewHeight * aspect) / 2 + horizontalOffset;
     camera.top = viewHeight / 2 + verticalOffset;
     camera.bottom = -viewHeight / 2 + verticalOffset;
     camera.updateProjectionMatrix();
@@ -522,8 +520,6 @@ export function mountGrove({ stage, canvas, reducedMotion }) {
   function render(time = startedAt) {
     if (disposed) return;
     const elapsed = Math.max(0, time - startedAt);
-    const growth = reducedMotion ? 1 : easeOutCubic(Math.min(1, elapsed / 900));
-    grove.scale.y = Math.max(0.02, growth);
 
     smoothX += (pointerX - smoothX) * 0.04;
     smoothY += (pointerY - smoothY) * 0.04;

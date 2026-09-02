@@ -7,6 +7,7 @@ User=shade-tree
 WorkingDirectory=/opt/shade-tree
 Environment=SHADE_TREE_ADMIT=invited
 Environment=SHADE_TREE_GATEWAY_PORT=8443
+Environment=SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES=41943040
 Environment=SHADE_TREE_METRICS_PORT=9101
 Environment=SHADE_TREE_LOG_LEVEL=info
 Environment=SHADE_TREE_LOG_FORMAT=json

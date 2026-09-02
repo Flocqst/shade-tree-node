@@ -7,8 +7,9 @@ per-topic docs; this page is the one-screen-per-topic version. Index: [`README.m
 
 > **v4 network status.** This checkout speaks envelope v4. There is no repo-maintained public
 > v4 network profile yet; obtain explicit discovery and contract values from a v4 operator or
-> run the local loop below. The checked-in Sepolia deployment is incompatible pre-v4 history,
-> observed read-only by the public Grove.
+> run the local loop below. The legacy Sepolia runtime records are incompatible pre-v4 history.
+> A separate `network/sepolia/deployment.json` records the invited-only v4 research Grove behind
+> the public aggregate map, but does not contain the membership inputs required to connect.
 
 ## How it works
 
@@ -82,15 +83,15 @@ anonymous: invited, staked, paid.
 
 ## The Rust binary
 
-`shade-tree-0.3.0-<target>-live` needs no Node and no tor daemon; the default non-live binary
+`shade-tree-0.4.1-<target>-live` needs no Node and no tor daemon; the default non-live binary
 verifies, selects and fetches directories but does not egress ([`rust/INSTALL.md`](../rust/INSTALL.md)):
 
 ```bash
 read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
 read -r SHADE_TREE_LIMIT && export SHADE_TREE_LIMIT                           # exact enrolled tier
-shade-tree identity --limit "$SHADE_TREE_LIMIT" --out identity.json           # JS CLI, once
+./shade-tree-0.4.1-<target>-live enroll --limit "$SHADE_TREE_LIMIT" --out identity.json
 shade-tree leaves --contract <v4-member-set-address> --rpc-url <operator-rpc-url> --out members.json
-./shade-tree-0.3.0-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
+./shade-tree-0.4.1-<target>-live egress --bootnode-onion <v4-bootnode.onion> \
   --signer <v4-directory-signer-hex> \
   --identity identity.json --members members.json --target api.ipify.org:443
 ```

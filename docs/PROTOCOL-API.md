@@ -309,6 +309,8 @@ Public copy may call the bootnode the **Elder Tree** and its signed directory th
 | GET | `/directory` | `200 <signed directory>` (section 4.1) | `:158` |
 | GET | `/gateway/<onion>` | `200 <stored announce rec>` (section 3) | `:162` |
 | POST | `/announce` | `200 { ok:true, onion, staked, ttl }` | `:167` |
+| POST | `/telemetry/relay` | `200 { ok:true }` for a private signed report bound to a live announcement | `makeServer` |
+| GET | `/telemetry/aggregate` | `200 <signed delayed cohort aggregate>`; raw reports are never returned | `makeServer` |
 
 - `/health`: `count` = live entry count; `admission` = `"open"|"stake"`; `signer` = pinned
   signer pubkey hex; `pay` (T-FEAT-7, ONLY when `SHADE_TREE_REGISTRAR_ADVERTISE` is set) =
@@ -318,6 +320,13 @@ Public copy may call the bootnode the **Elder Tree** and its signed directory th
   absent (`:131` `record`). Returns the exact stored announce for zero-trust re-verification.
 - `/announce`: request body is the announce record JSON (section 3). `ttl` in the reply is
   `registry.ttlSec` (default `900`).
+- `/telemetry/relay` is separate from `/announce`: exact-key
+  `shade-tree-relay-report-v1`, onion-key signature, boot/sequence/interval/counter reset metadata,
+  and no destination/member/nullifier/flow fields. The Elder requires a currently live announcement
+  and rejects replay, overlap, rollback, wraparound, future/stale time, and implausible deltas.
+- `/telemetry/aggregate` is the only relay telemetry read. Its signed 6h/24h windows end on a fixed
+  hour boundary at least six hours behind collection time, use fixed 1-GiB rounding, and omit
+  `roundedBytes` below five reporters or when unavailable. See `docs/RELAY-TELEMETRY.md`.
 
 The API has no pulse route and publishes no client-query sequence. Local Proxy progress
 events and the public Grove animation are interface behavior, not additional wire state.

@@ -1,0 +1,9 @@
+---
+# Copy outside the repository, replace the placeholder, and keep provider addresses out of
+# network records and commits. The preflight intentionally refuses a pending deployment record.
+shade_tree_v4:
+  hosts:
+    replace-with-inventory-host:
+      ansible_host: replace-with-provider-address
+      ansible_user: replace-with-admin-user
+

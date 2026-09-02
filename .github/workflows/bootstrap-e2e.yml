@@ -24,6 +24,13 @@ on:
       - ".github/workflows/bootstrap-e2e.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bootstrap-e2e:
     name: deploy bootstrap e2e (systemd container, ${{ matrix.mode }})
@@ -34,8 +41,9 @@ jobs:
       matrix:
         mode: [bootnode+gateway, gateway-only]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           submodules: recursive
 
       # ubuntu-latest ships Docker and can run privileged containers, which is what

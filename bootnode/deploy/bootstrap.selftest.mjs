@@ -13,6 +13,8 @@
 //   3. SHADE_TREE_BOOTNODE_ONION=<onion> (GAP-6, gateway-only): NO shade-tree-bootnode unit, NO bootnode HS
 //      block, the heartbeat announces to the REMOTE onion (with/without .onion suffix accepted),
 //      the gateway unit is byte-identical to the default one, a malformed onion is rejected.
+//   3b. SHADE_TREE_ELDER_ONLY=1: ONLY the Elder hidden service + unit are rendered; no gateway
+//      identity, gateway unit, or heartbeat exists, and incompatible gateway tunables fail closed.
 //   4. SHADE_TREE_GATEWAY_REGION passthrough into the heartbeat unit; invalid bucket rejected.
 //   5. Nothing outside <dir> is touched (the render dir is the only side effect).
 //   6. SHADE_TREE_HELIOS=1 (T-DEV-9b, opt-in): a 4th unit shade-tree-helios.service (hardened, loopback-only,
@@ -34,6 +36,11 @@
 //      contracts + RPC into the gateway unit and is fail-closed on a missing companion; canonical
 //      order; SHADE_TREE_PAY_PROTOCOLS subset normalized into registrar + both adverts; SHADE_TREE_REGISTRAR=1
 //      requires `paid` admitted; a GATEWAY-ONLY box may run the registrar on the GATEWAY onion.
+//  10. SHADE_TREE_ZK_ARTIFACTS: an explicit accepted vkey set is rendered into the gateway and
+//      heartbeat (so verification and signed capability advertisement agree); the optional legacy
+//      id is gateway-only; malformed ids/paths and a legacy id without a set fail closed.
+//  11. SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: the 40 MiB protocol default is pinned in the gateway
+//      unit; a bounded non-negative override is passed verbatim and malformed values fail closed.
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -116,7 +123,7 @@ async function main() {
     ok(/MEMBERS_DEST="\/etc\/shade-tree\/members\.json"/.test(bootstrapSource) && /install -o root -g "\$RUN_USER" -m 0640 "\$MEMBERS_SOURCE" "\$MEMBERS_DEST"/.test(bootstrapSource), "live bootstrap installs the invited admission root as root-owned and node-readable");
     ok(!/chown "\$RUN_USER:\$RUN_USER" "\$MEMBERS_DEST"/.test(bootstrapSource) && /ProtectSystem=strict/.test(bootstrapSource) && /ReadWritePaths=\$\{SHADE_TREE_DIR\}\/deploy-state/.test(bootstrapSource), "the node cannot make its trusted member set service-writable through the systemd sandbox");
     ok(/else\s+# An omitted peer list is the off switch[\s\S]*?rm -f "\$FLEET_TALLY_ENV_FILE"\s+fi/.test(bootstrapSource), "disabling the optional fleet tally removes its stale bearer-token file");
-    ok(/systemctl is-active --quiet shade-tree-gateway/.test(bootstrapSource) && /elif \[ "\$GATEWAY_WAS_ACTIVE" = "1" \]; then\s+systemctl restart shade-tree-gateway/.test(bootstrapSource), "an idempotent re-run restarts an already-running gateway so tally rotation or disablement takes effect");
+    ok(/systemctl is-active --quiet shade-tree-gateway/.test(bootstrapSource) && /elif \[ "\$WITH_GATEWAY" = "1" \] && \[ "\$GATEWAY_WAS_ACTIVE" = "1" \]; then\s+systemctl restart shade-tree-gateway/.test(bootstrapSource), "an idempotent re-run restarts an already-running gateway so tally rotation or disablement takes effect");
     ok(/mktemp \/etc\/shade-tree\/\.fleet-tally\.env\.XXXXXX/.test(bootstrapSource) && /mv -f "\$FLEET_TALLY_ENV_TMP" "\$FLEET_TALLY_ENV_FILE"/.test(bootstrapSource), "fleet tally token rotation replaces the root-only environment file atomically");
     ok(/safe `shade-tree proxy` template/.test(deployReadme) && /exact\s+enrolled tier/.test(deployReadme) && !/shade-tree client/.test(deployReadme), "deploy README promises a template and names the operator values it cannot invent");
 
@@ -152,6 +159,18 @@ async function main() {
     const elderDef = got.get("etc/systemd/system/shade-tree-bootnode.service");
     const nodeDef = got.get("etc/systemd/system/shade-tree-gateway.service");
     ok(unitEnv(nodeDef, "SHADE_TREE_GATEWAY_PORT") === "8443", "gateway unit and Tor backend share the default node port");
+    ok(unitEnv(nodeDef, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "41943040", "default gateway unit explicitly pins the 40 MiB protocol parameter");
+    const payloadOverride = render(work, "payload-override", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: "1048576" });
+    const payloadOverrideGateway = await readFile(join(payloadOverride.out, "etc/systemd/system/shade-tree-gateway.service"), "utf8");
+    ok(payloadOverride.status === 0 && unitEnv(payloadOverrideGateway, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "1048576", "payload ceiling override is rendered verbatim");
+    for (const [value, re] of [
+      ["-1", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+      ["40MiB", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+      ["9007199254740992", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+    ]) {
+      const bad = render(work, "payload-bad", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: value });
+      ok(bad.status !== 0 && re.test(bad.stderr), `bad payload ceiling rejected up front: ${JSON.stringify(value)}`);
+    }
     ok(unitEnv(elderDef, "SHADE_TREE_METRICS_PORT") === "9100" && unitEnv(nodeDef, "SHADE_TREE_METRICS_PORT") === "9101" && unitEnv(hbDef, "SHADE_TREE_HEARTBEAT_METRICS_PORT") === "9103", "default operator metrics use distinct loopback ports for Elder, Node, and heartbeat");
     ok([elderDef, nodeDef, hbDef].every((u) => unitEnv(u, "SHADE_TREE_LOG_LEVEL") === "info" && unitEnv(u, "SHADE_TREE_LOG_FORMAT") === "json" && unitEnv(u, "SHADE_TREE_BANNER") === "never"), "systemd defaults to structured info logs without terminal art");
     for (const f of got.keys()) if (f.endsWith(".service")) {
@@ -216,6 +235,32 @@ async function main() {
     // --render <dir> CLI form == env form.
     const cli = render(work, "cli", { SHADE_TREE_BOOTNODE_ONION: ONION }, ["--render", join(work, "cli")]);
     ok(cli.status === 0 && (await readAll(join(work, "cli"))).get("etc/systemd/system/shade-tree-heartbeat.service") === hb, "`--render <dir>` == SHADE_TREE_RENDER_ONLY=<dir>");
+
+    // ---------------------------------------------------------------- 3b. dedicated Elder mode
+    console.log("SHADE_TREE_ELDER_ONLY dedicated control plane:");
+    const elderOnly = render(work, "elder-only", { SHADE_TREE_ELDER_ONLY: "1" });
+    ok(elderOnly.status === 0 && /elder-only/.test(elderOnly.stdout), `Elder-only renders (${(elderOnly.stdout || "").trim()})`);
+    const elderFiles = await readAll(elderOnly.out);
+    ok([...elderFiles.keys()].join(",") === "etc/systemd/system/shade-tree-bootnode.service,etc/tor/torrc.d-shade-tree",
+      `emits torrc + Elder unit ONLY (${[...elderFiles.keys()].join(", ")})`);
+    const elderBlocks = hsBlocks(elderFiles.get("etc/tor/torrc.d-shade-tree"));
+    ok(elderBlocks.length === 1 && elderBlocks[0].dir === "/var/lib/tor/shade-tree-bootnode", "Elder-only torrc contains exactly the Elder hidden service");
+    ok(elderBlocks[0].lines[0] === "HiddenServicePort 80 127.0.0.1:8877" && elderBlocks[0].lines[1] === "HiddenServicePoWDefensesEnabled 0", "Elder-only backend remains loopback-only with PoW off by default");
+    ok(elderFiles.get("etc/systemd/system/shade-tree-bootnode.service") === elderDef, "Elder-only unit is byte-identical to the default Elder unit");
+    for (const alias of ["true", "yes", "on"]) {
+      const r = render(work, `elder-only-${alias}`, { SHADE_TREE_ELDER_ONLY: alias });
+      ok(r.status === 0 && (await readAll(r.out)).size === 2, `SHADE_TREE_ELDER_ONLY=${alias} == 1`);
+    }
+    for (const [name, env, message] of [
+      ["elder-remote", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_BOOTNODE_ONION: ONION }, /mutually exclusive/],
+      ["elder-region", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_GATEWAY_REGION: "na" }, /not valid in Elder-only mode/],
+      ["elder-helios", { SHADE_TREE_ELDER_ONLY: "1", SHADE_TREE_HELIOS: "1" }, /requires a gateway/],
+    ]) {
+      const r = render(work, name, env);
+      ok(r.status !== 0 && message.test(r.stderr), `${name} is rejected before rendering`);
+    }
+    const elderBad = render(work, "elder-bad", { SHADE_TREE_ELDER_ONLY: "maybe" });
+    ok(elderBad.status !== 0 && /SHADE_TREE_ELDER_ONLY must be 1 or 0/.test(elderBad.stderr), "invalid Elder-only toggle is rejected");
 
     // ---------------------------------------------------------------- 4. region passthrough
     console.log("SHADE_TREE_GATEWAY_REGION passthrough:");
@@ -432,6 +477,36 @@ async function main() {
     const ruG = gwRegFiles.get("etc/systemd/system/shade-tree-registrar.service"), hbG = gwRegFiles.get("etc/systemd/system/shade-tree-heartbeat.service");
     ok(unitEnv(ruG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ONION") === "gatewayplaceholderplaceholderplaceholderplaceholderplace.onion" && unitEnv(hbG, "SHADE_TREE_REGISTRAR_ADVERTISE") === "1" && unitEnv(hbG, "SHADE_TREE_BOOTNODE_ONION") === ONION + ".onion", "registrar + heartbeat name the GATEWAY onion as the registrar onion; heartbeat still announces to the remote bootnode");
     ok(unitEnv(gwRegFiles.get("etc/systemd/system/shade-tree-gateway.service"), "SHADE_TREE_ADMIT") === "invited,paid", "gateway-only gateway unit admits invited,paid");
+
+    console.log("explicit ZK artifact set:");
+    const artifactId = "rln-0b25f824a04da3a8";
+    const artifactPath = "circuits/rln/verification_key.json";
+    const artifactSpec = `${artifactId}=${artifactPath}`;
+    const artifacts = render(work, "zk-artifacts", {
+      SHADE_TREE_ZK_ARTIFACTS: artifactSpec,
+      SHADE_TREE_ZK_ARTIFACT_LEGACY: artifactId,
+    });
+    const artifactFiles = await readAll(artifacts.out);
+    const artifactGateway = artifactFiles.get("etc/systemd/system/shade-tree-gateway.service");
+    const artifactHeartbeat = artifactFiles.get("etc/systemd/system/shade-tree-heartbeat.service");
+    ok(artifacts.status === 0 && unitEnv(artifactGateway, "SHADE_TREE_ZK_ARTIFACTS") === artifactSpec && unitEnv(artifactHeartbeat, "SHADE_TREE_ZK_ARTIFACTS") === artifactSpec,
+      "gateway verifies and heartbeat advertises the same explicit artifact set");
+    ok(unitEnv(artifactGateway, "SHADE_TREE_ZK_ARTIFACT_LEGACY") === artifactId && unitEnv(artifactHeartbeat, "SHADE_TREE_ZK_ARTIFACT_LEGACY") === null,
+      "legacy envelope mapping is verifier-only and is not leaked into heartbeat configuration");
+    const stripArtifacts = (u) => u.split("\n").filter((l) => !/^Environment=SHADE_TREE_ZK_ARTIFACT/.test(l)).join("\n");
+    ok(stripArtifacts(artifactGateway) === got.get("etc/systemd/system/shade-tree-gateway.service") && stripArtifacts(artifactHeartbeat) === got.get("etc/systemd/system/shade-tree-heartbeat.service"),
+      "explicit artifact configuration otherwise leaves the default units byte-identical");
+    for (const [name, env, re] of [
+      ["bad-id", { SHADE_TREE_ZK_ARTIFACTS: "RLN-BAD=circuits/rln/verification_key.json" }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["missing-path", { SHADE_TREE_ZK_ARTIFACTS: `${artifactId}=` }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["unit-injection", { SHADE_TREE_ZK_ARTIFACTS: `${artifactSpec}\nEnvironment=BAD=1` }, /SHADE_TREE_ZK_ARTIFACTS must be/],
+      ["path-traversal", { SHADE_TREE_ZK_ARTIFACTS: `${artifactId}=circuits/../secret.json` }, /paths must not contain/],
+      ["legacy-without-set", { SHADE_TREE_ZK_ARTIFACT_LEGACY: artifactId }, /requires an explicit/],
+      ["bad-legacy", { SHADE_TREE_ZK_ARTIFACTS: artifactSpec, SHADE_TREE_ZK_ARTIFACT_LEGACY: "BAD ID" }, /bounded lowercase artifact id/],
+    ]) {
+      const rejected = render(work, `zk-artifacts-${name}`, env);
+      ok(rejected.status !== 0 && re.test(rejected.stderr), `explicit artifacts reject ${name}`);
+    }
 
     console.log("fleet tally onion route:");
     const tallyToken = "t".repeat(32);

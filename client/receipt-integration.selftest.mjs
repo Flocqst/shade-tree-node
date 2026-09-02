@@ -135,6 +135,7 @@ const client = new ShadeTreeClient({
   dirSigner: process.env.SHADE_TREE_DIR_SIGNER,
   socksClient: fakeSocks,
   socksIsolation: false,
+  slotStatePath: process.env.SHADE_TREE_SLOT_STATE_PATH,
 });
 const tunnel = await client.connect("example.com:443");
 console.log("RESULT:" + JSON.stringify(tunnel.shadeTree.receipt));
@@ -189,6 +190,7 @@ const baseEnv = {
   SHADE_TREE_BOOTNODE_ONION: "",
   SHADE_TREE_DIRECTORY_REFRESH_MS: "0",
   SHADE_TREE_HEALTH_CACHE: "", // no health persistence noise
+  SHADE_TREE_SLOT_STATE_PATH: join(work, "rln-slots.json"),
 };
 
 // ================================================================================================

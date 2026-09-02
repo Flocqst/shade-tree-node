@@ -1,10 +1,11 @@
 /* global AbortController, atob, crypto, document, navigator, TextEncoder, window */
 
-import { splitHistory, windowedHistory } from "./history.js";
 import { nextAgeRefreshDelay, snapshotFreshness } from "./freshness.js";
 import { grovePatchCount } from "./visual-model.js";
+import { onchainSigningPayload, validPublicOnchain } from "./onchain.js";
 
-const LIVE_URL = "/api/v1/data/grove/sepolia/head";
+const LIVE_URL = "/api/v2/data/grove/sepolia/head";
+const COUNT_FALLBACK_URL = "/api/v1/data/grove/sepolia/head";
 const FALLBACK_URL = "/grove/network.fallback.json";
 const NETWORK = "sepolia";
 const FETCH_TIMEOUT_MS = 9_000;
@@ -30,14 +31,61 @@ let currentView = { bundled: false, refreshFailed: false };
 const exactKeys = (value, keys) => value && typeof value === "object"
   && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
 const safeCount = (value) => Number.isInteger(value) && value >= 0 && value <= 100_000;
+const decimalU64 = (value) => {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,19})$/.test(value)) return null;
+  try { const parsed = BigInt(value); return parsed <= (1n << 64n) - 1n ? parsed : null; } catch { return null; }
+};
 const isoMillis = (value) => {
   if (typeof value !== "string") return NaN;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : NaN;
 };
 
+function validRelayWindow(value, hours, relay) {
+  const available = value?.status === "available";
+  const start = isoMillis(value?.windowStart);
+  const end = isoMillis(value?.windowEnd);
+  const base = exactKeys(value, available
+    ? ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "roundedBytes"]
+    : ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "suppressionReason"])
+    && value.windowHours === hours
+    && Number.isFinite(start) && Number.isFinite(end)
+    && end - start === hours * 60 * 60_000
+    && end <= isoMillis(relay.generatedAt) - relay.delayHours * 60 * 60_000
+    && safeCount(value.reportingNodes);
+  if (!base) return false;
+  if (available) {
+    const rounded = decimalU64(value.roundedBytes);
+    const bucket = decimalU64(relay.rounding.bucketBytes);
+    return value.reportingNodes >= relay.minimumCohort && rounded !== null && bucket !== null
+      && rounded > 0n && rounded % bucket === 0n;
+  }
+  return value.status === "suppressed"
+    && ["minimum-cohort", "unavailable"].includes(value.suppressionReason)
+    && value.roundedBytes === undefined;
+}
+
+function validRelay(value, observedAt) {
+  const generatedAt = isoMillis(value?.generatedAt);
+  return exactKeys(value, ["definition", "unit", "generatedAt", "delayHours", "minimumCohort", "rounding", "windows"])
+    && value.definition === "payload-bytes-relayed"
+    && value.unit === "bytes"
+    && Number.isFinite(generatedAt)
+    && generatedAt >= observedAt - 60 * 60_000
+    && generatedAt <= observedAt + 5 * 60_000
+    && value.delayHours >= 6
+    && Number.isInteger(value.minimumCohort) && value.minimumCohort >= 5
+    && exactKeys(value.rounding, ["method", "bucketBytes"])
+    && value.rounding.method === "ceiling" && decimalU64(value.rounding.bucketBytes) > 0n
+    && exactKeys(value.windows, ["sixHour", "twentyFourHour"])
+    && validRelayWindow(value.windows.sixHour, 6, value)
+    && validRelayWindow(value.windows.twentyFourHour, 24, value);
+}
+
 function validSnapshot(value) {
   const observedAt = isoMillis(value?.observedAt);
+  const v2 = value?.schema === "shade-tree-public-grove-v2";
+  const hasOnchain = v2 && value?.onchain !== undefined;
   const history = value?.history;
   const historyValid = Array.isArray(history)
     && history.length >= 1
@@ -52,8 +100,12 @@ function validSnapshot(value) {
         && safeCount(sample.announced);
     });
   return value
-    && exactKeys(value, ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
-    && value.schema === "shade-tree-public-grove-v1"
+    && exactKeys(value, v2
+      ? (hasOnchain
+        ? ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "onchain", "attestation"]
+        : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"])
+      : ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "attestation"])
+    && (value.schema === "shade-tree-public-grove-v1" || v2)
     && value.network === NETWORK
     && Number.isFinite(observedAt)
     && observedAt <= Date.now() + 5 * 60_000
@@ -77,6 +129,8 @@ function validSnapshot(value) {
     && value.privacy.futureSharedStatsMinReportingNodes === 5
     && historyValid
     && isoMillis(history.at(-1).at) === observedAt
+    && (!v2 || validRelay(value.relay, observedAt))
+    && (!hasOnchain || validPublicOnchain(value.onchain, observedAt))
     && exactKeys(value.attestation, ["algorithm", "keyId", "signature"])
     && value.attestation.algorithm === "Ed25519"
     && value.attestation.keyId === KEY_ID
@@ -84,7 +138,7 @@ function validSnapshot(value) {
 }
 
 function signingPayload(snapshot) {
-  return {
+  const payload = {
     schema: snapshot.schema,
     network: snapshot.network,
     observedAt: snapshot.observedAt,
@@ -109,6 +163,25 @@ function signingPayload(snapshot) {
     },
     history: snapshot.history.map((sample) => ({ at: sample.at, announced: sample.announced })),
   };
+  if (snapshot.schema === "shade-tree-public-grove-v2") {
+    payload.relay = {
+      definition: snapshot.relay.definition,
+      unit: snapshot.relay.unit,
+      generatedAt: snapshot.relay.generatedAt,
+      delayHours: snapshot.relay.delayHours,
+      minimumCohort: snapshot.relay.minimumCohort,
+      rounding: {
+        method: snapshot.relay.rounding.method,
+        bucketBytes: snapshot.relay.rounding.bucketBytes,
+      },
+      windows: {
+        sixHour: { ...snapshot.relay.windows.sixHour },
+        twentyFourHour: { ...snapshot.relay.windows.twentyFourHour },
+      },
+    };
+    if (snapshot.onchain !== undefined) payload.onchain = onchainSigningPayload(snapshot.onchain);
+  }
+  return payload;
 }
 
 function base64Bytes(value) {
@@ -153,6 +226,14 @@ async function fetchSnapshot(url) {
   }
 }
 
+async function fetchLiveSnapshot() {
+  try {
+    return await fetchSnapshot(LIVE_URL);
+  } catch {
+    return fetchSnapshot(COUNT_FALLBACK_URL);
+  }
+}
+
 function hashSeed(text) {
   let hash = 2166136261;
   for (const char of String(text)) {
@@ -176,8 +257,9 @@ function randomFrom(seed) {
 function drawFallback(snapshot) {
   fallback.querySelectorAll(".fallback-grove").forEach((element) => element.remove());
   const count = snapshot.nodes.announced;
-  const patchCount = Math.min(30, grovePatchCount(count, "high"));
+  const patchCount = grovePatchCount(count, "high");
   const random = randomFrom(hashSeed(`${snapshot.observedAt}:${count}`));
+  const trees = document.createDocumentFragment();
   for (let index = 0; index < patchCount; index += 1) {
     const vertical = 1 - (2 * (index + 0.5)) / patchCount;
     const radius = Math.sqrt(1 - vertical * vertical);
@@ -186,14 +268,16 @@ function drawFallback(snapshot) {
     const depth = Math.sin(angle) * radius;
     const grove = document.createElement("span");
     grove.className = "fallback-grove";
+    grove.dataset.announcedIdentity = "";
     grove.style.setProperty("--x", `${50 + horizontal * 39}%`);
     grove.style.setProperty("--y", `${50 - vertical * 39}%`);
     grove.style.setProperty("--scale", (0.58 + (depth + 1) * 0.32).toFixed(2));
     grove.style.setProperty("--alpha", (0.34 + (depth + 1) * 0.31).toFixed(2));
     grove.style.setProperty("--depth", String(Math.round(2 + (depth + 1) * 4)));
     grove.style.setProperty("--turn", `${Math.round((random() - 0.5) * 13)}deg`);
-    fallback.append(grove);
+    trees.append(grove);
   }
+  fallback.append(trees);
 }
 
 function setText(selector, value) {
@@ -212,11 +296,7 @@ function observationLabel(iso) {
 function updateFreshness() {
   if (!currentSnapshot) return;
   const status = snapshotFreshness(currentSnapshot, currentView);
-  document.body.classList.toggle("is-stale", status.stale);
-  document.body.classList.toggle("is-unavailable", currentView.refreshFailed);
-  setText("[data-view-age]", status.age.short);
-  setText("[data-snapshot-state]", status.snapshotState);
-  setText("[data-view-state]", status.viewState);
+  setText("[data-snapshot-state]", `${status.snapshotState} · ${status.age.long}`);
 }
 
 function scheduleAgeRefresh() {
@@ -232,77 +312,10 @@ function showUnavailable() {
   currentSnapshot = null;
   currentView = { bundled: false, refreshFailed: true };
   window.clearTimeout(ageTimer);
-  document.body.classList.remove("is-stale");
-  document.body.classList.add("is-unavailable");
-  setText("[data-view-state]", "Public view unavailable");
-  setText("[data-view-age]", "Unavailable");
   setText("[data-snapshot-state]", "Unavailable");
+  setText("[data-node-count]", "—");
   setText("[data-view-time]", "Unavailable");
   setText("[data-network]", "Unavailable");
-}
-
-function drawHistory(snapshot) {
-  const chart = document.querySelector("[data-history-chart]");
-  const line = document.querySelector("[data-history-line]");
-  const area = document.querySelector("[data-history-area]");
-  const pointGroup = document.querySelector("[data-history-points]");
-  if (!chart || !line || !area || !pointGroup) return;
-
-  const observedAt = Date.parse(snapshot.observedAt);
-  const startAt = observedAt - 24 * 60 * 60_000;
-  const samplesInWindow = windowedHistory(snapshot.history, snapshot.observedAt);
-  const samples = samplesInWindow.length ? samplesInWindow : [snapshot.history.at(-1)];
-  const counts = samples.map((sample) => sample.announced);
-  const low = Math.min(...counts);
-  const high = Math.max(...counts);
-  const chartTop = 32;
-  const chartBottom = 220;
-  const spread = Math.max(1, high - low);
-  const yLow = Math.max(0, low - spread * 0.18);
-  const yHigh = high + spread * 0.18;
-  const x = (sample) => Math.max(0, Math.min(960, ((Date.parse(sample.at) - startAt) / (24 * 60 * 60_000)) * 960));
-  const y = (sample) => chartBottom - ((sample.announced - yLow) / Math.max(1, yHigh - yLow)) * (chartBottom - chartTop);
-  const segments = splitHistory(samples, snapshot.source.cadenceMinutes);
-  const expectedSamples = Math.floor((24 * 60) / snapshot.source.cadenceMinutes) + 1;
-  const coverage = Math.min(100, Math.round((samples.length / expectedSamples) * 100));
-  const lineParts = [];
-  const areaParts = [];
-
-  segments.forEach((segment) => {
-    if (segment.length === 1) {
-      const pointX = x(segment[0]);
-      lineParts.push(`M${Math.max(0, pointX - 5).toFixed(1)} ${y(segment[0]).toFixed(1)}H${Math.min(960, pointX + 5).toFixed(1)}`);
-      return;
-    }
-    const points = segment.map((sample) => `${x(sample).toFixed(1)} ${y(sample).toFixed(1)}`);
-    lineParts.push(`M${points.join("L")}`);
-    areaParts.push(`M${x(segment[0]).toFixed(1)} ${chartBottom}L${points.join("L")}L${x(segment.at(-1)).toFixed(1)} ${chartBottom}Z`);
-  });
-
-  line.setAttribute("d", lineParts.join(""));
-  area.setAttribute("d", areaParts.join(""));
-  pointGroup.replaceChildren();
-  const stride = Math.max(1, Math.ceil(samples.length / 18));
-  samples.forEach((sample, index) => {
-    if (index !== samples.length - 1 && index % stride !== 0) return;
-    const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    point.setAttribute("class", "history-point");
-    point.setAttribute("cx", x(sample).toFixed(1));
-    point.setAttribute("cy", y(sample).toFixed(1));
-    point.setAttribute("r", index === samples.length - 1 ? "4" : "2.5");
-    pointGroup.append(point);
-  });
-
-  const change = samples.length > 1 ? samples.at(-1).announced - samples[0].announced : null;
-  setText("[data-history-low]", String(low));
-  setText("[data-history-high]", String(high));
-  setText("[data-history-samples]", String(samples.length));
-  setText("[data-history-coverage]", `${coverage}%`);
-  setText("[data-change]", change == null ? "n/a" : `${change > 0 ? "+" : ""}${change}`);
-  chart.setAttribute(
-    "aria-label",
-    `${samples.length} signed aggregate ${samples.length === 1 ? "sample" : "samples"} in the 24-hour window, ${coverage}% coverage. Low ${low}, high ${high}, latest ${samples.at(-1).announced}.`,
-  );
 }
 
 async function renderSnapshot(snapshot, { bundled = false } = {}) {
@@ -313,11 +326,9 @@ async function renderSnapshot(snapshot, { bundled = false } = {}) {
   updateFreshness();
   scheduleAgeRefresh();
   setText("[data-node-count]", String(count));
-  setText("[data-node-hours]", snapshot.growth?.announcedNodeHours == null ? "n/a" : String(snapshot.growth.announcedNodeHours));
   setText("[data-view-time]", observationLabel(snapshot.observedAt));
   setText("[data-network]", snapshot.network);
   setText("[data-snapshot-cadence]", `${cadence} min`);
-  drawHistory(snapshot);
   drawFallback(snapshot);
 
   if (!mounted) {
@@ -366,14 +377,12 @@ function scheduleNextLoad() {
 async function load() {
   if (loadActive) return;
   loadActive = true;
-  // This pulse represents the browser checking the same-origin signed aggregate. The browser
-  // never contacts the onion bootnode. A separate pulse is used when observedAt proves that the
-  // upstream observer published a new census.
-  document.body.classList.add("is-checking");
+  // The browser checks the same-origin signed aggregate and never contacts the onion bootnode.
+  // The canopy emits a stronger pulse when observedAt proves that the observer published a new census.
   stage.classList.add("is-querying");
   sceneController?.beginQuery();
   try {
-    const snapshot = await fetchSnapshot(LIVE_URL);
+    const snapshot = await fetchLiveSnapshot();
     const freshCensus = lastLiveObservedAt !== null && lastLiveObservedAt !== snapshot.observedAt;
     await renderSnapshot(snapshot);
     sceneController?.finishQuery(snapshot, { freshCensus });
@@ -394,13 +403,10 @@ async function load() {
   } finally {
     loadActive = false;
     lastLoadFinishedAt = Date.now();
-    document.body.classList.remove("is-checking");
     stage.classList.remove("is-querying");
     scheduleNextLoad();
   }
 }
-
-load();
 
 function onPageHide() {
   window.clearTimeout(pollTimer);
@@ -419,6 +425,9 @@ function onVisibilityChange() {
   if (Date.now() - lastLoadFinishedAt >= POLL_INTERVAL_MS) load();
 }
 
-window.addEventListener("pagehide", onPageHide);
-window.addEventListener("pageshow", onPageShow);
-document.addEventListener("visibilitychange", onVisibilityChange);
+if (window.location.protocol !== "file:") {
+  load();
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+}

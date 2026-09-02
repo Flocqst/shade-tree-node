@@ -14,6 +14,8 @@
 //   - established relay: bytes flow both ways; then no bytes in either direction for the
 //     idle timeout => both ends closed, `idle-timeout` counted in tunnel_closes; steady
 //     traffic inside the window keeps it open (timer IS re-armed by activity here)
+//   - combined relay payload is truncated at one shared byte boundary across BOTH directions;
+//     same-slot retries share the spent allowance and `payload-limit` is observable
 //   - a black-holed upstream connect (never completes) is bounded by the same idle timeout
 //   - SHADE_TREE_MAX_CONNS: the (max+1)th concurrent socket is refused `too-many-connections`
 //     BEFORE any envelope read; closing one admits the next (release on close)
@@ -35,7 +37,15 @@ import net from "node:net";
 // (a local echo server) is an admitted target. Set BEFORE the dynamic import.
 process.env.SHADE_TREE_EGRESS_ALLOW = "*:*";
 process.env.SHADE_TREE_ALLOW_PRIVATE_TARGETS = "1";
-const { makeHandler, makeConnLimiter, makeEgressPolicy, readEnvelope, HARDENING } = await import("./gateway.mjs");
+const {
+  DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES,
+  HARDENING,
+  makeConnLimiter,
+  makeEgressPolicy,
+  makeHandler,
+  makePayloadBudget,
+  readEnvelope,
+} = await import("./gateway.mjs");
 const { registry: metrics } = await import("../lib/metrics.mjs");
 
 let failures = 0;
@@ -112,6 +122,8 @@ console.log("gateway endpoint hardening (T-HARD-4):");
 await test("HARDENING defaults are the documented safe values", () => {
   assert.equal(HARDENING.envelopeTimeoutMs, 30000, "envelope deadline 30s (the pre-hardening hard-coded value)");
   assert.equal(HARDENING.idleTimeoutMs, 300000, "relay idle timeout 5 min");
+  assert.equal(HARDENING.maxPayloadBytes, 41_943_040, "combined payload ceiling 40 MiB");
+  assert.equal(DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES, 41_943_040);
   assert.equal(HARDENING.maxConns, 1024);
   assert.equal(HARDENING.maxConnsPerNullifier, 8);
 });
@@ -128,6 +140,34 @@ await test("makeConnLimiter: caps, release, per-nullifier isolation, 0 == unlimi
   l.release(); l.release(); l.release(); l.release(); assert.equal(l.total(), 0, "release never underflows");
   const u = makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 });
   for (let i = 0; i < 50; i++) { assert.equal(u.acquire(), true); assert.equal(u.acquireNullifier("z"), true); }
+});
+
+await test("makePayloadBudget: directions/retries share a slot, epochs and slots are independent, 0 disables", () => {
+  let now = 1000;
+  const budget = makePayloadBudget({ maxBytes: 10, ttlMs: 100, now: () => now });
+  assert.deepEqual(budget.take("slot-a", "epoch-1", 4), { allowed: 4, used: 4, remaining: 6, exhausted: false });
+  assert.deepEqual(budget.take("slot-a", "epoch-1", 9), { allowed: 6, used: 10, remaining: 0, exhausted: true }, "opposite direction truncates at the combined boundary");
+  assert.deepEqual(budget.take("slot-a", "epoch-1", 1), { allowed: 0, used: 10, remaining: 0, exhausted: true }, "same-slot retry receives no fresh allowance");
+  assert.equal(budget.remaining("slot-b", "epoch-1"), 10, "another RLN slot is independent");
+  assert.equal(budget.remaining("slot-a", "epoch-2"), 10, "the next epoch is independent");
+  assert.equal(budget.size(), 3);
+  now += 101;
+  budget.sweep();
+  assert.equal(budget.size(), 0, "expired epoch budgets are pruned");
+
+  const held = makePayloadBudget({ maxBytes: 10, ttlMs: 100, now: () => now });
+  assert.equal(held.acquire("long-slot", "epoch-1"), 10);
+  now += 101;
+  held.sweep();
+  assert.equal(held.size(), 1, "an active long-lived tunnel cannot have its allowance reset by pruning");
+  held.release("long-slot", "epoch-1");
+  now += 101;
+  held.sweep();
+  assert.equal(held.size(), 0, "a closed slot is retained only for the configured TTL");
+
+  const unlimited = makePayloadBudget({ maxBytes: 0 });
+  assert.deepEqual(unlimited.take("slot", "epoch", 123), { allowed: 123, used: null, remaining: Infinity, exhausted: false });
+  assert.equal(unlimited.size(), 0, "disabled accounting allocates no per-slot state");
 });
 
 // ---- cheap target gate ordering --------------------------------------------
@@ -502,6 +542,56 @@ await test("a client that closes during upstream connect destroys it and a late 
 
   await closeServer(gw); await closeServer(echo);
 }
+
+// ---- combined payload ceiling ----------------------------------------------
+await test("combined payload ceiling truncates exactly, closes both ends, and survives a same-slot retry", async () => {
+  const limit = 10;
+  const echo = await startEcho();
+  const payloadBudget = makePayloadBudget({ maxBytes: limit });
+  let dials = 0;
+  const gw = await startGateway(makeHandler(makeAdmitAll(), {
+    verify: stubVerify,
+    connect: (port, host, cb) => { dials++; return net.connect(port, host, cb); },
+    envelopeTimeoutMs: 5000,
+    idleTimeoutMs: 0,
+    payloadBudget,
+    limiter: makeConnLimiter({ maxConns: 0, maxPerNullifier: 0 }),
+  }));
+  const port = gw.address().port;
+  const beforeAgent = metricValue("shade_tree_gateway_agent_to_destination_payload_bytes_total", {});
+  const beforeDestination = metricValue("shade_tree_gateway_destination_to_agent_payload_bytes_total", {});
+  const beforeCloses = metricValue("shade_tree_gateway_tunnel_closes_total", { reason: "payload-limit" });
+
+  const first = await dial(port);
+  const payload = Buffer.from("abcdef");
+  first.sock.write(Buffer.concat([Buffer.from(envelopeFor("payload-slot", echo.address().port)), payload]));
+  await waitFor(() => first.closed, 3000, "payload-limited tunnel to close");
+  assert.deepEqual(
+    Buffer.concat(first.data),
+    Buffer.concat([Buffer.from('{"ok":true}\n'), Buffer.from("abcd")]),
+    "six request bytes plus four response bytes reach the exact ten-byte combined ceiling",
+  );
+  assert.equal(metricValue("shade_tree_gateway_agent_to_destination_payload_bytes_total", {}), beforeAgent + 6);
+  assert.equal(metricValue("shade_tree_gateway_destination_to_agent_payload_bytes_total", {}), beforeDestination + 4);
+  assert.equal(metricValue("shade_tree_gateway_tunnel_closes_total", { reason: "payload-limit" }), beforeCloses + 1, "payload-limit close counted once");
+  assert.equal(payloadBudget.remaining("payload-slot", "1"), 0);
+  assert.equal(dials, 1);
+
+  const retry = await dial(port);
+  retry.sock.write(envelopeFor("payload-slot", echo.address().port));
+  await waitFor(() => retry.closed, 3000, "spent same-slot retry to close");
+  assert.equal(lastJson(retry).err, "payload-limit", "retry receives no replacement allowance");
+  assert.equal(dials, 1, "spent retry is refused before another upstream connection");
+
+  const independent = await dial(port);
+  independent.sock.write(envelopeFor("payload-slot-2", echo.address().port));
+  await waitFor(() => independent.lines.length >= 1, 3000, "independent slot ack");
+  assert.deepEqual(lastJson(independent), { ok: true }, "another RLN slot has its own budget");
+  independent.sock.destroy();
+
+  await closeServer(gw);
+  await closeServer(echo);
+});
 
 // ---- concurrent-connection caps ---------------------------------------------
 {

@@ -50,25 +50,18 @@ function fibonacciPoint(index, total, phase = 0) {
   return new THREE.Vector3(Math.cos(turn) * radius, vertical, Math.sin(turn) * radius);
 }
 
-function tangentBasis(normal) {
-  const tangent = new THREE.Vector3(-normal.z, 0, normal.x);
-  if (tangent.lengthSq() < 0.01) tangent.set(1, 0, 0);
-  tangent.normalize();
-  return [tangent, new THREE.Vector3().crossVectors(normal, tangent).normalize()];
-}
-
 function createCanopyField(snapshot, quality) {
   const lowQuality = quality === "low";
   const announced = snapshot.nodes.announced;
   const patchCount = grovePatchCount(announced, quality);
-  const treesPerPatch = lowQuality ? 2 : 3;
-  const treeCount = patchCount * treesPerPatch;
+  const treeCount = patchCount;
   const phase = seededRandom(hashSeed(`${snapshot.observedAt}:${announced}`))() * Math.PI * 2;
   const random = seededRandom(hashSeed(`${announced}:${snapshot.observedAt}:canopy`));
   const normals = Array.from({ length: patchCount }, (_, index) => fibonacciPoint(index, patchCount, phase));
 
   const group = new THREE.Group();
-  group.name = "aggregate-canopy-field";
+  group.name = "announced-identity-trees";
+  group.userData.announcedIdentityCount = treeCount;
   const trunkGeometry = new THREE.CylinderGeometry(1, 1, 1, lowQuality ? 4 : 6, 1, false);
   const crownGeometry = new THREE.IcosahedronGeometry(1, lowQuality ? 0 : 1);
   const trunkMaterial = new THREE.MeshStandardMaterial({ color: BARK, flatShading: true, roughness: 1 });
@@ -81,6 +74,8 @@ function createCanopyField(snapshot, quality) {
   });
   const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, treeCount);
   const crowns = new THREE.InstancedMesh(crownGeometry, crownMaterial, treeCount);
+  trunks.name = "announced-identity-trunks";
+  crowns.name = "announced-identity-crowns";
   trunks.frustumCulled = false;
   crowns.frustumCulled = false;
 
@@ -91,30 +86,23 @@ function createCanopyField(snapshot, quality) {
   const color = new THREE.Color();
   let treeIndex = 0;
 
-  normals.forEach((normal, patchIndex) => {
-    const [tangent, bitangent] = tangentBasis(normal);
-    for (let localIndex = 0; localIndex < treesPerPatch; localIndex += 1) {
-      const spread = localIndex === 0 ? 0 : 0.12 + random() * 0.07;
-      const turn = localIndex * GOLDEN_ANGLE + random() * 0.25;
-      const offset = tangent.clone().multiplyScalar(Math.cos(turn) * spread)
-        .add(bitangent.clone().multiplyScalar(Math.sin(turn) * spread));
-      const base = normal.clone().multiplyScalar(SPHERE_RADIUS + 0.015).add(offset);
-      const height = (lowQuality ? 0.25 : 0.29) + random() * 0.15;
-      const trunkRadius = 0.025 + random() * 0.012;
-      const crownSize = (lowQuality ? 0.115 : 0.13) + random() * 0.05;
-      quaternion.setFromUnitVectors(UP, normal);
+  normals.forEach((normal, index) => {
+    const base = normal.clone().multiplyScalar(SPHERE_RADIUS + 0.015);
+    const height = (lowQuality ? 0.25 : 0.29) + random() * 0.15;
+    const trunkRadius = 0.025 + random() * 0.012;
+    const crownSize = (lowQuality ? 0.115 : 0.13) + random() * 0.05;
+    quaternion.setFromUnitVectors(UP, normal);
 
-      scale.set(trunkRadius, height, trunkRadius);
-      trunkMatrix.compose(base.clone().addScaledVector(normal, height * 0.5), quaternion, scale);
-      trunks.setMatrixAt(treeIndex, trunkMatrix);
+    scale.set(trunkRadius, height, trunkRadius);
+    trunkMatrix.compose(base.clone().addScaledVector(normal, height * 0.5), quaternion, scale);
+    trunks.setMatrixAt(treeIndex, trunkMatrix);
 
-      scale.set(crownSize, crownSize * (0.86 + random() * 0.2), crownSize);
-      crownMatrix.compose(base.clone().addScaledVector(normal, height + crownSize * 0.25), quaternion, scale);
-      crowns.setMatrixAt(treeIndex, crownMatrix);
-      color.setHex((patchIndex + localIndex) % 3 === 0 ? LEAF_DARK : LEAF).offsetHSL(0, 0, (random() - 0.5) * 0.09);
-      crowns.setColorAt(treeIndex, color);
-      treeIndex += 1;
-    }
+    scale.set(crownSize, crownSize * (0.86 + random() * 0.2), crownSize);
+    crownMatrix.compose(base.clone().addScaledVector(normal, height + crownSize * 0.25), quaternion, scale);
+    crowns.setMatrixAt(treeIndex, crownMatrix);
+    color.setHex(index % 3 === 0 ? LEAF_DARK : LEAF).offsetHSL(0, 0, (random() - 0.5) * 0.09);
+    crowns.setColorAt(treeIndex, color);
+    treeIndex += 1;
   });
 
   trunks.instanceMatrix.needsUpdate = true;

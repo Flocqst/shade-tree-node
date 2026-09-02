@@ -167,8 +167,33 @@ pub fn gateway_admits(entry: &GatewayEntry, adm: &Admission) -> bool {
 }
 
 /// Retain only entries passing `adm`; no-op when inactive. Returns the count retained.
+#[cfg(test)]
 pub fn filter_by_admission(gateways: &mut Vec<GatewayEntry>, adm: &Admission) -> usize {
-    if adm.is_active() {
+    filter_by_admission_with_demo(gateways, adm, None)
+}
+
+/// Issue #67 demo routing.  `demo.gateways` is deliberately outside the signed
+/// directory bytes, so it is used only for the explicit `--leaf-source demo`
+/// choice.  A named gateway qualifies, as does a legacy gateway with no signed
+/// `caps.admits`; a modern gateway is never inferred to support demo merely from
+/// its signed admission list (whose fixed grammar intentionally excludes demo).
+pub fn filter_by_admission_with_demo(
+    gateways: &mut Vec<GatewayEntry>,
+    adm: &Admission,
+    demo_gateways: Option<&[String]>,
+) -> usize {
+    if !adm.is_active() {
+        return gateways.len();
+    }
+    if adm.leaf_source.as_deref() == Some("demo") {
+        let named: std::collections::HashSet<String> = demo_gateways
+            .unwrap_or_default()
+            .iter()
+            .map(|onion| onion.to_ascii_lowercase())
+            .collect();
+        gateways
+            .retain(|g| admits_of(g).is_none() || named.contains(&g.onion.to_ascii_lowercase()));
+    } else {
         gateways.retain(|g| gateway_admits(g, adm));
     }
     gateways.len()
@@ -253,6 +278,25 @@ mod tests {
             0
         );
         assert!(describe_fleet_admits(&[legacy, all]).contains("(no policy advertised)"));
+    }
+
+    #[test]
+    fn demo_admission_uses_unsigned_candidate_names_or_legacy_only() {
+        let mut modern_named = admits_entry(Some(&["invited"]));
+        modern_named.onion = "named.onion".into();
+        let mut modern_other = admits_entry(Some(&["invited", "staked"]));
+        modern_other.onion = "other.onion".into();
+        let mut legacy = admits_entry(None);
+        legacy.onion = "legacy.onion".into();
+        let mut gateways = vec![modern_named.clone(), modern_other, legacy.clone()];
+        let adm = Admission {
+            leaf_source: Some("demo".into()),
+            max_anon: false,
+        };
+        filter_by_admission_with_demo(&mut gateways, &adm, Some(&["named.onion".to_string()]));
+        assert_eq!(gateways.len(), 2);
+        assert!(gateways.iter().any(|g| g.onion == modern_named.onion));
+        assert!(gateways.iter().any(|g| g.onion == legacy.onion));
     }
 
     fn entry_with(caps: Option<Caps>) -> GatewayEntry {

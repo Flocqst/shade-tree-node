@@ -144,13 +144,19 @@ function supportsWebGL2() {
 }
 
 async function loadGrove() {
-  if (!stage || !canvas || connection?.saveData || !supportsWebGL2()) return;
+  if (!stage || !canvas) return;
+
+  if (connection?.saveData || !supportsWebGL2()) {
+    stage.classList.add("use-fallback");
+    return;
+  }
 
   try {
     const { mountGrove } = await import("./grove.js");
     mountGrove({ stage, canvas, reducedMotion });
   } catch (error) {
     stage.classList.remove("is-live");
+    stage.classList.add("use-fallback");
     console.warn("Shade Tree Grove fell back to its still image.", error);
   }
 }

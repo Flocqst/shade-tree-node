@@ -3,42 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A signed aggregate view of the Shade Tree Grove. No identities, locations, or traffic.">
+  <meta name="description" content="Signed aggregate stats for the Shade Tree AI agent egress network, without publishing identities, locations, or traffic.">
   <meta name="theme-color" content="#07100c">
-  <meta property="og:title" content="The Grove · Shade Tree Grove">
+  <meta property="og:title" content="Privacy-Preserving Network Stats · Shade Tree Grove">
   <meta property="og:description" content="A privacy-preserving view of the Grove, built from signed aggregate reports.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shade-tree-node.vercel.app/grove/">
+  <meta property="og:site_name" content="Shade Tree Grove">
   <meta property="og:image" content="https://shade-tree-node.vercel.app/fig/shade-tree-og.png">
-  <meta property="og:image:alt" content="An abstract canopy sphere made of small groves and aggregate signals">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="A non-geographic canopy with one tree per announced identity">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://shade-tree-node.vercel.app/grove/">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/site.css">
-  <link rel="stylesheet" href="/grove/grove.css">
-  <script type="module" src="/grove/network.js"></script>
-  <title>The Grove · Shade Tree Grove</title>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../site.css">
+  <link rel="stylesheet" href="./grove.css">
+  <script type="module" src="./network.js"></script>
+  <script src="./file-preview.js" defer></script>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Shade Tree Grove",
+          "item": "https://shade-tree-node.vercel.app/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Network stats"
+        }
+      ]
+    }
+  </script>
+  <title>Privacy-Preserving Network Stats · Shade Tree Grove</title>
 </head>
-<body class="network-page is-checking">
+<body class="network-page">
   <a class="skip-link" href="#grove-main">Skip to Grove details</a>
 
+  <main id="grove-main">
   <header class="network-hero" aria-labelledby="grove-title">
     <nav class="site-nav" aria-label="Primary navigation">
-      <a class="wordmark" href="/" aria-label="Shade Tree Grove home">
+      <a class="wordmark" href="../index.html" aria-label="Shade Tree Grove home">
         <span class="tree-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>Shade Tree Grove</span>
       </a>
       <div class="nav-links">
-        <a href="/grove/" aria-current="page">Grove</a>
-        <a href="/research/">Research</a>
+        <a href="./index.html" aria-current="page">Grove</a>
+        <a href="../research/index.html">Research</a>
         <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
       </div>
     </nav>
 
     <div class="network-dashboard">
       <div class="network-copy">
-        <h1 id="grove-title">The Grove,<br><span>observed.</span></h1>
-        <p>A privacy-preserving view of the Grove, built from <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/data-api.md">signed aggregate reports</a> without publishing node identities or locations.</p>
+        <h1 id="grove-title">Shade Tree Grove<br><span>Network Stats</span></h1>
+        <p>A privacy-preserving view of the Grove, built from <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/specs/data-api.md">signed aggregate reports</a>. One tree appears per announced identity, with no identity or location attached.</p>
       </div>
 
       <div class="network-visual">
@@ -49,76 +73,23 @@
           </div>
           <canvas id="network-canvas" aria-hidden="true"></canvas>
         </div>
-        <div class="network-foot">
-          <div class="snapshot-state" role="status" aria-live="polite">
-            <span class="state-pulse" aria-hidden="true"></span>
-            <span data-view-state>Checking signed aggregate</span>
-          </div>
-        </div>
       </div>
 
       <aside class="provenance-panel" aria-label="Snapshot provenance">
         <div class="provenance-head">
           <span>Snapshot</span>
-          <strong data-snapshot-state>Verifying</strong>
+          <strong data-snapshot-state role="status" aria-live="polite" aria-atomic="true">Verifying</strong>
         </div>
         <dl>
+          <div class="provenance-count"><dt>Announced nodes</dt><dd data-node-count>…</dd></div>
           <div><dt>Network</dt><dd data-network>…</dd></div>
           <div><dt>Scope</dt><dd>Pre-v4 research fleet</dd></div>
-          <div><dt>Definition</dt><dd>Announced within TTL</dd></div>
           <div><dt>Observed</dt><dd data-view-time>…</dd></div>
           <div><dt>Refresh target</dt><dd data-snapshot-cadence>15 min</dd></div>
         </dl>
       </aside>
     </div>
-
-    <dl class="network-data">
-      <div><dt>Announced identities</dt><dd data-node-count>…</dd></div>
-      <div><dt>Observed</dt><dd data-view-age>…</dd></div>
-      <div><dt>24h node-hours</dt><dd data-node-hours>…</dd></div>
-      <div><dt>Observed change</dt><dd data-change>…</dd></div>
-    </dl>
   </header>
-
-  <main id="grove-main" class="grove-main">
-    <section class="history-panel" aria-labelledby="history-title">
-      <div class="section-copy">
-        <h2 id="history-title">24 hours of shade</h2>
-        <p>Signed aggregate counts only. Coverage and gaps stay visible.</p>
-      </div>
-      <div class="history-chart" data-history-chart role="img" aria-label="No signed count history loaded">
-        <svg viewBox="0 0 960 260" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <linearGradient id="history-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#e2be67" stop-opacity="0.28"></stop>
-              <stop offset="1" stop-color="#e2be67" stop-opacity="0"></stop>
-            </linearGradient>
-          </defs>
-          <g class="chart-grid">
-            <path d="M0 40H960M0 130H960M0 220H960"></path>
-          </g>
-          <path class="history-area" data-history-area d=""></path>
-          <path class="history-line" data-history-line d=""></path>
-          <g data-history-points></g>
-        </svg>
-        <div class="chart-axis" aria-hidden="true"><span>24h ago</span><span>Now</span></div>
-      </div>
-      <dl class="history-summary">
-        <div><dt>Low</dt><dd data-history-low>…</dd></div>
-        <div><dt>High</dt><dd data-history-high>…</dd></div>
-        <div><dt>Samples</dt><dd data-history-samples>…</dd></div>
-        <div><dt>Coverage</dt><dd data-history-coverage>…</dd></div>
-      </dl>
-    </section>
   </main>
-
-  <footer class="site-footer">
-    <span>Research preview</span>
-    <nav aria-label="Project links">
-      <a href="/">Home</a>
-      <a href="/research/">Research</a>
-      <a href="https://github.com/dmarzzz/shade-tree-node">Source</a>
-    </nav>
-  </footer>
 </body>
 </html>

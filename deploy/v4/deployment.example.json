@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "network": "replace-me",
+  "status": "pending",
+  "protocol": {
+    "min": 4,
+    "max": 4
+  },
+  "security": {
+    "proofArtifacts": null,
+    "scope": null,
+    "decisionRef": null
+  },
+  "services": {
+    "elder": {
+      "repository": null,
+      "commit": null
+    },
+    "node": {
+      "repository": null,
+      "commit": null
+    },
+    "heartbeat": {
+      "repository": null,
+      "commit": null
+    }
+  },
+  "elder": {
+    "onion": null,
+    "canopySigner": null,
+    "admission": "open",
+    "gatewayRegistry": null
+  },
+  "admission": {
+    "paths": [
+      "invited"
+    ],
+    "roots": {
+      "invited": null,
+      "staked": null,
+      "paid": null
+    },
+    "operatorAuthorization": null
+  },
+  "artifacts": {
+    "accepted": [],
+    "legacy": null
+  },
+  "created": null,
+  "note": "Template only. Replace every null required by the live preflight with operator-verified values; never copy retired fleet values."
+}

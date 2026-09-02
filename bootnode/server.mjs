@@ -79,6 +79,7 @@ import { registry as metrics, installRuntimeMetrics, listenMetrics, safeMetricsP
 import { createLogger } from "../lib/log.mjs";
 import { printOperatorBanner } from "../lib/operator-ui.mjs";
 import { makeFederation, parsePeers } from "./federation.mjs";
+import { makeRelayAggregator } from "../lib/relay-telemetry.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const log = createLogger("elder");
@@ -90,6 +91,8 @@ const M = {
   announces: metrics.counter("shade_tree_bootnode_announces_total", "Announces received, labeled result=accepted|rejected (+ reason on reject)."),
   directoryFetches: metrics.counter("shade_tree_bootnode_directory_fetches_total", "Signed directory (Canopy) requests served by the Elder Tree."),
   deltaFetches: metrics.counter("shade_tree_bootnode_directory_delta_fetches_total", "GET /directory/delta requests served, labeled result=delta|full."),
+  relayReports: metrics.counter("shade_tree_bootnode_relay_reports_total", "Private signed relay telemetry reports received, labeled only by bounded result/reason."),
+  relayAggregates: metrics.counter("shade_tree_bootnode_relay_aggregates_total", "Delayed cohort aggregate relay snapshots served."),
 };
 
 const ANNOUNCE_REASON_LABELS = new Set([
@@ -101,6 +104,16 @@ const ANNOUNCE_REASON_LABELS = new Set([
 export function announceReasonLabel(reason) {
   const base = String(reason || "other").toLowerCase().split(":", 1)[0];
   return ANNOUNCE_REASON_LABELS.has(base) ? base : "other";
+}
+
+const RELAY_REASON_LABELS = new Set([
+  "bad-report", "bad-signature", "not-announced", "future-interval", "stale-interval",
+  "interval-too-long", "sequence-replay", "interval-overlap", "missing-reset",
+  "unexpected-reset", "counter-rollback", "implausible-delta",
+]);
+function relayReasonLabel(reason) {
+  const base = String(reason || "other").toLowerCase().split(":", 1)[0];
+  return RELAY_REASON_LABELS.has(base) ? base : "other";
 }
 
 // Public presentation names. These headers are informational only. They are not signed and
@@ -602,6 +615,7 @@ export function makeRegistry({ signer, stake, admission = "open", ttlSec = 900, 
   const record = (onion) => live.get(String(onion).endsWith(".onion") ? onion : onion + ".onion")?.rec || null;
 
   return { announce, admitGossip, directory, directoryWithEtag, delta, sweep, record, loadPersisted, size: () => live.size,
+    has: (onion) => live.has(String(onion).endsWith(".onion") ? String(onion) : `${onion}.onion`),
     liveOnions: () => [...live.keys()], maxEntries: () => maxEntries, prober, admission, ttlSec, announceBucket: bucket };
 }
 
@@ -667,7 +681,7 @@ function readBody(req, max = 64 * 1024) {
 }
 
 // `limits` overrides HTTP_LIMITS (the selftest sets tiny timeouts); main() passes none.
-export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}) {
+export function makeServer(registry, { signerPub, limits = {}, pay = null, relayAggregator = null } = {}) {
   // Current live-gateway count as a gauge, evaluated at scrape time from this registry.
   metrics.gauge("shade_tree_bootnode_live_gateways", "Gateways currently live (announced within TTL).").setCollect(() => registry.size());
 
@@ -687,6 +701,39 @@ export function makeServer(registry, { signerPub, limits = {}, pay = null } = {}
       if (req.method === "GET" && url.pathname === "/health") {
         // `pay` (T-FEAT-7): present only when the operator advertises a registrar (see payAdvertFromEnv).
         return send(res, 200, { ok: true, count: registry.size(), admission: registry.admission, signer: signerPub, ...(pay ? { pay } : {}) }, ELDER_ROLE_HEADERS);
+      }
+      // Separate private telemetry ingestion. Reports never ride in /announce or /directory.
+      // The aggregator re-verifies onion control and requires this identity to be live in the
+      // authenticated registry before retaining a bounded raw delta.
+      if (req.method === "POST" && url.pathname === "/telemetry/relay") {
+        if (!relayAggregator) return send(res, 404, { ok: false, err: "telemetry-disabled" });
+        let report;
+        try { report = JSON.parse(await readBody(req, 16 * 1024)); }
+        catch { return send(res, 400, { ok: false, err: "bad-report" }); }
+        const result = await relayAggregator.accept(report);
+        M.relayReports.inc({ result: result.ok ? "accepted" : "rejected", ...(result.ok ? {} : { reason: relayReasonLabel(result.reason) }) });
+        return send(res, result.ok ? 200 : 400, result.ok ? { ok: true } : { ok: false, err: result.reason });
+      }
+      // The observer receives only a signed, delayed, rounded cohort aggregate. The raw node map
+      // is not exposed by any route. Suppressed windows omit roundedBytes completely.
+      if (req.method === "GET" && url.pathname === "/telemetry/aggregate") {
+        if (!relayAggregator) return send(res, 404, { ok: false, err: "telemetry-disabled" });
+        M.relayAggregates.inc();
+        const aggregate = relayAggregator.snapshot();
+        const body = Buffer.from(JSON.stringify(aggregate), "utf8");
+        const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+        if (req.headers["if-none-match"]?.split(",").some((value) => value.trim() === etag)) {
+          res.writeHead(304, { etag, "cache-control": "public, max-age=60", ...ELDER_ROLE_HEADERS });
+          return res.end();
+        }
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": body.length,
+          "cache-control": "public, max-age=60",
+          etag,
+          ...ELDER_ROLE_HEADERS,
+        });
+        return res.end(body);
       }
       // Operator metrics intentionally do not live on this server. Tor maps this entire
       // listener into the Elder onion, so exposing /metrics here would publish exact fleet
@@ -840,7 +887,14 @@ async function main() {
   }
 
   const pay = payAdvertFromEnv();
-  const server = makeServer(registry, { signerPub: signer.pub, pay });
+  const relayAggregator = makeRelayAggregator({
+    signer,
+    isAnnounced: (onion) => registry.has(onion),
+    statePath: process.env.SHADE_TREE_RELAY_ELDER_STATE || join(HERE, "relay-telemetry-state.local.json"),
+    minimumCohort: Number(process.env.SHADE_TREE_RELAY_MIN_COHORT || 5),
+    delayHours: Number(process.env.SHADE_TREE_RELAY_DELAY_HOURS || 6),
+  });
+  const server = makeServer(registry, { signerPub: signer.pub, pay, relayAggregator });
   if (pay) log.info("advertising 402 registrar in /health", pay);
 
   // Track live connections for draining (add/delete only — no per-request work).
@@ -872,7 +926,7 @@ async function main() {
     ] });
     log.info(`bootnode up on 127.0.0.1:${port}`, { event: "service.ready", admission, stake: stake.mode, ttlSec, metricsPort });
     log.info("Canopy signer ready", { signer: signer.pub });
-    log.debug("discovery endpoints ready", { endpoints: ["POST /announce", "GET /directory", "GET /directory/delta", "GET /gateway/<onion>", "GET /health"] });
+    log.debug("discovery endpoints ready", { endpoints: ["POST /announce", "POST /telemetry/relay", "GET /telemetry/aggregate", "GET /directory", "GET /directory/delta", "GET /gateway/<onion>", "GET /health"] });
     const b = registry.announceBucket;
     log.debug("endpoint hardening", { announceRatePerSec: Number(b.rate.toFixed(2)), announceBurst: b.burst, ...server.limits });
   });

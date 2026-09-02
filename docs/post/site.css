@@ -51,7 +51,7 @@ body:not(.home-page)::before {
   content: "";
   background:
     linear-gradient(180deg, rgba(7, 16, 12, 0.8), rgba(7, 16, 12, 0.97)),
-    url("/fig/shade-tree-banner.webp") center / cover no-repeat;
+    url("./fig/shade-tree-banner.webp") center / cover no-repeat;
   filter: saturate(0.72) contrast(1.05);
   transform: scale(1.02);
 }
@@ -200,6 +200,8 @@ img {
   color: var(--pulse);
 }
 
+.home-hero .nav-lab { display: none; }
+
 .home-hero {
   position: relative;
   min-height: clamp(43rem, 92svh, 56rem);
@@ -245,7 +247,7 @@ img {
 .forest-fallback {
   position: absolute;
   inset: 5% -3% 0 36%;
-  opacity: 0.84;
+  opacity: 0;
   transition: opacity 500ms ease;
 }
 
@@ -271,7 +273,7 @@ img {
   transform-origin: right;
 }
 
-.grove-stage.is-live .forest-fallback { opacity: 0; }
+.grove-stage.use-fallback .forest-fallback { opacity: 0.84; }
 
 .forest-fallback i {
   position: absolute;
@@ -584,44 +586,46 @@ img {
   line-height: 0.96;
 }
 
-.how-stack {
-  display: grid;
-}
-
-.how-mechanism {
-  padding: 0 0 clamp(3.5rem, 6vw, 5rem);
-}
-
-.how-mechanism + .how-mechanism {
-  padding-top: clamp(3.5rem, 6vw, 5rem);
-  border-top: 1px solid var(--line);
-}
-
-.how-copy {
-  max-width: 46rem;
-}
-
-.how-copy h3 {
-  margin: 0;
-  color: var(--lichen);
-  font-family: var(--display);
-  font-size: clamp(1.9rem, 3vw, 2.8rem);
-  font-weight: 400;
-  letter-spacing: -0.04em;
-  line-height: 1;
-}
-
-.how-copy p,
-.boundary {
-  max-width: 62ch;
-  margin: 1rem 0 0;
+.how-lede {
+  max-width: 52rem;
+  margin: calc(-1 * clamp(1.25rem, 2.5vw, 2.25rem)) 0 0;
   color: var(--muted);
-  font-size: 0.88rem;
-  line-height: 1.72;
+  font-size: clamp(1.02rem, 1.5vw, 1.3rem);
+  line-height: 1.65;
 }
 
-.how-copy a,
-.boundary a {
+/* dappled canopy light drifts behind the section; the flat bg is the fallback */
+.how-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.how-panel .shade-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.how-panel > :not(.shade-canvas) {
+  position: relative;
+}
+
+.how-figure {
+  max-width: 68rem;
+  margin: clamp(2.25rem, 4.5vw, 3.75rem) 0 0;
+}
+
+.how-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 0;
+}
+
+.how-lede a {
   color: var(--lichen);
   text-decoration: underline;
   text-decoration-color: var(--line-strong);
@@ -629,47 +633,9 @@ img {
   transition: color 160ms ease, text-decoration-color 160ms ease;
 }
 
-.how-copy a:hover,
-.boundary a:hover {
+.how-lede a:hover {
   color: var(--pulse);
   text-decoration-color: var(--pulse);
-}
-
-.how-visual {
-  display: block;
-  width: 100%;
-  margin-top: clamp(2rem, 4vw, 3.5rem);
-}
-
-.how-visual img {
-  width: 100%;
-  border: 0;
-  background: transparent;
-}
-
-.boundary {
-  margin-top: 1.25rem;
-}
-
-.protocol-link {
-  margin: -2rem 0 0;
-  text-align: right;
-}
-
-.protocol-link a {
-  display: inline-flex;
-  min-height: 2.75rem;
-  gap: 0.45rem;
-  align-items: center;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line-strong);
-  font-size: 0.8rem;
-  transition: color 160ms ease, border-color 160ms ease;
-}
-
-.protocol-link a:hover {
-  color: var(--pulse);
-  border-color: var(--pulse);
 }
 
 .solid-action,
@@ -719,6 +685,20 @@ img {
   margin: 1.4rem 0 0;
   color: var(--muted);
   font-size: clamp(1rem, 2vw, 1.2rem);
+}
+
+.guide-intro .guide-status {
+  max-width: 46rem;
+  padding: 1rem 1.1rem;
+  color: var(--muted);
+  background: rgba(16, 34, 25, 0.6);
+  border-left: 2px solid var(--pulse);
+  font-size: 0.9rem;
+}
+
+.guide-status strong {
+  color: var(--lichen);
+  font-weight: 650;
 }
 
 .guide-steps { border-top: 1px solid var(--line); }
@@ -780,16 +760,6 @@ img {
   gap: 0.45rem;
 }
 
-.footer-signature p {
-  max-width: 24ch;
-  margin: 0;
-  color: rgba(227, 233, 221, 0.86);
-  font-family: var(--display);
-  font-size: clamp(1.05rem, 1.6vw, 1.4rem);
-  line-height: 1.08;
-  letter-spacing: -0.025em;
-}
-
 .footer-signature span {
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -838,12 +808,6 @@ img {
   .role { grid-template-columns: 1fr; }
 
   .about-panel { grid-template-columns: 1fr; }
-
-  .how-visual {
-    max-width: 45rem;
-    margin-right: auto;
-    margin-left: auto;
-  }
 
   .role { gap: 2rem; }
 
@@ -947,17 +911,12 @@ img {
     margin-bottom: 2.75rem;
   }
 
-  .how-mechanism {
-    padding-bottom: 3.5rem;
+  .how-figure {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
-  .how-mechanism + .how-mechanism {
-    padding-top: 3.5rem;
-  }
-
-  .how-visual { margin-top: 1.75rem; }
-
-  .protocol-link { margin-top: -1.25rem; }
+  .how-figure img { min-width: 640px; }
 
   .guide-main {
     width: min(100% - 1rem, 46rem);

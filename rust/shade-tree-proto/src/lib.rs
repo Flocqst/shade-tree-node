@@ -41,6 +41,7 @@ use std::fmt;
 
 use data_encoding::Specification;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use k256::ecdsa::{RecoveryId, Signature as Secp256k1Signature, VerifyingKey as Secp256k1Key};
 use num_bigint::BigUint;
 use sha3::{Digest, Keccak256, Sha3_256};
 
@@ -120,6 +121,9 @@ impl std::error::Error for Error {}
 
 /// Crate result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Bootnode announce record version (`bootnode/announce.mjs`).
+pub const ANNOUNCE_VERSION: u64 = 1;
 
 // --------------------------------------------------------------------------
 // Record types (spec 3 announce, spec 4.1 directory)
@@ -215,6 +219,11 @@ pub struct Announce {
     /// no-caps announce is byte-identical to before. Unlike the directory entry there is
     /// NO separate `capsSig` on the announce — the caps are covered by `onion_sig`.
     pub caps: Option<Caps>,
+    /// Optional durable onion-key signature over [`canonical_caps_bytes`].  The
+    /// main `onion_sig` already covers caps in this announce; when this standalone
+    /// signature is present it is also checked because it is the signature copied
+    /// into directory entries.
+    pub caps_sig: Option<String>,
 }
 
 // --------------------------------------------------------------------------
@@ -1025,6 +1034,46 @@ pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> 
     check_gateway_bindings(dir)
 }
 
+/// Verify a directory against an allowlist of pinned signers.  This is the CLI-
+/// facing generalization of [`verify_directory`]: threshold directories can meet
+/// M-of-N with several pins, while a legacy single-signature directory must name
+/// (or verify under) one member of the same allowlist.
+pub fn verify_directory_with_signers(
+    dir: &Directory,
+    pinned_signers: &[&str],
+) -> Result<Vec<String>> {
+    let pins = normalize_pinned_signers(pinned_signers);
+    if pins.is_empty() {
+        return Err(Error::Reason("signer-not-pinned".into()));
+    }
+    if is_threshold_directory(dir) {
+        let refs: Vec<&str> = pins.iter().map(String::as_str).collect();
+        return verify_directory_threshold(dir, &refs);
+    }
+
+    if let Some(declared) = dir.signer.as_deref() {
+        let declared = declared
+            .strip_prefix("0x")
+            .or_else(|| declared.strip_prefix("0X"))
+            .unwrap_or(declared)
+            .to_ascii_lowercase();
+        if !pins.iter().any(|pin| pin == &declared) {
+            return Err(Error::Reason("signer-not-pinned".into()));
+        }
+        verify_directory(dir, &declared)?;
+        return Ok(vec![declared]);
+    }
+
+    // A historical directory may omit its signer label.  Try every explicit pin
+    // against the signature, but do not weaken the final error into TOFU.
+    for pin in &pins {
+        if verify_directory(dir, pin).is_ok() {
+            return Ok(vec![pin.clone()]);
+        }
+    }
+    Err(Error::Reason("bad-signature".into()))
+}
+
 /// Verify an announce record (spec 3.4).
 ///
 /// Reference: `bootnode/announce.mjs:80 verifyAnnounce`.
@@ -1034,20 +1083,69 @@ pub fn verify_directory(dir: &Directory, pinned_signer_hex: &str) -> Result<()> 
 /// `replayed-nonce`, `bad-onion-sig`, `bad-operator-sig`, `not-staked`, ...).
 ///
 /// `now` is unix seconds; `skew` is the freshness window (spec 3.3 default 120).
-/// Operator/stake proof (spec 3.2) is out of scope for this signature-only entry
-/// and is handled by the client with a chain reader.
-pub fn verify_announce(_ann: &Announce, _now: u64, _skew: u64) -> Result<()> {
-    // DEFERRED: the individual primitives it composes (onion_to_pubkey,
-    // canonical_announce_bytes, ed25519_verify) ARE implemented and conformance-tested.
-    // The operator-stake branch (proof 2, spec 3.2) recovers an EIP-191 personal_sign
-    // signer over `operator_auth_message` — that needs secp256k1 + Ethereum-address
-    // derivation in Rust (deps not yet added). testdata/vectors.json now pins the
-    // `operatorAnnounce` vector (fixed test key -> operator + operatorSig) for exactly
-    // this future task, so the ECDSA path can be conformance-checked when implemented.
-    // Freshness `now`/skew and nonce-replay ordering still have no pass/fail vector.
-    // Add those before wiring the ordered reason-code checks, so ordering/reason
-    // strings are pinned.
-    todo!("T-RUST-2: implement verify_announce (operatorAnnounce vector now exists; needs secp256k1/EIP-191 + freshness/nonce vectors)")
+/// `seen_nonce`, when supplied, is the caller's replay window.  A nonce is added
+/// only after every cryptographic check succeeds, so a forged record cannot burn
+/// a legitimate nonce.  Live stake lookup remains an I/O concern for the caller;
+/// this function authenticates the optional operator-to-onion authorization that
+/// a stake lookup relies on.
+pub fn verify_announce(
+    ann: &Announce,
+    now: u64,
+    skew: u64,
+    seen_nonce: Option<&mut HashSet<String>>,
+) -> Result<()> {
+    if ann.v != ANNOUNCE_VERSION {
+        return Err(Error::Reason(format!("bad-version:{}", ann.v)));
+    }
+
+    let pubkey =
+        onion_to_pubkey(&ann.onion).map_err(|e| Error::Reason(format!("bad-onion:{e}")))?;
+
+    if now.abs_diff(ann.ts) > skew {
+        return Err(Error::Reason(format!("stale-ts:{}", ann.ts)));
+    }
+    let replay_key = format!("{}:{}", ann.onion, ann.nonce);
+    if seen_nonce
+        .as_deref()
+        .is_some_and(|seen| seen.contains(&replay_key))
+    {
+        return Err(Error::Reason("replayed-nonce".into()));
+    }
+
+    let onion_sig_ok = (|| -> Option<bool> {
+        let sig: [u8; 64] = hex::decode(ann.onion_sig.as_ref()?).ok()?.try_into().ok()?;
+        Some(ed25519_verify(
+            &canonical_announce_bytes(ann),
+            &sig,
+            &pubkey,
+        ))
+    })()
+    .unwrap_or(false);
+    if !onion_sig_ok {
+        return Err(Error::Reason("bad-onion-sig".into()));
+    }
+
+    // The standalone caps signature is optional on announcements, but a supplied
+    // value must verify exactly as the JavaScript verifier requires.
+    if let (Some(caps), Some(caps_sig)) = (&ann.caps, &ann.caps_sig) {
+        if !verify_caps_sig(&ann.onion, caps, Some(caps_sig)) {
+            return Err(Error::Reason("bad-caps-sig".into()));
+        }
+    }
+
+    // JavaScript treats operator authorization as present only when both fields
+    // exist.  A half-present optional pair is ignored here as well; stake-required
+    // policy is enforced by the caller after this signature-only verification.
+    if let (Some(operator), Some(operator_sig)) = (&ann.operator, &ann.operator_sig) {
+        if !verify_operator_sig(&ann.onion, operator, operator_sig) {
+            return Err(Error::Reason("bad-operator-sig".into()));
+        }
+    }
+
+    if let Some(seen) = seen_nonce {
+        seen.insert(replay_key);
+    }
+    Ok(())
 }
 
 // --------------------------------------------------------------------------
@@ -1070,6 +1168,64 @@ pub fn operator_auth_message(onion: &str, operator: &str) -> String {
         "Shade Tree gateway operator authorization\nonion={onion}\noperator={}",
         operator.to_lowercase()
     )
+}
+
+/// Recover the Ethereum address that made an EIP-191 `personal_sign` signature
+/// over [`operator_auth_message`] and compare it to the claimed operator.
+///
+/// Signatures are the standard 65-byte `r || s || v` form.  `v` accepts the
+/// common 0/1 and 27/28 encodings (and the EIP-155 parity form accepted by
+/// ethers).  Addresses are compared case-insensitively because checksum casing
+/// is not part of the authorization message's identity semantics.
+pub fn verify_operator_sig(onion: &str, operator: &str, operator_sig: &str) -> bool {
+    let claimed = operator.to_ascii_lowercase();
+    let Some(address_hex) = claimed.strip_prefix("0x") else {
+        return false;
+    };
+    if address_hex.len() != 40 || hex::decode(address_hex).is_err() {
+        return false;
+    }
+
+    let sig_hex = operator_sig
+        .strip_prefix("0x")
+        .or_else(|| operator_sig.strip_prefix("0X"))
+        .unwrap_or(operator_sig);
+    let Ok(raw) = hex::decode(sig_hex) else {
+        return false;
+    };
+    if raw.len() != 65 {
+        return false;
+    }
+    let Ok(sig) = Secp256k1Signature::from_slice(&raw[..64]) else {
+        return false;
+    };
+    let parity = match raw[64] {
+        0 | 1 => raw[64],
+        27 | 28 => raw[64] - 27,
+        v if v >= 35 => (v - 35) & 1,
+        _ => return false,
+    };
+    let Some(recovery_id) = RecoveryId::from_byte(parity) else {
+        return false;
+    };
+
+    let message = operator_auth_message(onion, operator);
+    let prefix = format!("\x19Ethereum Signed Message:\n{}", message.len());
+    let mut hasher = Keccak256::new();
+    hasher.update(prefix.as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+
+    let Ok(key) = Secp256k1Key::recover_from_prehash(&digest, &sig, recovery_id) else {
+        return false;
+    };
+    let encoded = key.to_sec1_point(false);
+    let pubkey = encoded.as_bytes();
+    if pubkey.len() != 65 {
+        return false;
+    }
+    let recovered = Keccak256::digest(&pubkey[1..]);
+    hex::encode(&recovered[12..]) == address_hex
 }
 
 // --------------------------------------------------------------------------
@@ -1313,6 +1469,15 @@ pub fn sign_receipt(v: u64, onion: &str, epoch: &str, ok: bool, onion_seed: &[u8
 pub const PROTO_MIN: u64 = 4;
 /// Highest envelope version this build can emit/parse (`PROTO_MAX`/`CLIENT_PROTO_MAX` = 4).
 pub const PROTO_MAX: u64 = 4;
+
+/// Provisional default combined application-payload allowance for one RLN epoch slot.
+/// Gateways remain authoritative and may override or disable it operationally; clients use
+/// this value for display/documentation only, never as proof that more service is available.
+pub const DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES: u64 = 40 * 1024 * 1024;
+
+/// Exact bounded refusal reason returned before tunnel establishment when this gateway has
+/// already exhausted the `(externalNullifier, nullifier)` payload allowance.
+pub const REASON_PAYLOAD_LIMIT: &str = "payload-limit";
 
 /// The pre-negotiation wire version an envelope with NO `v` field is treated as
 /// (`gateway/gateway.mjs:269 LEGACY_ENVELOPE_VERSION` = 3).

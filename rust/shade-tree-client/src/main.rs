@@ -15,18 +15,21 @@ use std::collections::HashSet;
 use std::process::ExitCode;
 
 use serde::Deserialize;
-use shade_tree_proto::{pick_gateway, selection_order, verify_directory, verify_receipt, Receipt};
+use shade_tree_proto::{pick_gateway, selection_order, verify_receipt, Receipt};
 
 mod capability;
 mod dircache;
+#[cfg(feature = "live")]
+mod enroll;
 mod health;
-// The persisted K-slot cursor is used only by the `live` egress path (see the `live`
-// module); its unit tests run on the default build under `test`. Gating the module to
-// those two cfgs keeps the default NON-test build from compiling it at all.
-#[cfg(any(feature = "live", test))]
+#[cfg(feature = "live")]
+mod leaves;
+mod run;
+// The crash-safe K-slot coordinator is used by the `live` egress path; its unit
+// tests run on the default build under `test`.
+#[cfg(test)]
+#[allow(dead_code)]
 mod slotcursor;
-
-use dircache::DirectoryDto;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -240,7 +243,30 @@ SUBCOMMANDS:
         Parse an egress-success receipt JSON file and verify it (onion<->pubkey
         binding + ed25519 signature), bound to --onion. Prints ok / reason.
 
-    egress <TRANSPORT> --identity <f> --members <f> --target <host:port>
+    enroll [--limit <n>] [--out identity.json] [--members members.json]
+        Generate a new member identity entirely in Rust. The owner-only identity
+        file stays local; stdout contains only its public enrollment leaf for a
+        Grove operator. --members explicitly adds the leaf to a local version-2
+        demo set. Existing identity files are never overwritten. Requires live.
+
+    proxy-token
+        Print a fresh 256-bit URL-safe token for `proxy` and `run`. Requires live.
+
+    identity [--secret <decimal|0xhex> | --secret-file <f>] [--limit <n>] [--out <f>]
+        Derive the Rust client's Semaphore-v3 identitySecret and RLN rate-commitment
+        leaf natively (no Node.js setup step). Secret fallback order is
+        --secret, --secret-file, SHADE_TREE_SECRET, then ./.secret. --out is
+        written owner-only; otherwise the identity JSON is printed to stdout.
+        Requires a --features live build.
+
+    leaves --contract <0xaddress> [--rpc-url <url>] [--from-block <n>]
+           [--block-tag latest|finalized] [--out <f>]
+        Reconstruct an on-chain StakedReputationSet or PaidAccessSet directly
+        from JSON-RPC event logs and emit the ordered, zero-in-place members.json
+        consumed by egress. No Node.js exporter is required. Requires live.
+
+    egress <TRANSPORT> --identity <f> --target <host:port>
+           (--members <f> | --contract <0xaddress> [--rpc-url <url>])
            [--circuits <dir>] [--epoch <n>] [--slot <i>] [--slot-cursor <f>]
            [--rln-identifier <n>] [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
@@ -270,10 +296,13 @@ SUBCOMMANDS:
                                           (comma = failover list; used by the CI harness).
         Envelope options:
           --identity  JSON { identitySecret, leaf[, limit] } (the member's derived secret + leaf;
-                      export it from your SHADE_TREE_SECRET with the JS CLI: `shade-tree identity --out identity.json`;
+                      create it with Rust `shade-tree enroll`, or derive it from an existing
+                      SHADE_TREE_SECRET with Rust `shade-tree identity --out identity.json`;
                       `limit` = the leaf's reputation-tier userMessageLimit, T-FEAT-8, default 8)
-          --members   JSON { members: [leaf,...] }  (the ordered group, same as the gateway;
-                      for a staked/paid ON-CHAIN set export it: `shade-tree leaves --contract <addr> --out members.json`)
+          --members   JSON { members: [leaf,...] } (the ordered group, same as the gateway).
+          --contract  Discover the ordered group natively from on-chain events. For
+                      --leaf-source demo, omission uses the validated directory demo.contract;
+                      staked/paid may use SHADE_TREE_GROUP_CONTRACT / PAID_ACCESS_CONTRACT.
           --target    host:port bound into the proof (the egress destination)
           --circuits  OPTIONAL dir with rln.wasm + rln_final.zkey + verification_key.json;
                       omit it to use the artifacts EMBEDDED in this binary (self-contained,
@@ -285,13 +314,30 @@ SUBCOMMANDS:
                       (signed caps.artifacts) that exclude ours, egress fails closed with
                       `no-mutual-artifact:...` BEFORE proving.
           --epoch     epoch to prove for (default: floor(now/SHADE_TREE_EPOCH_SECONDS), K=120s)
-          --slot      messageId 0<=i<K (default 0)   --k  userMessageLimit / tier (default:
-                      the identity file's `limit`, else 8; must be the leaf's enrolled limit)
-          --slot-cursor  persist a per-epoch slot cursor (or SHADE_TREE_SLOT_CURSOR) so
-                      consecutive egress runs in one epoch advance 0,1,…,K-1 (distinct
-                      nullifiers) and reset on epoch roll; --slot overrides it
+          --k         userMessageLimit / tier (default: the identity file's `limit`, else 8;
+                      must be the leaf's enrolled limit)
+          --slot-cursor  exact state-file override (or SHADE_TREE_SLOT_CURSOR). Persistence is
+                      default-on under SHADE_TREE_SLOT_STATE_DIR / XDG_STATE_HOME / ~/.local/state,
+                      namespaced by the public member leaf. JS and Rust processes atomically
+                      share it, stop at K, and reset only when the epoch advances.
+          --unsafe-allow-slot-reuse-for-slashing-tests --slot <i>
+                      bypass persistent allocation ONLY for an isolated slashing test; never
+                      use with a funded/live member secret
           --rln-identifier  group id (default 1)     --nonce  32-hex per-request nonce
         Without the feature: prints an honest not-built error.
+
+    proxy [EGRESS OPTIONS] [--listen 127.0.0.1:8118] [--once]
+        Agent-facing local HTTP CONNECT proxy. CONNECT tunnels share one long-lived
+        embedded Arti bootstrap with isolated per-tunnel circuit groups and a bounded
+        proving/connection pool. The Proxy requires an unpredictable 32+ character
+        token (prefer SHADE_TREE_PROXY_TOKEN), returns 200 only after gateway
+        acceptance, and relays application bytes in both directions. Requires live.
+
+    run [--proxy URL] [--no-proxy HOSTS]
+        [--check-timeout-ms N] -- <command> [args]
+        Refuse to start the command unless the local Proxy is accepting, then inject
+        authenticated process-scoped HTTP(S)/WSS proxy variables into that child only.
+        Member/operator SHADE_TREE_* credentials are stripped from the child.
 
     help, --help, -h        Show this help.
     version, --version, -V  Show the version.
@@ -332,6 +378,9 @@ fn admission_refusal(
     before: &[shade_tree_proto::GatewayEntry],
 ) -> String {
     if adm.max_anon {
+        if adm.leaf_source.as_deref() == Some("demo") {
+            return "--max-anon: your leaf is in the demo set; demo admission is linked to the one-shot access request. Max-anon requires an invited (members.json) leaf -- drop --max-anon to use a demo gateway.".to_string();
+        }
         return format!(
             "--max-anon: no invited-only gateway in the directory (a gateway qualifies only when its signed caps say admits=[invited]); fleet: {}",
             capability::describe_fleet_admits(before)
@@ -348,10 +397,13 @@ fn admission_refusal(
 /// leaf is a precise refusal, never a wasted proof).
 fn check_admission(adm: &capability::Admission) -> Result<(), String> {
     if let Some(src) = &adm.leaf_source {
-        if !shade_tree_proto::ADMIT_PATHS.contains(&src.as_str()) {
+        if src != "demo" && !shade_tree_proto::ADMIT_PATHS.contains(&src.as_str()) {
             return Err(format!(
-                "--leaf-source: expected invited, staked or paid (got {src})"
+                "--leaf-source: expected invited, staked, paid or demo (got {src})"
             ));
+        }
+        if adm.max_anon && src == "demo" {
+            return Err("--max-anon: your leaf is in the demo set; demo admission is linked to the one-shot access request. Max-anon requires an invited (members.json) leaf -- drop --max-anon to use a demo gateway.".to_string());
         }
         if adm.max_anon && src != "invited" {
             return Err(format!("--max-anon: your leaf is in the {src} set; an invited-only gateway would reject it (wrong-group-root). Max-anon requires an invited (members.json) leaf -- drop --max-anon to use gateways that admit {src}."));
@@ -371,13 +423,17 @@ fn read_file(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))
 }
 
+fn signer_spec(args: &[String]) -> Option<String> {
+    take_flag(args, "--signers").or_else(|| take_flag(args, "--signer"))
+}
+
 fn cmd_verify_directory(args: &[String]) -> ExitCode {
     let Some(file) = args.first() else {
         eprintln!("verify-directory: missing <file>\n\n{HELP}");
         return ExitCode::from(2);
     };
-    let Some(signer) = take_flag(args, "--signer") else {
-        eprintln!("verify-directory: missing --signer <hex>");
+    let Some(signer) = signer_spec(args) else {
+        eprintln!("verify-directory: missing --signer <hex[,hex...]> (or --signers)");
         return ExitCode::from(2);
     };
     let raw = match read_file(file) {
@@ -387,16 +443,12 @@ fn cmd_verify_directory(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let dto: DirectoryDto = match serde_json::from_str(&raw) {
-        Ok(d) => d,
-        Err(e) => {
-            println!("not-ok: parse: {e}");
-            return ExitCode::from(1);
-        }
-    };
-    match verify_directory(&dto.into_proto(), &signer) {
-        Ok(()) => {
+    match dircache::parse_and_verify_document(&raw, &signer) {
+        Ok(document) => {
             println!("ok");
+            if document.dir.threshold.is_some() {
+                println!("threshold: {}", document.dir.threshold.unwrap_or_default());
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -411,8 +463,8 @@ fn cmd_select(args: &[String]) -> ExitCode {
         eprintln!("select: missing <dir-file>\n\n{HELP}");
         return ExitCode::from(2);
     };
-    let Some(signer) = take_flag(args, "--signer") else {
-        eprintln!("select: missing --signer <hex>");
+    let Some(signer) = signer_spec(args) else {
+        eprintln!("select: missing --signer <hex[,hex...]> (or --signers)");
         return ExitCode::from(2);
     };
     let seed = take_flag(args, "--seed")
@@ -426,19 +478,15 @@ fn cmd_select(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let dto: DirectoryDto = match serde_json::from_str(&raw) {
+    let document = match dircache::parse_and_verify_document(&raw, &signer) {
         Ok(d) => d,
         Err(e) => {
-            println!("not-ok: parse: {e}");
+            println!("not-ok: {e}");
             return ExitCode::from(1);
         }
     };
-    let mut dir = dto.into_proto();
-    // Zero-trust: never select from an unverified directory.
-    if let Err(e) = verify_directory(&dir, &signer) {
-        println!("not-ok: {e}");
-        return ExitCode::from(1);
-    }
+    let demo = document.demo;
+    let mut dir = document.dir;
 
     // Cross-session gateway deprioritization (T-RUST-3, reportResult parity): when a
     // --health-cache is given, seed each gateway's health from the persisted liveness
@@ -481,7 +529,11 @@ fn cmd_select(args: &[String]) -> ExitCode {
     }
     if adm.is_active() {
         let before = dir.gateways.clone();
-        capability::filter_by_admission(&mut dir.gateways, &adm);
+        capability::filter_by_admission_with_demo(
+            &mut dir.gateways,
+            &adm,
+            demo.as_ref().map(|d| d.gateways.as_slice()),
+        );
         if dir.gateways.is_empty() {
             println!("not-ok: {}", admission_refusal(&adm, &before));
             return ExitCode::from(1);
@@ -547,6 +599,217 @@ fn cmd_verify_receipt(args: &[String]) -> ExitCode {
     }
 }
 
+fn cmd_identity(args: &[String]) -> ExitCode {
+    #[cfg(feature = "live")]
+    {
+        use serde::Serialize;
+        use std::io::Write;
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct IdentityOutput<'a> {
+            identity_secret: &'a str,
+            leaf: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            limit: Option<u64>,
+        }
+
+        let (secret, source) = if let Some(secret) = take_flag(args, "--secret") {
+            (secret, "--secret".to_string())
+        } else if let Some(path) = take_flag(args, "--secret-file") {
+            match read_file(&path) {
+                Ok(secret) => (secret.trim().to_string(), format!("--secret-file {path}")),
+                Err(e) => {
+                    eprintln!("identity: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Ok(secret) = std::env::var("SHADE_TREE_SECRET") {
+            (secret, "SHADE_TREE_SECRET".to_string())
+        } else {
+            match read_file(".secret") {
+                Ok(secret) => (secret.trim().to_string(), "./.secret".to_string()),
+                Err(_) => {
+                    eprintln!("identity: no secret; pass --secret/--secret-file, set SHADE_TREE_SECRET, or create ./.secret");
+                    return ExitCode::from(2);
+                }
+            }
+        };
+        let limit = match take_flag(args, "--limit") {
+            Some(v) => match v.parse::<u64>() {
+                Ok(n) => n,
+                Err(_) => {
+                    eprintln!("identity: --limit must be an integer");
+                    return ExitCode::from(2);
+                }
+            },
+            None => shade_tree_egress::slot::DEFAULT_LIMIT,
+        };
+        let material = match shade_tree_rln::identity::derive_identity(&secret, limit) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("identity: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let output = IdentityOutput {
+            identity_secret: &material.identity_secret,
+            leaf: &material.leaf,
+            limit: (limit != shade_tree_egress::slot::DEFAULT_LIMIT).then_some(limit),
+        };
+        let mut body = serde_json::to_string_pretty(&output).expect("serialize identity");
+        body.push('\n');
+        if let Some(path) = take_flag(args, "--out") {
+            #[cfg(unix)]
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = match options.open(&path) {
+                Ok(file) => file,
+                Err(e) => {
+                    eprintln!("identity: write {path}: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            if let Err(e) = file.write_all(body.as_bytes()) {
+                eprintln!("identity: write {path}: {e}");
+                return ExitCode::from(2);
+            }
+            #[cfg(unix)]
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                eprintln!("identity: chmod {path}: {e}");
+                return ExitCode::from(2);
+            }
+            eprintln!(
+                "shade-tree identity — {source}; public leaf {}; wrote {path}",
+                material.leaf
+            );
+        } else {
+            print!("{body}");
+            eprintln!(
+                "shade-tree identity — {source}; public leaf {}",
+                material.leaf
+            );
+        }
+        ExitCode::SUCCESS
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        let _ = args;
+        eprintln!("identity: requires a --features live build");
+        ExitCode::from(3)
+    }
+}
+
+fn cmd_enroll(args: &[String]) -> ExitCode {
+    #[cfg(feature = "live")]
+    {
+        enroll::cmd_enroll(args)
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        let _ = args;
+        eprintln!("enroll: requires a --features live build");
+        ExitCode::from(3)
+    }
+}
+
+fn cmd_proxy_token(args: &[String]) -> ExitCode {
+    #[cfg(feature = "live")]
+    {
+        enroll::cmd_proxy_token(args)
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        let _ = args;
+        eprintln!("proxy-token: requires a --features live build");
+        ExitCode::from(3)
+    }
+}
+
+fn cmd_leaves(args: &[String]) -> ExitCode {
+    #[cfg(feature = "live")]
+    {
+        let contract = take_flag(args, "--contract")
+            .or_else(|| std::env::var("SHADE_TREE_PAID_ACCESS_CONTRACT").ok())
+            .or_else(|| {
+                std::env::var("SHADE_TREE_GROUP_CONTRACT")
+                    .ok()
+                    .and_then(|v| v.split(',').next().map(str::trim).map(str::to_string))
+            });
+        let Some(contract) = contract.filter(|s| !s.is_empty()) else {
+            eprintln!("leaves: no contract; pass --contract or set SHADE_TREE_GROUP_CONTRACT/SHADE_TREE_PAID_ACCESS_CONTRACT");
+            return ExitCode::from(2);
+        };
+        let rpc_url = take_flag(args, "--rpc-url")
+            .or_else(|| std::env::var("SHADE_TREE_RPC_URL").ok())
+            .unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
+        let from = take_flag(args, "--from-block")
+            .or_else(|| std::env::var("SHADE_TREE_FROM_BLOCK").ok())
+            .unwrap_or_else(|| "0".to_string());
+        let from_block = if let Some(hex) = from.strip_prefix("0x") {
+            u64::from_str_radix(hex, 16)
+        } else {
+            from.parse::<u64>()
+        };
+        let Ok(from_block) = from_block else {
+            eprintln!("leaves: invalid --from-block {from:?}");
+            return ExitCode::from(2);
+        };
+        let block_tag = take_flag(args, "--block-tag").unwrap_or_else(|| "latest".to_string());
+        let rln_identifier = take_flag(args, "--rln-identifier")
+            .or_else(|| std::env::var("SHADE_TREE_RLN_IDENTIFIER").ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1);
+        let discovered = match leaves::fetch_members(
+            &rpc_url,
+            &contract,
+            from_block,
+            &block_tag,
+            rln_identifier,
+        ) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("leaves: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        let mut body =
+            serde_json::to_string_pretty(&discovered.document).expect("serialize members document");
+        body.push('\n');
+        if let Some(path) = take_flag(args, "--out") {
+            if let Err(e) = std::fs::write(&path, &body) {
+                eprintln!("leaves: write {path}: {e}");
+                return ExitCode::from(2);
+            }
+            eprintln!(
+                "shade-tree leaves — {contract}: {} live leaves in {} slots; root {}; wrote {path}",
+                discovered.live_count,
+                discovered.document.members.len(),
+                discovered.root
+            );
+        } else {
+            print!("{body}");
+            eprintln!(
+                "shade-tree leaves — {contract}: {} live leaves in {} slots; root {}",
+                discovered.live_count,
+                discovered.document.members.len(),
+                discovered.root
+            );
+        }
+        ExitCode::SUCCESS
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        let _ = args;
+        eprintln!("leaves: requires a --features live build");
+        ExitCode::from(3)
+    }
+}
+
 fn cmd_egress(args: &[String]) -> ExitCode {
     #[cfg(feature = "live")]
     {
@@ -562,6 +825,19 @@ fn cmd_egress(args: &[String]) -> ExitCode {
                 ExitCode::from(3)
             }
         }
+    }
+}
+
+fn cmd_proxy(args: &[String]) -> ExitCode {
+    #[cfg(feature = "live")]
+    {
+        live::run_proxy(args)
+    }
+    #[cfg(not(feature = "live"))]
+    {
+        let _ = args;
+        eprintln!("proxy: requires a --features live build");
+        ExitCode::from(3)
     }
 }
 
@@ -602,7 +878,7 @@ mod live {
 
     use super::{
         admission_from_args, admission_refusal, capability, check_admission, default_seed,
-        dircache, health, mulberry32, now_ms, parse_max_age, read_file, slotcursor, take_flag,
+        dircache, health, mulberry32, now_ms, parse_max_age, read_file, signer_spec, take_flag,
     };
 
     /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
@@ -619,6 +895,25 @@ mod live {
             port: u16,
             artifacts: Option<Vec<String>>,
         },
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum RelayMode {
+        None,
+        Stdio,
+        ProxyResponse,
+    }
+
+    impl RelayMode {
+        fn from_args(args: &[String]) -> Self {
+            if args.iter().any(|arg| arg == "--proxy-response") {
+                Self::ProxyResponse
+            } else if args.iter().any(|arg| arg == "--stdio") {
+                Self::Stdio
+            } else {
+                Self::None
+            }
+        }
     }
 
     impl Transport {
@@ -638,6 +933,18 @@ mod live {
                 Transport::PlainTcp(_) => None,
             }
         }
+
+        fn gateway(&self) -> shade_tree_egress::Gateway {
+            match self {
+                Transport::PlainTcp(address) => shade_tree_egress::Gateway::PlainTcp {
+                    address: address.clone(),
+                },
+                Transport::Onion { onion, port, .. } => shade_tree_egress::Gateway::Onion {
+                    onion: onion.clone(),
+                    port: *port,
+                },
+            }
+        }
     }
 
     /// Cross-session liveness feedback context (only set for the directory / bootnode
@@ -650,10 +957,17 @@ mod live {
         cache: health::HealthCache,
     }
 
+    type DirectoryCandidates = (
+        Vec<Transport>,
+        Option<HealthCtx>,
+        Option<dircache::DemoAdvert>,
+    );
+
     /// The full egress plan: the ordered candidates + optional health feedback.
     struct EgressPlan {
         transports: Vec<Transport>,
         health: Option<HealthCtx>,
+        demo: Option<dircache::DemoAdvert>,
     }
 
     #[derive(Deserialize)]
@@ -691,20 +1005,31 @@ mod live {
         now / epoch_seconds()
     }
 
-    // Where to persist the K-slot cursor (opt-in, like --health-cache): the
-    // `--slot-cursor <f>` flag wins, else the SHADE_TREE_SLOT_CURSOR env, else none (no
-    // persistence -> slot 0, the historical default, so existing harnesses are
-    // unchanged). An empty/"off"/"0" env value is an explicit OFF.
-    fn slot_cursor_path(rest: &[String]) -> Option<PathBuf> {
+    // Exact override first; otherwise use the JS-compatible default under the public leaf.
+    // Empty/off is rejected: only the explicit slashing-test flag below can bypass safety.
+    fn slot_cursor_path(
+        rest: &[String],
+        leaf: &str,
+    ) -> Result<PathBuf, shade_tree_egress::slot::Error> {
         if let Some(f) = take_flag(rest, "--slot-cursor") {
-            return Some(PathBuf::from(f));
+            let f = f.trim();
+            if f.is_empty() || f == "0" || f.eq_ignore_ascii_case("off") {
+                return Err(shade_tree_egress::slot::Error::Unavailable(
+                    "--slot-cursor cannot disable safety".into(),
+                ));
+            }
+            return Ok(PathBuf::from(f));
         }
-        let v = std::env::var("SHADE_TREE_SLOT_CURSOR").ok()?;
-        let v = v.trim();
-        if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
-            return None;
+        if let Ok(v) = std::env::var("SHADE_TREE_SLOT_CURSOR") {
+            let v = v.trim();
+            if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
+                return Err(shade_tree_egress::slot::Error::Unavailable(
+                    "SHADE_TREE_SLOT_CURSOR cannot disable safety".into(),
+                ));
+            }
+            return Ok(PathBuf::from(v));
         }
-        Some(PathBuf::from(v))
+        shade_tree_egress::slot::default_path(leaf)
     }
 
     // Per-step embedded-Tor timeout (bootstrap + connect each), SHADE_TREE_TOR_TIMEOUT_SECS.
@@ -714,6 +1039,14 @@ mod live {
             .and_then(|s| s.parse().ok())
             .filter(|&n: &u64| n > 0)
             .unwrap_or(180)
+    }
+
+    fn gateway_ack_timeout_secs() -> u64 {
+        std::env::var("SHADE_TREE_GATEWAY_ACK_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n: &u64| n > 0)
+            .unwrap_or(15)
     }
 
     // A 16-byte random nonce -> 32 hex chars, matching client/shade-tree-client.mjs
@@ -759,7 +1092,7 @@ mod live {
         fresh: Result<String, String>,
         rest: &[String],
         signer: &str,
-    ) -> Result<(Vec<Transport>, Option<HealthCtx>), String> {
+    ) -> Result<DirectoryCandidates, String> {
         use shade_tree_proto::selection_order;
 
         let cache_path = take_flag(rest, "--cache").map(PathBuf::from);
@@ -772,6 +1105,7 @@ mod live {
                 out.fresh_error.as_deref().unwrap_or("fresh unavailable")
             );
         }
+        let demo = out.demo;
         let mut dir = out.dir;
 
         // Cross-session deprioritization (reportResult parity): seed health, keep the cache
@@ -796,7 +1130,11 @@ mod live {
         check_admission(&adm)?;
         if adm.is_active() {
             let before = dir.gateways.clone();
-            capability::filter_by_admission(&mut dir.gateways, &adm);
+            capability::filter_by_admission_with_demo(
+                &mut dir.gateways,
+                &adm,
+                demo.as_ref().map(|d| d.gateways.as_slice()),
+            );
             if dir.gateways.is_empty() {
                 return Err(admission_refusal(&adm, &before));
             }
@@ -832,7 +1170,7 @@ mod live {
             transports.len(),
             transports[0].label()
         );
-        Ok((transports, health_ctx))
+        Ok((transports, health_ctx, demo))
     }
 
     // Fetch GET /directory from the bootnode onion over EMBEDDED TOR (arti), returning the
@@ -841,60 +1179,55 @@ mod live {
     // anything is used, so a lying/MITM'd bootnode cannot forge an entry. Speaks minimal
     // HTTP/1.1 over the Tor stream (dircache::http_get_request / parse_http_body), exactly
     // like bootnode/fetch.mjs does over its SOCKS tunnel.
-    fn fetch_directory_over_tor(bootnode_onion: &str) -> Result<String, String> {
-        use arti_client::{TorClient, TorClientConfig};
+    fn fetch_directory_over_tor(
+        bootnode_onion: &str,
+        client: &shade_tree_egress::Client,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Result<String, String> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (onion, port) = parse_onion_addr(bootnode_onion, 80)?;
         let host = format!("{onion}.onion");
         let timeout_secs = tor_timeout_secs();
         let timeout = Duration::from_secs(timeout_secs);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("tokio runtime: {e}"))?;
-        rt.block_on(async move {
-            eprintln!("egress: bootstrapping embedded Tor (arti) for bootnode discovery ...");
-            let tor = tokio::time::timeout(
-                timeout,
-                TorClient::create_bootstrapped(TorClientConfig::default()),
-            )
-            .await
-            .map_err(|_| format!("arti bootstrap timed out after {timeout_secs}s"))?
-            .map_err(|e| format!("arti bootstrap: {e}"))?;
-
-            eprintln!("egress: fetching /directory from {host}:{port} over Tor ...");
-            let mut stream = tokio::time::timeout(timeout, tor.connect((host.as_str(), port)))
-                .await
-                .map_err(|_| format!("bootnode connect timed out after {timeout_secs}s"))?
-                .map_err(|e| format!("connect bootnode {host}:{port}: {e}"))?;
-
-            let req = dircache::http_get_request(&host, "/directory");
-            stream
-                .write_all(req.as_bytes())
-                .await
-                .map_err(|e| format!("write request: {e}"))?;
-            stream.flush().await.map_err(|e| format!("flush: {e}"))?;
-
-            let mut buf: Vec<u8> = Vec::with_capacity(4096);
-            let mut chunk = [0u8; 4096];
-            loop {
-                let n = stream
-                    .read(&mut chunk)
+        runtime.block_on(async move {
+            tokio::time::timeout(timeout, async move {
+                eprintln!("egress: fetching /directory from {host}:{port} over Tor ...");
+                let gateway = shade_tree_egress::Gateway::Onion { onion, port };
+                let mut stream = client
+                    .open(&gateway)
                     .await
-                    .map_err(|e| format!("read response: {e}"))?;
-                if n == 0 {
-                    break;
+                    .map_err(|e| format!("connect bootnode {host}:{port}: {e}"))?;
+
+                let req = dircache::http_get_request(&host, "/directory");
+                stream
+                    .write_all(req.as_bytes())
+                    .await
+                    .map_err(|e| format!("write request: {e}"))?;
+                stream.flush().await.map_err(|e| format!("flush: {e}"))?;
+
+                let mut buf: Vec<u8> = Vec::with_capacity(4096);
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = stream
+                        .read(&mut chunk)
+                        .await
+                        .map_err(|e| format!("read response: {e}"))?;
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > dircache::MAX_HTTP_RESP {
+                        return Err(format!(
+                            "bootnode response exceeded {} bytes",
+                            dircache::MAX_HTTP_RESP
+                        ));
+                    }
                 }
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > dircache::MAX_HTTP_RESP {
-                    return Err(format!(
-                        "bootnode response exceeded {} bytes",
-                        dircache::MAX_HTTP_RESP
-                    ));
-                }
-            }
-            dircache::parse_http_body(&buf)
+                dircache::parse_http_body(&buf)
+            })
+            .await
+            .map_err(|_| format!("bootnode HTTP exchange timed out after {timeout_secs}s"))?
         })
     }
 
@@ -915,119 +1248,77 @@ mod live {
         Ok((onion, port))
     }
 
-    // One bootstrapped embedded-Tor client (arti) + its Tokio runtime, REUSED across the
-    // whole failover candidate loop (T-RUST-3b). Bootstrap is the slow part of a Tor dial;
-    // the previous code re-bootstrapped a fresh `TorClient` (and a fresh runtime) for EVERY
-    // candidate, which was purely wasteful — every onion candidate shares the same Tor
-    // network view, so one bootstrap serves them all. We bootstrap ONCE (lazily, only if a
-    // candidate is actually an onion) and call `connect()` per candidate on the same client.
-    //
-    // The RLN envelope is built BEFORE this is created (build_envelope spins up and drops its
-    // own Tokio runtime for the wasm witness), so creating this runtime never nests one
-    // runtime inside another. Bootstrap + each connect are bounded by SHADE_TREE_TOR_TIMEOUT_SECS.
-    struct TorSession {
-        rt: tokio::runtime::Runtime,
-        // `create_bootstrapped` hands back an `Arc<TorClient>` (the client is not itself
-        // Clone); the Arc is the cheap-to-clone reuse handle shared across the loop.
-        client: std::sync::Arc<arti_client::TorClient<tor_rtcompat::PreferredRuntime>>,
-        timeout: Duration,
-        timeout_secs: u64,
-    }
+    async fn relay_async<S>(stream: S, rest: &[u8], mode: RelayMode) -> Result<(), String>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::{copy, split, AsyncWriteExt};
 
-    impl TorSession {
-        // Bootstrap arti ONCE. Called lazily on the first onion candidate so a run whose
-        // failover order is all plain-TCP never pays for a bootstrap.
-        fn bootstrap() -> Result<Self, String> {
-            use arti_client::{TorClient, TorClientConfig};
-
-            let timeout_secs = tor_timeout_secs();
-            let timeout = Duration::from_secs(timeout_secs);
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("tokio runtime: {e}"))?;
-            eprintln!("egress: bootstrapping embedded Tor (arti) once for the failover loop ...");
-            let client = rt.block_on(async {
-                tokio::time::timeout(
-                    timeout,
-                    TorClient::create_bootstrapped(TorClientConfig::default()),
+        let (mut reader, mut writer) = split(stream);
+        let mut stdout = tokio::io::stdout();
+        if mode == RelayMode::ProxyResponse {
+            stdout
+                .write_all(
+                    b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: shade-tree-rust\r\n\r\n",
                 )
                 .await
-                .map_err(|_| format!("arti bootstrap timed out after {timeout_secs}s"))?
-                .map_err(|e| format!("arti bootstrap: {e}"))
-            })?;
-            Ok(Self {
-                rt,
-                client,
-                timeout,
-                timeout_secs,
-            })
+                .map_err(|e| format!("write proxy response: {e}"))?;
         }
+        if !rest.is_empty() {
+            stdout
+                .write_all(rest)
+                .await
+                .map_err(|e| format!("write early tunnel bytes: {e}"))?;
+        }
+        stdout
+            .flush()
+            .await
+            .map_err(|e| format!("flush stdout: {e}"))?;
 
-        // Dial the gateway `.onion` over the ALREADY-bootstrapped client and send the framed
-        // envelope, reading one newline-terminated ack — the read/frame contract is IDENTICAL
-        // to the plain-TCP `send_envelope`, so the gateway cannot tell the transports apart.
-        fn dial_and_send(
-            &self,
-            onion: &str,
-            port: u16,
-            wire: &str,
-        ) -> Result<serde_json::Value, String> {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-            let timeout = self.timeout;
-            let timeout_secs = self.timeout_secs;
-            let client = std::sync::Arc::clone(&self.client);
-            self.rt.block_on(async move {
-                let host = format!("{onion}.onion");
-                eprintln!("egress: dialing {host}:{port} over Tor ...");
-                let mut stream =
-                    tokio::time::timeout(timeout, client.connect((host.as_str(), port)))
-                        .await
-                        .map_err(|_| format!("onion connect timed out after {timeout_secs}s"))?
-                        .map_err(|e| format!("connect onion {host}:{port}: {e}"))?;
-
-                stream
-                    .write_all(wire.as_bytes())
+        let mut stdin = tokio::io::stdin();
+        let up = async {
+            copy(&mut stdin, &mut writer)
+                .await
+                .map_err(|e| format!("relay stdin to tunnel: {e}"))?;
+            // The current gateway treats a client FIN as a full tunnel close (its Node socket
+            // is not allowHalfOpen), so a finite `printf ... | --stdio` must keep the tunnel's
+            // write half open long enough to receive the destination response. CONNECT clients
+            // are long-lived and do need their EOF propagated so abandoned proxy children exit.
+            if mode == RelayMode::ProxyResponse {
+                writer
+                    .shutdown()
                     .await
-                    .map_err(|e| format!("write envelope: {e}"))?;
-                stream
-                    .flush()
-                    .await
-                    .map_err(|e| format!("flush envelope: {e}"))?;
-
-                let mut buf: Vec<u8> = Vec::with_capacity(256);
-                let mut chunk = [0u8; 512];
-                loop {
-                    let n = stream
-                        .read(&mut chunk)
-                        .await
-                        .map_err(|e| format!("read ack: {e}"))?;
-                    if n == 0 {
-                        return Err("gateway closed the connection before an ack".to_string());
-                    }
-                    if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
-                        buf.extend_from_slice(&chunk[..nl]);
-                        break;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                    if buf.len() > 64 * 1024 {
-                        return Err("ack exceeded 64KiB without a newline".to_string());
-                    }
-                }
-                let line = String::from_utf8_lossy(&buf);
-                serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
-                    format!(
-                        "bad ack json ({e}): {}",
-                        line.chars().take(160).collect::<String>()
-                    )
-                })
-            })
+                    .map_err(|e| format!("shutdown tunnel write: {e}"))?;
+            }
+            Ok::<(), String>(())
+        };
+        let down = async {
+            copy(&mut reader, &mut stdout)
+                .await
+                .map_err(|e| format!("relay tunnel to stdout: {e}"))?;
+            stdout
+                .flush()
+                .await
+                .map_err(|e| format!("flush stdout: {e}"))
+        };
+        tokio::pin!(up);
+        tokio::pin!(down);
+        tokio::select! {
+            result = &mut down => result,
+            result = &mut up => {
+                result?;
+                down.await
+            }
         }
     }
 
     // Dial plain TCP, send the framed envelope, read one newline-terminated ack, parse it.
-    fn send_envelope(dial: &str, wire: &str) -> Result<serde_json::Value, String> {
+    #[allow(dead_code)] // retained for the plain-socket relay regression tests/history
+    fn send_envelope(
+        dial: &str,
+        wire: &str,
+        relay: RelayMode,
+    ) -> Result<serde_json::Value, String> {
         let mut stream = TcpStream::connect(dial).map_err(|e| format!("connect {dial}: {e}"))?;
         stream.set_nodelay(true).ok();
         stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
@@ -1035,6 +1326,7 @@ mod live {
             .write_all(wire.as_bytes())
             .map_err(|e| format!("write envelope: {e}"))?;
         let mut buf: Vec<u8> = Vec::with_capacity(256);
+        let mut rest = Vec::new();
         let mut chunk = [0u8; 512];
         loop {
             let n = stream
@@ -1045,6 +1337,7 @@ mod live {
             }
             if let Some(nl) = chunk[..n].iter().position(|&b| b == b'\n') {
                 buf.extend_from_slice(&chunk[..nl]);
+                rest.extend_from_slice(&chunk[nl + 1..n]);
                 break;
             }
             buf.extend_from_slice(&chunk[..n]);
@@ -1053,12 +1346,47 @@ mod live {
             }
         }
         let line = String::from_utf8_lossy(&buf);
-        serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
+        let ack = serde_json::from_str::<serde_json::Value>(&line).map_err(|e| {
             format!(
                 "bad ack json ({e}): {}",
                 line.chars().take(160).collect::<String>()
             )
-        })
+        })?;
+        if ack.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+            && relay != RelayMode::None
+        {
+            if let Err(e) = relay_plain(stream, &rest, relay) {
+                eprintln!("egress: accepted tunnel relay ended with error: {e}");
+            }
+        }
+        Ok(ack)
+    }
+
+    #[allow(dead_code)] // retained to preserve the bounded-stdin shutdown regression fix
+    fn relay_plain(stream: TcpStream, rest: &[u8], mode: RelayMode) -> Result<(), String> {
+        // Drive both directions on one runtime. A detached blocking stdin thread can lose
+        // already-buffered application bytes if the peer closes concurrently and the process
+        // returns first; the async relay keeps the upload future owned until its bytes and FIN
+        // have reached the tunnel (and is the same code path used by Arti).
+        stream
+            .set_nonblocking(true)
+            .map_err(|e| format!("set tunnel nonblocking: {e}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("create relay runtime: {e}"))?;
+        let result = runtime.block_on(async move {
+            let stream = tokio::net::TcpStream::from_std(stream)
+                .map_err(|e| format!("adopt tunnel socket: {e}"))?;
+            relay_async(stream, rest, mode).await
+        });
+        // Tokio implements async stdin with a blocking read. If the destination closes
+        // first, `relay_async` correctly returns on the downstream branch, but an unbounded
+        // Runtime drop would still wait for client stdin and deadlock the Proxy child. The
+        // process is isolated per CONNECT, so a bounded shutdown safely lets its OS teardown
+        // close the abandoned pipe reader after all downstream bytes have been flushed.
+        runtime.shutdown_timeout(Duration::from_millis(100));
+        result
     }
 
     // Resolve the ordered FAILOVER plan from the CLI flags. Order of precedence:
@@ -1066,7 +1394,11 @@ mod live {
     // A comma-separated --plain-tcp/--onion is an explicit failover LIST (dead first,
     // live second, ...); --directory/--bootnode-onion derive the ordered list from the
     // signed directory's weighted selection_order (with LKG caching + health).
-    fn resolve_plan(rest: &[String]) -> Result<EgressPlan, String> {
+    fn resolve_plan(
+        rest: &[String],
+        client: &shade_tree_egress::Client,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Result<EgressPlan, String> {
         if let Some(list) = take_flag(rest, "--plain-tcp") {
             let transports: Vec<Transport> = list
                 .split(',')
@@ -1080,6 +1412,7 @@ mod live {
             return Ok(EgressPlan {
                 transports,
                 health: None,
+                demo: None,
             });
         }
         if let Some(list) = take_flag(rest, "--onion") {
@@ -1098,25 +1431,34 @@ mod live {
             return Ok(EgressPlan {
                 transports,
                 health: None,
+                demo: None,
             });
         }
         if let Some(bootnode) = take_flag(rest, "--bootnode-onion") {
-            let Some(signer) = take_flag(rest, "--signer") else {
+            let Some(signer) = signer_spec(rest) else {
                 return Err("--bootnode-onion needs --signer <hex>".into());
             };
             // Discovery over Tor is the FRESH source; a fetch failure still degrades to the
             // verified LKG cache inside directory_candidates (never nothing / never unverified).
-            let fresh = fetch_directory_over_tor(&bootnode);
-            let (transports, health) = directory_candidates(fresh, rest, &signer)?;
-            return Ok(EgressPlan { transports, health });
+            let fresh = fetch_directory_over_tor(&bootnode, client, runtime);
+            let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+            return Ok(EgressPlan {
+                transports,
+                health,
+                demo,
+            });
         }
         if let Some(dirf) = take_flag(rest, "--directory") {
-            let Some(signer) = take_flag(rest, "--signer") else {
+            let Some(signer) = signer_spec(rest) else {
                 return Err("--directory needs --signer <hex>".into());
             };
             let fresh = read_file(&dirf); // a read failure -> LKG cache fallback
-            let (transports, health) = directory_candidates(fresh, rest, &signer)?;
-            return Ok(EgressPlan { transports, health });
+            let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+            return Ok(EgressPlan {
+                transports,
+                health,
+                demo,
+            });
         }
         Err(
             "no transport: pass --directory <f> --signer <hex> or --bootnode-onion <onion> \
@@ -1124,31 +1466,6 @@ mod live {
              (dial specific onion(s) over Tor), or --plain-tcp <host:port[,host:port...]> (no Tor)"
                 .to_string(),
         )
-    }
-
-    // Dial one candidate + send the framed envelope. Ok(ack) means the gateway replied
-    // (accept OR refuse — terminal); Err means a dial/IO failure the failover loop rotates on.
-    // `tor` holds the shared bootstrapped session (T-RUST-3b): the first onion candidate
-    // bootstraps it, every later onion candidate reuses it. A bootstrap failure leaves `tor`
-    // as `None`, so a later onion candidate may retry — the reuse only caches SUCCESS.
-    fn dial_send(
-        t: &Transport,
-        wire: &str,
-        tor: &mut Option<TorSession>,
-    ) -> Result<serde_json::Value, String> {
-        match t {
-            Transport::PlainTcp(hp) => {
-                eprintln!("egress: dialing {hp} (plain TCP, no Tor) ...");
-                send_envelope(hp, wire)
-            }
-            Transport::Onion { onion, port, .. } => {
-                if tor.is_none() {
-                    *tor = Some(TorSession::bootstrap()?);
-                }
-                // Just populated (or already present): reuse the one bootstrapped client.
-                tor.as_ref().unwrap().dial_and_send(onion, *port, wire)
-            }
-        }
     }
 
     // Fold one dial outcome into the health cache (reportResult parity). No-op unless a
@@ -1161,16 +1478,302 @@ mod live {
         health::update(&mut ctx.cache, &ctx.known, &onion, ok, None, now_ms());
     }
 
-    pub fn run_egress(rest: &[String]) -> ExitCode {
-        let (identity_path, members_path, target) = match (
+    fn proxy_args(rest: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < rest.len() {
+            match rest[index].as_str() {
+                "--listen" | "--target" => index += 2,
+                "--once" | "--stdio" | "--proxy-response" => index += 1,
+                value if value.starts_with("--listen=") || value.starts_with("--target=") => {
+                    index += 1
+                }
+                _ => {
+                    out.push(rest[index].clone());
+                    index += 1;
+                }
+            }
+        }
+        out
+    }
+
+    #[derive(Debug)]
+    enum ProxyRequest {
+        Health,
+        Connect { target: String, early: Vec<u8> },
+    }
+
+    fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+        if left.len() != right.len() {
+            return false;
+        }
+        left.iter()
+            .zip(right)
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
+    }
+
+    fn read_proxy_request(
+        stream: &mut TcpStream,
+        auth_token: &str,
+    ) -> Result<ProxyRequest, String> {
+        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+        let mut bytes = Vec::with_capacity(1024);
+        let mut chunk = [0u8; 1024];
+        let end = loop {
+            let n = stream
+                .read(&mut chunk)
+                .map_err(|e| format!("read CONNECT request: {e}"))?;
+            if n == 0 {
+                if bytes.is_empty() {
+                    return Err("empty-health-probe".into());
+                }
+                return Err("client closed before CONNECT request completed".into());
+            }
+            bytes.extend_from_slice(&chunk[..n]);
+            if bytes.len() > 16 * 1024 {
+                return Err("CONNECT request headers exceeded 16KiB".into());
+            }
+            if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        stream.set_read_timeout(None).ok();
+        let header = std::str::from_utf8(&bytes[..end])
+            .map_err(|_| "CONNECT request headers are not UTF-8".to_string())?;
+        use base64::Engine as _;
+        let expected = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("shade-tree:{auth_token}"))
+        );
+        let credentials = header
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("Proxy-Authorization")
+                    .then_some(value.trim())
+            })
+            .collect::<Vec<_>>();
+        if credentials.len() != 1
+            || !constant_time_eq(credentials[0].as_bytes(), expected.as_bytes())
+        {
+            return Err("proxy-auth-required".into());
+        }
+
+        let first = header.lines().next().unwrap_or("");
+        let mut fields = first.split_whitespace();
+        let method = fields.next();
+        if method == Some("GET")
+            && fields.next() == Some("/_shade_tree/health")
+            && fields
+                .next()
+                .is_some_and(|version| version.starts_with("HTTP/1."))
+        {
+            return Ok(ProxyRequest::Health);
+        }
+        if method != Some("CONNECT") {
+            return Err("only HTTP CONNECT is supported".into());
+        }
+        let target = fields
+            .next()
+            .filter(|s| !s.is_empty() && s.len() <= 512)
+            .ok_or_else(|| "CONNECT target is missing or too long".to_string())?;
+        let (_, port) = target
+            .rsplit_once(':')
+            .ok_or_else(|| "CONNECT target must be host:port".to_string())?;
+        if port.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
+            return Err("CONNECT target has an invalid port".into());
+        }
+        Ok(ProxyRequest::Connect {
+            target: target.to_string(),
+            early: bytes[end..].to_vec(),
+        })
+    }
+
+    fn serve_proxy_client(
+        mut stream: TcpStream,
+        base_args: &[String],
+        auth_token: &str,
+        client: &shade_tree_egress::Client,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Result<bool, String> {
+        let (target, early) = match read_proxy_request(&mut stream, auth_token) {
+            Ok(ProxyRequest::Health) => {
+                stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .map_err(|e| format!("write health response: {e}"))?;
+                return Ok(false);
+            }
+            Ok(ProxyRequest::Connect { target, early }) => (target, early),
+            Err(e) if e == "empty-health-probe" => return Ok(false),
+            Err(e) if e == "proxy-auth-required" => {
+                let response = b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"shade-tree\"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(response);
+                return Err("proxy authentication required".into());
+            }
+            Err(e) => {
+                let body = format!("Shade Tree proxy: {e}\n");
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                return Err(e);
+            }
+        };
+        let mut args = base_args.to_vec();
+        args.push("--target".into());
+        args.push(target);
+        let status = execute_egress(&args, client, runtime, Some((&mut stream, &early)));
+        if status != ExitCode::SUCCESS {
+            let body = b"Shade Tree tunnel setup failed\n";
+            let response = format!(
+                "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+            return Err("egress setup failed".into());
+        }
+        Ok(true)
+    }
+
+    fn bind_proxy_listener(listen: &str) -> Result<std::net::TcpListener, String> {
+        let listener =
+            std::net::TcpListener::bind(listen).map_err(|e| format!("bind {listen}: {e}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|e| format!("inspect bound address for {listen}: {e}"))?;
+        if !address.ip().is_loopback() {
+            return Err(format!(
+                "REFUSING non-loopback Proxy listener {address}; the agent Proxy must stay loopback-only"
+            ));
+        }
+        Ok(listener)
+    }
+
+    pub fn run_proxy(rest: &[String]) -> ExitCode {
+        let auth_token = match std::env::var("SHADE_TREE_PROXY_TOKEN").ok() {
+            Some(token) => match super::run::validate_auth_token(&token) {
+                Ok(()) => std::sync::Arc::new(token),
+                Err(error) => {
+                    eprintln!("proxy: {error}");
+                    return ExitCode::from(2);
+                }
+            },
+            None => {
+                eprintln!("proxy: missing authentication; set SHADE_TREE_PROXY_TOKEN");
+                return ExitCode::from(2);
+            }
+        };
+        let runtime = match new_runtime() {
+            Ok(runtime) => std::sync::Arc::new(runtime),
+            Err(e) => {
+                eprintln!("proxy: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        // One in-process client for the entire proxy lifetime: its Arti once-cell and
+        // bounded prover are shared by every CONNECT worker.
+        let client = std::sync::Arc::new(new_client());
+        let listen = take_flag(rest, "--listen").unwrap_or_else(|| "127.0.0.1:8118".into());
+        let once = rest.iter().any(|arg| arg == "--once");
+        let listener = match bind_proxy_listener(&listen) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("proxy: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let bound = listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or(listen);
+        eprintln!("shade-tree proxy listening on http://{bound}");
+        let base_args = proxy_args(rest);
+        let worker_count = prover_workers();
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<TcpStream>(worker_count);
+        let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+        if !once {
+            for _ in 0..worker_count {
+                let args = base_args.clone();
+                let auth_token = std::sync::Arc::clone(&auth_token);
+                let client = std::sync::Arc::clone(&client);
+                let runtime = std::sync::Arc::clone(&runtime);
+                let receiver = std::sync::Arc::clone(&receiver);
+                std::thread::spawn(move || loop {
+                    let stream = match receiver.lock() {
+                        Ok(receiver) => match receiver.recv() {
+                            Ok(stream) => stream,
+                            Err(_) => return,
+                        },
+                        Err(_) => return,
+                    };
+                    if let Err(e) =
+                        serve_proxy_client(stream, &args, &auth_token, &client, &runtime)
+                    {
+                        eprintln!("proxy: {e}");
+                    }
+                });
+            }
+        }
+        for incoming in listener.incoming() {
+            let stream = match incoming {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("proxy: accept failed: {e}");
+                    continue;
+                }
+            };
+            if once {
+                match serve_proxy_client(stream, &base_args, &auth_token, &client, &runtime) {
+                    Ok(false) => continue,
+                    Ok(true) => return ExitCode::SUCCESS,
+                    Err(e) => {
+                        eprintln!("proxy: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            match sender.try_send(stream) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(mut stream)) => {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n",
+                    );
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    eprintln!("proxy: worker pool stopped");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        ExitCode::SUCCESS
+    }
+
+    fn execute_egress(
+        rest: &[String],
+        client: &shade_tree_egress::Client,
+        runtime: &tokio::runtime::Runtime,
+        mut proxy: Option<(&mut TcpStream, &[u8])>,
+    ) -> ExitCode {
+        let relay = if proxy.is_some() {
+            RelayMode::ProxyResponse
+        } else {
+            RelayMode::from_args(rest)
+        };
+        let (identity_path, target) = match (
             take_flag(rest, "--identity"),
-            take_flag(rest, "--members"),
             take_flag(rest, "--target"),
         ) {
-            (Some(i), Some(m), Some(t)) => (i, m, t),
+            (Some(i), Some(t)) => (i, t),
             _ => {
                 eprintln!(
-                    "egress (live): need --identity <f> --members <f> --target <host:port>\n\n{}",
+                    "egress (live): need --identity <f> --target <host:port> and either --members <f> or an on-chain source\n\n{}",
                     super::HELP
                 );
                 return ExitCode::from(2);
@@ -1182,7 +1785,7 @@ mod live {
 
         // Resolve the ordered failover plan up front so a missing/ambiguous transport (or an
         // unusable directory with no LKG fallback) fails BEFORE the expensive proof build.
-        let mut plan = match resolve_plan(rest) {
+        let mut plan = match resolve_plan(rest, client, runtime) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("egress (live): {e}");
@@ -1199,11 +1802,81 @@ mod live {
                 return ExitCode::from(2);
             }
         };
-        let members: MembersFile = match load_json(&members_path) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("{e}");
+        let members: MembersFile = if let Some(members_path) = take_flag(rest, "--members") {
+            match load_json(&members_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else {
+            let source = admission_from_args(rest).leaf_source;
+            let advertised_demo = source.as_deref() == Some("demo");
+            let contract = take_flag(rest, "--contract")
+                .or_else(|| {
+                    advertised_demo
+                        .then(|| plan.demo.as_ref().map(|d| d.contract.clone()))
+                        .flatten()
+                })
+                .or_else(|| {
+                    (source.as_deref() == Some("paid"))
+                        .then(|| std::env::var("SHADE_TREE_PAID_ACCESS_CONTRACT").ok())
+                        .flatten()
+                })
+                .or_else(|| {
+                    std::env::var("SHADE_TREE_GROUP_CONTRACT")
+                        .ok()
+                        .and_then(|v| v.split(',').next().map(str::trim).map(str::to_string))
+                });
+            let Some(contract) = contract.filter(|s| !s.is_empty()) else {
+                eprintln!("egress (live): no --members file and no on-chain contract source; pass --contract, configure SHADE_TREE_GROUP_CONTRACT/SHADE_TREE_PAID_ACCESS_CONTRACT, or use a valid directory demo advert with --leaf-source demo");
                 return ExitCode::from(2);
+            };
+            let rpc_url = take_flag(rest, "--rpc-url")
+                .or_else(|| std::env::var("SHADE_TREE_RPC_URL").ok())
+                .unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
+            let from = take_flag(rest, "--from-block")
+                .or_else(|| std::env::var("SHADE_TREE_FROM_BLOCK").ok())
+                .unwrap_or_else(|| "0".to_string());
+            let parsed_from = if let Some(hex) = from.strip_prefix("0x") {
+                u64::from_str_radix(hex, 16)
+            } else {
+                from.parse::<u64>()
+            };
+            let Ok(from_block) = parsed_from else {
+                eprintln!("egress (live): invalid --from-block {from:?}");
+                return ExitCode::from(2);
+            };
+            let block_tag = take_flag(rest, "--block-tag").unwrap_or_else(|| "latest".into());
+            let rln_id = take_flag(rest, "--rln-identifier")
+                .unwrap_or_else(|| "1".into())
+                .parse::<u64>()
+                .unwrap_or(1);
+            let discovered = match super::leaves::fetch_members(
+                &rpc_url, &contract, from_block, &block_tag, rln_id,
+            ) {
+                Ok(value) => value,
+                Err(e) => {
+                    eprintln!("egress (live): leaf discovery failed: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            if !discovered
+                .document
+                .members
+                .iter()
+                .any(|m| m == &identity.leaf)
+            {
+                eprintln!("egress (live): your leaf {}.. is not present in discovered {} ({} live leaves)", identity.leaf.chars().take(12).collect::<String>(), contract, discovered.live_count);
+                return ExitCode::from(2);
+            }
+            eprintln!(
+                "egress: discovered {} live leaves from {} (root {})",
+                discovered.live_count, contract, discovered.root
+            );
+            MembersFile {
+                members: discovered.document.members,
             }
         };
         // K = this member's tier limit (T-FEAT-8): `--k` wins, else the identity file's `limit`
@@ -1218,32 +1891,55 @@ mod live {
                     return ExitCode::from(2);
                 }
             },
-            None => identity.limit.unwrap_or(slotcursor::K_SLOTS),
+            None => identity
+                .limit
+                .unwrap_or(shade_tree_egress::slot::DEFAULT_LIMIT),
         };
-        if k < 1 || k > slotcursor::MAX_LIMIT {
+        if !(1..=shade_tree_egress::slot::MAX_LIMIT).contains(&k) {
             eprintln!(
                 "egress (live): K={k} out of range 1..{} (RLN(20,16) range check is 16-bit)",
-                slotcursor::MAX_LIMIT
+                shade_tree_egress::slot::MAX_LIMIT
             );
             return ExitCode::from(2);
         }
-        // Slot resolution (parity with makeSlotPool, client/shade-tree-client.mjs):
-        //   1. explicit `--slot <i>` always wins and leaves any cursor untouched.
-        //   2. otherwise, if a persisted cursor is configured (`--slot-cursor <f>` or
-        //      SHADE_TREE_SLOT_CURSOR), advance it: consecutive egress runs in one epoch get
-        //      distinct slots 0,1,…,K-1 (distinct nullifiers), resetting on epoch roll.
-        //   3. with no cursor and no `--slot`, preserve the historical default of slot 0.
-        let slot = match take_flag(rest, "--slot").and_then(|s| s.parse::<u64>().ok()) {
-            Some(explicit) => explicit,
-            None => match slot_cursor_path(rest) {
-                Some(path) => slotcursor::next_slot(Some(&path), epoch, k),
-                None => 0,
-            },
-        };
-        if slot >= k {
-            eprintln!("egress (live): --slot {slot} >= K {k} (out of this member's tier; the circuit would reject it)");
+        // Default-on persistent allocation is durably committed BEFORE proof construction.
+        // This intentionally burns a slot on a crash/local failure rather than allowing a
+        // restarted process to reuse a nullifier. Manual slots are test-only and gated by an
+        // unmistakable flag so production callers cannot casually disable the coordinator.
+        let unsafe_reuse = rest
+            .iter()
+            .any(|s| s == "--unsafe-allow-slot-reuse-for-slashing-tests");
+        let explicit_slot = take_flag(rest, "--slot");
+        if explicit_slot.is_some() && !unsafe_reuse {
+            eprintln!("egress (live): --slot bypasses crash-safe allocation; it requires --unsafe-allow-slot-reuse-for-slashing-tests and is only for isolated slashing tests");
             return ExitCode::from(2);
         }
+        let slots = if unsafe_reuse {
+            let message_id = match explicit_slot {
+                Some(s) => match s.parse::<u64>() {
+                    Ok(slot) => slot,
+                    Err(_) => {
+                        eprintln!("egress (live): --slot must be an integer (got {s:?})");
+                        return ExitCode::from(2);
+                    }
+                },
+                None => 0,
+            };
+            if message_id >= k {
+                eprintln!("egress (live): --slot {message_id} >= K {k} (out of this member's tier; the circuit would reject it)");
+                return ExitCode::from(2);
+            }
+            shade_tree_egress::SlotPolicy::UnsafeForSlashingTest { message_id }
+        } else {
+            let cursor = match slot_cursor_path(rest, &identity.leaf) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("egress (live): REFUSING to prove — {e}");
+                    return ExitCode::from(3);
+                }
+            };
+            shade_tree_egress::SlotPolicy::CrashSafe { cursor }
+        };
         let rln_identifier = take_flag(rest, "--rln-identifier").unwrap_or_else(|| "1".to_string());
         let nonce = take_flag(rest, "--nonce").unwrap_or_else(gen_nonce);
 
@@ -1295,15 +1991,17 @@ mod live {
             }
         };
 
-        // Build the REAL envelope in Rust (native tree + Groth16 prover).
+        // Build the REAL envelope on shade-tree-egress's bounded blocking worker, then
+        // connect through its service-lifetime transport. The proof is built once and
+        // reused byte-for-byte across failover candidates inside the crate.
         eprintln!(
-            "egress: building RLN envelope (epoch={epoch}, slot={slot}, target={target}, artifact={artifact}, {}) ...",
+            "egress: building RLN envelope (epoch={epoch}, slot=crash-safe, target={target}, artifact={artifact}, {}) ...",
             match circuits.as_deref() {
                 Some(d) => format!("circuits={d}"),
                 None => "circuits=embedded".to_string(),
             }
         );
-        let input = shade_tree_rln::prover::EnvelopeInput {
+        let proof = shade_tree_egress::ProofRequest {
             identity_secret: identity.identity_secret,
             member_leaf: identity.leaf,
             members: members.members,
@@ -1312,115 +2010,278 @@ mod live {
             epoch,
             rln_identifier,
             user_message_limit: k,
-            message_id: slot,
             circuits_dir: circuits,
         };
-        let built = match shade_tree_rln::prover::build_envelope(&input) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("egress: build envelope failed: {e}");
-                return ExitCode::from(3);
-            }
+        let gateways = plan.transports.iter().map(Transport::gateway).collect();
+        let request = shade_tree_egress::ConnectRequest {
+            gateways,
+            proof,
+            slots,
+            artifact,
         };
-
-        // Frame the wire envelope byte-for-byte like client/shade-tree-client.mjs buildEnvelope.
-        // `artifact` (T-HARD-8) names the ZK artifact set the proof was made with, so a gateway
-        // in a dual-VK window verifies under the matching vkey (older gateways ignore the field).
-        let envelope = serde_json::json!({
-            "v": shade_tree_proto::PROTO_MAX,
-            "target": built.target,
-            "nonce": built.nonce,
-            "artifact": artifact,
-            "proof": {
-                "snarkProof": { "proof": built.proof, "publicSignals": built.public_signals },
-                "epoch": built.epoch,
-                "rlnIdentifier": built.rln_identifier,
-            },
-            "nullifier": built.nullifier,
-            "externalNullifier": built.external_nullifier,
-            "share": { "x": built.share_x, "y": built.share_y },
-        });
-        let wire = serde_json::to_string(&envelope).expect("serialize envelope") + "\n";
-
-        // FAILOVER LOOP (client/shade-tree-client.mjs connect()). The ONE envelope built above is
-        // REUSED across every candidate (deterministic-retry: a retry reproduces the SAME
-        // share). Rotate to the next candidate on a DIAL failure; a gateway that replied
-        // (accept OR gate-refuse) is TERMINAL, matching the JS client. Each dial outcome is
-        // fed back into the health cache (reportResult) so a failing gateway is deprioritized
-        // next session.
-        let n = plan.transports.len();
-        let mut last_err: Option<String> = None;
-        let mut outcome: Option<(String, serde_json::Value)> = None;
-        // One bootstrapped Tor client shared across the whole loop (T-RUST-3b): lazily
-        // created by the first onion candidate, reused by every later one.
-        let mut tor: Option<TorSession> = None;
-        // Move the transports out so `report` can borrow `plan.health` mutably in the loop.
-        let transports = std::mem::take(&mut plan.transports);
-        for (i, t) in transports.iter().enumerate() {
-            eprintln!("egress: candidate {}/{}: {}", i + 1, n, t.label());
-            match dial_send(t, &wire, &mut tor) {
-                Ok(ack) => {
-                    report(&mut plan.health, t, true); // dial succeeded (accept or refuse)
-                    outcome = Some((t.label(), ack));
-                    break;
-                }
-                Err(e) => {
-                    report(&mut plan.health, t, false); // dial failed -> rotate
-                    eprintln!("egress: candidate {} failed ({e}); rotating", t.label());
-                    last_err = Some(e);
+        let outcome = runtime.block_on(client.connect(request));
+        let attempts = match &outcome {
+            Ok(connected) => connected.attempts.as_slice(),
+            Err(shade_tree_egress::Error::GatewayRefused { attempts, .. })
+            | Err(shade_tree_egress::Error::AllCandidatesFailed { attempts }) => {
+                attempts.as_slice()
+            }
+            Err(_) => &[],
+        };
+        for attempt in attempts {
+            if let Some(transport) = plan
+                .transports
+                .iter()
+                .find(|transport| transport.label() == attempt.gateway.label())
+            {
+                report(&mut plan.health, transport, attempt.dial_succeeded);
+                if !attempt.dial_succeeded {
+                    eprintln!(
+                        "egress: candidate {} failed ({}); rotating",
+                        transport.label(),
+                        attempt
+                            .error
+                            .as_deref()
+                            .unwrap_or("unknown transport error")
+                    );
                 }
             }
         }
-
-        // Persist the session's liveness feedback once (best-effort; no-op if no health ctx).
         if let Some(ctx) = plan.health.as_mut() {
             health::save(Some(&ctx.cache_path), &mut ctx.cache);
         }
 
-        let Some((gateway_label, ack)) = outcome else {
-            eprintln!(
-                "egress: all {n} candidate(s) failed; last error: {}",
-                last_err.as_deref().unwrap_or("(none)")
-            );
-            return ExitCode::from(3);
+        let connected = match outcome {
+            Ok(connected) => connected,
+            Err(shade_tree_egress::Error::GatewayRefused {
+                kind: shade_tree_egress::GatewayRefusalKind::PayloadLimit,
+                ..
+            }) => {
+                eprintln!(
+                    "egress: gateway payload budget exhausted for this RLN epoch slot; open a new tunnel with another slot or wait for the protocol epoch to advance"
+                );
+                return ExitCode::from(4);
+            }
+            Err(shade_tree_egress::Error::GatewayRefused { ack, .. }) => {
+                let err = ack
+                    .get("err")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("(no err field)");
+                if proxy.is_none() {
+                    println!("not-ok: gate-refused: {err}");
+                }
+                // An artifact reject (T-HARD-8) advertises the gateway's accepted ids back; surface
+                // them + whether ours is among them (parity with client/shade-tree-client.mjs connect()).
+                if let Some(list) = ack.get("artifacts").and_then(serde_json::Value::as_array) {
+                    let ids: Vec<String> = list
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect();
+                    let hint = match shade_tree_proto::select_artifact(
+                        Some(&ids),
+                        std::slice::from_ref(&client_artifact),
+                    ) {
+                        Ok(id) => format!("retry with {id}"),
+                        Err(e) => e.to_string(),
+                    };
+                    if proxy.is_none() {
+                        println!("gateway accepts artifacts: {} ({hint})", ids.join(","));
+                    }
+                }
+                return ExitCode::from(1);
+            }
+            Err(shade_tree_egress::Error::Slot(shade_tree_egress::slot::Error::Exhausted {
+                epoch,
+                limit,
+            })) => {
+                eprintln!("egress: epoch budget exhausted: used {limit}/{limit} slots in epoch {epoch}; wait for the protocol epoch to advance");
+                return ExitCode::from(4);
+            }
+            Err(e) => {
+                eprintln!("egress: {e}");
+                return ExitCode::from(3);
+            }
         };
 
-        let ok = ack
-            .get("ok")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if ok {
+        let gateway_label = connected.gateway.label();
+        if let Some((client_stream, early_request)) = proxy.as_mut() {
+            let downstream = match client_stream.try_clone() {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("proxy: clone client socket: {e}");
+                    return ExitCode::from(3);
+                }
+            };
+            if let Err(e) = downstream.set_nonblocking(true) {
+                eprintln!("proxy: set client socket nonblocking: {e}");
+                return ExitCode::from(3);
+            }
+            let result = runtime.block_on(async move {
+                use tokio::io::AsyncWriteExt;
+                let mut tunnel = connected.stream;
+                if !early_request.is_empty() {
+                    tunnel
+                        .write_all(early_request)
+                        .await
+                        .map_err(|e| format!("forward early client bytes: {e}"))?;
+                    tunnel
+                        .flush()
+                        .await
+                        .map_err(|e| format!("flush early client bytes: {e}"))?;
+                }
+                let mut downstream = tokio::net::TcpStream::from_std(downstream)
+                    .map_err(|e| format!("adopt proxy client socket: {e}"))?;
+                downstream
+                    .write_all(
+                        b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: shade-tree-rust\r\n\r\n",
+                    )
+                    .await
+                    .map_err(|e| format!("write proxy response: {e}"))?;
+                let relay_result = async {
+                    if !connected.early_data.is_empty() {
+                        downstream
+                            .write_all(&connected.early_data)
+                            .await
+                            .map_err(|e| format!("write early tunnel bytes: {e}"))?;
+                    }
+                    downstream
+                        .flush()
+                        .await
+                        .map_err(|e| format!("flush proxy response: {e}"))?;
+                    tokio::io::copy_bidirectional(&mut downstream, &mut tunnel)
+                        .await
+                        .map_err(|e| format!("relay proxy tunnel: {e}"))?;
+                    Ok::<(), String>(())
+                }
+                .await;
+                Ok::<Option<String>, String>(relay_result.err())
+            });
+            match result {
+                Err(e) => {
+                    eprintln!("proxy: tunnel setup failed before CONNECT acceptance: {e}");
+                    return ExitCode::from(3);
+                }
+                Ok(Some(e)) => {
+                    // The gateway accepted the proof and the Proxy sent 200 Connection
+                    // Established. A later relay error (including a benign platform-specific
+                    // ENOTCONN while both peers close) can only terminate that established
+                    // tunnel; it is too late to turn the exchange back into an HTTP 502.
+                    // Report the close, but finish this accepted request normally. This also
+                    // matches the one-shot relay path below.
+                    eprintln!("proxy: accepted tunnel relay ended with error: {e}");
+                }
+                Ok(None) => {}
+            }
+        } else if relay == RelayMode::None {
             println!("ok");
             println!("gateway: {gateway_label}");
-            println!("target: {}", built.target);
-            println!("nullifier: {}", built.nullifier);
-            if let Some(r) = ack.get("receipt") {
-                println!("receipt: {r}");
+            println!("target: {}", connected.proof.target);
+            println!("nullifier: {}", connected.proof.nullifier);
+            if let Some(receipt) = connected.ack.get("receipt") {
+                println!("receipt: {receipt}");
             }
-            ExitCode::SUCCESS
         } else {
-            let err = ack
-                .get("err")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("(no err field)");
-            println!("not-ok: gate-refused: {err}");
-            // An artifact reject (T-HARD-8) advertises the gateway's accepted ids back; surface
-            // them + whether ours is among them (parity with client/shade-tree-client.mjs connect()).
-            if let Some(list) = ack.get("artifacts").and_then(serde_json::Value::as_array) {
-                let ids: Vec<String> = list
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect();
-                let hint = match shade_tree_proto::select_artifact(
-                    Some(&ids),
-                    std::slice::from_ref(&client_artifact),
-                ) {
-                    Ok(id) => format!("retry with {id}"),
-                    Err(e) => e.to_string(),
-                };
-                println!("gateway accepts artifacts: {} ({hint})", ids.join(","));
+            let result =
+                runtime.block_on(relay_async(connected.stream, &connected.early_data, relay));
+            if let Err(e) = result {
+                eprintln!("egress: accepted tunnel relay ended with error: {e}");
             }
-            ExitCode::from(1)
+            eprintln!("egress: tunnel via {gateway_label} closed");
+        }
+        ExitCode::SUCCESS
+    }
+
+    fn new_runtime() -> Result<tokio::runtime::Runtime, String> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime: {e}"))
+    }
+
+    fn prover_workers() -> usize {
+        std::env::var("SHADE_TREE_PROVER_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|workers| (1..=64).contains(workers))
+            .unwrap_or(2)
+    }
+
+    fn new_client() -> shade_tree_egress::Client {
+        shade_tree_egress::Client::new(
+            Duration::from_secs(tor_timeout_secs()),
+            Duration::from_secs(gateway_ack_timeout_secs()),
+            prover_workers(),
+        )
+    }
+
+    pub fn run_egress(rest: &[String]) -> ExitCode {
+        let runtime = match new_runtime() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                eprintln!("egress: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let client = new_client();
+        execute_egress(rest, &client, &runtime, None)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn empty_proxy_preflight_is_not_a_connect_attempt() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let peer = std::thread::spawn(move || {
+                let stream = TcpStream::connect(address).unwrap();
+                drop(stream);
+            });
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(
+                read_proxy_request(&mut stream, "0123456789abcdef0123456789abcdef").unwrap_err(),
+                "empty-health-probe"
+            );
+            peer.join().unwrap();
+        }
+
+        #[test]
+        fn proxy_listener_refuses_non_loopback_bindings() {
+            let error = bind_proxy_listener("0.0.0.0:0").unwrap_err();
+            assert!(error.contains("REFUSING non-loopback"));
+            let listener = bind_proxy_listener("127.0.0.1:0").unwrap();
+            assert!(listener.local_addr().unwrap().ip().is_loopback());
+        }
+
+        #[test]
+        fn proxy_health_check_requires_the_exact_token() {
+            use base64::Engine as _;
+            let token = "0123456789abcdef0123456789abcdef";
+            let credential =
+                base64::engine::general_purpose::STANDARD.encode(format!("shade-tree:{token}"));
+            for (presented, expected_ok) in [
+                (credential, true),
+                (
+                    base64::engine::general_purpose::STANDARD.encode("shade-tree:wrong"),
+                    false,
+                ),
+            ] {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let peer = std::thread::spawn(move || {
+                    let mut stream = TcpStream::connect(address).unwrap();
+                    write!(
+                        stream,
+                        "GET /_shade_tree/health HTTP/1.1\r\nHost: localhost\r\nProxy-Authorization: Basic {presented}\r\n\r\n"
+                    )
+                    .unwrap();
+                });
+                let (mut stream, _) = listener.accept().unwrap();
+                let result = read_proxy_request(&mut stream, token);
+                assert_eq!(matches!(result, Ok(ProxyRequest::Health)), expected_ok);
+                peer.join().unwrap();
+            }
         }
     }
 }
@@ -1437,7 +2298,13 @@ fn main() -> ExitCode {
         "fetch-directory" => cmd_fetch_directory(rest),
         "select" => cmd_select(rest),
         "verify-receipt" => cmd_verify_receipt(rest),
+        "enroll" => cmd_enroll(rest),
+        "proxy-token" => cmd_proxy_token(rest),
+        "identity" => cmd_identity(rest),
+        "leaves" => cmd_leaves(rest),
         "egress" => cmd_egress(rest),
+        "proxy" => cmd_proxy(rest),
+        "run" => run::run(rest),
         "help" | "--help" | "-h" => {
             println!("{HELP}");
             ExitCode::SUCCESS

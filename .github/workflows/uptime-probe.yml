@@ -10,14 +10,15 @@ name: uptime-probe
 #   SHADE_TREE_DIR_SIGNER       the pinned directory-signer pubkey (hex, no 0x)
 #   SHADE_TREE_NETWORK          ALTERNATIVE: a network/<name>/ record name (e.g. sepolia); the probe reads
 #                         the two values above from network/<name>/bootnode.json (lib/network-record.mjs)
-#   SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS  optional, observation-only compatibility for an explicitly
-#                         identified pre-v4 research fleet; it does not affect clients or nodes
+#   SHADE_TREE_PROBE_ACCEPT_PRE_V4_CAPS  keep 0 for the current v4 Grove; 1 is observation-only
+#                         compatibility for an explicitly identified legacy fleet
 #   SHADE_TREE_GROVE_SIGNING_KEY  dedicated Ed25519 private key, stored only as an Actions secret
 # The onion and signer are not secret, so plain variables are the right home; the same names are
 # also read from SECRETS as a fallback. The Grove signing key is secret. The hosted probe never
 # prints the count and scrubs onions from error text. After a fresh, verified
-# probe, the workflow force-updates the generated network-state branch with one allowlisted
-# signed aggregate snapshot for the public Grove. No directory rows are written to that branch.
+# probe, the workflow force-updates the generated network-state branch with versioned allowlisted
+# signed aggregate snapshots for the public Grove. No directory rows are written to that branch.
+# A final read-only job verifies the production page and both public signed heads.
 #
 # NO-OP GUARD: if none of the variables/secrets is set, the job writes a ::notice:: and exits
 # green without installing anything, so an unconfigured fork/repo never red-flags. Only a real
@@ -46,6 +47,7 @@ jobs:
     timeout-minutes: 12
     outputs:
       grove_snapshot: ${{ steps.grove.outputs.snapshot }}
+      grove_v2_snapshot: ${{ steps.grove.outputs.snapshot_v2 }}
     env:
       SHADE_TREE_BOOTNODE_ONION: ${{ vars.SHADE_TREE_BOOTNODE_ONION || secrets.SHADE_TREE_BOOTNODE_ONION }}
       SHADE_TREE_DIR_SIGNER: ${{ vars.SHADE_TREE_DIR_SIGNER || secrets.SHADE_TREE_DIR_SIGNER }}
@@ -149,8 +151,10 @@ jobs:
         if: steps.cfg.outputs.configured == 'true' && env.SHADE_TREE_PROBE_SKIP != '1'
         run: |
           : > "$RUNNER_TEMP/grove.previous.json"
+          : > "$RUNNER_TEMP/grove-v2.previous.json"
           if git fetch --quiet --no-tags origin refs/heads/network-state:refs/remotes/origin/network-state 2>/dev/null; then
             git show refs/remotes/origin/network-state:grove.json > "$RUNNER_TEMP/grove.previous.json" 2>/dev/null || true
+            git show refs/remotes/origin/network-state:grove-v2.json > "$RUNNER_TEMP/grove-v2.previous.json" 2>/dev/null || true
           fi
 
       - name: build aggregate-only public Grove snapshot
@@ -171,22 +175,30 @@ jobs:
             --network sepolia \
             --previous "$RUNNER_TEMP/grove.previous.json" \
             --out "$RUNNER_TEMP/grove.json"
+          node scripts/grove-snapshot.mjs \
+            --network sepolia \
+            --previous "$RUNNER_TEMP/grove-v2.previous.json" \
+            --relay 1 \
+            --out "$RUNNER_TEMP/grove-v2.json"
           echo "snapshot=$(base64 -w0 "$RUNNER_TEMP/grove.json")" >> "$GITHUB_OUTPUT"
+          echo "snapshot_v2=$(base64 -w0 "$RUNNER_TEMP/grove-v2.json")" >> "$GITHUB_OUTPUT"
 
   publish:
     name: publish signed aggregate
     needs: probe
-    if: needs.probe.outputs.grove_snapshot != ''
+    if: needs.probe.outputs.grove_snapshot != '' && needs.probe.outputs.grove_v2_snapshot != ''
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
       contents: write
     steps:
-      # This job deliberately checks out no code and runs no action. It receives only a signed,
-      # base64-encoded JSON blob and constructs a one-file, parentless commit through GitHub's API.
+      # This job deliberately checks out no code and runs no action. It receives only signed,
+      # base64-encoded JSON blobs and constructs a parentless commit with the two snapshots plus
+      # a minimal Vercel config that disables deployments for this generated branch.
       - name: publish generated network state
         env:
           GROVE_SNAPSHOT_B64: ${{ needs.probe.outputs.grove_snapshot }}
+          GROVE_V2_SNAPSHOT_B64: ${{ needs.probe.outputs.grove_v2_snapshot }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -197,7 +209,12 @@ jobs:
 
           blob_payload="$(jq -n --arg content "$GROVE_SNAPSHOT_B64" '{content:$content,encoding:"base64"}')"
           blob_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$blob_payload" | jq -er .sha)"
-          tree_payload="$(jq -n --arg sha "$blob_sha" '{tree:[{path:"grove.json",mode:"100644",type:"blob",sha:$sha}]}')"
+          blob_v2_payload="$(jq -n --arg content "$GROVE_V2_SNAPSHOT_B64" '{content:$content,encoding:"base64"}')"
+          blob_v2_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$blob_v2_payload" | jq -er .sha)"
+          vercel_config='{"git":{"deploymentEnabled":{"network-state":false}}}'
+          vercel_blob_payload="$(jq -n --arg content "$vercel_config" '{content:$content,encoding:"utf-8"}')"
+          vercel_blob_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/blobs" -d "$vercel_blob_payload" | jq -er .sha)"
+          tree_payload="$(jq -n --arg sha "$blob_sha" --arg sha_v2 "$blob_v2_sha" --arg vercel_sha "$vercel_blob_sha" '{tree:[{path:"grove.json",mode:"100644",type:"blob",sha:$sha},{path:"grove-v2.json",mode:"100644",type:"blob",sha:$sha_v2},{path:"docs/post/vercel.json",mode:"100644",type:"blob",sha:$vercel_sha}]}')"
           tree_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/trees" -d "$tree_payload" | jq -er .sha)"
           commit_payload="$(jq -n --arg tree "$tree_sha" '{message:"data: update public Grove snapshot",tree:$tree,parents:[]}')"
           commit_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" "$api/git/commits" -d "$commit_payload" | jq -er .sha)"
@@ -213,3 +230,38 @@ jobs:
             echo "unexpected network-state ref response: $ref_status" >&2
             exit 1
           fi
+
+  verify-public:
+    name: verify public Grove data plane
+    needs: publish
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - name: verify production page and signed heads
+        env:
+          GROVE_ORIGIN: https://shade-tree-node.vercel.app
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            page_status="$(curl -sS -o "$RUNNER_TEMP/grove-page.html" -w '%{http_code}' "$GROVE_ORIGIN/grove/")"
+            v1_status="$(curl -sS -o "$RUNNER_TEMP/grove-v1.json" -w '%{http_code}' "$GROVE_ORIGIN/api/v1/data/grove/sepolia/head")"
+            v2_status="$(curl -sS -o "$RUNNER_TEMP/grove-v2.json" -w '%{http_code}' "$GROVE_ORIGIN/api/v2/data/grove/sepolia/head")"
+            page_ok=false
+            v1_schema=""
+            v2_schema=""
+            if [ "$page_status" = "200" ] && grep -q 'id="grove-main"' "$RUNNER_TEMP/grove-page.html"; then page_ok=true; fi
+            if [ "$v1_status" = "200" ]; then v1_schema="$(jq -r '.schema // empty' "$RUNNER_TEMP/grove-v1.json")"; fi
+            if [ "$v2_status" = "200" ]; then v2_schema="$(jq -r '.schema // empty' "$RUNNER_TEMP/grove-v2.json")"; fi
+            if [ "$page_ok" = "true" ] && [ "$v1_schema" = "shade-tree-public-grove-v1" ] && [ "$v2_schema" = "shade-tree-public-grove-v2" ]; then
+              echo "public Grove page and signed v1/v2 heads are healthy"
+              echo "Public Grove page and signed v1/v2 heads: healthy" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "public data plane not ready (attempt $attempt/12; page=$page_status v1=$v1_status v2=$v2_status)"
+            sleep 5
+          done
+          echo "::error title=public Grove data plane unhealthy::The publisher succeeded, but the production Grove page or a signed Data API head did not become healthy within 60 seconds."
+          exit 1

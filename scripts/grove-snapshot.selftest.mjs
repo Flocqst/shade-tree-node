@@ -120,6 +120,40 @@ const collected = await collectPublicGrove({
 });
 assert.equal(collected.nodes.announced, 2);
 assert.equal(verifyPublicGroveAttestation(collected, publicKey), true);
+
+const relay = {
+  definition: "payload-bytes-relayed",
+  unit: "bytes",
+  generatedAt: NOW.toISOString(),
+  delayHours: 6,
+  minimumCohort: 5,
+  rounding: { method: "ceiling", bucketBytes: "1073741824" },
+  windows: {
+    sixHour: {
+      status: "available",
+      windowHours: 6,
+      windowStart: "2026-08-23T00:00:00.000Z",
+      windowEnd: "2026-08-23T06:00:00.000Z",
+      reportingNodes: 5,
+      roundedBytes: "1073741824",
+    },
+    twentyFourHour: {
+      status: "available",
+      windowHours: 24,
+      windowStart: "2026-08-22T06:00:00.000Z",
+      windowEnd: "2026-08-23T06:00:00.000Z",
+      reportingNodes: 5,
+      roundedBytes: "1073741824",
+    },
+  },
+};
+const v2 = buildPublicGroveSnapshot({ directory, observedAt: NOW, network: "sepolia", relay });
+assert.equal(v2.schema, "shade-tree-public-grove-v2");
+assert.deepEqual(Object.keys(v2).sort(), ["growth", "history", "network", "nodes", "observedAt", "privacy", "relay", "schema", "source"]);
+const signedV2 = attestPublicGroveSnapshot(v2, privateKey);
+assert.equal(verifyPublicGroveAttestation(signedV2, publicKey), true);
+assert.equal(verifyPublicGroveAttestation({ ...signedV2, relay: { ...signedV2.relay, minimumCohort: 6 } }, publicKey), false, "v2 attestation covers relay privacy metadata");
+assert.equal(JSON.stringify(signedV2).includes(gateways[0].onion), false, "v2 fixture remains aggregate-only");
 await assert.rejects(
   collectPublicGrove({ signingKey: privateKey, observe: async () => ({ result: { ok: false, signerOk: false, directoryFresh: false }, directory: null }) }),
   /no verified bootnode directory/,

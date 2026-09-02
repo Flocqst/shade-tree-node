@@ -1,7 +1,8 @@
 #!/bin/sh
 # install.sh: one-line installer for the prebuilt Rust `shade-tree` client (issue #64).
 #
-#   curl -fsSL https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh | sh
+#   curl -q -fsSL --proto '=https' --proto-redir '=https' \
+#     https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh | sh
 #
 # What it does, in order: detect OS/arch, resolve the release tag, refuse to replace a symlink
 # at the destination (unless forced), download the matching release asset AND its .sha256,
@@ -10,16 +11,15 @@
 # never fetches a binary over cleartext from the network.
 #
 # Knobs (environment; `curl | sh` cannot take flags):
-#   SHADE_TREE_VERSION       release tag to install (`v0.3.0` or `0.3.0`); default: latest
-#   SHADE_TREE_LIVE=1        install the `-live` variant (embedded Tor + RLN prover); only
-#                            some targets publish one, see rust/INSTALL.md
+#   SHADE_TREE_VERSION       release tag to install (`v0.4.1` or `0.4.1`); default: latest
+#   SHADE_TREE_LIVE=auto     install the `-live` agent where published (default); use 0 for
+#                            the verifier-only binary or 1 to require a live binary
 #   SHADE_TREE_INSTALL_DIR   destination directory; default $HOME/.local/bin
-#   SHADE_TREE_FORCE=1       replace a destination that is a symlink to a file (the npm
-#                            CLI's bin)
+#   SHADE_TREE_FORCE=1       replace a destination that is a symlink to a file
 #   SHADE_TREE_TARGET        skip detection; one of the seven published targets
 #   SHADE_TREE_LIBC=gnu|musl choose the Linux libc when it cannot be detected
 #   SHADE_TREE_RELEASE_BASE  where releases live; default the GitHub Releases page. Must be
-#                            https://, or file:// / loopback http:// for tests and mirrors.
+#                            https://; file:// / loopback http:// exist only for offline tests.
 #
 # Asset naming comes from .github/workflows/release.yml:
 #   shade-tree-<version>-<target>[-live][.exe]   plus   <asset>.sha256   ("<hex>  <file>")
@@ -36,19 +36,20 @@ shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 usage() {
   cat <<'EOF'
-usage: sh install.sh            (or: curl -fsSL <raw url>/scripts/install.sh | sh)
+usage: sh install.sh            (or: curl -q -fsSL --proto '=https' --proto-redir '=https' <https url> | sh)
 
 Installs the prebuilt Rust `shade-tree` client from a GitHub Release into ~/.local/bin after
 verifying its sha256 against the published .sha256 asset. No sudo, ever.
 
 environment:
-  SHADE_TREE_VERSION=v0.3.0     pin a release (default: latest)
-  SHADE_TREE_LIVE=1             the -live variant (embedded Tor + prover), where published
+  SHADE_TREE_VERSION=v0.4.1     pin a release (default: latest)
+  SHADE_TREE_LIVE=auto          default: -live agent where published, verifier otherwise;
+                                1 requires -live, 0 installs the verifier-only binary
   SHADE_TREE_INSTALL_DIR=DIR    destination (default: $HOME/.local/bin)
-  SHADE_TREE_FORCE=1            replace a destination that is a symlink to a file (npm's bin)
+  SHADE_TREE_FORCE=1            replace a destination that is a symlink to a file
   SHADE_TREE_TARGET=TRIPLE      skip OS/arch detection (one of the seven published targets)
   SHADE_TREE_LIBC=gnu|musl      choose the Linux libc when it cannot be detected
-  SHADE_TREE_RELEASE_BASE=URL   https:// release base (file:// or loopback http:// for tests)
+  SHADE_TREE_RELEASE_BASE=URL   https:// release base (local schemes are test-only)
 
 Prefer to inspect before running? Download the script, read it, then `sh install.sh`.
 Windows: works from Git Bash or MSYS2 (x86_64 only); see rust/INSTALL.md for PowerShell.
@@ -63,7 +64,7 @@ esac
 
 REPO_BASE_DEFAULT="https://github.com/dmarzzz/shade-tree-node/releases"
 BASE="${SHADE_TREE_RELEASE_BASE:-$REPO_BASE_DEFAULT}"
-LIVE="${SHADE_TREE_LIVE:-0}"
+LIVE="${SHADE_TREE_LIVE:-auto}"
 FORCE="${SHADE_TREE_FORCE:-0}"
 if [ -n "${SHADE_TREE_INSTALL_DIR:-}" ]; then
   INSTALL_DIR="$SHADE_TREE_INSTALL_DIR"
@@ -72,9 +73,8 @@ else
   INSTALL_DIR="$HOME/.local/bin"
 fi
 
-# Booleans are exactly 0 or 1: a typo such as SHADE_TREE_LIVE=yes must not quietly install the
-# other variant.
-case "$LIVE" in 0|1) ;; *) die "SHADE_TREE_LIVE must be 1 or 0 (got '$LIVE')" ;; esac
+# A typo such as SHADE_TREE_LIVE=yes must not quietly install the wrong variant.
+case "$LIVE" in auto|0|1) ;; *) die "SHADE_TREE_LIVE must be auto, 1, or 0 (got '$LIVE')" ;; esac
 case "$FORCE" in 0|1) ;; *) die "SHADE_TREE_FORCE must be 1 or 0 (got '$FORCE')" ;; esac
 
 # --- prerequisites -------------------------------------------------------------------------
@@ -128,7 +128,9 @@ case "$BASE" in
     case "$AUTHORITY" in *:) die "malformed port in SHADE_TREE_RELEASE_BASE ('$AUTHORITY')" ;; esac
     if [ -n "$PORTPART" ]; then
       case "$PORTPART" in *[!0-9]*) die "malformed port in SHADE_TREE_RELEASE_BASE ('$AUTHORITY')" ;; esac
-      [ "$PORTPART" -ge 1 ] && [ "$PORTPART" -le 65535 ] || die "port out of range in SHADE_TREE_RELEASE_BASE ('$AUTHORITY')"
+      if [ "$PORTPART" -lt 1 ] || [ "$PORTPART" -gt 65535 ]; then
+        die "port out of range in SHADE_TREE_RELEASE_BASE ('$AUTHORITY')"
+      fi
     fi
     PROTO=http ;;
   *) die "SHADE_TREE_RELEASE_BASE must be an https:// URL (got '$BASE')" ;;
@@ -140,19 +142,18 @@ BASE="${BASE%/}"
 # never send a loopback request through an ambient http_proxy.
 curl_get() {
   if [ "$PROTO" = http ]; then
-    curl -fsSL --retry 2 --connect-timeout 20 --max-time 600 --proto "=$PROTO" --proto-redir "=https" --noproxy '*' "$@"
+    curl -q -fsSL --retry 2 --connect-timeout 20 --max-time 600 --proto "=$PROTO" --proto-redir "=https" --noproxy '*' "$@"
   else
-    curl -fsSL --retry 2 --connect-timeout 20 --max-time 600 --proto "=$PROTO" --proto-redir "=https" "$@"
+    curl -q -fsSL --retry 2 --connect-timeout 20 --max-time 600 --proto "=$PROTO" --proto-redir "=https" "$@"
   fi
 }
 curl_head() {
   if [ "$PROTO" = http ]; then
-    curl -fsSI --connect-timeout 20 --max-time 60 --proto "=$PROTO" --noproxy '*' "$@"
+    curl -q -fsSI --connect-timeout 20 --max-time 60 --proto "=$PROTO" --noproxy '*' "$@"
   else
-    curl -fsSI --connect-timeout 20 --max-time 60 --proto "=$PROTO" "$@"
+    curl -q -fsSI --connect-timeout 20 --max-time 60 --proto "=$PROTO" "$@"
   fi
 }
-fetch() { curl_get -o "$2" "$1"; }
 # Turn a curl exit code into the remedy the user actually needs. 22 is the only "the server
 # answered and said no" code; everything else is transport, and "asset not found" would send
 # someone to check their version instead of their network.
@@ -196,7 +197,15 @@ else
     *) die "unsupported CPU architecture '$ARCH' (releases cover x86_64 and aarch64); see rust/INSTALL.md to build from source" ;;
   esac
   case "$OS" in
-    Darwin) TARGET="$ARCH-apple-darwin" ;;
+    Darwin)
+      # An Apple Silicon Mac running an x86_64 shell under Rosetta reports x86_64 from uname.
+      # Apple's sysctl flag is the authoritative way to distinguish that from an Intel Mac.
+      if [ "$ARCH" = x86_64 ] && command -v sysctl >/dev/null 2>&1; then
+        case "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" in
+          1) ARCH=aarch64; say "note: Rosetta translation detected; selecting the Apple Silicon release" ;;
+        esac
+      fi
+      TARGET="$ARCH-apple-darwin" ;;
     Linux)
       LIBC="${SHADE_TREE_LIBC:-}"
       [ -n "$LIBC" ] || LIBC="$(detect_libc)"
@@ -233,7 +242,9 @@ else
   # header needs no API token and no JSON parser.
   LOCATION="$(curl_head -o /dev/null -w '%{redirect_url}' "$BASE/latest" || true)"
   TAG="${LOCATION##*/tag/}"
-  [ -n "$LOCATION" ] && [ "$TAG" != "$LOCATION" ] || die "could not resolve the latest release from $BASE/latest (set SHADE_TREE_VERSION to pin one)"
+  if [ -z "$LOCATION" ] || [ "$TAG" = "$LOCATION" ]; then
+    die "could not resolve the latest release from $BASE/latest (set SHADE_TREE_VERSION to pin one)"
+  fi
   VERSION="${TAG#v}"
   say "release: $TAG (latest)"
 fi
@@ -241,19 +252,21 @@ case "$TAG" in
   v[0-9]*) ;;
   *) die "unexpected release tag '$TAG'" ;;
 esac
+case "$VERSION" in
+  ''|*[!0-9A-Za-z.+-]*) die "unexpected release version '$VERSION'" ;;
+esac
 
 # --- destination preflight (before any download) ------------------------------------------
-# The npm CLI is also installed as `shade-tree`, always as a symlink into node_modules, so a
-# symlink at the destination is refused unless forced. A symlink to a DIRECTORY is refused
-# outright: `mv` would follow it and drop the binary inside. A regular file there is replaced
-# with a note: the script cannot know who wrote it, and that is the only other shape npm never
-# produces. Anything else (a directory, a device) is refused.
+# A symlink at the destination is refused unless explicitly forced. A symlink to a DIRECTORY is
+# refused even then: `mv` would follow it and drop the binary inside. A regular file there is
+# replaced with a note so rerunning the installer can upgrade it. Anything else (a directory,
+# a device) is refused.
 BIN_NAME="shade-tree$EXT"
 DEST="$INSTALL_DIR/$BIN_NAME"
 check_destination() {
   if [ -L "$DEST" ]; then
     [ ! -d "$DEST" ] || die "$DEST is a symlink to a directory; refusing to install through it. Remove it or choose another SHADE_TREE_INSTALL_DIR"
-    [ "$FORCE" = 1 ] || die "$DEST is a symlink (the npm CLI installs shade-tree that way); refusing to replace it. Use another SHADE_TREE_INSTALL_DIR, or SHADE_TREE_FORCE=1 to replace it anyway"
+    [ "$FORCE" = 1 ] || die "$DEST is a symlink; refusing to replace it. Use another SHADE_TREE_INSTALL_DIR, or SHADE_TREE_FORCE=1 to replace it explicitly"
   elif [ -e "$DEST" ] && [ ! -f "$DEST" ]; then
     die "$DEST exists and is not a regular file; refusing to replace it"
   fi
@@ -266,12 +279,6 @@ mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
 [ -w "$INSTALL_DIR" ] || die "$INSTALL_DIR is not writable (choose another SHADE_TREE_INSTALL_DIR; this installer never uses sudo)"
 
 # --- asset ------------------------------------------------------------------------------------
-SUFFIX=
-[ "$LIVE" = 1 ] && SUFFIX=-live
-ASSET="shade-tree-$VERSION-$TARGET$SUFFIX$EXT"
-URL="$BASE/download/$TAG/$ASSET"
-say "asset: $ASSET"
-
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/shade-tree-install.XXXXXX")"
 STAGE=""
 # Whatever happens next (checksum mismatch, Ctrl-C, a failed download), the partial files go,
@@ -281,21 +288,65 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-# The .sha256 first: it is tiny, and a 404 there is the clearest signal that no such asset
-# exists for this target/version/variant, which for -live is the common case.
-if HTTP_CODE="$(curl_get -w '%{http_code}' -o "$TMP/$ASSET.sha256" "$URL.sha256" 2>/dev/null)"; then
-  :
+# `auto` probes the selected release instead of assuming every tag has the current target
+# matrix. It falls back only for a genuine 404/file-not-found. Network, TLS, and integrity
+# failures remain fail-closed. An explicit SHADE_TREE_LIVE=1 never falls back.
+select_asset() {
+  SUFFIX=
+  [ "$LIVE" != 0 ] && SUFFIX=-live
+  ASSET="shade-tree-$VERSION-$TARGET$SUFFIX$EXT"
+  URL="$BASE/download/$TAG/$ASSET"
+}
+fetch_to() {
+  FETCH_CODE="$(curl_get -w '%{http_code}' -o "$2" "$1" 2>/dev/null)"
+}
+fetch_variant() {
+  FETCH_WHAT="$ASSET.sha256"
+  if fetch_to "$URL.sha256" "$TMP/$ASSET.sha256"; then :; else FETCH_RC=$?; return "$FETCH_RC"; fi
+  FETCH_WHAT="$ASSET"
+  if fetch_to "$URL" "$TMP/$ASSET"; then :; else FETCH_RC=$?; return "$FETCH_RC"; fi
+}
+fetch_was_missing() {
+  [ "$1" = 37 ] || { [ "$1" = 22 ] && [ "$FETCH_CODE" = 404 ]; }
+}
+
+select_asset
+say "asset: $ASSET"
+if fetch_variant; then
+  [ "$LIVE" != auto ] || LIVE=1
 else
   RC=$?
-  if [ "$RC" = 22 ] && [ "$HTTP_CODE" = 404 ] || [ "$RC" = 37 ]; then
-    if [ "$LIVE" = 1 ]; then
-      die "no -live asset for $TARGET in $TAG ($ASSET.sha256 not found). Live builds are published only for some targets; see rust/INSTALL.md, or unset SHADE_TREE_LIVE for the default build"
+  if fetch_was_missing "$RC"; then
+    if [ "$LIVE" = auto ]; then
+      say "note: no -live asset for $TARGET in $TAG ($FETCH_WHAT not found);"
+      say "      installing the verifier-only binary from that release"
+      if [ "$TARGET" = x86_64-apple-darwin ]; then
+        say "      (Intel macOS cannot use this release for live tunneling; see rust/INSTALL.md)"
+      fi
+      LIVE=0
+      select_asset
+      say "asset: $ASSET"
+      if fetch_variant; then
+        :
+      else
+        RC=$?
+        if fetch_was_missing "$RC"; then
+          die "release asset $FETCH_WHAT not found (wrong SHADE_TREE_VERSION or SHADE_TREE_TARGET?)"
+        fi
+        die "could not fetch $FETCH_WHAT: $(explain_curl "$RC" "$FETCH_CODE"). Check your network or SHADE_TREE_RELEASE_BASE and retry"
+      fi
+    elif [ "$LIVE" = 1 ]; then
+      if [ "$TARGET" = x86_64-apple-darwin ]; then
+        die "no -live asset for $TARGET in $TAG ($FETCH_WHAT not found); Intel macOS releases may be verifier-only. Set SHADE_TREE_LIVE=0 or see rust/INSTALL.md"
+      fi
+      die "no -live asset for $TARGET in $TAG ($FETCH_WHAT not found). Set SHADE_TREE_LIVE=0 for the verifier-only build or see rust/INSTALL.md"
+    else
+      die "release asset $FETCH_WHAT not found (wrong SHADE_TREE_VERSION or SHADE_TREE_TARGET?)"
     fi
-    die "release asset $ASSET.sha256 not found at $URL.sha256 (wrong SHADE_TREE_VERSION or SHADE_TREE_TARGET?)"
+  else
+    die "could not fetch $FETCH_WHAT: $(explain_curl "$RC" "$FETCH_CODE"). Check your network or SHADE_TREE_RELEASE_BASE and retry"
   fi
-  die "could not fetch $URL.sha256: $(explain_curl "$RC" "$HTTP_CODE"). Check your network or SHADE_TREE_RELEASE_BASE and retry"
 fi
-fetch "$URL" "$TMP/$ASSET" || die "download of $ASSET failed ($URL)"
 
 # --- verify (the whole point) -------------------------------------------------------------
 # The .sha256 line is "<hex>  <file>" (release.yml frames it by hand so every target matches).
@@ -312,7 +363,7 @@ case "$EXPECTED" in *[!0-9a-f]*) die "malformed $ASSET.sha256 (non-hex digest); 
 [ "$EXPECTED_NAME" = "$ASSET" ] || die "$ASSET.sha256 names '$EXPECTED_NAME', not '$ASSET'; refusing to install"
 ACTUAL="$(sha256_of "$TMP/$ASSET" | tr 'A-F' 'a-f')"
 [ "$ACTUAL" = "$EXPECTED" ] || die "checksum mismatch for $ASSET (expected $EXPECTED, got $ACTUAL); refusing to install"
-say "verified: sha256 $ACTUAL"
+say "verified transfer integrity: sha256 $ACTUAL"
 
 # --- install (only now does the file get an executable bit) --------------------------------
 # Stage in an exclusive temp file inside the destination directory (so the final rename is a
@@ -327,7 +378,9 @@ check_destination
 if [ -L "$DEST" ]; then rm -f "$DEST" || die "cannot remove symlink $DEST"; fi
 mv -f "$STAGE" "$DEST"
 STAGE=""
-[ -f "$DEST" ] && [ ! -L "$DEST" ] && [ -x "$DEST" ] || die "$DEST is not the installed executable after the rename; refusing to report success"
+if [ ! -f "$DEST" ] || [ -L "$DEST" ] || [ ! -x "$DEST" ]; then
+  die "$DEST is not the installed executable after the rename; refusing to report success"
+fi
 say "installed: $DEST ($TAG, $TARGET${SUFFIX:+, live})"
 
 # --- after-care -------------------------------------------------------------------------------
@@ -341,10 +394,8 @@ if command -v xattr >/dev/null 2>&1 && xattr -p com.apple.quarantine "$DEST" >/d
   say "  xattr -d com.apple.quarantine $QDEST"
 fi
 
-# The npm CLI (`npm install --global git+...`) is ALSO called shade-tree: the Proxy, `run`, and
-# operator commands live there, the Rust binary is the verify/select/egress client. Walk the
-# whole PATH rather than asking `command -v`, which only reports the winner and would stay
-# silent about an npm CLI sitting BEHIND the directory we just installed into.
+# Walk the whole PATH rather than asking `command -v`, which only reports the winner and would
+# stay silent about another installation behind the directory we just installed into.
 OTHERS=""
 SAVED_IFS="$IFS"
 IFS=:
@@ -360,10 +411,8 @@ IFS="$SAVED_IFS"
 if [ -n "$OTHERS" ]; then
   FIRST="$(command -v shade-tree 2>/dev/null || true)"
   say "warning: other shade-tree executables are on PATH:$OTHERS"
-  say "         (likely the npm CLI, which keeps that name for the Proxy and operator commands)."
   if [ "$FIRST" = "$DEST" ]; then
-    say "         Your shell will run this Rust client first and shadow them; call the npm CLI by"
-    say "         its full path when you need it."
+    say "         Your shell will run this Rust client first and shadow them."
   else
     say "         Your shell will run $FIRST first and shadow $DEST; call the Rust client by its"
     say "         full path, or put $INSTALL_DIR earlier in PATH."
@@ -377,17 +426,22 @@ case ":$PATH:" in
 esac
 
 say ""
+say "warning: v0.4 is a research preview with testnet-only, unaudited RLN setup artifacts;"
+say "         do not use it as a production anonymity or security boundary."
+say "note: the checksum establishes transfer integrity, not publisher provenance;"
+say "      verify the GitHub build attestation when provenance matters (rust/INSTALL.md)."
+say ""
 say "next:"
 say "  $QDEST --help"
 if [ "$LIVE" = 1 ]; then
-  say "  # identity.json comes from the npm CLI at your enrolled tier; see rust/INSTALL.md"
-  say "  # \"Examples\" for that step, then, with the operator's Elder onion and signer pin:"
-  say "  $QDEST egress --bootnode-onion <elder.onion> --signer <canopy-signer-hex> \\"
-  say "    --identity identity.json --members members.json --target api.ipify.org:443"
-  say "  # Until issue #75 is fixed: at most ONE egress invocation per member secret per"
-  say "  # protocol epoch (120 s by default), counting any attempt that may have reached a"
-  say "  # node. The optional --slot-cursor is best-effort and wraps at K; do not rely on it."
+  say "  # Create the owner-only identity locally; send only public-leaf.txt to the operator:"
+  say "  read -r SHADE_TREE_LIMIT"
+  say "  $QDEST enroll --limit \"\$SHADE_TREE_LIMIT\" --out identity.json > public-leaf.txt"
+  say "  # After admission, use the operator's member set, Elder onion, and signer pin:"
+  say "  $QDEST proxy --bootnode-onion <elder.onion> --signer <canopy-signer-hex> \\"
+  say "    --identity identity.json --members members.json --listen 127.0.0.1:8118"
+  say "  # Slot allocation is automatic and safely coordinated by default; see rust/INSTALL.md."
 else
   say "  $QDEST verify-directory directory.json --signer <canopy-signer-hex>"
-  say "  (egress needs the -live build: SHADE_TREE_LIVE=1, where published; see rust/INSTALL.md)"
+  say "  (tunneling needs a -live build, which v0.4 does not publish for Intel macOS)"
 fi

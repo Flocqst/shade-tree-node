@@ -1,17 +1,57 @@
 openapi: 3.1.0
 info:
   title: Shade Tree Grove Data API
-  version: 1.0.0
+  version: 2.0.0
   license:
     name: MIT
     identifier: MIT
   description: >-
-    Read-only access to the currently implemented signed Sepolia Grove head.
+    Read-only access to the signed Sepolia Grove v1 and v2 heads. V1 remains
+    count-only; v2 adds the delayed minimum-cohort relay aggregate and may add
+    an independently validated delayed v4 onchain ledger.
     This specification intentionally excludes proposed publisher endpoints and
     all unimplemented traffic, health, implementation, and per-node metrics.
 servers:
   - url: https://shade-tree-node.vercel.app
 paths:
+  /api/v2/data/grove/sepolia/head:
+    get:
+      operationId: getSepoliaGroveV2Head
+      summary: Get the latest fresh verified Grove v2 aggregate
+      tags: [Relay telemetry, Onchain activity]
+      security: []
+      description: >-
+        Returns the exact shade-tree-public-grove-v2 envelope. The server
+        validates exact keys, Ed25519 publication attestation, head and relay
+        generation ages of at most one hour, delayed fixed windows, fixed
+        rounding, and minimum cohorts of five. Suppressed values are omitted.
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fresh verified signed v2 aggregate.
+          headers:
+            ETag:
+              schema:
+                type: string
+            X-Shade-Tree-Schema:
+              schema:
+                type: string
+                const: shade-tree-public-grove-v2
+          content:
+            application/json:
+              schema:
+                $ref: "../docs/post/openapi-v2.json#/components/schemas/PublicGroveV2"
+        "304":
+          description: The supplied If-None-Match weakly matches the current ETag.
+        "400":
+          description: Query parameters are not supported.
+        "503":
+          description: No fresh valid upstream v2 snapshot is available; never a synthetic zero.
   /api/v1/data/grove/sepolia/head:
     get:
       operationId: getSepoliaGroveHead

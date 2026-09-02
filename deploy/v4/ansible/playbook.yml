@@ -1,0 +1,8 @@
+---
+- name: Reconcile a pinned Shade Tree Protocol v4 host
+  hosts: shade_tree_v4
+  gather_facts: true
+  become: true
+  roles:
+    - role: shade_tree_v4
+

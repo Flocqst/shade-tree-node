@@ -1,0 +1,287 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Shade Tree Grove Data API",
+    "version": "2.0.0",
+    "description": "Signed Grove head with delayed, rounded relay telemetry and an optional delayed, finalized v4 onchain ledger. Missing, suppressed, or unavailable observations are never encoded as zero."
+  },
+  "servers": [{ "url": "https://shade-tree-node.vercel.app" }],
+  "tags": [
+    { "name": "Relay telemetry", "description": "Payload bytes counted once on reads from either side of an established tunnel; excludes proof envelopes, acknowledgements, Tor/TCP/IP/TLS overhead, failed connects, probes, and retransmissions below the socket layer." },
+    { "name": "Onchain activity", "description": "Optional v4-only commitment, attributable settlement, and finalized contract-enforcement aggregates. The section is omitted when no current verified live target exists." }
+  ],
+  "paths": {
+    "/api/v2/data/grove/sepolia/head": {
+      "get": {
+        "operationId": "getSepoliaGroveV2Head",
+        "summary": "Get the latest verified signed Grove v2 aggregate",
+        "tags": ["Relay telemetry", "Onchain activity"],
+        "security": [],
+        "parameters": [{ "name": "If-None-Match", "in": "header", "required": false, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "Fresh, exact-key, signature-verified Grove v2 head.",
+            "headers": {
+              "ETag": { "schema": { "type": "string" } },
+              "X-Shade-Tree-Schema": { "schema": { "type": "string", "const": "shade-tree-public-grove-v2" } }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PublicGroveV2" } } }
+          },
+          "304": { "description": "If-None-Match weakly matches the current response ETag." },
+          "400": { "description": "Query parameters are unsupported." },
+          "503": { "description": "A fresh verified upstream head is unavailable; never a synthetic zero." }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PublicGroveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "network", "observedAt", "source", "nodes", "growth", "privacy", "history", "relay", "attestation"],
+        "properties": {
+          "schema": { "type": "string", "const": "shade-tree-public-grove-v2" },
+          "network": { "type": "string", "const": "sepolia" },
+          "observedAt": { "type": "string", "format": "date-time", "description": "No more than five minutes in the future and no more than one hour old." },
+          "source": { "$ref": "#/components/schemas/Source" },
+          "nodes": { "$ref": "#/components/schemas/Nodes" },
+          "growth": { "$ref": "#/components/schemas/Growth" },
+          "privacy": { "$ref": "#/components/schemas/Privacy" },
+          "history": { "type": "array", "minItems": 1, "maxItems": 97, "items": { "$ref": "#/components/schemas/HistorySample" } },
+          "relay": { "$ref": "#/components/schemas/Relay" },
+          "onchain": { "$ref": "#/components/schemas/OnchainActivity" },
+          "attestation": { "$ref": "#/components/schemas/Attestation" }
+        }
+      },
+      "Source": {
+        "type": "object", "additionalProperties": false,
+        "required": ["bootnodeReachable", "directoryVerified", "definition", "cadenceMinutes"],
+        "properties": {
+          "bootnodeReachable": { "type": "boolean", "const": true },
+          "directoryVerified": { "type": "boolean", "const": true },
+          "definition": { "type": "string", "const": "announced-within-ttl" },
+          "cadenceMinutes": { "type": "integer", "const": 15 }
+        }
+      },
+      "Nodes": {
+        "type": "object", "additionalProperties": false, "required": ["announced"],
+        "properties": { "announced": { "type": "integer", "minimum": 0, "maximum": 100000 } }
+      },
+      "Growth": {
+        "type": "object", "additionalProperties": false, "required": ["windowHours", "announcedNodeHours", "samples"],
+        "properties": {
+          "windowHours": { "type": "integer", "const": 24 },
+          "announcedNodeHours": { "type": ["integer", "null"], "minimum": 0, "maximum": 2400000 },
+          "samples": { "type": "integer", "minimum": 1, "maximum": 97 }
+        }
+      },
+      "Privacy": {
+        "type": "object", "additionalProperties": false,
+        "required": ["identities", "locations", "traffic", "stablePositions", "futureSharedStatsMinReportingNodes"],
+        "properties": {
+          "identities": { "type": "boolean", "const": false },
+          "locations": { "type": "boolean", "const": false },
+          "traffic": { "type": "boolean", "const": false },
+          "stablePositions": { "type": "boolean", "const": false },
+          "futureSharedStatsMinReportingNodes": { "type": "integer", "const": 5 }
+        }
+      },
+      "HistorySample": {
+        "type": "object", "additionalProperties": false, "required": ["at", "announced"],
+        "properties": { "at": { "type": "string", "format": "date-time" }, "announced": { "type": "integer", "minimum": 0, "maximum": 100000 } }
+      },
+      "Relay": {
+        "type": "object", "additionalProperties": false,
+        "description": "Aggregate payload bytes only. No node identities or per-node records.",
+        "required": ["definition", "unit", "generatedAt", "delayHours", "minimumCohort", "rounding", "windows"],
+        "properties": {
+          "definition": { "type": "string", "const": "payload-bytes-relayed" },
+          "unit": { "type": "string", "const": "bytes" },
+          "generatedAt": { "type": "string", "format": "date-time", "description": "Canonical generation time, no more than five minutes after observedAt and no more than one hour before it." },
+          "delayHours": { "type": "integer", "minimum": 6 },
+          "minimumCohort": { "type": "integer", "minimum": 5 },
+          "rounding": {
+            "type": "object", "additionalProperties": false, "required": ["method", "bucketBytes"],
+            "properties": { "method": { "type": "string", "const": "ceiling" }, "bucketBytes": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" } }
+          },
+          "windows": {
+            "type": "object", "additionalProperties": false, "required": ["sixHour", "twentyFourHour"],
+            "properties": {
+              "sixHour": { "$ref": "#/components/schemas/RelayWindow6h" },
+              "twentyFourHour": { "$ref": "#/components/schemas/RelayWindow24h" }
+            }
+          }
+        }
+      },
+      "RelayWindow6h": {
+        "oneOf": [
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "roundedBytes"],
+            "properties": {
+              "status": { "type": "string", "const": "available" },
+              "windowHours": { "type": "integer", "const": 6 },
+              "windowStart": { "type": "string", "format": "date-time" },
+              "windowEnd": { "type": "string", "format": "date-time" },
+              "reportingNodes": { "type": "integer", "minimum": 5, "maximum": 100000 },
+              "roundedBytes": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "suppressionReason"],
+            "properties": {
+              "status": { "type": "string", "const": "suppressed" },
+              "windowHours": { "type": "integer", "const": 6 },
+              "windowStart": { "type": "string", "format": "date-time" },
+              "windowEnd": { "type": "string", "format": "date-time" },
+              "reportingNodes": { "type": "integer", "minimum": 0, "maximum": 100000 },
+              "suppressionReason": { "type": "string", "enum": ["minimum-cohort", "unavailable"] }
+            }
+          }
+        ]
+      },
+      "RelayWindow24h": {
+        "oneOf": [
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "roundedBytes"],
+            "properties": {
+              "status": { "type": "string", "const": "available" },
+              "windowHours": { "type": "integer", "const": 24 },
+              "windowStart": { "type": "string", "format": "date-time" },
+              "windowEnd": { "type": "string", "format": "date-time" },
+              "reportingNodes": { "type": "integer", "minimum": 5, "maximum": 100000 },
+              "roundedBytes": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["status", "windowHours", "windowStart", "windowEnd", "reportingNodes", "suppressionReason"],
+            "properties": {
+              "status": { "type": "string", "const": "suppressed" },
+              "windowHours": { "type": "integer", "const": 24 },
+              "windowStart": { "type": "string", "format": "date-time" },
+              "windowEnd": { "type": "string", "format": "date-time" },
+              "reportingNodes": { "type": "integer", "minimum": 0, "maximum": 100000 },
+              "suppressionReason": { "type": "string", "enum": ["minimum-cohort", "unavailable"] }
+            }
+          }
+        ]
+      },
+      "OnchainActivity": {
+        "type": "object", "additionalProperties": false,
+        "description": "Optional aggregate from one delayed finalized v4 block. No commitments, payer/payee identities, transaction hashes, registrar orders, or cross-set deduplication claims are published.",
+        "required": ["definition", "generatedAt", "delayHours", "minimumCohort", "source", "membership", "settlements", "enforcement"],
+        "properties": {
+          "definition": { "type": "string", "const": "finalized-v4-onchain-activity" },
+          "generatedAt": { "type": "string", "format": "date-time" },
+          "delayHours": { "type": "integer", "minimum": 6 },
+          "minimumCohort": { "type": "integer", "minimum": 5 },
+          "source": { "$ref": "#/components/schemas/OnchainSource" },
+          "membership": { "$ref": "#/components/schemas/OnchainMembership" },
+          "settlements": { "$ref": "#/components/schemas/OnchainSettlements" },
+          "enforcement": { "$ref": "#/components/schemas/OnchainEnforcement" }
+        }
+      },
+      "OnchainSource": {
+        "type": "object", "additionalProperties": false,
+        "required": ["chainId", "finalizedBlock", "finalizedBlockHash", "finalizedBlockTime", "finalityConfirmations"],
+        "properties": {
+          "chainId": { "type": "integer", "const": 11155111 },
+          "finalizedBlock": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$" },
+          "finalizedBlockHash": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+          "finalizedBlockTime": { "type": "string", "format": "date-time", "description": "At least delayHours before generatedAt." },
+          "finalityConfirmations": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "CohortCommitmentCount": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["status", "activeCommitments"], "properties": { "status": { "const": "available" }, "activeCommitments": { "type": "integer", "minimum": 5, "maximum": 100000000 } } },
+          { "$ref": "#/components/schemas/CohortSuppressed" }
+        ]
+      },
+      "CohortSlashCount": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["status", "finalizedSlashes"], "properties": { "status": { "const": "available" }, "finalizedSlashes": { "type": "integer", "minimum": 5, "maximum": 100000000 } } },
+          { "$ref": "#/components/schemas/CohortSuppressed" }
+        ]
+      },
+      "CohortSuppressed": {
+        "type": "object", "additionalProperties": false, "required": ["status", "suppressionReason"],
+        "properties": { "status": { "const": "suppressed" }, "suppressionReason": { "const": "minimum-cohort" } }
+      },
+      "OnchainMembership": {
+        "type": "object", "additionalProperties": false,
+        "required": ["definition", "duplicatePolicy", "staked", "paid"],
+        "properties": {
+          "definition": { "const": "active-commitments-at-finalized-block" },
+          "duplicatePolicy": { "const": "separate-contract-classes-no-cross-set-dedup" },
+          "staked": { "$ref": "#/components/schemas/CohortCommitmentCount" },
+          "paid": { "$ref": "#/components/schemas/CohortCommitmentCount" }
+        }
+      },
+      "OnchainSettlements": {
+        "oneOf": [
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["definition", "attributionRule", "status", "completedAccesses", "atomicValue", "asset"],
+            "properties": {
+              "definition": { "const": "finalized-settlement-linked-to-finalized-insert" },
+              "attributionRule": { "const": "signed-registrar-chain-verified-v1" },
+              "status": { "const": "available" },
+              "completedAccesses": { "type": "integer", "minimum": 5, "maximum": 100000000 },
+              "atomicValue": { "type": "string", "pattern": "^[1-9][0-9]{0,77}$" },
+              "asset": {
+                "type": "object", "additionalProperties": false, "required": ["chainId", "address", "decimals", "symbol"],
+                "properties": {
+                  "chainId": { "type": "integer", "const": 11155111 },
+                  "address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+                  "decimals": { "type": "integer", "minimum": 0, "maximum": 255 },
+                  "symbol": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,16}$" }
+                }
+              }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["definition", "attributionRule", "status", "suppressionReason"],
+            "properties": {
+              "definition": { "const": "finalized-settlement-linked-to-finalized-insert" },
+              "attributionRule": { "const": "signed-registrar-chain-verified-v1" },
+              "status": { "const": "suppressed" },
+              "suppressionReason": { "const": "minimum-cohort" }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["definition", "attributionRule", "status", "unavailableReason"],
+            "properties": {
+              "definition": { "const": "finalized-settlement-linked-to-finalized-insert" },
+              "attributionRule": { "const": "signed-registrar-chain-verified-v1" },
+              "status": { "const": "unavailable" },
+              "unavailableReason": { "const": "attribution-unavailable" }
+            }
+          }
+        ]
+      },
+      "OnchainEnforcement": {
+        "type": "object", "additionalProperties": false, "required": ["definition", "staked", "paid"],
+        "properties": {
+          "definition": { "const": "finalized-contract-slash-events" },
+          "staked": { "$ref": "#/components/schemas/CohortSlashCount" },
+          "paid": { "$ref": "#/components/schemas/CohortSlashCount" }
+        }
+      },
+      "Attestation": {
+        "type": "object", "additionalProperties": false, "required": ["algorithm", "keyId", "signature"],
+        "properties": {
+          "algorithm": { "type": "string", "const": "Ed25519" },
+          "keyId": { "type": "string", "const": "grove-2026-08" },
+          "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$" }
+        }
+      }
+    }
+  }
+}

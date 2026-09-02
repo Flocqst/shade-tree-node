@@ -3,6 +3,10 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { identityFor, rateCommitmentOf } from "../lib/rln.mjs";
 import {
   ShadeTreeClient,
   ShadeTreeEpochBudgetError,
@@ -13,6 +17,9 @@ import {
 import { proxyFailureLabel } from "./shim.mjs";
 
 let failures = 0;
+const slotWork = mkdtempSync(join(tmpdir(), "shade-tree-safety-slots-"));
+let slotFileId = 0;
+const slotStatePath = () => join(slotWork, `slots-${slotFileId++}.json`);
 async function test(name, fn) {
   try { await fn(); console.log("  PASS  " + name); }
   catch (error) { failures += 1; console.log("  FAIL  " + name + " :: " + (error?.stack || error)); }
@@ -103,6 +110,7 @@ function clientHarness(modes, { ackTimeoutMs = 15, ackMaxBytes = 32 } = {}) {
     gatewayArtifacts: ["test-artifact"],
     loadGroupFn: fakeGroup,
     prove: fakeProve,
+    slotStatePath: slotStatePath(),
   });
   client._candidates = async () => candidates;
   client._sel = async () => ({ reportResult: (onion, result) => reports.push({ onion, ...result }) });
@@ -111,11 +119,25 @@ function clientHarness(modes, { ackTimeoutMs = 15, ackMaxBytes = 32 } = {}) {
 
 console.log("local epoch budget:");
 
+await test("default state is namespaced by the public member leaf and stores no bearer secret", () => {
+  const secret = "0x01";
+  const pool = makeSlotPool({
+    secret, K: 2, epochOf: () => 9n, loadGroupFn: fakeGroup, prove: fakeProve,
+    slotStateDir: join(slotWork, "default-state"),
+  });
+  const publicLeaf = rateCommitmentOf(identityFor(secret), 2).toString();
+  assert.equal(basename(pool.statePath()), `${publicLeaf}.json`);
+  assert.equal(pool.nextSlot().slot, 0);
+  const raw = readFileSync(pool.statePath(), "utf8");
+  assert.equal(raw.includes(secret), false);
+  assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ["epoch", "nextSlot", "version"]);
+});
+
 await test("the K+1 request throws typed reset metadata instead of reusing slot zero", () => {
   let epoch = 10n;
   const pool = makeSlotPool({
     secret: "s", K: 2, epochOf: () => epoch, epochSeconds: 60, now: () => 605_000,
-    loadGroupFn: fakeGroup, prove: fakeProve,
+    loadGroupFn: fakeGroup, prove: fakeProve, slotStatePath: slotStatePath(),
   });
   assert.deepEqual([pool.nextSlot().slot, pool.nextSlot().slot], [0, 1]);
   assert.throws(
@@ -147,28 +169,25 @@ await test("slash tests can opt into slot reuse only through the explicit unsafe
   assert.deepEqual([pool.nextSlot().slot, pool.nextSlot().slot, pool.nextSlot().slot], [0, 1, 0]);
 });
 
-await test("local envelope failures return their reservation instead of exhausting the epoch", async () => {
+await test("local envelope failures durably burn reservations so a restart cannot reuse them", async () => {
   const failProve = async () => { throw new Error("local prover failed"); };
+  const state = slotStatePath();
   const pool = makeSlotPool({
-    secret: "s", K: 2, epochOf: () => 10n, loadGroupFn: fakeGroup, prove: failProve,
+    secret: "s", K: 2, epochOf: () => 10n, loadGroupFn: fakeGroup, prove: failProve, slotStatePath: state,
   });
-  for (let i = 0; i < 5; i++) {
-    await assert.rejects(
-      () => buildEnvelope({ secret: "s", target: "example.com:443", pool, prove: failProve }),
-      /local prover failed/,
-    );
-  }
-  assert.deepEqual(pool.state(), { epoch: 10n, cursor: 0, remaining: 2, source: "members.json" });
-  const built = await buildEnvelope({ secret: "s", target: "example.com:443", pool, prove: fakeProve });
-  assert.equal(built.slot, 0, "the first successful envelope still owns slot zero");
+  await assert.rejects(() => buildEnvelope({ secret: "s", target: "example.com:443", pool, prove: failProve }), /local prover failed/);
   assert.deepEqual(pool.state(), { epoch: 10n, cursor: 1, remaining: 1, source: "members.json" });
+  const restarted = makeSlotPool({ secret: "s", K: 2, epochOf: () => 10n, loadGroupFn: fakeGroup, prove: fakeProve, slotStatePath: state });
+  const built = await buildEnvelope({ secret: "s", target: "example.com:443", pool: restarted, prove: fakeProve });
+  assert.equal(built.slot, 1, "restart advances past the slot allocated before the local failure");
+  assert.throws(() => restarted.nextSlot(), ShadeTreeEpochBudgetError);
 });
 
-await test("released slots never collide with a concurrent active reservation", async () => {
+await test("concurrent reservations stay distinct and a failed proof cannot release one for reuse", async () => {
   const pending = [];
   const deferredProve = (...args) => new Promise((resolve, reject) => pending.push({ args, slot: args[2], resolve, reject }));
   const pool = makeSlotPool({
-    secret: "s", K: 2, epochOf: () => 10n, loadGroupFn: fakeGroup, prove: fakeProve,
+    secret: "s", K: 2, epochOf: () => 10n, loadGroupFn: fakeGroup, prove: fakeProve, slotStatePath: slotStatePath(),
   });
   const first = buildEnvelope({ secret: "s", target: "a.example:443", pool, prove: deferredProve })
     .then((value) => ({ value }), (error) => ({ error }));
@@ -183,14 +202,14 @@ await test("released slots never collide with a concurrent active reservation", 
 
   pending[0].reject(new Error("first local proof failed"));
   assert.match((await first).error.message, /first local proof failed/);
-  const replacement = buildEnvelope({ secret: "s", target: "c.example:443", pool, prove: deferredProve });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(pending[2].slot, 0, "only the released slot is reused while slot one remains active");
+  await assert.rejects(
+    () => buildEnvelope({ secret: "s", target: "c.example:443", pool, prove: deferredProve }),
+    ShadeTreeEpochBudgetError,
+    "the failed slot remains burned",
+  );
 
   pending[1].resolve(await fakeProve(...pending[1].args));
-  pending[2].resolve(await fakeProve(...pending[2].args));
   assert.equal((await second).value.slot, 1);
-  assert.equal((await replacement).slot, 0);
   assert.deepEqual(pool.state(), { epoch: 10n, cursor: 2, remaining: 0, source: "members.json" });
 });
 
@@ -272,5 +291,6 @@ await test("protocol and artifact rejects are onion-local and fail over with one
   second.destroy();
 });
 
+rmSync(slotWork, { recursive: true, force: true });
 console.log(failures ? `\nSELFTEST FAILED: ${failures} case(s)` : "\nSELFTEST PASSED: all cases green");
 process.exit(failures ? 1 : 0);

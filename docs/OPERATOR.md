@@ -93,6 +93,61 @@ environment file, and reference it with `EnvironmentFile=` from
 shade-tree-heartbeat`). Do not put the key in the unit command or shell history; it is not a
 `bootstrap.sh` tunable.
 
+### Add the next node on a second provider / ASN
+
+The current disposable v4 research Grove spans three regions but one provider and ASN. Before
+adding another long-lived node, place it on a different provider network so one DigitalOcean or
+AS14061 incident cannot remove the whole Grove. This changes failure independence; it does not by
+itself make the anonymity set larger or the untrusted testnet artifacts production-safe.
+
+Use a fresh Ubuntu 24.04 host with a dedicated public address, root or passwordless `sudo`, outbound
+traffic allowed, and **only TCP 22 from the reviewed operator CIDR inbound**. Do not expose the
+gateway, heartbeat, or metrics ports. Record the provider account owner, region, instance size,
+admin CIDR, abuse contact, teardown method, and identity-backup location before bootstrap.
+
+| Target | Image / access | Provider firewall | Operator note |
+|---|---|---|---|
+| Hetzner Cloud | Ubuntu 24.04, SSH key, non-root sudo user or root | inbound 22/tcp from the operator `/32`; outbound allow | Record the project owner and server rescue path. |
+| OVHcloud VPS | Ubuntu 24.04, SSH key | provider firewall plus host UFW with the same SSH-only rule | Record the control-panel owner and reinstall/recovery path. |
+| Bare metal / colocated | Ubuntu 24.04, remote-console access, dedicated egress address | upstream ACL plus host UFW; no management subnet reachable from egress | Keep BMC, storage, validator, wallet, and authenticated RPC networks physically or logically separate. |
+
+Before announcing, verify the address is not in the Elder provider's ASN. Run this from the
+operator workstation and save the returned organization string in the deployment receipt:
+
+```bash
+curl -fsS "https://ipinfo.io/<new-node-public-ip>/org"
+```
+
+Then use gateway-only mode against the existing v4 Elder. Fetch the bootstrap script from the same
+reviewed immutable ref that `SHADE_TREE_REF` names; do not mix `main` at download time with an older
+service checkout:
+
+```bash
+export SHADE_TREE_REF=<reviewed-tag-or-commit>
+curl -fsSL "https://raw.githubusercontent.com/dmarzzz/shade-tree-node/$SHADE_TREE_REF/bootnode/deploy/bootstrap.sh" \
+  -o /tmp/shade-tree-bootstrap.sh
+sudo env \
+  SHADE_TREE_REF="$SHADE_TREE_REF" \
+  SHADE_TREE_BOOTNODE_ONION=<v4-elder.onion> \
+  SHADE_TREE_BOOTNODE_SIGNER=<pinned-canopy-signer> \
+  SHADE_TREE_MEMBERS_FILE=/root/operator-members.json \
+  SHADE_TREE_GATEWAY_REGION=<na|sa|eu|af|as|oc|aq|unknown> \
+  bash /tmp/shade-tree-bootstrap.sh
+```
+
+`SHADE_TREE_BOOTNODE_SIGNER` is printed into the client handoff; the heartbeat authenticates its own
+announcement and does not trust that value. If the Elder requires staked operator admission, fund
+and register a provider-specific operator key with `shade-tree register-gateway`, then load the
+heartbeat signing key from a root-only environment file as described above. Do not reuse a slash or
+operator hot key merely because two nodes share an owner.
+
+Finish by checking `shade-tree-heartbeat` reports `accepted`, the signed Canopy adds exactly the new
+Protocol v4 onion, the node's `/readyz` is healthy on loopback, all non-SSH clearnet ports remain
+closed, and a real invited CONNECT returns the new provider address. Give the provider abuse contact
+a concise description: the public IP is an access-gated HTTPS CONNECT egress; complaints identify
+the node address, not the private member behind an RLN proof. Preserve logs under the project's
+traffic-metadata limits and follow [INCIDENT.md](INCIDENT.md) rather than promising attribution.
+
 ### By hand
 
 If you did not use `bootstrap.sh` (bringing your own host, or a non-systemd setup):
@@ -510,6 +565,7 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_SLASH_KEY` | `--slash-key` | Hot key that submits `slash()` txs; unset = dry-run. |
 | `SHADE_TREE_SLASH_CONTRACT` | `--slash-contract` | Slash contract address (independent of the root source). |
 | `SHADE_TREE_SLOTS` | (none) | Default-tier per-epoch rate cap `K` (nullifiers before over-spend). Must match the limit members' leaves were enrolled with. |
+| `SHADE_TREE_SLOT_STATE_DIR` | (none) | Proxy/SDK/Rust client state root for atomic RLN slot allocation. Defaults to the OS user-state directory and is namespaced by public member leaf. Empty/`off` is rejected; state corruption, unavailability, or a stale lock fails closed. |
 | `SHADE_TREE_TIERS` | (none) | Reputation-tier limits this gateway knows, e.g. `8,32` (T-FEAT-8). Only used to name the right leaf when slashing an over-spender (`resolveSlashLeaf`); proofs carry no tier. Default = `SHADE_TREE_SLOTS`. See "Reputation tiers" below. |
 | `SHADE_TREE_EPOCH_SECONDS` | `--epoch-seconds` | Epoch length (default 120). Must match client and gateway. |
 | `SHADE_TREE_RPC_URL` | `--rpc-url` | JSON-RPC endpoint for all on-chain reads/writes. For `SHADE_TREE_ROOT_PROVIDER=light` it must serve `eth_getProof` at the finalized block (own node / archive-capable provider; public RPCs' proof windows are ~32 blocks, shorter than finality). |
@@ -538,6 +594,7 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
 | `SHADE_TREE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `SHADE_TREE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
 | `SHADE_TREE_ENVELOPE_TIMEOUT_MS` / `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES` | (none) | Combined payload ceiling per RLN epoch slot (default `41943040` = 40 MiB). Same-node retries share it; `0` disables. |
 | `SHADE_TREE_MAX_CONNS` / `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
 | `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` / `SHADE_TREE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `SHADE_TREE_BOOTNODE_MAX_ENTRIES` and `SHADE_TREE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
 | `SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
@@ -654,9 +711,10 @@ SHADE_TREE_ADMIT=staked shade-tree gateway \
   --group-contract <v4-staked-set-address> --rpc-url <operator-rpc-url>
 ```
 
-Use a named network only when you maintain a current v4 record for it. The
-checked-in `sepolia` record is retired pre-v4 history and is intentionally not
-a gateway configuration preset.
+Use a named network only when you maintain a current v4 runtime record for it. The legacy
+`sepolia` contracts, bootnode, and signed directories are retired pre-v4 history and intentionally
+are not a gateway configuration preset. Its separate `deployment.json` is a current research
+receipt, not a complete runtime preset.
 
 - The named paths are the ONLY root sources and the ONLY slash routing targets; a configured but
   un-admitted contract is never read. Startup prints the policy, then the sources: `admits:
@@ -822,6 +880,11 @@ should not need to touch them unless you run an unusually large or slow fleet.
   `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
   (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
   simply reconnect; raise it if members legitimately hold idle connections longer.
+- **Combined payload ceiling** — both opaque TLS directions spend from one
+  `(externalNullifier, nullifier)` budget. At `SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES` bytes (40 MiB by
+  default), the final chunk is truncated to the exact boundary and both sockets close with
+  `reason="payload-limit"`. A same-node retry gets only the slot's remainder. Higher tiers receive
+  one allowance per private slot; asynchronous cross-node replays can still race the fleet tally.
 - **Connection caps** — `SHADE_TREE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
   before any read (`too-many-connections`); `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
   tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry

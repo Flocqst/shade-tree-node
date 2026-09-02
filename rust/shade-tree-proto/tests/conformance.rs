@@ -8,19 +8,18 @@
 //!
 //! Only the functions with a vector in the fixture are exercised here.
 //! `calculate_signal_hash` is now conformance-checked against the `signalHash` vector
-//! (T-RUST-1b). `verify_announce` remains a documented stub in `src/lib.rs` (its
-//! operator-ECDSA / EIP-191 path needs secp256k1 in Rust) and is intentionally NOT
-//! called, even though the `operatorAnnounce` vector now exists for a future task.
+//! (T-RUST-1b). Announcement verification is covered across onion control,
+//! EIP-191 operator recovery, freshness, and replay state.
 
 use serde_json::Value;
 use shade_tree_proto::{
     accept_envelope_version, calculate_signal_hash, canonical_announce_bytes, canonical_caps_bytes,
     canonical_directory_bytes, canonical_receipt_bytes, ed25519_public_key, ed25519_sign,
     ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
-    select_proto_version, sign_receipt, verify_caps_sig, verify_directory,
-    verify_directory_threshold, verify_receipt, Announce, Caps, Directory, EnvelopeVersion,
-    GatewayEntry, ProtoCaps, Receipt, REASON_BAD_VERSION, REASON_NO_MUTUAL_VERSION,
-    REASON_UNSUPPORTED_VERSION,
+    select_proto_version, sign_receipt, verify_announce, verify_caps_sig, verify_directory,
+    verify_directory_threshold, verify_operator_sig, verify_receipt, Announce, Caps, Directory,
+    EnvelopeVersion, GatewayEntry, ProtoCaps, Receipt, REASON_BAD_VERSION,
+    REASON_NO_MUTUAL_VERSION, REASON_UNSUPPORTED_VERSION,
 };
 
 /// Load `testdata/vectors.json` relative to this crate's manifest dir.
@@ -82,7 +81,61 @@ fn vector_announce(v: &Value) -> Announce {
         operator: None,
         operator_sig: None,
         caps: None,
+        caps_sig: None,
     }
+}
+
+#[test]
+fn verify_announce_checks_eip191_freshness_and_replay() {
+    let v = vectors();
+    let mut ann = vector_announce(&v);
+    ann.operator = Some(
+        v["operatorAnnounce"]["operator"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    );
+    ann.operator_sig = Some(
+        v["operatorAnnounce"]["operatorSig"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    );
+    assert!(verify_operator_sig(
+        &ann.onion,
+        ann.operator.as_deref().unwrap(),
+        ann.operator_sig.as_deref().unwrap()
+    ));
+
+    let mut seen = std::collections::HashSet::new();
+    verify_announce(&ann, ann.ts, 120, Some(&mut seen)).expect("valid announce");
+    assert_eq!(
+        verify_announce(&ann, ann.ts, 120, Some(&mut seen))
+            .unwrap_err()
+            .to_string(),
+        "replayed-nonce"
+    );
+
+    let mut fresh_seen = std::collections::HashSet::new();
+    assert_eq!(
+        verify_announce(&ann, ann.ts + 121, 120, Some(&mut fresh_seen))
+            .unwrap_err()
+            .to_string(),
+        format!("stale-ts:{}", ann.ts)
+    );
+    assert!(
+        fresh_seen.is_empty(),
+        "a rejected announce must not burn its nonce"
+    );
+
+    let mut bad_operator = ann.clone();
+    bad_operator.operator = Some("0x000000000000000000000000000000000000dead".into());
+    assert_eq!(
+        verify_announce(&bad_operator, bad_operator.ts, 120, None)
+            .unwrap_err()
+            .to_string(),
+        "bad-operator-sig"
+    );
 }
 
 // -- 1. onion <-> pubkey (spec 2) ------------------------------------------
@@ -829,6 +882,7 @@ fn announce_with_caps_matches_vector() {
         operator: None,
         operator_sig: None,
         caps: Some(vector_caps(&v)),
+        caps_sig: None,
     };
     let bytes = canonical_announce_bytes(&ann);
     // caps appended after nonce; byte-identical to the pinned caps-carrying announce.
