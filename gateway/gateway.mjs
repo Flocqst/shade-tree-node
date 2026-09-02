@@ -34,6 +34,7 @@
 // neither a root source nor a slash target.
 
 import net from "node:net";
+import { Transform } from "node:stream";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
 import { watch } from "node:fs";
@@ -56,14 +57,15 @@ const LISTEN_HOST = "127.0.0.1";
 const LISTEN_PORT = Number(process.env.SHADE_TREE_GATEWAY_PORT || 8443);
 const MAX_ENVELOPE = 64 * 1024;
 export const MAX_EGRESS_ADDRESSES = 8;
+export const DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES = 40 * 1024 * 1024;
 const log = createLogger("node");
 
 // ---- metrics (T-MON-2) ------------------------------------------------------
 // Registered against the process-wide registry at import time: this only fills in-memory
 // state and binds NO port. The gateway speaks raw TCP, so /metrics is exposed by a SEPARATE
 // loopback http server started only when SHADE_TREE_METRICS_PORT is set (see main()). Off by
-// default => existing behavior and every selftest are byte-for-byte unchanged. All
-// increments below sit on cold branches / the connect callback, never the per-byte pipe.
+// default => no listener. Payload counters increment once per admitted stream chunk; all labels
+// remain closed enums and no traffic identity is retained.
 const M = {
   tunnels: metrics.counter("shade_tree_gateway_tunnels_total", "Tunnels by result=pass|drop (+ reason on drop)."),
   slashes: metrics.counter("shade_tree_gateway_slashes_total", "Members slashed for an RLN over-spend (2nd distinct signal on a nullifier)."),
@@ -72,7 +74,7 @@ const M = {
   // Established tunnels closed by the gateway itself (not by either peer), by reason. Kept
   // SEPARATE from tunnels_total: a tunnel that idles out already counted as result=pass, so
   // counting it again as a drop would double-count the tunnel (T-HARD-4).
-  tunnelCloses: metrics.counter("shade_tree_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout)."),
+  tunnelCloses: metrics.counter("shade_tree_gateway_tunnel_closes_total", "Established tunnels closed by the gateway, by reason (idle-timeout|payload-limit|upstream-error)."),
   // T-FEAT-7: trusted roots per source (source=static|staked|paid, contract=address|members.json)
   // and the paid set's live leaf count (its anonymity set; the floor is SHADE_TREE_PAID_MIN_LEAVES).
   rootsBySource: metrics.gauge("shade_tree_gateway_trusted_roots", "Trusted admission roots right now, by bounded source=invited|staked|paid."),
@@ -80,8 +82,8 @@ const M = {
   // sources it has: last-known-good roots + members.json), 0 once it reads again. Alert on it.
   rootDegraded: metrics.gauge("shade_tree_gateway_root_source_degraded", "1 = this bounded root source failed its last refresh; 0 = healthy."),
   paidLeaves: metrics.gauge("shade_tree_gateway_paid_access_leaves", "Live leaves in the PaidAccessSet; no contract label is exposed."),
-  agentToDestinationBytes: metrics.counter("shade_tree_gateway_agent_to_destination_payload_bytes_total", "Application payload bytes read from agents after tunnel establishment. No traffic labels are recorded."),
-  destinationToAgentBytes: metrics.counter("shade_tree_gateway_destination_to_agent_payload_bytes_total", "Application payload bytes read from destinations after tunnel establishment. No traffic labels are recorded."),
+  agentToDestinationBytes: metrics.counter("shade_tree_gateway_agent_to_destination_payload_bytes_total", "Application payload bytes relayed from agents after tunnel establishment. No traffic labels are recorded."),
+  destinationToAgentBytes: metrics.counter("shade_tree_gateway_destination_to_agent_payload_bytes_total", "Application payload bytes relayed from destinations after tunnel establishment. No traffic labels are recorded."),
 };
 
 const DROP_LABELS = new Set([
@@ -91,6 +93,7 @@ const DROP_LABELS = new Set([
   "artifact-unknown", "artifact-retired", "bad-artifact", "bad-target", "bad-target-policy",
   "bad-target-address", "bad-target-dns",
   "replayed-envelope", "rate-slashed", "over-spend-slashed", "nullifier-conn-limit",
+  "payload-limit",
   "upstream-timeout", "upstream-refused", "upstream-unreachable", "upstream-reset",
   "upstream-error", "internal-error",
 ]);
@@ -138,17 +141,23 @@ function upstreamDropLabel(code) {
 //                                 open tunnels: an exact-envelope honest retry inside the replay
 //                                 window is admitted idempotently, so without this cap one proof
 //                                 could pin N idle tunnels open. Over => `nullifier-conn-limit`.
+//   SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES combined application payload relayed in both directions for
+//                                 one (externalNullifier, nullifier) RLN slot (default 41943040 =
+//                                 40 MiB; 0 = unlimited). Same-node retries share the budget. The
+//                                 final chunk is truncated at the exact boundary, then both sockets
+//                                 close and `payload-limit` is counted in tunnel_closes_total.
 //   SHADE_TREE_DNS_TIMEOUT_MS      maximum time resolving an admitted target (default 5000).
 //                                 A stalled resolver cannot pin the handler indefinitely.
 function envInt(name, dflt) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return dflt;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : dflt;
+  return Number.isSafeInteger(n) && n >= 0 ? n : dflt;
 }
 export const HARDENING = Object.freeze({
   envelopeTimeoutMs: envInt("SHADE_TREE_ENVELOPE_TIMEOUT_MS", 30000),
   idleTimeoutMs: envInt("SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS", 300000),
+  maxPayloadBytes: envInt("SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES", DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES),
   maxConns: envInt("SHADE_TREE_MAX_CONNS", 1024),
   maxConnsPerNullifier: envInt("SHADE_TREE_MAX_CONNS_PER_NULLIFIER", 8),
   dnsTimeoutMs: envInt("SHADE_TREE_DNS_TIMEOUT_MS", 5000),
@@ -182,6 +191,111 @@ export function makeConnLimiter({ maxConns = HARDENING.maxConns, maxPerNullifier
     nullifierCount: (n) => perNullifier.get(String(n)) || 0,
     trackedNullifiers: () => perNullifier.size,
   };
+}
+
+// One proof slot is named by its epoch external nullifier plus its RLN nullifier. Keep a local
+// combined byte budget under that key so an exact-envelope retry cannot reset its allowance merely
+// by opening another socket. State lives for two epochs, matching makeSpentSet's verifier/replay
+// retention after the last socket closes. Active entries are never pruned, so a long-lived tunnel
+// cannot regain 40 MiB merely by crossing the retention boundary. Pruning happens only when a new
+// key is allocated or sweep() is called, never per byte. `maxBytes=0` is the explicit operator
+// opt-out and allocates no state.
+export function makePayloadBudget({
+  maxBytes = HARDENING.maxPayloadBytes,
+  ttlMs = 2 * EPOCH_SECONDS * 1000,
+  now = () => Date.now(),
+} = {}) {
+  maxBytes = Number(maxBytes);
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error("payload budget maxBytes must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+    throw new Error("payload budget ttlMs must be a positive safe integer");
+  }
+
+  const entries = new Map(); // "epoch\0nullifier" -> { used, active, at }
+  const keyOf = (nullifier, epoch) => `${String(epoch)}\0${String(nullifier)}`;
+
+  function sweep() {
+    const cutoff = now() - ttlMs;
+    for (const [key, entry] of entries) {
+      if (entry.active === 0 && entry.at < cutoff) entries.delete(key);
+    }
+  }
+
+  function entryFor(nullifier, epoch) {
+    const key = keyOf(nullifier, epoch);
+    let entry = entries.get(key);
+    if (!entry) {
+      sweep();
+      entry = { used: 0, active: 0, at: now() };
+      entries.set(key, entry);
+    }
+    return entry;
+  }
+
+  function remaining(nullifier, epoch) {
+    if (maxBytes === 0) return Infinity;
+    const entry = entryFor(nullifier, epoch);
+    return Math.max(0, maxBytes - entry.used);
+  }
+
+  function acquire(nullifier, epoch) {
+    if (maxBytes === 0) return Infinity;
+    const entry = entryFor(nullifier, epoch);
+    entry.active += 1;
+    return Math.max(0, maxBytes - entry.used);
+  }
+
+  function release(nullifier, epoch) {
+    if (maxBytes === 0) return;
+    const entry = entries.get(keyOf(nullifier, epoch));
+    if (!entry) return;
+    entry.active = Math.max(0, entry.active - 1);
+    if (entry.active === 0) entry.at = now();
+  }
+
+  function take(nullifier, epoch, requestedBytes) {
+    const requested = Number(requestedBytes);
+    if (!Number.isSafeInteger(requested) || requested < 0) {
+      throw new Error("payload budget request must be a non-negative safe integer");
+    }
+    if (maxBytes === 0) {
+      return { allowed: requested, used: null, remaining: Infinity, exhausted: false };
+    }
+    const entry = entryFor(nullifier, epoch);
+    const allowed = Math.min(requested, Math.max(0, maxBytes - entry.used));
+    entry.used += allowed;
+    return {
+      allowed,
+      used: entry.used,
+      remaining: maxBytes - entry.used,
+      exhausted: entry.used >= maxBytes,
+    };
+  }
+
+  return { maxBytes, acquire, release, remaining, take, sweep, size: () => entries.size };
+}
+
+function payloadTransform({ budget, nullifier, epoch, count, onLimit }) {
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      let result;
+      try {
+        result = budget.take(nullifier, epoch, chunk.length);
+        if (result.allowed > 0) count(chunk.subarray(0, result.allowed));
+      } catch (error) {
+        callback(error);
+        return;
+      }
+
+      // callback(null, data) pushes to the downstream socket synchronously. Schedule the close
+      // only after that push so the boundary bytes may be relayed, while a shared budget prevents
+      // the opposite direction from forwarding anything beyond the same combined ceiling.
+      callback(null, result.allowed > 0 ? chunk.subarray(0, result.allowed) : undefined);
+      if (result.exhausted) onLimit(result.used);
+    },
+  });
 }
 
 // ---- recent-roots: the accepted admission roots, refreshed on change --------
@@ -1206,11 +1320,14 @@ export function makeHandler(spentSet, {
   dnsTimeoutMs = HARDENING.dnsTimeoutMs,
   envelopeTimeoutMs = HARDENING.envelopeTimeoutMs,
   idleTimeoutMs = HARDENING.idleTimeoutMs,
+  maxPayloadBytes = HARDENING.maxPayloadBytes,
+  payloadBudget = null,
   limiter = makeConnLimiter(),
   onTunnelOpen = () => {},
   onTunnelClose = () => {},
   relayCounter = null,
 } = {}) {
+  const tunnelPayloadBudget = payloadBudget || makePayloadBudget({ maxBytes: maxPayloadBytes });
   return async function handle(socket) {
     socket.setNoDelay(true);
     // A permanent error sink on the client socket (T-HARD-4). Found by the slow-loris selftest: a
@@ -1329,6 +1446,23 @@ export function makeHandler(spentSet, {
       }
       socket.once("close", releaseNullifierSlot);
 
+      // An exact-envelope retry on this node shares the original slot's payload allowance. If
+      // that slot already consumed the ceiling, fail before DNS/TCP work and do not manufacture
+      // another 40 MiB merely because the member opened a replacement socket.
+      const payloadRemaining = tunnelPayloadBudget.acquire(v.nullifier, v.externalNullifier);
+      let payloadBudgetHeld = true;
+      socket.once("close", () => {
+        if (!payloadBudgetHeld) return;
+        payloadBudgetHeld = false;
+        tunnelPayloadBudget.release(v.nullifier, v.externalNullifier);
+      });
+      if (payloadRemaining <= 0) {
+        log.debug("tunnel rejected", { reason: "payload-limit" });
+        M.tunnels.inc({ result: "drop", reason: "payload-limit" });
+        reply(socket, { ok: false, err: "payload-limit" });
+        return socket.destroy();
+      }
+
       const resolvedTarget = await resolveEgressTarget(tgt, { lookup, allowPrivateTargets, timeoutMs: dnsTimeoutMs });
       if (!resolvedTarget.ok) {
         M.tunnels.inc({ result: "drop", reason: resolvedTarget.reason });
@@ -1341,11 +1475,15 @@ export function makeHandler(spentSet, {
       let established = false;
       let tunnelOpened = false;
       let upstream = null;
+      let gatewayCloseReason = null;
+      let relayStreams = [];
       const closeTunnel = () => {
         if (tunnelOpened) {
           tunnelOpened = false;
           onTunnelClose();
         }
+        for (const stream of relayStreams) stream.destroy();
+        relayStreams = [];
         upstream?.destroy();
       };
       // Attach cleanup before dialing. If the client closes while DNS/TCP connect is pending,
@@ -1397,26 +1535,68 @@ export function makeHandler(spentSet, {
           // Success ack. Default (no signer) => exactly `{ ok: true }` (byte-identical to the
           // pre-receipt path); with a signer => `{ ok: true, receipt }` (T-FEAT-13).
           reply(socket, successAck(makeReceipt));
-          // Relay-byte accounting starts only after the destination connection is established.
-          // `__rest` is application payload that arrived in the same TCP read as the proof
-          // envelope; it was buffered pre-connect but is counted exactly once here, at the point
-          // it is first relayed. Later chunks are counted once on their source socket's `data`
-          // event. No flow/destination/member/nullifier label is retained.
-          socket.on("data", (chunk) => {
+
+          // Enforce one opaque, combined payload budget across both relay directions. TLS remains
+          // end to end: these transforms see only byte chunks, never HTTP methods, queries, hosts,
+          // or streams. The budget key is the admitted RLN epoch+slot, so same-node retries share
+          // what remains. The two direction counters receive only bytes actually admitted by the
+          // budget; the proof envelope and success acknowledgement are outside the accounting.
+          let payloadLimitScheduled = false;
+          const closeAtPayloadLimit = (used) => {
+            if (payloadLimitScheduled) return;
+            payloadLimitScheduled = true;
+            queueMicrotask(() => {
+              if (!established || gatewayCloseReason) return;
+              gatewayCloseReason = "payload-limit";
+              M.tunnelCloses.inc({ reason: "payload-limit" });
+              log.debug("tunnel closed", { reason: "payload-limit", payloadBytes: used });
+              // net.Socket.destroySoon() flushes the already-admitted boundary bytes before
+              // teardown. No later chunk can pass because the shared budget is exhausted.
+              if (typeof candidateSocket.destroySoon === "function") candidateSocket.destroySoon();
+              else candidateSocket.destroy();
+              if (typeof socket.destroySoon === "function") socket.destroySoon();
+              else socket.destroy();
+            });
+          };
+          const countAgentToDestination = (chunk) => {
             relayCounter?.addAgentToDestination(chunk);
             M.agentToDestinationBytes.inc({}, chunk.length);
-          });
-          candidateSocket.on("data", (chunk) => {
+          };
+          const countDestinationToAgent = (chunk) => {
             relayCounter?.addDestinationToAgent(chunk);
             M.destinationToAgentBytes.inc({}, chunk.length);
+          };
+          const agentRelay = payloadTransform({
+            budget: tunnelPayloadBudget,
+            nullifier: v.nullifier,
+            epoch: v.externalNullifier,
+            count: countAgentToDestination,
+            onLimit: closeAtPayloadLimit,
           });
+          const destinationRelay = payloadTransform({
+            budget: tunnelPayloadBudget,
+            nullifier: v.nullifier,
+            epoch: v.externalNullifier,
+            count: countDestinationToAgent,
+            onLimit: closeAtPayloadLimit,
+          });
+          const closeOnRelayError = () => {
+            candidateSocket.destroy();
+            socket.destroy();
+          };
+          agentRelay.on("error", closeOnRelayError);
+          destinationRelay.on("error", closeOnRelayError);
+          relayStreams = [agentRelay, destinationRelay];
+
+          // Wire destinations first. `__rest` was consumed alongside the proof envelope, so feed
+          // it explicitly before attaching the remaining client stream and count it exactly once.
+          agentRelay.pipe(candidateSocket);
+          destinationRelay.pipe(socket);
+          candidateSocket.pipe(destinationRelay);
           if (env.__rest && env.__rest.length) {
-            relayCounter?.addAgentToDestination(env.__rest);
-            M.agentToDestinationBytes.inc({}, env.__rest.length);
-            candidateSocket.write(env.__rest);
+            agentRelay.write(env.__rest);
           }
-          socket.pipe(candidateSocket);
-          candidateSocket.pipe(socket);
+          if (!payloadLimitScheduled) socket.pipe(agentRelay);
         });
         upstream = candidateSocket;
         candidateSocket.setNoDelay(true);
@@ -1430,7 +1610,10 @@ export function makeHandler(spentSet, {
             return;
           }
           if (established) {
-            M.tunnelCloses.inc({ reason: "upstream-error" });
+            if (!gatewayCloseReason) {
+              gatewayCloseReason = "upstream-error";
+              M.tunnelCloses.inc({ reason: "upstream-error" });
+            }
           } else {
             observeUpstreamConnect();
             M.tunnels.inc({ result: "drop", reason });
@@ -1453,6 +1636,7 @@ export function makeHandler(spentSet, {
           candidateSocket.setTimeout(candidateTimeoutMs, () => {
             if (candidateSocket !== upstream) return;
             if (established) {
+              gatewayCloseReason = "idle-timeout";
               M.tunnelCloses.inc({ reason: "idle-timeout" });
               log.debug("tunnel closed", { reason: "idle-timeout", idleMs: idleTimeoutMs });
             } else {
@@ -1552,7 +1736,11 @@ async function main() {
   // byte-identical to T-FEAT-12. The bundled transport is best-effort and fail-open.
   const sharedTally = makeConfiguredFleetTally();
   const spentSet = makeSpentSet({ slash, sharedTally });
-  const sweepTimer = setInterval(() => spentSet.sweep(), EPOCH_SECONDS * 1000);
+  const payloadBudget = makePayloadBudget();
+  const sweepTimer = setInterval(() => {
+    spentSet.sweep();
+    payloadBudget.sweep();
+  }, EPOCH_SECONDS * 1000);
   sweepTimer.unref();
 
   // Optional signed success receipts (T-FEAT-13); null unless SHADE_TREE_RECEIPTS=1.
@@ -1570,6 +1758,7 @@ async function main() {
   const server = net.createServer(makeHandler(spentSet, {
     makeReceipt,
     limiter,
+    payloadBudget,
     relayCounter,
     onTunnelOpen: () => { activeTunnels += 1; },
     onTunnelClose: () => { activeTunnels = Math.max(0, activeTunnels - 1); },
@@ -1601,6 +1790,7 @@ async function main() {
       ["listen", `${LISTEN_HOST}:${LISTEN_PORT}`],
       ["admission", roots.admits?.join(",") || process.env.SHADE_TREE_ADMIT || "invited"],
       ["egress", process.env.SHADE_TREE_EGRESS_ALLOW || "*:443"],
+      ["payload limit", payloadBudget.maxBytes > 0 ? `${payloadBudget.maxBytes} bytes combined / RLN slot` : "off"],
       ["relay telemetry", relayTelemetryEnabled ? "private reports on" : "off"],
       ["metrics", metricsPort > 0 ? `127.0.0.1:${metricsPort}` : "off"],
       ["logs", `${process.env.SHADE_TREE_LOG_LEVEL || "info"} / ${process.env.SHADE_TREE_LOG_FORMAT || "auto"}`],
@@ -1617,7 +1807,7 @@ async function main() {
     const replayWindowMs = Number(process.env.SHADE_TREE_REPLAY_WINDOW_MS) || 5000;
     log.debug("replay defense ready", { replayWindowMs });
     if (sharedTally) log.info("fleet tally: ON; best-effort per-epoch replay suppression after peer propagation (nullifier+epoch only; fail-open)");
-    log.debug("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, dnsTimeoutMs: HARDENING.dnsTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
+    log.debug("endpoint hardening", { envelopeTimeoutMs: HARDENING.envelopeTimeoutMs, idleTimeoutMs: HARDENING.idleTimeoutMs, maxPayloadBytes: payloadBudget.maxBytes, dnsTimeoutMs: HARDENING.dnsTimeoutMs, maxConns: limiter.maxConns, maxConnsPerNullifier: limiter.maxPerNullifier });
   });
 
   const timeoutMs = Number(process.env.SHADE_TREE_SHUTDOWN_TIMEOUT_MS || 10000);

@@ -25,9 +25,11 @@ Files:
 | `shade_tree_bootnode_connections` | gauge | none | `bootnode/server.mjs` |
 | `shade_tree_gateway_tunnels_total` | counter | `result` (pass\|drop), `reason` (on drop) | `gateway/gateway.mjs` |
 | `shade_tree_gateway_slashes_total` | counter | none | `gateway/gateway.mjs` |
-| `shade_tree_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout) | `gateway/gateway.mjs` (T-HARD-4; separate from `tunnels_total` so an idled-out tunnel is not double-counted as a drop) |
+| `shade_tree_gateway_tunnel_closes_total` | counter | `reason` (idle-timeout\|payload-limit\|upstream-error) | `gateway/gateway.mjs` (separate from `tunnels_total` because these tunnels already counted as pass) |
 | `shade_tree_gateway_active_tunnels` | gauge | none | `gateway/gateway.mjs` |
 | `shade_tree_gateway_connections` | gauge | none | `gateway/gateway.mjs` |
+| `shade_tree_gateway_agent_to_destination_payload_bytes_total` | counter | none | `gateway/gateway.mjs` |
+| `shade_tree_gateway_destination_to_agent_payload_bytes_total` | counter | none | `gateway/gateway.mjs` |
 | `shade_tree_gateway_verify_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
 | `shade_tree_gateway_upstream_connect_seconds` | histogram | `le` (on `_bucket`) | `gateway/gateway.mjs` |
 | `shade_tree_gateway_trusted_roots` | gauge | `source` (invited\|staked\|paid) | `gateway/gateway.mjs` |

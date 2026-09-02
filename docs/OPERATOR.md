@@ -594,6 +594,7 @@ Full surface: [CONFIG.md](CONFIG.md). The knobs an operator actually changes:
 | `SHADE_TREE_ZK_ARTIFACTS` | (none) | The ZK artifact sets (verification keys) this gateway ACCEPTS, as `<id>=<vkey path>[,<id>=<vkey path>...]` (T-HARD-8, `docs/CEREMONY.md` §6). `<id>` is content-derived (`rln-<sha256(vkey)[0:16]>`, = `testdata/zk-artifacts.lock.json` `circuits.rln.artifactId`) and MUST match the file, else the gateway refuses to start. Unset = the built-in `circuits/rln/verification_key.json` under its own id (byte-equivalent to a single-VK gateway) and **no** artifact caps advertised. When set, the accepted ids are advertised as SIGNED caps (`artifacts`). |
 | `SHADE_TREE_ZK_ARTIFACT_LEGACY` | (none) | Which artifact id an envelope WITHOUT an `artifact` field (an un-upgraded client) means. Unset = the lock's `circuits.rln.previousArtifactId` if a ceremony has rotated the set, else the built-in id. If this id is not in `SHADE_TREE_ZK_ARTIFACTS`, such envelopes are rejected `artifact-retired:<id>` (precise, never `invalid-proof`). |
 | `SHADE_TREE_ENVELOPE_TIMEOUT_MS` / `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` | (none) | Gateway slow-client limits: envelope deadline (default 30 s) and relay idle timeout (default 5 min). See "Endpoint hardening" below. |
+| `SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES` | (none) | Combined payload ceiling per RLN epoch slot (default `41943040` = 40 MiB). Same-node retries share it; `0` disables. |
 | `SHADE_TREE_MAX_CONNS` / `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` | (none) | Gateway concurrent-connection caps: total (default 1024) and per nullifier (default 8). `0` = unlimited. |
 | `SHADE_TREE_BOOTNODE_ANNOUNCE_RATE` / `SHADE_TREE_BOOTNODE_ANNOUNCE_BURST` | (none) | Bootnode GLOBAL announce token bucket (default 66.7/s, burst 1000 — sized from `SHADE_TREE_BOOTNODE_MAX_ENTRIES` and `SHADE_TREE_BOOTNODE_HEARTBEAT`; `docs/BOOTNODE.md`). |
 | `SHADE_TREE_BOOTNODE_HEADERS_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` / `_KEEPALIVE_TIMEOUT_MS` / `_MAX_HEADER_BYTES` | (none) | Bootnode HTTP slow-client limits (defaults 10 s / 30 s / 5 s / 8 KiB). |
@@ -879,6 +880,11 @@ should not need to touch them unless you run an unusually large or slow fleet.
   `SHADE_TREE_TUNNEL_IDLE_TIMEOUT_MS` (5 min) is closed at both ends
   (`shade_tree_gateway_tunnel_closes_total{reason="idle-timeout"}`). Long-lived idle TLS sessions
   simply reconnect; raise it if members legitimately hold idle connections longer.
+- **Combined payload ceiling** — both opaque TLS directions spend from one
+  `(externalNullifier, nullifier)` budget. At `SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES` bytes (40 MiB by
+  default), the final chunk is truncated to the exact boundary and both sockets close with
+  `reason="payload-limit"`. A same-node retry gets only the slot's remainder. Higher tiers receive
+  one allowance per private slot; asynchronous cross-node replays can still race the fleet tally.
 - **Connection caps** — `SHADE_TREE_MAX_CONNS` (1024) concurrent sockets total, refused at accept
   before any read (`too-many-connections`); `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
   tunnels per nullifier (`nullifier-conn-limit`), so one proof replayed inside the honest-retry

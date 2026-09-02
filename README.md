@@ -188,7 +188,8 @@ use structured JSON logs and separate loopback metrics for each role. See the
   slot; state resets only when the protocol epoch advances.
 
 One proof admits one CONNECT tunnel, not one HTTP request. HTTP/2 and keep-alive
-can carry many requests inside it. Read the [protocol](specs/protocol.md) and
+can carry many requests inside it. Both opaque traffic directions share a 40 MiB
+allowance per RLN epoch slot on each node; reaching it closes the tunnel. Read the [protocol](specs/protocol.md) and
 [threat model](docs/THREAT-MODEL.md) for the exact guarantees.
 
 ## Repository

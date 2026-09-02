@@ -266,7 +266,8 @@
     shade_tree_reconcile_fingerprint: >-
       {{ ((shade_tree_deployment | to_json) ~ shade_tree_target_mode ~ shade_tree_admin_cidr
           ~ (shade_tree_ssh_port | string) ~ shade_tree_gateway_region
-          ~ (shade_tree_enable_pow | string)) | hash('sha256') }}
+          ~ (shade_tree_enable_pow | string)
+          ~ (shade_tree_tunnel_max_payload_bytes | string)) | hash('sha256') }}
 
 - name: Check whether this exact reviewed configuration was applied
   ansible.builtin.stat:
@@ -322,6 +323,7 @@
     SHADE_TREE_BANNER: never
     SHADE_TREE_BOOTNODE_PORT: "{{ shade_tree_bootnode_port | string }}"
     SHADE_TREE_GATEWAY_PORT: "{{ shade_tree_gateway_port | string }}"
+    SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: "{{ shade_tree_tunnel_max_payload_bytes | string }}"
     SHADE_TREE_ELDER_METRICS_PORT: "{{ shade_tree_elder_metrics_port | string }}"
     SHADE_TREE_NODE_METRICS_PORT: "{{ shade_tree_node_metrics_port | string }}"
     SHADE_TREE_HEARTBEAT_METRICS_PORT: "{{ shade_tree_heartbeat_metrics_port | string }}"

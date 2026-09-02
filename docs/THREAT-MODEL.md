@@ -374,6 +374,10 @@ what a member can cost with one proof. **Enforced** by:
   socket error sink closes the **half-close crash** (a partial envelope + FIN used to raise an
   unhandled `EPIPE` on the error reply and kill the whole gateway process — one connection, full
   outage; found by the T-HARD-4 selftest, confirmed against `main` before the fix).
+- `gateway/gateway.mjs:makePayloadBudget` — both opaque relay directions share a 40 MiB
+  `(externalNullifier, nullifier)` allowance (`SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES`); same-node
+  retries cannot reset it, and the exact boundary closes both sockets with `payload-limit`.
+  Cross-node concurrency remains subject to the asynchronous, fail-open fleet-tally residual.
 - `gateway/gateway.mjs:makeConnLimiter` — `SHADE_TREE_MAX_CONNS` (1024) concurrent sockets, refused at
   accept before any read (`too-many-connections`); `SHADE_TREE_MAX_CONNS_PER_NULLIFIER` (8) concurrent
   tunnels per nullifier (`nullifier-conn-limit`), checked *after* `spentSet.admit` so a slashable

@@ -39,6 +39,7 @@ ok(/SHADE_TREE_STAKE_MODE=onchain/.test(ELDER_STAKE) && /SHADE_TREE_GATEWAY_REGI
 console.log("host hardening and idempotence:");
 ok(/ufw default deny incoming/.test(TASKS) && /shade-tree-v4-admin/.test(TASKS) && /unexpected inbound allow rule/.test(TASKS), "firewall permits only the exact reviewed admin CIDR rule");
 ok(/SHADE_TREE_LOG_FORMAT: json/.test(TASKS) && /SHADE_TREE_BANNER: never/.test(TASKS), "bootstrap is pinned to JSON logs without terminal decoration");
+ok(/shade_tree_tunnel_max_payload_bytes:\s*41943040/.test(DEFAULTS) && /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES/.test(TASKS), "gateway deployment pins the provisional 40 MiB combined payload ceiling");
 ok(/SHADE_TREE_ZK_ARTIFACTS/.test(TASKS) && /shade_tree_artifact_specs \| join/.test(TASKS), "node and heartbeat receive the record-derived explicit artifact set");
 ok(/Refuse public service or metrics listeners/.test(TASKS) && /127\[\.\]0\[\.\]0\[\.\]1/.test(TASKS), "postflight rejects non-loopback service or metrics sockets");
 ok(/shade_tree_reconcile_fingerprint/.test(TASKS) && /\.applied/.test(TASKS) && /only after every check passes/.test(TASKS), "re-runs use a configuration fingerprint written only after postflight success");

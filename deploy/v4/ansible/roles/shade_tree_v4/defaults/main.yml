@@ -17,7 +17,7 @@ shade_tree_force_reconcile: false
 
 shade_tree_bootnode_port: 8877
 shade_tree_gateway_port: 8443
+shade_tree_tunnel_max_payload_bytes: 41943040
 shade_tree_elder_metrics_port: 9100
 shade_tree_node_metrics_port: 9101
 shade_tree_heartbeat_metrics_port: 9103
-

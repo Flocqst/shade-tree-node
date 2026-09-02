@@ -39,6 +39,8 @@
 //  10. SHADE_TREE_ZK_ARTIFACTS: an explicit accepted vkey set is rendered into the gateway and
 //      heartbeat (so verification and signed capability advertisement agree); the optional legacy
 //      id is gateway-only; malformed ids/paths and a legacy id without a set fail closed.
+//  11. SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: the 40 MiB protocol default is pinned in the gateway
+//      unit; a bounded non-negative override is passed verbatim and malformed values fail closed.
 //
 //   node bootnode/deploy/bootstrap.selftest.mjs
 //
@@ -157,6 +159,18 @@ async function main() {
     const elderDef = got.get("etc/systemd/system/shade-tree-bootnode.service");
     const nodeDef = got.get("etc/systemd/system/shade-tree-gateway.service");
     ok(unitEnv(nodeDef, "SHADE_TREE_GATEWAY_PORT") === "8443", "gateway unit and Tor backend share the default node port");
+    ok(unitEnv(nodeDef, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "41943040", "default gateway unit explicitly pins the 40 MiB protocol parameter");
+    const payloadOverride = render(work, "payload-override", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: "1048576" });
+    const payloadOverrideGateway = await readFile(join(payloadOverride.out, "etc/systemd/system/shade-tree-gateway.service"), "utf8");
+    ok(payloadOverride.status === 0 && unitEnv(payloadOverrideGateway, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "1048576", "payload ceiling override is rendered verbatim");
+    for (const [value, re] of [
+      ["-1", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+      ["40MiB", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+      ["9007199254740992", /SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer/],
+    ]) {
+      const bad = render(work, "payload-bad", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: value });
+      ok(bad.status !== 0 && re.test(bad.stderr), `bad payload ceiling rejected up front: ${JSON.stringify(value)}`);
+    }
     ok(unitEnv(elderDef, "SHADE_TREE_METRICS_PORT") === "9100" && unitEnv(nodeDef, "SHADE_TREE_METRICS_PORT") === "9101" && unitEnv(hbDef, "SHADE_TREE_HEARTBEAT_METRICS_PORT") === "9103", "default operator metrics use distinct loopback ports for Elder, Node, and heartbeat");
     ok([elderDef, nodeDef, hbDef].every((u) => unitEnv(u, "SHADE_TREE_LOG_LEVEL") === "info" && unitEnv(u, "SHADE_TREE_LOG_FORMAT") === "json" && unitEnv(u, "SHADE_TREE_BANNER") === "never"), "systemd defaults to structured info logs without terminal art");
     for (const f of got.keys()) if (f.endsWith(".service")) {
