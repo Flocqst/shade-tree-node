@@ -92,12 +92,35 @@ pub enum SlotPolicy {
 
 /// An accepted tunnel plus the bytes received after the ack's newline.
 pub struct Connected {
+    /// Opaque application stream. Once accepted, a gateway-enforced payload boundary appears as
+    /// ordinary EOF because an in-band JSON error would corrupt the end-to-end TLS connection.
     pub stream: BoxStream,
     pub gateway: Gateway,
     pub ack: serde_json::Value,
     pub early_data: Vec<u8>,
     pub proof: ProofMetadata,
     pub attempts: Vec<Attempt>,
+}
+
+/// Stable classification for gateway refusals that need client-specific handling.
+///
+/// The full acknowledgement remains attached to [`Error::GatewayRefused`]. Only reasons with
+/// protocol-defined client behavior belong here; unknown reasons stay terminal as [`Self::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayRefusalKind {
+    /// This gateway has no payload allowance left for the proof's RLN epoch slot.
+    PayloadLimit,
+    /// Any refusal not explicitly classified by this client version.
+    Other,
+}
+
+impl GatewayRefusalKind {
+    pub fn from_ack(ack: &serde_json::Value) -> Self {
+        match ack.get("err").and_then(serde_json::Value::as_str) {
+            Some(shade_tree_proto::REASON_PAYLOAD_LIMIT) => Self::PayloadLimit,
+            _ => Self::Other,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -112,6 +135,7 @@ pub enum Error {
     },
     GatewayRefused {
         gateway: Gateway,
+        kind: GatewayRefusalKind,
         ack: Box<serde_json::Value>,
         proof: ProofMetadata,
         attempts: Vec<Attempt>,
@@ -459,8 +483,10 @@ impl Client {
                                 attempts,
                             });
                         }
+                        let kind = GatewayRefusalKind::from_ack(&ack);
                         return Err(Error::GatewayRefused {
                             gateway,
+                            kind,
                             ack: Box::new(ack),
                             proof,
                             attempts,
@@ -624,6 +650,43 @@ mod tests {
         }
     }
 
+    struct PayloadLimitDialer {
+        dials: Arc<AtomicUsize>,
+    }
+
+    impl Dialer for PayloadLimitDialer {
+        fn dial<'a>(&'a self, _gateway: &'a Gateway) -> DialFuture<'a> {
+            self.dials.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let (client, mut gateway) = tokio::io::duplex(4096);
+                tokio::spawn(async move {
+                    loop {
+                        let mut byte = [0_u8; 1];
+                        gateway.read_exact(&mut byte).await.unwrap();
+                        if byte[0] == b'\n' {
+                            break;
+                        }
+                    }
+                    gateway
+                        .write_all(b"{\"ok\":false,\"err\":\"payload-limit\"}\n")
+                        .await
+                        .unwrap();
+                });
+                Ok(Box::pin(client) as BoxStream)
+            })
+        }
+
+        fn successful_bootstraps(&self) -> usize {
+            0
+        }
+
+        fn isolated(&self) -> Arc<dyn Dialer> {
+            Arc::new(Self {
+                dials: Arc::clone(&self.dials),
+            })
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn two_tunnels_share_one_injected_bootstrap() {
         let dialer = Arc::new(FakeArti {
@@ -669,6 +732,71 @@ mod tests {
         let mut lock = cursor.as_os_str().to_os_string();
         lock.push(".lock");
         let _ = std::fs::remove_dir(std::path::PathBuf::from(lock));
+    }
+
+    #[tokio::test]
+    async fn payload_limit_is_typed_and_terminal_before_gateway_failover() {
+        assert_eq!(
+            shade_tree_proto::DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES,
+            41_943_040
+        );
+        assert_eq!(
+            GatewayRefusalKind::from_ack(&serde_json::json!({
+                "ok": false,
+                "err": "payload-limit"
+            })),
+            GatewayRefusalKind::PayloadLimit
+        );
+        assert_eq!(
+            GatewayRefusalKind::from_ack(&serde_json::json!({
+                "ok": false,
+                "err": "invalid-proof"
+            })),
+            GatewayRefusalKind::Other
+        );
+
+        let dials = Arc::new(AtomicUsize::new(0));
+        let dialer = Arc::new(PayloadLimitDialer {
+            dials: Arc::clone(&dials),
+        });
+        let prover = Arc::new(BlockingProver::with_function(1, move |input| {
+            Ok(built(input.target))
+        }));
+        let client = Client::with_components(dialer, prover);
+        let outcome = client
+            .connect(ConnectRequest {
+                gateways: vec![
+                    Gateway::PlainTcp {
+                        address: "first.invalid:1".into(),
+                    },
+                    Gateway::PlainTcp {
+                        address: "must-not-dial.invalid:2".into(),
+                    },
+                ],
+                proof: proof_request("example.com:443"),
+                slots: SlotPolicy::UnsafeForSlashingTest { message_id: 0 },
+                artifact: "rln-test".into(),
+            })
+            .await;
+
+        match outcome {
+            Err(Error::GatewayRefused {
+                kind,
+                ack,
+                attempts,
+                ..
+            }) => {
+                assert_eq!(kind, GatewayRefusalKind::PayloadLimit);
+                assert_eq!(
+                    ack.get("err").and_then(serde_json::Value::as_str),
+                    Some(shade_tree_proto::REASON_PAYLOAD_LIMIT)
+                );
+                assert_eq!(attempts.len(), 1);
+                assert!(attempts[0].dial_succeeded);
+            }
+            _ => panic!("payload-limit must remain a terminal typed gateway refusal"),
+        }
+        assert_eq!(dials.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

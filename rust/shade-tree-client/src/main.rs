@@ -2053,6 +2053,15 @@ mod live {
 
         let connected = match outcome {
             Ok(connected) => connected,
+            Err(shade_tree_egress::Error::GatewayRefused {
+                kind: shade_tree_egress::GatewayRefusalKind::PayloadLimit,
+                ..
+            }) => {
+                eprintln!(
+                    "egress: gateway payload budget exhausted for this RLN epoch slot; open a new tunnel with another slot or wait for the protocol epoch to advance"
+                );
+                return ExitCode::from(4);
+            }
             Err(shade_tree_egress::Error::GatewayRefused { ack, .. }) => {
                 let err = ack
                     .get("err")

@@ -198,6 +198,13 @@ manual `--slot` bypass requires
 `--unsafe-allow-slot-reuse-for-slashing-tests` and must never be used with a
 live or funded member.
 
+Each accepted tunnel is also subject to the gateway's combined payload allowance
+(40 MiB per RLN epoch slot by default). If an already-spent proof is refused before
+CONNECT acceptance, the Rust client reports a payload-budget error and exits with
+status 4 without rotating to another gateway. If the boundary is reached after
+acceptance, the opaque TLS stream ends normally: the gateway cannot inject a reason
+without corrupting end-to-end TLS, so the client deliberately treats that close as EOF.
+
 ## Other commands
 
 The default and live variants can verify signed data without opening a tunnel:

@@ -1470,6 +1470,15 @@ pub const PROTO_MIN: u64 = 4;
 /// Highest envelope version this build can emit/parse (`PROTO_MAX`/`CLIENT_PROTO_MAX` = 4).
 pub const PROTO_MAX: u64 = 4;
 
+/// Provisional default combined application-payload allowance for one RLN epoch slot.
+/// Gateways remain authoritative and may override or disable it operationally; clients use
+/// this value for display/documentation only, never as proof that more service is available.
+pub const DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES: u64 = 40 * 1024 * 1024;
+
+/// Exact bounded refusal reason returned before tunnel establishment when this gateway has
+/// already exhausted the `(externalNullifier, nullifier)` payload allowance.
+pub const REASON_PAYLOAD_LIMIT: &str = "payload-limit";
+
 /// The pre-negotiation wire version an envelope with NO `v` field is treated as
 /// (`gateway/gateway.mjs:269 LEGACY_ENVELOPE_VERSION` = 3).
 pub const LEGACY_ENVELOPE_VERSION: u64 = 3;
