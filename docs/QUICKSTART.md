@@ -11,10 +11,11 @@ node or Grove on a host.
 
 > **Current network status.** This checkout speaks envelope v4 only. The committed
 > [`network/sepolia/`](../network/sepolia/README.md) legacy contract and directory files describe
-> the earlier incompatible pre-v4 deployment; they are not runnable defaults for this Proxy,
-> payments, or staking. The directory's separate `deployment.json` records the disposable v4
-> research Grove and supplies its Elder+Canopy-signer discovery default. That fleet is invited-only:
-> the repository still provides no public admission profile or matching membership input.
+> the earlier incompatible pre-v4 deployment; they are not runnable defaults for this Proxy or
+> payments. The directory's separate `deployment.json` records the disposable v4 research Grove,
+> supplies its Elder+Canopy-signer discovery default, and publishes its explicit Sepolia staking
+> path. Invited credentials remain private; staked members provide the published contract and RPC
+> values explicitly.
 
 Everything is one CLI: `shade-tree <command> [--flags]`. Install it:
 
