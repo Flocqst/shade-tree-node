@@ -1375,8 +1375,8 @@ mod live {
         health: Option<HealthCtx>,
         demo: Option<dircache::DemoAdvert>,
         /// Present only for the zero-configuration bundled public path. Any
-        /// explicit transport/member contract/RPC source keeps legacy custom
-        /// discovery defaults instead.
+        /// explicit transport/member contract/leaf source keeps legacy custom
+        /// discovery defaults instead. An RPC-only override retains this profile.
         profile: Option<PublicStakedProfile>,
     }
 
@@ -1555,25 +1555,35 @@ mod live {
         })
     }
 
-    /// True when membership/RPC input is explicitly custom. The bundled public
-    /// profile is deliberately all-or-nothing: mixing its implicit contract with
-    /// a caller's unrelated source would silently combine incompatible defaults.
-    fn has_explicit_member_source(args: &[String]) -> bool {
-        has_value_flag(
+    fn use_bundled_public_profile_setting(
+        args: &[String],
+        group_contract: Option<&str>,
+        paid_contract: Option<&str>,
+        _rpc_url: Option<&str>,
+        leaf_source: Option<&str>,
+    ) -> bool {
+        let nonempty = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
+        // An RPC override changes only the route to the same bundled contract. It
+        // intentionally does not discard the contract, tier, admission path, epoch,
+        // or signed rate policy. Contract/member/path inputs do select a custom Grove.
+        !has_value_flag(args, &["--members", "--contract", "--leaf-source"])
+            && !nonempty(group_contract)
+            && !nonempty(paid_contract)
+            && !nonempty(leaf_source)
+    }
+
+    fn use_bundled_public_profile(args: &[String]) -> bool {
+        let group_contract = std::env::var("SHADE_TREE_GROUP_CONTRACT").ok();
+        let paid_contract = std::env::var("SHADE_TREE_PAID_ACCESS_CONTRACT").ok();
+        let rpc_url = std::env::var("SHADE_TREE_RPC_URL").ok();
+        let leaf_source = std::env::var("SHADE_TREE_LEAF_SOURCE").ok();
+        use_bundled_public_profile_setting(
             args,
-            &["--members", "--contract", "--rpc-url", "--leaf-source"],
-        ) || [
-            "SHADE_TREE_GROUP_CONTRACT",
-            "SHADE_TREE_PAID_ACCESS_CONTRACT",
-            "SHADE_TREE_RPC_URL",
-            "SHADE_TREE_LEAF_SOURCE",
-        ]
-        .iter()
-        .any(|name| {
-            std::env::var(name)
-                .ok()
-                .is_some_and(|value| !value.trim().is_empty())
-        })
+            group_contract.as_deref(),
+            paid_contract.as_deref(),
+            rpc_url.as_deref(),
+            leaf_source.as_deref(),
+        )
     }
 
     fn require_public_gateway_rates(
@@ -2011,10 +2021,10 @@ mod live {
             });
         }
         let (bootnode, signer) = default_discovery()?;
-        let profile = if has_explicit_member_source(rest) {
-            None
-        } else {
+        let profile = if use_bundled_public_profile(rest) {
             Some(default_public_profile()?)
+        } else {
+            None
         };
         let fresh = fetch_directory_over_tor(&bootnode, client, runtime);
         let (transports, health, demo) =
@@ -2900,15 +2910,55 @@ mod live {
         }
 
         #[test]
+        fn rpc_only_override_keeps_the_bundled_public_profile() {
+            assert!(use_bundled_public_profile_setting(
+                &["--rpc-url".into(), "https://rpc.example".into()],
+                None,
+                None,
+                None,
+                None
+            ));
+            assert!(use_bundled_public_profile_setting(
+                &[],
+                None,
+                None,
+                Some("https://rpc.example"),
+                None
+            ));
+        }
+
+        #[test]
         fn explicit_member_inputs_select_the_custom_profile_path() {
             for args in [
                 vec!["--members".into(), "members.json".into()],
                 vec!["--contract=0x1111".into()],
-                vec!["--rpc-url".into(), "https://rpc.example".into()],
                 vec!["--leaf-source".into(), "invited".into()],
             ] {
-                assert!(has_explicit_member_source(&args));
+                assert!(!use_bundled_public_profile_setting(
+                    &args, None, None, None, None
+                ));
             }
+            assert!(!use_bundled_public_profile_setting(
+                &[],
+                Some("0x1111"),
+                None,
+                Some("https://rpc.example"),
+                None
+            ));
+            assert!(!use_bundled_public_profile_setting(
+                &[],
+                None,
+                Some("0x2222"),
+                None,
+                None
+            ));
+            assert!(!use_bundled_public_profile_setting(
+                &[],
+                None,
+                None,
+                None,
+                Some("invited")
+            ));
         }
 
         #[test]

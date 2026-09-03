@@ -153,9 +153,10 @@ current v4 Sepolia Elder, signer, staked contract, RPC, deployment block,
 60-second epoch, and `defaultLimit=1` embedded in
 `network/sepolia/deployment.json`. Each eligible gateway must carry the exact
 matching `caps.rate` in its onion-signed capabilities; a missing or different
-policy fails before proof construction. Explicit membership/RPC configuration
-keeps the custom-Grove defaults of a 120-second epoch and limit 8. Override
-discovery with
+policy fails before proof construction. An RPC-only override retains this public
+profile while changing how the bundled contract is read. Explicit membership,
+contract, or leaf-source configuration keeps the custom-Grove defaults of a
+120-second epoch and limit 8. Override discovery with
 `--directory <file> --signer <hex>`, `--bootnode-onion <onion> --signer <hex>`,
 or `--onion <node.onion>`; see `shade-tree --help` for all egress options.
 Directory-backed tunnels use smooth weighted round-robin for their first gateway
