@@ -41,7 +41,8 @@ The funding key is read from --key-file or SHADE_TREE_REGISTER_KEY and signs
 locally; it is never accepted as an argument or sent to the RPC. Without an
 explicit contract/RPC, the bundled live Sepolia Grove staking profile is used.
 SHADE_TREE_GROUP_CONTRACT, SHADE_TREE_RPC_URL, SHADE_TREE_LIMIT, and
-SHADE_TREE_BOND are the environment equivalents. A public Anvil development key
+SHADE_TREE_BOND are the environment equivalents. SHADE_TREE_CHAIN_ID overrides
+the expected chain; the bundled public contract is pinned to Sepolia. A public Anvil development key
 is selected only for a loopback RPC. The default tier is the bundled staked
 root's defaultLimit (1 for the public Grove)."#;
 
@@ -61,6 +62,7 @@ struct Registration {
     limit: u64,
     contract: Address,
     rpc_url: String,
+    expected_chain_id: Option<u64>,
     bond_override: Option<U256>,
 }
 
@@ -169,18 +171,30 @@ fn parse_args(args: &[String]) -> Result<Option<CliOptions>, String> {
     Ok(Some(out))
 }
 
+#[cfg(test)]
 pub(crate) fn registration_defaults_from(
     deployment: crate::BundledDeployment,
-) -> Result<(String, String, u64), String> {
+) -> Result<(String, String, u64, Option<u64>), String> {
     let default_limit = crate::staked_default_limit_from(&deployment)?;
     let staked = deployment
         .staked
         .ok_or_else(|| "bundled deployment has no live staked admission root".to_string())?;
-    Ok((staked.contract, staked.rpc_url, default_limit))
+    Ok((
+        staked.contract,
+        staked.rpc_url,
+        default_limit,
+        staked.chain_id,
+    ))
 }
 
-fn bundled_defaults() -> Result<(String, String, u64), String> {
-    registration_defaults_from(crate::default_deployment()?)
+fn bundled_defaults() -> Result<(String, String, u64, Option<u64>), String> {
+    let profile = crate::default_public_profile()?;
+    Ok((
+        profile.contract,
+        profile.rpc_url,
+        profile.default_limit,
+        Some(profile.chain_id),
+    ))
 }
 
 fn parse_u256(value: &str, label: &str) -> Result<U256, String> {
@@ -220,7 +234,7 @@ fn read_commitment(cli: &CliOptions) -> Result<String, String> {
 }
 
 fn resolve_registration(cli: &CliOptions) -> Result<Registration, String> {
-    let (bundled_contract, bundled_rpc, bundled_limit) = bundled_defaults()?;
+    let (bundled_contract, bundled_rpc, bundled_limit, bundled_chain_id) = bundled_defaults()?;
     let commitment = parse_u256(&read_commitment(cli)?, "commitment")?;
     let field = U256::from_dec_str(BN254_FIELD).expect("BN254 field constant");
     if commitment.is_zero() || commitment >= field {
@@ -236,6 +250,7 @@ fn resolve_registration(cli: &CliOptions) -> Result<Registration, String> {
         .ok()
         .filter(|limit| (1..=u16::MAX as u64).contains(limit))
         .ok_or_else(|| format!("--limit must be in 1..={}", u16::MAX))?;
+    let bundled_address = Address::from_str(first_contract(&bundled_contract)).ok();
     let contract_raw = cli
         .contract
         .clone()
@@ -259,11 +274,23 @@ fn resolve_registration(cli: &CliOptions) -> Result<Registration, String> {
         .or_else(|| std::env::var("SHADE_TREE_BOND").ok())
         .map(|value| parse_u256(&value, "bond"))
         .transpose()?;
+    let expected_chain_id = match std::env::var("SHADE_TREE_CHAIN_ID").ok() {
+        Some(value) if !value.trim().is_empty() => Some(
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|chain_id| *chain_id > 0)
+                .ok_or_else(|| "SHADE_TREE_CHAIN_ID must be a positive integer".to_string())?,
+        ),
+        _ if bundled_address == Some(contract) => bundled_chain_id,
+        _ => None,
+    };
     Ok(Registration {
         commitment,
         limit,
         contract,
         rpc_url,
+        expected_chain_id,
         bond_override,
     })
 }
@@ -507,6 +534,20 @@ where
     B: FnMut(U256, bool),
     S: FnMut(&str),
 {
+    let chain_id = result_quantity(rpc.call("eth_chainId", json!([]))?, "eth_chainId")?;
+    if chain_id.is_zero() || chain_id > U256::from(u64::MAX) {
+        return Err("eth_chainId returned an unsupported value".into());
+    }
+    if registration
+        .expected_chain_id
+        .is_some_and(|expected| chain_id.as_u64() != expected)
+    {
+        return Err(format!(
+            "staking RPC chainId {} does not match configured chainId {}; refusing to sign",
+            chain_id,
+            registration.expected_chain_id.unwrap()
+        ));
+    }
     let (contract_bond, tiered) = tier_bond(rpc, registration)?;
     let bond = registration.bond_override.unwrap_or(contract_bond);
     if bond != contract_bond {
@@ -534,10 +575,6 @@ where
     };
     before_send(bond, tiered);
 
-    let chain_id = result_quantity(rpc.call("eth_chainId", json!([]))?, "eth_chainId")?;
-    if chain_id.is_zero() || chain_id > U256::from(u64::MAX) {
-        return Err("eth_chainId returned an unsupported value".into());
-    }
     let from = wallet.address;
     let call = json!({
         "from": format!("{from:#x}"),
@@ -721,7 +758,7 @@ pub fn cmd_register_member(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(SendOutcome::Mined { hash, block }) => {
-            println!("  mined:    {hash} in block {block}; member staked and admitted.");
+            println!("  mined:    {hash} in block {block}; member staked. Public admission begins after this block reaches finality.");
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -742,6 +779,7 @@ mod tests {
         active: bool,
         send_error: bool,
         sent_raw: Option<String>,
+        chain_id: &'static str,
     }
 
     impl RpcCall for MockRpc {
@@ -764,7 +802,7 @@ mod tests {
                         panic!("unexpected eth_call {data}");
                     }
                 }
-                "eth_chainId" => Value::String("0xaa36a7".into()),
+                "eth_chainId" => Value::String(self.chain_id.into()),
                 "eth_getTransactionCount" => Value::String("0x7".into()),
                 "eth_estimateGas" => Value::String("0x186a0".into()),
                 "eth_gasPrice" => Value::String("0x77359400".into()),
@@ -793,6 +831,7 @@ mod tests {
             limit: 8,
             contract: Address::from_str("0x1111111111111111111111111111111111111111").unwrap(),
             rpc_url: "https://rpc.example/secret-api-key".into(),
+            expected_chain_id: Some(11_155_111),
             bond_override: None,
         }
     }
@@ -827,10 +866,11 @@ mod tests {
 
     #[test]
     fn bundled_profile_points_at_live_staked_root() {
-        let (contract, rpc, default_limit) = bundled_defaults().unwrap();
+        let (contract, rpc, default_limit, chain_id) = bundled_defaults().unwrap();
         assert!(Address::from_str(&contract).is_ok());
         assert!(rpc.starts_with("https://"));
         assert!((1..=u16::MAX as u64).contains(&default_limit));
+        assert_eq!(chain_id, Some(11_155_111));
         assert!(!rpc_label(&rpc).contains('?'));
     }
 
@@ -839,7 +879,7 @@ mod tests {
         let mut deployment: Value = serde_json::from_str(crate::DEFAULT_DEPLOYMENT).unwrap();
         deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
         let parsed = crate::parse_bundled_deployment(&deployment.to_string()).unwrap();
-        let (_, _, limit) = registration_defaults_from(parsed).unwrap();
+        let (_, _, limit, _) = registration_defaults_from(parsed).unwrap();
         assert_eq!(limit, 1);
     }
 
@@ -883,6 +923,7 @@ mod tests {
             active: false,
             send_error: false,
             sent_raw: None,
+            chain_id: "0xaa36a7",
         };
         let wallet = FundingWallet::from_key(ANVIL_KEY_0).unwrap();
         let mut observed_bond = None;
@@ -933,6 +974,7 @@ mod tests {
             active: true,
             send_error: false,
             sent_raw: None,
+            chain_id: "0xaa36a7",
         };
         let wallet = FundingWallet::from_key(ANVIL_KEY_0).unwrap();
         assert_eq!(
@@ -940,7 +982,7 @@ mod tests {
             SendOutcome::AlreadyActive
         );
         assert!(rpc.sent_raw.is_none());
-        assert_eq!(calls.lock().unwrap().len(), 2);
+        assert_eq!(calls.lock().unwrap().len(), 3);
     }
 
     #[test]
@@ -950,11 +992,32 @@ mod tests {
             active: false,
             send_error: true,
             sent_raw: None,
+            chain_id: "0xaa36a7",
         };
         let wallet = FundingWallet::from_key(ANVIL_KEY_0).unwrap();
         let error = send(&mut rpc, &registration(), &wallet, |_, _| {}, |_| {}).unwrap_err();
         assert!(error.contains("locally signed transaction 0x"));
         assert!(error.contains("check the hash before retrying"));
         assert!(rpc.sent_raw.is_some());
+    }
+
+    #[test]
+    fn wrong_chain_is_rejected_before_contract_reads_or_signing() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut rpc = MockRpc {
+            calls: calls.clone(),
+            active: false,
+            send_error: false,
+            sent_raw: None,
+            chain_id: "0x1",
+        };
+        let wallet = FundingWallet::from_key(ANVIL_KEY_0).unwrap();
+        let error = send(&mut rpc, &registration(), &wallet, |_, _| {}, |_| {}).unwrap_err();
+        assert!(error.contains("chainId 1 does not match configured chainId 11155111"));
+        assert!(rpc.sent_raw.is_none());
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[("eth_chainId".into(), json!([]))]
+        );
     }
 }

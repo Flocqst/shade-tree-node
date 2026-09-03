@@ -81,7 +81,7 @@ interface ICommitmentHasher {
 contract StakedReputationSet {
     // ---- immutable parameters -------------------------------------------------
 
-    uint256 public immutable BOND;      // bond of the DEFAULT_LIMIT tier; fixed per tier (R1)
+    uint256 public immutable BOND; // bond of the DEFAULT_LIMIT tier; fixed per tier (R1)
     uint256 public immutable UNBONDING; // exit time-lock in seconds (R4)
 
     /// The pre-tier per-member message limit (RLN userMessageLimit K = 8): the tier the
@@ -97,15 +97,15 @@ contract StakedReputationSet {
     // ---- membership state -----------------------------------------------------
 
     struct Member {
-        uint256 bond;             // staked amount (== bondFor(limit) while held); 0 once gone
-        uint64  index;           // append-only leaf index, for off-chain tree rebuild
-        uint64  exitInitiatedAt; // 0 while active; timestamp once exiting
-        uint32  limit;           // the tier (RLN userMessageLimit) the leaf was staked at
+        uint256 bond; // staked amount (== bondFor(limit) while held); 0 once gone
+        uint64 index; // append-only leaf index, for off-chain tree rebuild
+        uint64 exitInitiatedAt; // 0 while active; timestamp once exiting
+        uint32 limit; // the tier (RLN userMessageLimit) the leaf was staked at
     }
 
     mapping(uint256 => Member) public members; // commitment => Member   (storage slot 0)
-    uint64 public nextIndex;                    // append-only leaf counter (slot 1)
-    uint256 public activeCount;                 // members currently staked (slot 2)
+    uint64 public nextIndex; // append-only leaf counter (slot 1)
+    uint256 public activeCount; // members currently staked (slot 2)
 
     // ---- on-chain incremental Merkle tree (T-DEV-9) ---------------------------
     //
@@ -202,20 +202,27 @@ contract StakedReputationSet {
         withdrawVerifier = _withdrawVerifier;
         hasher = _hasher;
 
-        // Tier table: DEFAULT_LIMIT first, then the extras (validated, ascending, distinct).
+        // Tier table: globally ascending, including extra limits below DEFAULT_LIMIT. Earlier
+        // deployments only used limits above 8; the public low-rate profile adds limit 1 and
+        // every consumer is promised an ascending table.
         if (extraLimits.length != extraBonds.length) revert BadTierTable();
         _bondOf[DEFAULT_LIMIT] = bond;
-        _allowedLimits.push(DEFAULT_LIMIT);
         uint256 prev = 0;
+        bool pushedDefault = false;
         for (uint256 i = 0; i < extraLimits.length; i++) {
             uint256 lim = extraLimits[i];
             if (lim == 0 || lim > MAX_LIMIT || lim == DEFAULT_LIMIT) revert BadLimit();
             if (lim <= prev || _bondOf[lim] != 0) revert BadTierTable(); // ascending + distinct
             if (extraBonds[i] == 0) revert BadBond();
+            if (!pushedDefault && lim > DEFAULT_LIMIT) {
+                _allowedLimits.push(DEFAULT_LIMIT);
+                pushedDefault = true;
+            }
             _bondOf[lim] = extraBonds[i];
             _allowedLimits.push(lim);
             prev = lim;
         }
+        if (!pushedDefault) _allowedLimits.push(DEFAULT_LIMIT);
 
         // Initialize the incremental tree's zero subtree roots and the empty-tree root.
         // _zeroes[0] = keccak256(GROUP_ID) >> 8 (Semaphore v3 `hash(id)` leaf zero value).
@@ -354,7 +361,7 @@ contract StakedReputationSet {
         delete members[commitment];
         emit MemberWithdrawn(commitment, recipient);
 
-        (bool ok, ) = recipient.call{value: amount}("");
+        (bool ok,) = recipient.call{value: amount}("");
         if (!ok) revert PayoutFailed();
     }
 
@@ -391,7 +398,7 @@ contract StakedReputationSet {
         // commitment no longer live), keeping the two roots identical event-for-event.
         if (wasActive) _updateLeaf(idx, _zeroes[0]);
 
-        (bool ok, ) = receiver.call{value: amount}("");
+        (bool ok,) = receiver.call{value: amount}("");
         if (!ok) revert PayoutFailed();
     }
 

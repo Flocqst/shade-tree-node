@@ -21,7 +21,7 @@
 // Exit 0 = all invariants held. No network, no chain, no Tor.
 
 import { generateKeyPairSync } from "node:crypto";
-import { advertisedPorts, buildGatewayCaps, announceOnce } from "./heartbeat.mjs";
+import { advertisedPorts, advertisedRate, buildGatewayCaps, announceOnce } from "./heartbeat.mjs";
 import { buildAnnounce, verifyAnnounce, canonicalAnnounceBytes } from "./announce.mjs";
 import { pubkeyToOnion, canonicalCaps } from "../lib/directory.mjs";
 import { PROTO_RANGE } from "../gateway/gateway.mjs";
@@ -68,6 +68,12 @@ async function main() {
   ok(JSON.stringify(caps.ports) === "[443,8443]", "caps.ports derived from SHADE_TREE_EGRESS_ALLOW");
   ok(caps.region === "eu", "caps.region from SHADE_TREE_GATEWAY_REGION");
   ok(caps.proto && caps.proto.min === PROTO_RANGE.min && caps.proto.max === PROTO_RANGE.max, "caps.proto == gateway PROTO_RANGE (not hardcoded)");
+  const rateEnv = { SHADE_TREE_EPOCH_SECONDS: "60", SHADE_TREE_ROOT_FRESHNESS_SECONDS: "60", SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: "41943040" };
+  const rate = advertisedRate(rateEnv);
+  ok(rate?.scope === "grove-v4" && rate.epochSeconds === 60 && rate.payloadBytesPerSlot === 41943040, "runtime epoch/freshness/payload become one canonical signed rate policy");
+  ok(advertisedRate({ SHADE_TREE_EPOCH_SECONDS: "60" }) === null, "partial runtime rate policy is not advertised");
+  const ratedCaps = buildGatewayCaps(rateEnv);
+  ok(ratedCaps?.rate?.epochSeconds === 60 && ratedCaps.proto, "a complete rate policy triggers signed caps and carries protocol range");
 
   // Explicit default-equivalent egress policy still advertises [443] (operator opted in by SETTING it).
   const capsDefault = buildGatewayCaps({ SHADE_TREE_EGRESS_ALLOW: "*:443" });

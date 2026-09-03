@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { artifactIdOf } from "../../lib/zk-artifacts.mjs";
-import { loadDeploymentRecord, validateDeploymentRecord, validatePinnedCheckout } from "./preflight.mjs";
+import { loadDeploymentRecord, validateDeploymentRecord, validatePinnedCheckout, validatePublicStakeOnchain } from "./preflight.mjs";
+import { AbiCoder, Interface } from "ethers";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -42,6 +43,7 @@ function liveRecord() {
     services: { elder: { ...service }, node: { ...service }, heartbeat: { ...service } },
     elder: { onion: ONION, canopySigner: SIGNER, admission: "open", gatewayRegistry: null },
     admission: {
+      defaultPath: "invited",
       paths: ["invited"],
       roots: { invited: { membersSha256: "33".repeat(32) }, staked: null, paid: null },
       operatorAuthorization: null,
@@ -90,7 +92,105 @@ const staked = copy(live);
 staked.admission.paths = ["invited", "staked"];
 staked.admission.roots.staked = { contract: CONTRACT, rpcUrl: "https://rpc.example.test", deployBlock: 42 };
 staked.admission.operatorAuthorization = { approved: true, decisionRef: "operator-change-42" };
+staked.ratePolicy = { scope: "grove-v4", window: "fixed", epochSeconds: 120, previousEpochsAccepted: 1, rootFreshnessSeconds: 120, payloadBytesPerSlot: 41943040, slashConfirmationSeconds: 3600 };
 ok(validateDeploymentRecord(staked, { repoRoot: ROOT }).ok, "staked admission needs a contract root and explicit operator authorization reference");
+const publicStake = copy(staked);
+publicStake.network = "sepolia";
+publicStake.admission.defaultPath = "staked";
+publicStake.ratePolicy = { ...staked.ratePolicy, epochSeconds: 60, rootFreshnessSeconds: 60, crossGateway: "best-effort-fleet-tally" };
+publicStake.admission.roots.staked = {
+  ...staked.admission.roots.staked,
+  profile: "public-stake-v1",
+  chainId: 11155111,
+  deployTx: "0x" + "44".repeat(32),
+  hasher: CONTRACT,
+  withdrawVerifier: CONTRACT,
+  defaultLimit: 1,
+  tiers: [
+    { limit: 1, bondWei: "100000000000000000" },
+    { limit: 8, bondWei: "800000000000000000" },
+  ],
+  unbondingSeconds: 86400,
+  minUnbondingSeconds: 3720,
+};
+ok(validateDeploymentRecord(publicStake, { repoRoot: ROOT }).ok, "public-stake-v1 exact Sepolia economics and safety window pass");
+ok(fields(validateDeploymentRecord(staked, { repoRoot: ROOT, requireStakeProfile: "public-stake-v1" })).includes("admission.roots.staked.profile"), "a rollout-required public profile cannot be bypassed by an absent marker");
+const publicIface = new Interface([
+  "function BOND() view returns (uint256)", "function UNBONDING() view returns (uint256)",
+  "function bondFor(uint256) view returns (uint256)", "function allowedLimits() view returns (uint256[])",
+  "function hasher() view returns (address)", "function withdrawVerifier() view returns (address)",
+  "function groth16() view returns (address)",
+]);
+const publicConstructor = AbiCoder.defaultAbiCoder().encode(
+  ["uint256", "uint256", "uint256", "address", "address", "uint256[]", "uint256[]"],
+  [800_000_000_000_000_000n, 86_400n, 3_720n, CONTRACT, CONTRACT, [1n], [100_000_000_000_000_000n]],
+);
+const syntheticRuntime = "0x73" + CONTRACT.slice(2) + "00";
+const syntheticRuntimeSpec = {
+  runtimeBytes: 22,
+  normalizedSha256: "04e68fb0a3de2c1165a3333264659a15b4ccf7bf2be2e0747172124bc62293f4",
+  zeroRanges: [{ start: 1, length: 20 }],
+  links: { PoseidonT2: [{ start: 1, length: 20 }], PoseidonT3: [{ start: 1, length: 20 }] },
+};
+const syntheticLibrarySpec = { ...syntheticRuntimeSpec };
+delete syntheticLibrarySpec.links;
+const publicBytecodeManifest = {
+  schemaVersion: 1,
+  profile: "public-stake-v1",
+  contracts: {
+    staking: syntheticRuntimeSpec,
+    hasher: syntheticRuntimeSpec,
+    withdrawVerifier: syntheticRuntimeSpec,
+    groth16: syntheticRuntimeSpec,
+  },
+  libraries: { PoseidonT2: syntheticLibrarySpec, PoseidonT3: syntheticLibrarySpec },
+};
+const publicRpc = async (_url, method, params) => {
+  if (method === "eth_chainId") return "0xaa36a7";
+  if (method === "eth_getTransactionReceipt") return { status: "0x1", blockNumber: "0x2a", contractAddress: CONTRACT };
+  if (method === "eth_getCode") return syntheticRuntime;
+  if (method === "eth_getTransactionByHash") return { to: null, input: "0x6000" + publicConstructor.slice(2) };
+  if (method === "eth_call") {
+    const selector = params[0].data.slice(0, 10);
+    for (const name of ["BOND", "UNBONDING", "bondFor", "allowedLimits", "hasher", "withdrawVerifier", "groth16"]) {
+      if (publicIface.getFunction(name).selector !== selector) continue;
+      if (name === "BOND") return publicIface.encodeFunctionResult(name, [800_000_000_000_000_000n]);
+      if (name === "UNBONDING") return publicIface.encodeFunctionResult(name, [86_400n]);
+      if (name === "allowedLimits") return publicIface.encodeFunctionResult(name, [[1n, 8n]]);
+      if (name === "hasher" || name === "withdrawVerifier" || name === "groth16") return publicIface.encodeFunctionResult(name, [CONTRACT]);
+      const [limit] = publicIface.decodeFunctionData(name, params[0].data);
+      return publicIface.encodeFunctionResult(name, [limit === 1n ? 100_000_000_000_000_000n : 800_000_000_000_000_000n]);
+    }
+  }
+  throw new Error(`unexpected ${method}`);
+};
+ok((await validatePublicStakeOnchain(publicStake, { rpcCall: publicRpc, bytecodeManifest: publicBytecodeManifest })).ok, "public profile receipt, pinned runtime bytecode, constructor, and getters match the record");
+let actualRuntimeRpc = null;
+const runtimeRpc = async (url, method, params) => { actualRuntimeRpc = url; return publicRpc(url, method, params); };
+ok((await validatePublicStakeOnchain(publicStake, { rpcCall: runtimeRpc, rpcUrl: "https://runtime-rpc.example.test", bytecodeManifest: publicBytecodeManifest })).ok && actualRuntimeRpc === "https://runtime-rpc.example.test",
+  "rollout can preflight the exact operator runtime RPC instead of only the public record RPC");
+const wrongChainRpc = async (url, method, params) => method === "eth_chainId" ? "0x1" : publicRpc(url, method, params);
+ok((await validatePublicStakeOnchain(publicStake, { rpcCall: wrongChainRpc, bytecodeManifest: publicBytecodeManifest })).errors.some((error) => error.field === "onchain.chainId"), "public on-chain gate rejects a non-Sepolia RPC");
+const wrongBondRpc = async (url, method, params) => method === "eth_call" && params[0].data.startsWith(publicIface.getFunction("bondFor").selector)
+  ? publicIface.encodeFunctionResult("bondFor", [1n])
+  : publicRpc(url, method, params);
+ok((await validatePublicStakeOnchain(publicStake, { rpcCall: wrongBondRpc, bytecodeManifest: publicBytecodeManifest })).errors.some((error) => error.field.startsWith("onchain.bondFor")), "public on-chain gate rejects a drifted tier bond");
+const wrongCodeRpc = async (url, method, params) => method === "eth_getCode" && params[0].toLowerCase() === publicStake.admission.roots.staked.contract.toLowerCase()
+  ? "0x6001"
+  : publicRpc(url, method, params);
+ok((await validatePublicStakeOnchain(publicStake, { rpcCall: wrongCodeRpc, bytecodeManifest: publicBytecodeManifest })).errors.some((error) => error.field === "onchain.bytecode.staking"), "public on-chain gate rejects look-alike staking runtime bytecode");
+const cheapPublic = copy(publicStake); cheapPublic.admission.roots.staked.tiers[0].bondWei = "1";
+ok(fields(validateDeploymentRecord(cheapPublic, { repoRoot: ROOT })).includes("admission.roots.staked.tiers"), "public profile cannot silently drift from the 0.1/0.8 ETH table");
+const shortExit = copy(publicStake); shortExit.admission.roots.staked.unbondingSeconds = 300;
+ok(fields(validateDeploymentRecord(shortExit, { repoRoot: ROOT })).includes("admission.roots.staked.unbondingSeconds"), "public profile cannot shorten the 24-hour exit window");
+const wrongPublicDefault = copy(publicStake); wrongPublicDefault.admission.defaultPath = "invited";
+ok(fields(validateDeploymentRecord(wrongPublicDefault, { repoRoot: ROOT })).includes("admission.defaultPath"), "public profile must be the deployed client default");
+const zeroPublicBlock = copy(publicStake); zeroPublicBlock.admission.roots.staked.deployBlock = 0;
+ok(fields(validateDeploymentRecord(zeroPublicBlock, { repoRoot: ROOT })).includes("admission.roots.staked.deployBlock"), "public profile requires a positive deployment block");
+for (const [field, value] of [["epochSeconds", 120], ["rootFreshnessSeconds", 120], ["payloadBytesPerSlot", 4_194_304], ["slashConfirmationSeconds", 3_599]]) {
+  const drifted = copy(publicStake); drifted.ratePolicy[field] = value;
+  ok(fields(validateDeploymentRecord(drifted, { repoRoot: ROOT })).includes("ratePolicy"), `public profile rejects drifted ${field}`);
+}
 const badRpc = copy(staked); badRpc.admission.roots.staked.rpcUrl = "https://token@example.test";
 ok(fields(validateDeploymentRecord(badRpc, { repoRoot: ROOT })).includes("admission.roots.staked.rpcUrl"), "credentialed staking RPC URLs are rejected");
 const badDeployBlock = copy(staked); badDeployBlock.admission.roots.staked.deployBlock = -1;

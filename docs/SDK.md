@@ -63,7 +63,8 @@ an environment fallback is listed below; test injection hooks such as
 | `torHost` | `SHADE_TREE_TOR_HOST` | `127.0.0.1` | Tor SOCKS host. |
 | `torPort` | `SHADE_TREE_TOR_PORT` | `9250` | Tor SOCKS port. The bundled client script uses `9260`. |
 | `socksIsolation` | `SHADE_TREE_SOCKS_ISOLATION` | enabled | Give each CONNECT tunnel distinct SOCKS credentials. This isolates Tor streams only when the Tor endpoint enables `IsolateSOCKSAuth`. |
-| `limit` | `SHADE_TREE_LIMIT` | `SHADE_TREE_SLOTS`, usually `8` | The private rate tier used when the member leaf was enrolled. |
+| `limit` | `SHADE_TREE_LIMIT` | bundled network `defaultLimit` (current Sepolia: `1`), otherwise `8` | The private rate tier used when the member leaf was enrolled. |
+| `ratePolicy` | none | bundled network policy when using bundled discovery | Expected fixed epoch, root freshness, and payload ceiling. Dynamic selection fails closed when a node's onion-signed `caps.rate` is absent or different. |
 | `slotStateDir` | `SHADE_TREE_SLOT_STATE_DIR` | `$XDG_STATE_HOME/shade-tree/rln-slots` or `~/.local/state/shade-tree/rln-slots` | Parent for default-on, per-public-leaf RLN allocation state. |
 | `leafSource` | `SHADE_TREE_LEAF_SOURCE` | `auto` | Pin `invited`, `staked`, or `paid` membership discovery. |
 | `maxAnon` | `SHADE_TREE_MAX_ANON` | disabled | Restrict selection to invited-only gateways; requires an invited leaf. |
@@ -85,8 +86,9 @@ responses, and tunnels acquired by that call are closed.
 
 Dynamic discovery uses `bootnode` / `SHADE_TREE_BOOTNODE_ONION`; it requires the
 matching pinned signer and takes precedence over a static directory. With no
-explicit source, the SDK installs the current v4 Sepolia Elder+signer pair from
-the bundled deployment record.
+explicit source, the SDK installs the current v4 Sepolia Elder+signer, staked
+contract/RPC/deployment block, tier-1 default, and 60-second/40 MiB rate policy
+from the bundled deployment record.
 
 Slot allocation is persistent and atomic across Proxy and SDK processes using
 the same member leaf. The file contains exactly `{version, epoch, nextSlot}`;

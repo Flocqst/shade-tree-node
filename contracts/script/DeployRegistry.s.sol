@@ -36,8 +36,8 @@ import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 ///
 /// Environment variables (all optional; defaults in parens):
 ///   SHADE_TREE_BOND_WEI          fixed stake denomination, wei         (0.01 ether)
-///   SHADE_TREE_UNBONDING         exit time-lock, seconds               (300)
-///   SHADE_TREE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270)
+///   SHADE_TREE_UNBONDING         exit time-lock, seconds               (300; public profile: 86400)
+///   SHADE_TREE_MIN_UNBONDING     F+E+C lower bound the ctor enforces   (270; public profile: 3720)
 ///   SHADE_TREE_GATEWAY_OWNER     GatewayRegistry slashing/gov address  (0 => deployer)
 ///   SHADE_TREE_DEPLOY_STAKED     1 = also deploy StakedReputationSet   (1)
 ///   SHADE_TREE_DEPLOY_REGISTRY   1 = deploy GatewayRegistry; 0 = keep an existing one and only
@@ -54,6 +54,10 @@ import {WithdrawVerifier} from "../WithdrawVerifier.sol";
 ///   SHADE_TREE_TIER_BONDS_WEI    bond of each extra tier, comma-separated, same length as
 ///                          SHADE_TREE_TIER_LIMITS; each nonzero            (required with SHADE_TREE_TIER_LIMITS)
 ///                          The default tier 8 always costs SHADE_TREE_BOND_WEI.
+///   SHADE_TREE_PUBLIC_STAKE_PROFILE 1 = pin the public Sepolia table:
+///                          tier 1 => 0.1 ether, tier 8 => 0.8 ether, with the real
+///                          Groth16 exit verifier. Every Proxy/node must separately use
+///                          SHADE_TREE_EPOCH_SECONDS=60; epoch length is off chain.
 ///   SHADE_TREE_RPC_URL           endpoint, recorded into the JSON      ("http://127.0.0.1:8545")
 ///   SHADE_TREE_DEPLOY_OUT        JSON output path                      ("contracts/deployed.local.json")
 contract DeployRegistry is Cheats {
@@ -67,18 +71,28 @@ contract DeployRegistry is Cheats {
         )
     {
         // ---- parameters (env-overridable) ------------------------------------
-        uint256 bond = vm.envOr("SHADE_TREE_BOND_WEI", uint256(0.01 ether));
-        uint256 unbonding = vm.envOr("SHADE_TREE_UNBONDING", uint256(300));
-        uint256 minUnbonding = vm.envOr("SHADE_TREE_MIN_UNBONDING", uint256(270)); // F+E+C
+        bool publicStakeProfile = vm.envOr("SHADE_TREE_PUBLIC_STAKE_PROFILE", uint256(0)) != 0;
+        uint256 bond = vm.envOr("SHADE_TREE_BOND_WEI", publicStakeProfile ? uint256(0.8 ether) : uint256(0.01 ether));
+        uint256 unbonding = vm.envOr("SHADE_TREE_UNBONDING", publicStakeProfile ? uint256(1 days) : uint256(300));
+        uint256 minUnbonding = vm.envOr("SHADE_TREE_MIN_UNBONDING", publicStakeProfile ? uint256(3720) : uint256(270)); // root freshness + epoch + slash confirmation
         address gwOwner = vm.envOr("SHADE_TREE_GATEWAY_OWNER", address(0)); // 0 => deployer
         bool deployStaked = vm.envOr("SHADE_TREE_DEPLOY_STAKED", uint256(1)) != 0;
         bool deployRegistry = vm.envOr("SHADE_TREE_DEPLOY_REGISTRY", uint256(1)) != 0;
+        if (publicStakeProfile) {
+            require(block.chainid == 11155111, "public stake profile is Sepolia-only");
+            require(deployStaked, "public stake profile requires SHADE_TREE_DEPLOY_STAKED=1");
+            require(!deployRegistry, "public stake profile reuses the live GatewayRegistry");
+            require(bond == 0.8 ether, "public stake profile pins tier 8 to 0.8 ether");
+            require(unbonding == 1 days, "public stake profile pins unbonding to 24 hours");
+            require(minUnbonding == 3720, "public stake profile pins F+E+C minimum to 3720 seconds");
+        }
 
         console.log("== DeployRegistry ==");
         console.log("chainid    ", block.chainid);
         console.log("bond (wei) ", bond);
         console.log("unbonding  ", unbonding);
         console.log("minUnbond  ", minUnbonding);
+        if (publicStakeProfile) console.log("profile      public-stake-v1 (tier 1 = 0.1 ether)");
 
         vm.startBroadcast();
 
@@ -90,13 +104,14 @@ contract DeployRegistry is Cheats {
             gatewayRegistry = address(gwReg);
         } else {
             gatewayRegistry = vm.envOr("SHADE_TREE_GATEWAY_REGISTRY", address(0));
+            require(gatewayRegistry != address(0), "SHADE_TREE_GATEWAY_REGISTRY required when registry deploy disabled");
             console.log("GatewayRegistry: not deployed (SHADE_TREE_DEPLOY_REGISTRY=0); recording", gatewayRegistry);
         }
 
         // ---- StakedReputationSet: the member admission set (optional) --------
         if (deployStaked) {
             (stakedReputationSet, withdrawVerifier, commitmentHasher) =
-                _deploySet(bond, unbonding, minUnbonding);
+                _deploySet(bond, unbonding, minUnbonding, publicStakeProfile);
         }
 
         vm.stopBroadcast();
@@ -111,29 +126,47 @@ contract DeployRegistry is Cheats {
             console.log("StakedReputationSet   (skipped: SHADE_TREE_DEPLOY_STAKED=0)");
         }
 
-        _writeDeployment(
-            gatewayRegistry, stakedReputationSet, commitmentHasher, withdrawVerifier, deployStaked
-        );
+        _writeDeployment(gatewayRegistry, stakedReputationSet, commitmentHasher, withdrawVerifier, publicStakeProfile);
     }
 
     /// Deploy the member admission set: hasher + exit-auth verifier (pre-deployed addresses
     /// from env, else fresh) + the tiered StakedReputationSet (T-FEAT-8b tier table from
     /// SHADE_TREE_TIER_LIMITS / SHADE_TREE_TIER_BONDS_WEI). Split out of run() to keep the stack shallow.
-    function _deploySet(uint256 bond, uint256 unbonding, uint256 minUnbonding)
+    function _deploySet(uint256 bond, uint256 unbonding, uint256 minUnbonding, bool publicStakeProfile)
         internal
         returns (address set, address verifierAddr, address hasherAddr)
     {
         verifierAddr = vm.envOr("SHADE_TREE_WITHDRAW_VERIFIER", address(0));
         hasherAddr = vm.envOr("SHADE_TREE_COMMITMENT_HASHER", address(0));
+        if (publicStakeProfile) {
+            require(verifierAddr == address(0), "public stake profile deploys the pinned in-repo verifier");
+            require(hasherAddr == address(0), "public stake profile deploys the pinned in-repo hasher");
+        }
         // Opt-in: when no pre-deployed verifier address is given, deploy the REAL Groth16
         // exit-auth verifier (T-DEV-1) instead of the revealed-secret Mock. Default 0 keeps
         // the Mock so the local demo (scripts/demo-e2e.mjs, which authorizes by revealing the
         // secret) still works. The REAL verifier is TESTNET-ONLY until T-HARD-1 (untrusted VK).
-        bool realVerifier = vm.envOr("SHADE_TREE_DEPLOY_REAL_VERIFIER", uint256(0)) != 0;
+        bool realVerifier =
+            vm.envOr("SHADE_TREE_DEPLOY_REAL_VERIFIER", publicStakeProfile ? uint256(1) : uint256(0)) != 0;
+        if (publicStakeProfile) {
+            require(realVerifier, "public stake profile requires SHADE_TREE_DEPLOY_REAL_VERIFIER=1");
+        }
         // T-FEAT-8b tier table (extra tiers beyond the default limit 8 => SHADE_TREE_BOND_WEI).
-        uint256[] memory extraLimits = _parseUintList(vm.envOr("SHADE_TREE_TIER_LIMITS", string("")));
-        uint256[] memory extraBonds = _parseUintList(vm.envOr("SHADE_TREE_TIER_BONDS_WEI", string("")));
-        require(extraLimits.length == extraBonds.length, "SHADE_TREE_TIER_LIMITS / SHADE_TREE_TIER_BONDS_WEI length mismatch");
+        uint256[] memory extraLimits =
+            _parseUintList(vm.envOr("SHADE_TREE_TIER_LIMITS", publicStakeProfile ? string("1") : string("")));
+        uint256[] memory extraBonds = _parseUintList(
+            vm.envOr("SHADE_TREE_TIER_BONDS_WEI", publicStakeProfile ? string("100000000000000000") : string(""))
+        );
+        require(
+            extraLimits.length == extraBonds.length,
+            "SHADE_TREE_TIER_LIMITS / SHADE_TREE_TIER_BONDS_WEI length mismatch"
+        );
+        if (publicStakeProfile) {
+            require(
+                extraLimits.length == 1 && extraLimits[0] == 1 && extraBonds[0] == 0.1 ether,
+                "public stake profile pins tier 1 to 0.1 ether"
+            );
+        }
         console.log("tier 8 bond", bond);
         for (uint256 i = 0; i < extraLimits.length; i++) {
             console.log("tier       ", extraLimits[i]);
@@ -158,8 +191,7 @@ contract DeployRegistry is Cheats {
                 console.log("deployed WithdrawVerifier (REAL Groth16 exit-auth)");
                 console.log("  WARNING: testnet-only VK (untrusted dev setup, T-HARD-1 pending)");
             } else {
-                MockWithdrawVerifier mockVerifier =
-                    new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
+                MockWithdrawVerifier mockVerifier = new MockWithdrawVerifier(ICommitmentHasher(hasherAddr));
                 verifierAddr = address(mockVerifier);
                 console.log("WARNING: deployed MockWithdrawVerifier (testnet-only, secret revealed in calldata)");
             }
@@ -183,7 +215,9 @@ contract DeployRegistry is Cheats {
         bytes memory b = bytes(csv);
         if (b.length == 0) return out;
         uint256 n = 1;
-        for (uint256 i = 0; i < b.length; i++) if (b[i] == ",") n++;
+        for (uint256 i = 0; i < b.length; i++) {
+            if (b[i] == ",") n++;
+        }
         out = new uint256[](n);
         uint256 k = 0;
         uint256 acc = 0;
@@ -207,31 +241,55 @@ contract DeployRegistry is Cheats {
     /// Record the addresses to a JSON file the gateway/lib read to find the contracts.
     /// Path is env-overridable (SHADE_TREE_DEPLOY_OUT) so a simulation can target a scratch file
     /// and leave the committed `contracts/deployed.local.json` untouched.
-    function _writeDeployment(
-        address gwReg,
-        address set,
-        address hasher,
-        address verifier,
-        bool deployStaked
-    ) internal {
+    function _writeDeployment(address gwReg, address set, address hasher, address verifier, bool publicStakeProfile)
+        internal
+    {
         string memory outPath = vm.envOr("SHADE_TREE_DEPLOY_OUT", string("contracts/deployed.local.json"));
         string memory rpcUrl = vm.envOr("SHADE_TREE_RPC_URL", string("http://127.0.0.1:8545"));
+        uint256 bond = vm.envOr("SHADE_TREE_BOND_WEI", publicStakeProfile ? uint256(0.8 ether) : uint256(0.01 ether));
+        uint256 unbonding = vm.envOr("SHADE_TREE_UNBONDING", publicStakeProfile ? uint256(1 days) : uint256(300));
+        uint256 minUnbonding = vm.envOr("SHADE_TREE_MIN_UNBONDING", publicStakeProfile ? uint256(3720) : uint256(270));
 
         // stakedReputationSet/hasher/verifier are the zero address when the set is skipped;
         // the gateway/lib only need gatewayRegistry + rpcUrl for stake-mode admission.
-        string memory setStr = deployStaked ? vm.toString(set) : "";
-        string memory hasherStr = deployStaked ? vm.toString(hasher) : "";
-        string memory verifierStr = deployStaked ? vm.toString(verifier) : "";
+        string memory setStr = set != address(0) ? vm.toString(set) : "";
+        string memory hasherStr = hasher != address(0) ? vm.toString(hasher) : "";
+        string memory verifierStr = verifier != address(0) ? vm.toString(verifier) : "";
 
         string memory json = string.concat(
             "{\n",
-            '  "gatewayRegistry": "', vm.toString(gwReg), '",\n',
-            '  "stakedReputationSet": "', setStr, '",\n',
-            '  "hasher": "', hasherStr, '",\n',
-            '  "verifier": "', verifierStr, '",\n',
-            '  "rpcUrl": "', rpcUrl, '"\n',
-            "}\n"
+            '  "gatewayRegistry": "',
+            vm.toString(gwReg),
+            '",\n',
+            '  "stakedReputationSet": "',
+            setStr,
+            '",\n',
+            '  "hasher": "',
+            hasherStr,
+            '",\n',
+            '  "verifier": "',
+            verifierStr,
+            '",\n',
+            '  "chainId": ',
+            vm.toString(block.chainid),
+            ",\n"
         );
+        json = string.concat(
+            json,
+            '  "profile": ',
+            publicStakeProfile ? '"public-stake-v1"' : "null",
+            ",\n",
+            '  "defaultBondWei": "',
+            vm.toString(bond),
+            '",\n',
+            '  "unbondingSeconds": ',
+            vm.toString(unbonding),
+            ",\n",
+            '  "minUnbondingSeconds": ',
+            vm.toString(minUnbonding),
+            ",\n"
+        );
+        json = string.concat(json, '  "rpcUrl": "', rpcUrl, '"\n', "}\n");
         vm.writeFile(outPath, json);
         console.log("wrote", outPath);
     }

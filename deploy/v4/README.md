@@ -41,12 +41,16 @@ node deploy/v4/preflight.mjs \
 ```
 
 The deploy form omits `--allow-pending`. It requires `status: "live"`, every pin/root, a valid
-Elder identity, at least one byte-verified artifact, and no floating ref:
+Elder identity, at least one byte-verified artifact, and no floating ref. For
+`public-stake-v1` it also queries the credential-free RPC and verifies Sepolia chain ID,
+deployment receipt/block/bytecode, constructor parameters, tier bonds, allowed limits,
+unbonding, hasher, and withdrawal verifier before any target is changed:
 
 ```bash
 node deploy/v4/preflight.mjs \
   --record network/<network>/deployment.json \
-  --repo-root .
+  --repo-root . \
+  --require-stake-profile public-stake-v1
 ```
 
 ## 2. Prepare secret inputs outside Git

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0 — Public Sepolia staking
+
+**Official research preview.** This release uses unaudited, untrusted-testnet
+proof artifacts and Sepolia ETH. It is not a production anonymity or security
+boundary and must not be used with real funds or sensitive traffic.
+
+The bundled Grove now admits any member who registers a tier-1 commitment with
+exactly 0.1 Sepolia ETH. Tier 1 permits one CONNECT tunnel per fixed 60-second
+epoch and caps that tunnel at 40 MiB of combined payload. Cross-gateway replay
+suppression is authenticated but best-effort and fail-open, not an atomic global
+reservation system.
+
+### Added
+
+- Added a fresh immutable public staking profile with tier 1 at 0.1 Sepolia ETH,
+  compatibility tier 8 at 0.8 Sepolia ETH, a 24-hour unbonding window, and the
+  real in-repo testnet exit verifier.
+- Added native Rust member registration with owner-only key-file or environment
+  key input, local EIP-1559 signing, exact on-chain bond discovery, receipt
+  confirmation, and duplicate protection.
+- Added bundled zero-configuration JS and Rust defaults for the live Elder,
+  Canopy signer, staking contract, RPC, deployment block, tier, and rate policy.
+- Added onion-signed node rate capabilities and fail-closed client matching for
+  the 60-second epoch, 60-second root lifetime, and 40 MiB payload ceiling.
+
+### Fixed
+
+- Expire superseded membership roots and last-known-good RPC snapshots by wall
+  clock even when no later membership event occurs.
+- Keep identity enrollment, registration, and egress on the same explicit tier
+  in both implementations, including RPC-only overrides.
+- Sort contract tier tables globally so the new limit-1 tier precedes limit 8.
+
 ## 0.4.1 — Accepted-tunnel close handling
 
 **Official research preview.** This patch supersedes v0.4.0 for agents, but it

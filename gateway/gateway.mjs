@@ -417,7 +417,8 @@ export function describeRootSources({ static: st, contracts = [] } = {}) {
 //   some root is trusted already (the static members.json root, or another chain source). With NO
 //   root at all the gateway still exits nonzero (an admission set of nothing is not a gateway;
 //   systemd restarts it, which is the retry). A source that fails on a LATER refresh keeps its
-//   last-known-good (lib/root-provider.mjs withCache) exactly as before.
+//   last-known-good only for the configured freshness window. Once that window expires, its
+//   roots are removed and admission fails closed until a fresh chain read succeeds.
 export async function initRoots({
   contracts = null,
   want = null,
@@ -534,7 +535,20 @@ export async function initRoots({
       }
     }
     stopRootPolling = provider.onChange?.(
-      () => refresh().then(() => checkPaidFloor(false)).catch((e) => log.warn("root refresh failed; keeping recent-roots", { err: e.message })),
+      async (_roots, pollError) => {
+        if (pollError) {
+          chainRoots = [];
+          perSource = contracts.map((c) => ({ contract: c.address, roots: [], leafCount: null, error: pollError.message }));
+          degraded.clear();
+          for (const c of contracts) degraded.add(c.address.toLowerCase());
+          recompute();
+          log.error("root freshness window expired; rejecting on-chain admission until a fresh read succeeds", { err: pollError.message });
+          return;
+        }
+        await refresh()
+          .then(() => checkPaidFloor(false))
+          .catch((e) => log.warn("root refresh failed within freshness window; keeping recent-roots", { err: e.message }));
+      },
       pollIntervalMs,
     ) || (() => {});
   }

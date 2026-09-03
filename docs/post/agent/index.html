@@ -60,29 +60,29 @@
     <header class="guide-intro">
       <h1>Add Shade Tree Grove to an agent.</h1>
       <p>Install one verified Rust binary, start its embedded-Arti Proxy, then give that route to one agent process.</p>
-      <p class="guide-status"><strong>Research preview.</strong> v0.4.1 is the current patched binary agent distribution. It bundles the current v4 Sepolia discovery pair, but an operator must still admit your leaf and supply the matching membership input.</p>
+      <p class="guide-status"><strong>Research preview.</strong> v0.5.0 bundles the public Sepolia tier-1 profile. A 0.1 Sepolia ETH stake admits one CONNECT tunnel per fixed 60-second epoch with a 40 MiB combined payload ceiling.</p>
     </header>
 
     <div class="guide-steps">
       <section class="guide-step" aria-labelledby="agent-install">
         <h2 id="agent-install">1. Download and verify</h2>
-        <p>The installer detects the platform, downloads the matching v0.4.1 <code>-live</code> binary and checksum, verifies both digest and filename, and installs into <code>~/.local/bin</code>. The binary includes the Proxy, RLN prover, and Arti; the agent machine needs neither Node.js nor a system Tor daemon.</p>
-        <div class="command" aria-label="Install the Shade Tree Grove v0.4.1 live binary">
-          <code>curl -q -fsSL --proto '=https' --proto-redir '=https' \<br>&nbsp;&nbsp;https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh \<br>&nbsp;&nbsp;| SHADE_TREE_VERSION=v0.4.1 sh<br>shade-tree --version</code>
-          <button class="copy-command" type="button" data-copy="curl -q -fsSL --proto '=https' --proto-redir '=https' \&#10;  https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh \&#10;  | SHADE_TREE_VERSION=v0.4.1 sh&#10;shade-tree --version" aria-label="Copy v0.4.1 live binary installation commands">copy</button>
+        <p>The installer detects the platform, downloads the matching v0.5.0 <code>-live</code> binary and checksum, verifies both digest and filename, and installs into <code>~/.local/bin</code>. The binary includes the Proxy, RLN prover, and Arti; the agent machine needs neither Node.js nor a system Tor daemon.</p>
+        <div class="command" aria-label="Install the Shade Tree Grove v0.5.0 live binary">
+          <code>curl -q -fsSL --proto '=https' --proto-redir '=https' \<br>&nbsp;&nbsp;https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh \<br>&nbsp;&nbsp;| SHADE_TREE_VERSION=v0.5.0 sh<br>shade-tree --version</code>
+          <button class="copy-command" type="button" data-copy="curl -q -fsSL --proto '=https' --proto-redir '=https' \&#10;  https://raw.githubusercontent.com/dmarzzz/shade-tree-node/main/scripts/install.sh \&#10;  | SHADE_TREE_VERSION=v0.5.0 sh&#10;shade-tree --version" aria-label="Copy v0.5.0 live binary installation commands">copy</button>
         </div>
-        <p>Intel macOS has no prebuilt live tunnel in v0.4.1. The macOS binary is checksummed and attested but not yet notarized. The <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/rust/INSTALL.md">Rust installation guide</a> lists published targets, manual checksum and attestation verification, and source builds.</p>
+        <p>Intel macOS has no prebuilt live tunnel in v0.5.0. The macOS binary is checksummed and attested but not yet notarized. The <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/rust/INSTALL.md">Rust installation guide</a> lists published targets, manual checksum and attestation verification, and source builds.</p>
       </section>
 
       <section class="guide-step" aria-labelledby="agent-profile">
-        <h2 id="agent-profile">2. Create an identity and get admitted</h2>
-        <p>Ask one Grove operator for the exact rate tier, an invited, staked, or paid admission path, and the matching membership input. Ask for an Elder Tree onion and its raw 64-hex Canopy signer only when using an alternate Grove.</p>
+        <h2 id="agent-profile">2. Create an identity and stake</h2>
+        <p>The bundled public profile creates a tier-1 identity. Fund a separate key file with 0.1 Sepolia ETH plus gas; registration signs locally and submits only the signed transaction.</p>
         <div class="command" aria-label="Create a local Shade Tree identity">
-          <code>read -r SHADE_TREE_LIMIT<br>shade-tree enroll --limit "$SHADE_TREE_LIMIT" --out identity.json &gt; public-leaf.txt</code>
-          <button class="copy-command" type="button" data-copy="read -r SHADE_TREE_LIMIT&#10;shade-tree enroll --limit &quot;$SHADE_TREE_LIMIT&quot; --out identity.json &gt; public-leaf.txt" aria-label="Copy identity enrollment commands">copy</button>
+          <code>shade-tree enroll --out identity.json &gt; public-leaf.txt<br>chmod 600 funded-sepolia.key<br>shade-tree register-member "$(cat public-leaf.txt)" --key-file funded-sepolia.key</code>
+          <button class="copy-command" type="button" data-copy="shade-tree enroll --out identity.json &gt; public-leaf.txt&#10;chmod 600 funded-sepolia.key&#10;shade-tree register-member &quot;$(cat public-leaf.txt)&quot; --key-file funded-sepolia.key" aria-label="Copy identity enrollment and staking commands">copy</button>
         </div>
-        <p><code>identity.json</code> contains the member secret and stays local. Send only <code>public-leaf.txt</code> through the operator's admission process. For invited access, wait for the operator to confirm that leaf in the root its nodes verify and save the matching <code>members.json</code>.</p>
-        <p>The bundled discovery pair does not include public admission or membership. Do not use the retired Sepolia records or invent those values. If you do not have an operator, ask for operator or onboarding help in <a href="https://github.com/dmarzzz/shade-tree-node/discussions">GitHub Discussions</a>; never post <code>identity.json</code>, a member secret, or a Proxy token.</p>
+        <p><code>identity.json</code> contains the member secret and stays local. The staking wallet address, public leaf, amount, and timing are public. Never post the identity, funded key, member secret, or Proxy token. Alternate invited or paid Groves still require their operator's exact tier and membership input.</p>
+        <p>The profile uses untrusted testnet proof artifacts and is not suitable for real funds or sensitive traffic. See the <a href="https://github.com/dmarzzz/shade-tree-node/blob/main/docs/PUBLIC-STAKING.md">exact protocol parameters</a> and ask for help in <a href="https://github.com/dmarzzz/shade-tree-node/discussions">GitHub Discussions</a>.</p>
       </section>
 
       <section class="guide-step" aria-labelledby="agent-start">
@@ -92,12 +92,12 @@
           <code>(umask 077; set -C; shade-tree proxy-token &gt; proxy-token.txt)<br>IFS= read -r SHADE_TREE_PROXY_TOKEN &lt; proxy-token.txt<br>export SHADE_TREE_PROXY_TOKEN</code>
           <button class="copy-command" type="button" data-copy="(umask 077; set -C; shade-tree proxy-token &gt; proxy-token.txt)&#10;IFS= read -r SHADE_TREE_PROXY_TOKEN &lt; proxy-token.txt&#10;export SHADE_TREE_PROXY_TOKEN" aria-label="Copy Proxy token commands">copy</button>
         </div>
-        <p>Then start invited access on loopback; the Proxy uses the bundled current-v4 Elder and signer:</p>
+        <p>Then start public staked access on loopback; the Proxy uses the bundled current-v4 Elder, signer, contract, RPC, tier, and rate policy:</p>
         <div class="command" aria-label="Start the local Shade Tree embedded-Arti Proxy">
-          <code>shade-tree proxy \<br>&nbsp;&nbsp;--identity identity.json \<br>&nbsp;&nbsp;--members members.json \<br>&nbsp;&nbsp;--listen 127.0.0.1:8118</code>
-          <button class="copy-command" type="button" data-copy="shade-tree proxy \&#10;  --identity identity.json \&#10;  --members members.json \&#10;  --listen 127.0.0.1:8118" aria-label="Copy embedded-Arti Proxy start commands">copy</button>
+          <code>shade-tree proxy \<br>&nbsp;&nbsp;--identity identity.json \<br>&nbsp;&nbsp;--listen 127.0.0.1:8118</code>
+          <button class="copy-command" type="button" data-copy="shade-tree proxy \&#10;  --identity identity.json \&#10;  --listen 127.0.0.1:8118" aria-label="Copy embedded-Arti Proxy start commands">copy</button>
         </div>
-        <p>An alternate signer's key and Elder onion are one trust-pinned pair; take both from the same operator. Staked and paid profiles use that operator's contract and RPC values instead of <code>members.json</code>. Keep the token file only for this running Proxy.</p>
+        <p>An alternate signer's key and Elder onion are one trust-pinned pair; take both from the same operator. Alternate invited profiles add that operator's <code>members.json</code>; staked and paid profiles use its contract and RPC. Keep the token file only for this running Proxy.</p>
       </section>
 
       <section class="guide-step" aria-labelledby="agent-run">

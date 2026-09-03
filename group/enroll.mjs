@@ -61,16 +61,13 @@ const commitment = rateCommitmentOf(identityFor(secret), limit).toString();
 const tierNote = limit === K_SLOTS ? "" : `   (tier limit ${limit}: run the client with SHADE_TREE_LIMIT=${limit})`;
 
 function printRegistrationGuide(write) {
-  write("To stake this commitment on a remote StakedReputationSet, load the public profile and");
-  write("funded key without putting the key in argv or shell history:");
-  write("  read -r SHADE_TREE_RPC_URL && export SHADE_TREE_RPC_URL");
-  write("  read -r SHADE_TREE_GROUP_CONTRACT && export SHADE_TREE_GROUP_CONTRACT");
+  write("To stake this commitment on the bundled public Sepolia Grove, load a funded key");
+  write("without putting the key in argv or shell history (contract/RPC/tier come from the record):");
   write("  read -s SHADE_TREE_REGISTER_KEY");
   write(`  SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree register-member ${commitment} --limit ${limit}`);
   write("  unset SHADE_TREE_REGISTER_KEY");
   write("");
-  write("For a loopback Anvil using the development defaults:");
-  write(`  shade-tree register-member ${commitment} --limit ${limit}`);
+  write("For another Grove, explicitly supply its network/contract, RPC, and matching tier.");
 }
 
 if (commitmentOnly) {

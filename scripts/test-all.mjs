@@ -127,6 +127,12 @@ if (fast) {
     results.push({ name: "forge test", passed });
     const summary = (forge.stdout || "").split("\n").filter((l) => /tests? passed|Suite result|failed/.test(l)).slice(-3).join("\n");
     console.log(passed ? summary || "  PASS" : (forge.stdout || forge.stderr));
+    if (passed) {
+      const manifest = spawnSync(process.execPath, [join(ROOT, "deploy/v4/check-bytecode-manifest.mjs")], { cwd: ROOT, encoding: "utf8" });
+      const manifestPassed = manifest.status === 0;
+      results.push({ name: "public-stake-v1 bytecode manifest", passed: manifestPassed });
+      console.log(manifestPassed ? `  PASS  ${(manifest.stdout || "").trim()}` : (manifest.stderr || manifest.stdout));
+    }
   }
 }
 

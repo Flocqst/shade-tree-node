@@ -7,19 +7,19 @@ gives the Proxy settings to one child process. The agent path needs neither
 Node.js nor a system Tor daemon.
 
 > [!WARNING]
-> Research preview. The current v4 Sepolia Elder and Canopy signer are bundled
-> for discovery, but that is not public access. Get the exact tier and matching
-> membership input from the Grove operator. Retired pre-v4 records remain unusable.
+> Research preview. The bundled public Sepolia profile uses untrusted testnet ZK
+> artifacts and links the staking wallet to the public member commitment. It is
+> not suitable for real funds or sensitive use. Retired pre-v4 records remain unusable.
 
 ## 1. Install the live binary
 
 Download the `-live` binary and matching `.sha256` for your platform from the
 [latest release](https://github.com/dmarzzz/shade-tree-node/releases/latest).
-This example installs the v0.4.1 x86_64 GNU/Linux asset; change `TARGET` to the
+This example installs the v0.5.0 x86_64 GNU/Linux asset; change `TARGET` to the
 published target for your machine when needed:
 
 ```sh
-VERSION=0.4.1
+VERSION=0.5.0
 TARGET=x86_64-unknown-linux-gnu
 ASSET="shade-tree-$VERSION-$TARGET-live"
 curl -LO "https://github.com/dmarzzz/shade-tree-node/releases/download/v$VERSION/$ASSET"
@@ -38,7 +38,24 @@ limitation.
 
 ## 2. Create an identity and obtain admission
 
-Ask one Grove operator for:
+For the bundled public Sepolia Grove, tier 1 costs exactly 0.1 Sepolia ETH and
+permits one CONNECT tunnel per fixed 60-second epoch, capped at 40 MiB combined
+payload. Create the identity locally and register its public leaf with a separately
+funded testnet wallet:
+
+```sh
+shade-tree enroll --out identity.json > public-leaf.txt
+chmod 600 funded-sepolia.key
+shade-tree register-member "$(cat public-leaf.txt)" --key-file funded-sepolia.key
+```
+
+The CLI reads the current contract, RPC, deployment block, tier, Elder, signer,
+and rate policy from its bundled deployment record. The wallet signs locally;
+the private key never goes to the RPC. The receipt confirms mining; wait for that
+block to reach Sepolia finality before starting the Proxy, because client and
+gateway membership snapshots both default to the finalized tree.
+
+For an invited, paid, or alternate Grove, ask its operator for:
 
 - the exact rate tier (`limit`) your new leaf should use;
 - an invited, staked, or paid admission process;
@@ -77,7 +94,16 @@ membership verification fails.
 
 ## 3. Start the local Proxy
 
-For invited access through an Elder Tree:
+For bundled public staked access through its Elder Tree:
+
+```sh
+(umask 077; set -C; shade-tree proxy-token > proxy-token.txt)
+IFS= read -r SHADE_TREE_PROXY_TOKEN < proxy-token.txt
+export SHADE_TREE_PROXY_TOKEN
+shade-tree proxy --identity identity.json --listen 127.0.0.1:8118
+```
+
+For invited access, add the operator's member set:
 
 ```sh
 (umask 077; set -C; shade-tree proxy-token > proxy-token.txt)
@@ -99,8 +125,8 @@ gateways with smooth weighted round-robin by default; `--no-rotation-spread`
 restores independent weighted-random first choices. Use
 `--directory directory.json --signer <hex>` for a static signed Canopy, or
 `--bootnode-onion <elder.onion> --signer <hex>` to override the bundled Elder,
-or `--onion <node.onion>:80` for one pinned node. Staked or paid profiles can use
-the operator's `--contract` and `--rpc-url` values instead of `--members`.
+or `--onion <node.onion>:80` for one pinned node. Alternate staked or paid profiles
+use the operator's `--contract` and `--rpc-url` values instead of `--members`.
 
 RLN slot allocation is default-on, durable, and atomic across Rust and
 JavaScript clients using the same public leaf. It stores no bearer secret and

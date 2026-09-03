@@ -19,8 +19,9 @@ import {WithdrawVerifier} from "../contracts/WithdrawVerifier.sol";
 /// two-tier tree's on-chain root equals the JS newGroup root; the REAL Groth16 exit proof
 /// authorizes the same identity's tier-32 leaf when the set passes 32 (and never at 8).
 contract StakedReputationSetTiersTest is Cheats {
-    uint256 constant BOND = 0.01 ether;      // tier 8
-    uint256 constant BOND32 = 4 * BOND;      // tier 32 (docs/ONCHAIN.md example table)
+    uint256 constant BOND = 0.01 ether; // tier 8
+    uint256 constant BOND32 = 4 * BOND; // tier 32 (docs/ONCHAIN.md example table)
+    uint256 constant PUBLIC_BOND = 0.1 ether; // tier 1 public Sepolia profile
     uint256 constant UNBONDING = 300;
     uint256 constant MIN_UNBONDING = 270;
 
@@ -41,7 +42,8 @@ contract StakedReputationSetTiersTest is Cheats {
     uint256 constant LEAF_1_32 = 21870821934631409796951764463230306021276785678227429566889140684627332455916;
     // newGroup([leafA8, leafB32]).root  and  newGroup([leafA8, leafB32, leafC32]) minus index 1.
     uint256 constant ROOT_A8_B32 = 999545622477661542770851523408301966697872713731637418335043567790453142627;
-    uint256 constant ROOT_A8_C32_MIDDLE_REMOVED = 20065059751002061676348401220246220318416130971542254276689180612584217408439;
+    uint256 constant ROOT_A8_C32_MIDDLE_REMOVED =
+        20065059751002061676348401220246220318416130971542254276689180612584217408439;
 
     address constant RECIPIENT = address(0xBEEF);
     address constant RECEIVER = address(0xCAFE);
@@ -60,7 +62,9 @@ contract StakedReputationSetTiersTest is Cheats {
         internal
         returns (StakedReputationSet)
     {
-        return new StakedReputationSet(BOND, UNBONDING, MIN_UNBONDING, v, ICommitmentHasher(address(hasher)), limits, bonds);
+        return new StakedReputationSet(
+            BOND, UNBONDING, MIN_UNBONDING, v, ICommitmentHasher(address(hasher)), limits, bonds
+        );
     }
 
     function setUp() public {
@@ -122,6 +126,25 @@ contract StakedReputationSetTiersTest is Cheats {
         assertEq(lim.length, 1);
         assertEq(lim[0], 8);
         assertEq(s.bondFor(32), 0);
+    }
+
+    function test_TierTable_LimitOnePublicProfile_IsGloballyAscending() public {
+        uint256[] memory limits = new uint256[](1);
+        uint256[] memory bonds = new uint256[](1);
+        limits[0] = 1;
+        bonds[0] = PUBLIC_BOND;
+        StakedReputationSet s = _newSet(limits, bonds, IWithdrawVerifier(address(verifier)));
+
+        uint256[] memory admitted = s.allowedLimits();
+        assertEq(admitted.length, 2);
+        assertEq(admitted[0], 1, "the one-tunnel tier sorts before the legacy tier 8");
+        assertEq(admitted[1], 8);
+        assertEq(s.bondFor(1), PUBLIC_BOND, "0.1 ETH buys the limit-1 tier");
+
+        uint256 leaf = hasher.commitmentOf(SECRET_A, 1);
+        s.register{value: PUBLIC_BOND}(leaf, 1);
+        assertTrue(s.isActive(leaf));
+        assertEq(s.limitOf(leaf), 1);
     }
 
     function test_Constructor_RejectsBadTierTables() public {
@@ -319,7 +342,9 @@ contract StakedReputationSetTiersTest is Cheats {
         assertTrue(real.verify(leaf32, 32, ctx, exitProof32), "fixture proof authorizes the tier-32 leaf at 32");
         assertFalse(real.verify(leaf32, 8, ctx, exitProof32), "...but not at limit 8 (leaf mismatch)");
         assertFalse(real.verify(LEAF_A_8, 32, ctx, exitProof32), "nor the tier-8 leaf at 32");
-        assertFalse(real.verify(leaf32, 32, ctx, exitProof8), "the tier-8 exit proof is bound to another leaf's context");
+        assertFalse(
+            real.verify(leaf32, 32, ctx, exitProof8), "the tier-8 exit proof is bound to another leaf's context"
+        );
         // through the set: it passes the recorded limit
         s.register{value: BOND32}(leaf32, 32);
         vm.expectRevert(StakedReputationSet.BadProof.selector);
@@ -335,11 +360,11 @@ contract StakedReputationSetTiersTest is Cheats {
     // ---- on-chain root == JS root for a mixed-tier tree --------------------------
 
     function test_Root_MixedTiers_EqualsJsNewGroup() public {
-        set.register{value: BOND}(LEAF_A_8, 8);      // index 0
-        set.register{value: BOND32}(LEAF_B_32, 32);  // index 1
+        set.register{value: BOND}(LEAF_A_8, 8); // index 0
+        set.register{value: BOND32}(LEAF_B_32, 32); // index 1
         assertEq(set.currentRoot(), ROOT_A8_B32, "root == newGroup([leafA8, leafB32]).root");
         assertEq(uint256(vm.load(address(set), bytes32(set.ROOT_STORAGE_SLOT()))), ROOT_A8_B32, "still slot 3");
-        set.register{value: BOND32}(LEAF_C_32, 32);  // index 2
+        set.register{value: BOND32}(LEAF_C_32, 32); // index 2
         set.slash(LEAF_B_32, SECRET_B, 32, RECEIVER); // zero-in-place @1
         assertEq(set.currentRoot(), ROOT_A8_C32_MIDDLE_REMOVED, "root == JS tree minus index 1");
     }

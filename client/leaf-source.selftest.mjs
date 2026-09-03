@@ -23,7 +23,7 @@ async function main() {
   const contracts = [{ address: "0xA", kind: "staked" }, { address: "0xP", kind: "paid" }];
   const calls = [];
   const loadStatic = async () => { calls.push("static"); return staticG; };
-  const loadContract = async ({ contract, rpcUrl }) => { calls.push(contract + "@" + rpcUrl); if (contract === "0xA") return { ...stakedG, contract }; if (contract === "0xP") return { ...paidG, contract }; throw new Error("boom"); };
+  const loadContract = async ({ contract, rpcUrl, blockTag }) => { calls.push(contract + "@" + rpcUrl + (blockTag ? `#${blockTag}` : "")); if (contract === "0xA") return { ...stakedG, contract }; if (contract === "0xP") return { ...paidG, contract }; throw new Error("boom"); };
   const mk = (secret, limit) => makeLeafSourceLoader({ secret, limit, contracts, rpcUrl: "http://rpc", loadStatic, loadContract });
 
   let r = await mk(s, 8)();
@@ -34,6 +34,9 @@ async function main() {
   calls.length = 0;
   r = await mk(p, 32)();
   ok(r.source === "paid(0xP)" && r.root === paidG.root && calls.join() === "static,0xA@http://rpc,0xP@http://rpc", "paid member: found in the paid set last");
+  calls.length = 0;
+  r = await makeLeafSourceLoader({ secret: a, limit: 8, env: { SHADE_TREE_STAKE_PROFILE: "public-stake-v1" }, contracts, rpcUrl: "http://rpc", loadStatic, loadContract, only: "staked" })();
+  ok(r.source === "staked(0xA)" && calls.join() === "0xA@http://rpc#finalized", "public-stake-v1 leaf discovery pins the same finalized snapshot as its gateways");
   let err = null;
   try { await mk(p, 8)(); } catch (e) { err = e.message; }
   ok(/in none of: members\.json \(2 leaves\), staked\(0xA\) \(1 leaves\), paid\(0xP\) \(1 leaves\)/.test(err || "") && /must equal the tier/.test(err), "wrong --limit (paid at 32, asked 8) -> precise error naming every source + the tier hint");

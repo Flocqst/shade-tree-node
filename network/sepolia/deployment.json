@@ -6,6 +6,15 @@
     "min": 4,
     "max": 4
   },
+  "ratePolicy": {
+    "scope": "grove-v4",
+    "window": "fixed",
+    "epochSeconds": 120,
+    "previousEpochsAccepted": 1,
+    "rootFreshnessSeconds": 120,
+    "payloadBytesPerSlot": 41943040,
+    "slashConfirmationSeconds": 3600
+  },
   "security": {
     "proofArtifacts": "untrusted-testnet",
     "scope": "disposable-research",
@@ -32,6 +41,7 @@
     "gatewayRegistry": "0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868"
   },
   "admission": {
+    "defaultPath": "invited",
     "paths": [
       "invited",
       "staked"

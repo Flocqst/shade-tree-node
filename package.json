@@ -1,6 +1,6 @@
 {
   "name": "shade-tree-node",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Run a local proxy for an agent, or a node that provides proof-gated onion egress.",
   "engines": {
     "node": ">=20"
@@ -51,6 +51,7 @@
     "test:site:browser": "playwright test --config=playwright.config.mjs",
     "test:site:production": "node scripts/site-smoke.mjs",
     "test:contracts": "forge test",
+    "test:bytecode-manifest": "node deploy/v4/check-bytecode-manifest.mjs",
     "site:serve": "node scripts/serve-site.mjs",
     "site:lighthouse": "npx --yes @lhci/cli@0.15.1 autorun",
     "lint": "eslint .",

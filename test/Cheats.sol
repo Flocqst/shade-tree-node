@@ -11,6 +11,7 @@ pragma solidity ^0.8.24;
 /// Minimal subset of the Foundry cheatcode interface actually used by our tests + deploy.
 interface Vm {
     function warp(uint256) external;
+    function chainId(uint256) external;
     function deal(address, uint256) external;
     function prank(address) external;
     function startPrank(address) external;
@@ -31,6 +32,7 @@ interface Vm {
     function envOr(string calldata, string calldata) external view returns (string memory);
     function envOr(string calldata, uint256) external view returns (uint256);
     function envOr(string calldata, address) external view returns (address);
+    function setEnv(string calldata, string calldata) external;
     function readFile(string calldata) external view returns (string memory);
     function parseJsonBytes(string calldata, string calldata) external pure returns (bytes memory);
 }

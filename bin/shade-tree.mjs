@@ -89,7 +89,7 @@ const COMMANDS = {
   join:              { script: "group/join.mjs",            help: "guided front door: `shade-tree join [member]` or `shade-tree join node`; make an identity + print the next commands (`gateway` remains an alias)" },
   enroll:            { script: "group/enroll.mjs",          help: "generate a member identity + print its secret/commitment" },
   identity:          { script: "group/identity.mjs",         help: "export the Rust client's --identity file {identitySecret, leaf} from your secret: shade-tree identity [--out <path>] [--secret-file <path>] (secret: --secret-file | SHADE_TREE_SECRET | ./.secret)" },
-  "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: shade-tree register-member <commitment> [--limit N] (tier; default 8)" },
+  "register-member": { script: "group/register-onchain.mjs", help: "stake a member commitment into StakedReputationSet: shade-tree register-member <commitment> [--limit N] (current Sepolia default: 1)" },
   pay:               { script: "group/pay.mjs",              help: "BUY a membership leaf over HTTP 402 (x402 or MPP; stablecoin, no gas): shade-tree pay --bootnode <onion> --limit 8|32 [--protocol x402|mpp] [--key-file <buyer-key>] [--dry-run]" },
   leaves:            { script: "group/leaves.mjs",           help: "export an on-chain set's ordered leaves as a members.json for the Rust client: shade-tree leaves --contract 0x.. [--out members.json]" },
   "register-gateway":{ script: "group/register-gateway.mjs", help: "stake a gateway operator bond into GatewayRegistry" },
@@ -176,13 +176,13 @@ function proxyHelp(command = "proxy") {
   console.log("   or: shade-tree proxy --onion NODE_ONION [--limit N] [--tor-port N]\n");
   console.log("Load the member secret without putting it in shell history or process arguments:");
   console.log("  read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET\n");
-  console.log("Invited profiles also set SHADE_TREE_MEMBERS_FILE. Use the exact tier supplied by the operator;");
-  console.log("tier 8 is only a default. Start Tor first, then route one child with:");
+  console.log("The bundled Sepolia profile uses public staked tier 1; invited/alternate profiles also set");
+  console.log("SHADE_TREE_MEMBERS_FILE and their exact tier. Start Tor first, then route one child with:");
   console.log("  shade-tree run -- your-agent\n");
   console.log(`Discovery defaults to the bundled current v4 ${DEFAULT_CLIENT_NETWORK} Elder and refreshes its signed Canopy about every five minutes.`);
   console.log("An explicit --bootnode/--dir-signer, --directory/--dir-signer, or --onion overrides discovery.");
   console.log("New tunnels rotate smoothly across healthy weighted gateways by default; --no-rotation-spread restores weighted-random first picks.");
-  console.log("Membership input and the exact tier still come from the Grove operator.");
+  console.log("The bundled staking contract/RPC/tier/rate policy need no flags; alternate Groves do.");
   console.log("Guide: https://github.com/dmarzzz/shade-tree-node/blob/main/docs/AGENT.md");
 }
 
@@ -388,9 +388,10 @@ async function main() {
   // v4 profile when no discovery source was supplied. Explicit flags/env always win, and non-client
   // services never inherit that client default.
   const role = COMMAND_ROLE[cmd];
-  if (env.SHADE_TREE_NETWORK || role === "client") {
+  const usesClientNetwork = role === "client" || ["enroll", "identity", "register-member"].includes(cmd);
+  if (env.SHADE_TREE_NETWORK || usesClientNetwork) {
     try {
-      const filled = role === "client" ? applyClientNetworkEnv(env) : applyNetworkEnv(env);
+      const filled = usesClientNetwork ? applyClientNetworkEnv(env) : applyNetworkEnv(env);
       if (filled.length) {
         const network = env.SHADE_TREE_NETWORK || DEFAULT_CLIENT_NETWORK;
         console.error(`shade-tree ${cmd}: network "${network}" supplied ${filled.join(", ")}`);

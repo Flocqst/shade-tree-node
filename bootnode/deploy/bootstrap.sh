@@ -88,6 +88,10 @@
 #   SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES  non-negative integer (default: 41943040 = 40 MiB)
 #                    combined opaque payload relayed in both directions per RLN epoch slot.
 #                    Same-node retries share the allowance; 0 explicitly disables the ceiling.
+#   SHADE_TREE_EPOCH_SECONDS positive integer (default: 120) fixed RLN epoch; clients must match.
+#   SHADE_TREE_TIERS comma-separated ascending limits (default: 8) admitted proof tiers.
+#   SHADE_TREE_ROOT_FRESHNESS_SECONDS positive integer (default: epoch length) hard wall-clock
+#                    lifetime for superseded roots and cached RPC snapshots.
 #   SHADE_TREE_ZK_ARTIFACTS <id>=<verification-key-path>[,...]  explicit verification-key set
 #                    accepted by the gateway and advertised by the heartbeat. Paths are absolute
 #                    or relative to SHADE_TREE_DIR. Production automation should always set this;
@@ -164,6 +168,9 @@ SHADE_TREE_HELIOS_SHA256="${SHADE_TREE_HELIOS_SHA256:-}"
 HELIOS_BIN=/usr/local/bin/helios
 SHADE_TREE_ADMIT="${SHADE_TREE_ADMIT:-invited}"
 SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES="${SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES:-41943040}"
+SHADE_TREE_EPOCH_SECONDS="${SHADE_TREE_EPOCH_SECONDS:-120}"
+SHADE_TREE_TIERS="${SHADE_TREE_TIERS:-8}"
+SHADE_TREE_ROOT_FRESHNESS_SECONDS="${SHADE_TREE_ROOT_FRESHNESS_SECONDS:-$SHADE_TREE_EPOCH_SECONDS}"
 SHADE_TREE_MEMBERS_FILE="${SHADE_TREE_MEMBERS_FILE:-}"
 SHADE_TREE_REGISTRAR="${SHADE_TREE_REGISTRAR:-0}"
 SHADE_TREE_PAY_PROTOCOLS="${SHADE_TREE_PAY_PROTOCOLS:-x402,mpp}"
@@ -314,6 +321,12 @@ if [ "$ADMIT_STAKED" = "1" ] || [ "$ADMIT_PAID" = "1" ]; then
 fi
 { [[ "$SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES" =~ ^(0|[1-9][0-9]{0,15})$ ]] && [ "$SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES" -le 9007199254740991 ]; } \
   || die "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES must be an integer in 0..9007199254740991 (got '$SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES')"
+[[ "$SHADE_TREE_EPOCH_SECONDS" =~ ^[1-9][0-9]{0,8}$ ]] \
+  || die "SHADE_TREE_EPOCH_SECONDS must be a positive integer (got '$SHADE_TREE_EPOCH_SECONDS')"
+[[ "$SHADE_TREE_ROOT_FRESHNESS_SECONDS" =~ ^[1-9][0-9]{0,8}$ ]] \
+  || die "SHADE_TREE_ROOT_FRESHNESS_SECONDS must be a positive integer (got '$SHADE_TREE_ROOT_FRESHNESS_SECONDS')"
+[[ "$SHADE_TREE_TIERS" =~ ^[1-9][0-9]{0,4}(,[1-9][0-9]{0,4})*$ ]] \
+  || die "SHADE_TREE_TIERS must be a comma-separated tier list (got '$SHADE_TREE_TIERS')"
 if [ "$SHADE_TREE_HELIOS" = "1" ] && [ "$ADMIT_STAKED" != "1" ]; then
   die "SHADE_TREE_HELIOS=1 anchors the ON-CHAIN (staked) admission root, but SHADE_TREE_ADMIT=${SHADE_TREE_ADMIT} does not admit staked leaves; set SHADE_TREE_ADMIT=invited,staked (or staked)"
 fi
@@ -609,6 +622,9 @@ WorkingDirectory=${SHADE_TREE_DIR}
 Environment=SHADE_TREE_ADMIT=${SHADE_TREE_ADMIT}
 Environment=SHADE_TREE_GATEWAY_PORT=${SHADE_TREE_GATEWAY_PORT}
 Environment=SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES=${SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES}
+Environment=SHADE_TREE_EPOCH_SECONDS=${SHADE_TREE_EPOCH_SECONDS}
+Environment=SHADE_TREE_TIERS=${SHADE_TREE_TIERS}
+Environment=SHADE_TREE_ROOT_FRESHNESS_SECONDS=${SHADE_TREE_ROOT_FRESHNESS_SECONDS}
 Environment=SHADE_TREE_METRICS_PORT=${SHADE_TREE_NODE_METRICS_PORT}
 Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
 Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}
@@ -705,6 +721,10 @@ Environment=SHADE_TREE_BOOTNODE_ONION=${BN_ONION}
 Environment=SHADE_TREE_GW_IDENTITY=${GW_HS}/identity.local.json
 Environment=SHADE_TREE_TOR_PORT=9050
 Environment=SHADE_TREE_ADMIT=${SHADE_TREE_ADMIT}
+Environment=SHADE_TREE_EPOCH_SECONDS=${SHADE_TREE_EPOCH_SECONDS}
+Environment=SHADE_TREE_TIERS=${SHADE_TREE_TIERS}
+Environment=SHADE_TREE_ROOT_FRESHNESS_SECONDS=${SHADE_TREE_ROOT_FRESHNESS_SECONDS}
+Environment=SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES=${SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES}
 Environment=SHADE_TREE_HEARTBEAT_METRICS_PORT=${SHADE_TREE_HEARTBEAT_METRICS_PORT}
 Environment=SHADE_TREE_LOG_LEVEL=${SHADE_TREE_LOG_LEVEL}
 Environment=SHADE_TREE_LOG_FORMAT=${SHADE_TREE_LOG_FORMAT}

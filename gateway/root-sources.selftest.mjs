@@ -194,6 +194,24 @@ async function main() {
     await stalePoll();
     ok(_getRecentRoots().has("1234") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "provider recovery -> keep root and clear degraded gauge");
     _setRecentRoots([]);
+
+    // Once the provider reports that its bounded LKG has expired, the gateway
+    // removes every on-chain root immediately. The same root may be restored only
+    // by a later successful refresh.
+    let expiryPoll = null;
+    const expiring = {
+      contract: "0xA",
+      currentRoots: async () => ({ roots: ["5678"], observedAtBlock: 9, finalized: true, leafCount: 1 }),
+      onChange: (fn) => { expiryPoll = fn; return () => {}; },
+      describe: () => ({ provider: "node", contract: "0xA" }),
+    };
+    await initRoots({ contracts: [A], want: { static: false, onchain: true }, loadStatic, makeProvider: () => expiring, watchFile: noWatch, quiet: true, rpcUrl: "http://127.0.0.1:1" });
+    ok(_getRecentRoots().has("5678"), "fresh on-chain root is admitted before its freshness window expires");
+    await expiryPoll([], new Error("freshness expired"));
+    ok(_getRecentRoots().size === 0 && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 1/.test(scrape()), "expired LKG is removed so on-chain admission fails closed");
+    await expiryPoll(["5678"], null);
+    ok(_getRecentRoots().has("5678") && /shade_tree_gateway_root_source_degraded\{[^}]*source="staked"[^}]*\} 0/.test(scrape()), "fresh read after expiry restores the root and clears degraded state");
+    _setRecentRoots([]);
   }
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: root-sources selftest (${failures} failure${failures === 1 ? "" : "s"})`);

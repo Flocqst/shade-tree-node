@@ -48,7 +48,7 @@ import { dirname, join } from "node:path";
 import { buildAnnounce, operatorAuthMessage, verifyOperatorSig } from "./announce.mjs";
 import { postOverTor } from "./fetch.mjs";
 import { checkEgress, EGRESS_CHECK_TARGET, PROTO_RANGE } from "../gateway/gateway.mjs";
-import { REGION_BUCKETS } from "../lib/directory.mjs";
+import { REGION_BUCKETS, canonicalCaps } from "../lib/directory.mjs";
 import { loadArtifactSet } from "../lib/zk-artifacts.mjs";
 import { parseAdmit, admitsFromRoots } from "../lib/admission.mjs";
 import { payAdvertFromEnv } from "./server.mjs";
@@ -194,6 +194,24 @@ export function advertisedPay(env = process.env, { gatewayOnion = null } = {}) {
   return out;
 }
 
+export function advertisedRate(env = process.env) {
+  const configured = [
+    env.SHADE_TREE_EPOCH_SECONDS,
+    env.SHADE_TREE_ROOT_FRESHNESS_SECONDS,
+    env.SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES,
+  ];
+  if (configured.some((value) => value === undefined || String(value).trim() === "")) return null;
+  const rate = {
+    scope: "grove-v4",
+    window: "fixed",
+    epochSeconds: Number(configured[0]),
+    previousEpochsAccepted: 1,
+    rootFreshnessSeconds: Number(configured[1]),
+    payloadBytesPerSlot: Number(configured[2]),
+  };
+  return canonicalCaps({ rate }).rate || null;
+}
+
 // Build the raw caps object from env (injectable for tests; defaults to process.env). Returns
 // null when the gateway is UNCONFIGURED (no explicit egress policy, no valid region, no artifact
 // set, no admission policy, no pay advert) so the announce stays byte-identical to today.
@@ -224,8 +242,10 @@ export function buildGatewayCaps(env = process.env, { artifactIds = null, gatewa
   if (admits) caps.admits = admits;
   const pay = advertisedPay(env, { gatewayOnion });
   if (pay) caps.pay = pay;
+  const rate = advertisedRate(env);
+  if (rate) caps.rate = rate;
   // Nothing configured -> no caps -> byte-identical announce (proven in the selftest).
-  if (caps.ports === undefined && caps.region === undefined && caps.artifacts === undefined && caps.admits === undefined && caps.pay === undefined) return null;
+  if (caps.ports === undefined && caps.region === undefined && caps.artifacts === undefined && caps.admits === undefined && caps.pay === undefined && caps.rate === undefined) return null;
   // At least one real cap: advertise the proto range too (complete, and safe — it only ever
   // rides alongside already-present caps, never triggers caps on its own).
   caps.proto = { min: PROTO_RANGE.min, max: PROTO_RANGE.max };

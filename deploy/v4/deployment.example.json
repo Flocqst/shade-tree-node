@@ -6,6 +6,7 @@
     "min": 4,
     "max": 4
   },
+  "ratePolicy": null,
   "security": {
     "proofArtifacts": null,
     "scope": null,
@@ -32,6 +33,7 @@
     "gatewayRegistry": null
   },
   "admission": {
+    "defaultPath": "invited",
     "paths": [
       "invited"
     ],

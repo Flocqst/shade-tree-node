@@ -59,26 +59,27 @@ shade-tree --version
 Automatic mode first tries the selected release's self-contained `-live` agent
 and falls back to its verifier-only binary only when that live asset is absent.
 On Apple Silicon it detects Rosetta shells and still selects the native arm64
-live build. Intel macOS has only the v0.4 verifier binary. Pin v0.4.1 with
-`... | SHADE_TREE_VERSION=v0.4.1 sh`, or read the
+live build. Intel macOS has only the v0.5 verifier binary. Pin v0.5.0 with
+`... | SHADE_TREE_VERSION=v0.5.0 sh`, or read the
 [installer options and manual verification steps](rust/INSTALL.md). Checksums
 provide transfer integrity; GitHub attestations provide the stronger build
 provenance check.
 
-Ask a Grove operator for the exact tier and admission material first. Create an
-owner-only identity locally, then submit only the printed public leaf through
-that operator's admission process:
+The bundled Sepolia Grove defaults to public staked tier 1: 0.1 Sepolia ETH buys
+one CONNECT tunnel per fixed 60-second epoch with a 40 MiB combined payload
+ceiling. Create an owner-only identity locally, then register only its printed
+public leaf with a separately funded testnet wallet:
 
 ```bash
-read -r SHADE_TREE_LIMIT
-shade-tree enroll --limit "$SHADE_TREE_LIMIT" --out identity.json > leaf.txt
+shade-tree enroll --out identity.json > leaf.txt
+chmod 600 funded-sepolia.key
+shade-tree register-member "$(cat leaf.txt)" --key-file funded-sepolia.key
 ```
 
 `enroll` generates identity material; it does not add the leaf to a Grove.
-Continue only after the operator confirms admission and supplies the matching
-member set (or on-chain source). The current v4 Sepolia Elder and signer are
-bundled as the discovery default; an operator can still supply a different pair.
-Then start the self-contained Proxy:
+The current contract, RPC, deployment block, tier, Elder, signer, and rate policy
+are bundled defaults; explicit settings still select another Grove. After the
+registration block reaches Sepolia finality, start the self-contained Proxy:
 
 ```bash
 (umask 077; set -C; shade-tree proxy-token > proxy-token.txt)
@@ -86,7 +87,6 @@ IFS= read -r SHADE_TREE_PROXY_TOKEN < proxy-token.txt
 export SHADE_TREE_PROXY_TOKEN
 shade-tree proxy \
   --identity identity.json \
-  --members members.json \
   --listen 127.0.0.1:8118
 ```
 
@@ -105,8 +105,9 @@ are removed from the child environment. Software that ignores proxy variables
 must be configured with the authenticated URL
 `http://shade-tree:$SHADE_TREE_PROXY_TOKEN@127.0.0.1:8118`. Rust applications
 can use the `shade-tree-egress` crate; JavaScript applications can import
-[`ShadeTreeClient`](docs/SDK.md). The repo-maintained v4 default covers discovery
-only; a member secret, exact tier, and matching admission input are still required.
+[`ShadeTreeClient`](docs/SDK.md). The exact public semantics and their non-atomic
+cross-gateway caveat are recorded in
+[`docs/PUBLIC-STAKING.md`](docs/PUBLIC-STAKING.md).
 
 ## How it works
 

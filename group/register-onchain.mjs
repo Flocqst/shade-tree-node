@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { normLimit, K_SLOTS } from "../lib/rln.mjs";
 import { parseContractList } from "../lib/root-provider.mjs";
-import { makeBoundedJsonRpcProvider, registrationKey, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
+import { makeBoundedJsonRpcProvider, registrationKey, requireRpcChainId, waitForTransactionReceipt } from "../lib/rpc-safety.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEPLOYED_PATH = join(HERE, "..", "contracts", "deployed.local.json");
@@ -101,6 +101,11 @@ async function main() {
   }
 
   const provider = await makeBoundedJsonRpcProvider(ethers, rpcUrl);
+  const expectedChainId = process.env.SHADE_TREE_CHAIN_ID || deployed.chainId || null;
+  if (expectedChainId != null && expectedChainId !== "") {
+    const actual = (await provider.getNetwork()).chainId;
+    requireRpcChainId(actual, expectedChainId, { label: "staking RPC" });
+  }
   const wallet = new ethers.Wallet(key, provider);
   const abi = [
     "function register(uint256 commitment) payable",
@@ -137,7 +142,7 @@ async function main() {
     : await contract["register(uint256)"](commitment, { value: bond });
   console.log(`  tx:       ${tx.hash}  (waiting for confirmation...)`);
   const rcpt = await waitForTransactionReceipt(tx, { operation: "member registration" });
-  console.log(`  mined in block ${rcpt.blockNumber}; member staked and admitted to the on-chain root.`);
+  console.log(`  mined in block ${rcpt.blockNumber}; member staked. Public admission begins after this block reaches finality.`);
 }
 
 main().catch((e) => {

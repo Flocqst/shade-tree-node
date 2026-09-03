@@ -762,13 +762,16 @@ export function gatewayMeetsRequirement(entry, req) {
   if (req.region != null) {
     if (!caps.region || caps.region !== req.region) return false;
   }
+  if (req.rate != null) {
+    if (!caps.rate || JSON.stringify(caps.rate) !== JSON.stringify(canonicalCaps({ rate: req.rate }).rate)) return false;
+  }
   return true;
 }
 
 // A requirement is "active" only if it actually constrains something; an absent/empty object
 // leaves selection untouched (the byte-identical default path).
 export function requirementActive(req) {
-  return Boolean(req && typeof req === "object" && (req.port != null || req.proto != null || req.region != null));
+  return Boolean(req && typeof req === "object" && (req.port != null || req.proto != null || req.region != null || req.rate != null));
 }
 
 function describeRequirement(req) {
@@ -776,6 +779,7 @@ function describeRequirement(req) {
   if (req.port != null) parts.push(`port=${req.port}`);
   if (req.proto != null) parts.push(`proto=${req.proto}`);
   if (req.region != null) parts.push(`region=${req.region}`);
+  if (req.rate != null) parts.push(`rate=${req.rate.epochSeconds}s/${req.rate.payloadBytesPerSlot}B`);
   return parts.join(",");
 }
 
@@ -892,6 +896,8 @@ export async function selectCandidates(req = null, adm = null, opts = null) {
     if (arts) c.artifacts = arts;
     const admits = admitsOf(g); // T-FEAT-9: the gateway's signed admission policy, when advertised
     if (admits) c.admits = admits;
+    const rate = canonicalCaps(g.caps).rate;
+    if (rate) c.rate = rate;
     return c;
   });
 }

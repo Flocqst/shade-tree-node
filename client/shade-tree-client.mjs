@@ -32,6 +32,7 @@ import * as rln from "../lib/rln.mjs";
 import { verifyReceipt } from "../lib/receipt.mjs";
 import { configuredContracts, loadGroupFromContract } from "../lib/root-provider.mjs";
 import { admitPathOfSource, parseLeafSource, envFlag, ADMIT_ORDER } from "../lib/admission.mjs";
+import { applyClientNetworkEnv } from "../lib/network-record.mjs";
 import {
   ShadeTreeSlotStateError,
   allocatePersistentSlot,
@@ -41,7 +42,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Namespace access keeps lightweight module-loader tests compatible with older semaphore mocks
 // that do not export the clock constant, while production still uses the protocol's one source.
-const CLIENT_EPOCH_SECONDS = Number(semaphoreConfig.EPOCH_SECONDS ?? process.env.SHADE_TREE_EPOCH_SECONDS ?? 120);
+const clientEpochSeconds = () => Number(process.env.SHADE_TREE_EPOCH_SECONDS ?? semaphoreConfig.EPOCH_SECONDS ?? 120);
 
 // ---- leaf-source discovery (T-FEAT-7, docs/PAYMENTS.md) ----------------------------
 // A member's leaf lives in exactly one of the sets the gateway trusts (gateway/gateway.mjs
@@ -68,6 +69,7 @@ export function makeLeafSourceLoader({
 } = {}) {
   const all = contracts || configuredContracts(env);
   const sources = only === "auto" ? all : all.filter((c) => (c.kind || "staked") === only);
+  const publicRootTag = env.SHADE_TREE_STAKE_PROFILE === "public-stake-v1" ? "finalized" : null;
   const wantStatic = only === "auto" || only === "invited";
   const holds = (g, leaf) => !!g && typeof g.indexOf === "function" && g.indexOf(BigInt(leaf)) !== -1;
   return async function discoverGroup() {
@@ -91,7 +93,7 @@ export function makeLeafSourceLoader({
     for (const c of sources) {
       const label = `${c.kind || "staked"}(${c.address})`;
       try {
-        const r = await loadContract({ contract: c.address, rpcUrl });
+        const r = await loadContract({ contract: c.address, rpcUrl, ...(publicRootTag ? { blockTag: publicRootTag } : {}) });
         if (holds(r.group, leaf)) return { ...r, source: label };
         tried.push(`${label} (${r.count} leaves)`);
       } catch (e) {
@@ -114,7 +116,7 @@ export function makeLeafSourceLoader({
 // with a K its leaf does not carry cannot prove at all (proveForSlot: not in group). A K+1st
 // request fails locally; it never wraps into slashable slot reuse.
 export class ShadeTreeEpochBudgetError extends Error {
-  constructor({ epoch, limit, used = limit, epochSeconds = CLIENT_EPOCH_SECONDS, nowMs = Date.now() }) {
+  constructor({ epoch, limit, used = limit, epochSeconds = clientEpochSeconds(), nowMs = Date.now() }) {
     const epochValue = BigInt(epoch);
     const seconds = Number(epochSeconds);
     const resetAtMs = Number(epochValue + 1n) * seconds * 1000;
@@ -150,7 +152,7 @@ export function makeSlotPool({
   slotStatePath,
   slotStateDir,
   slotLockTimeoutMs,
-  epochSeconds = CLIENT_EPOCH_SECONDS,
+  epochSeconds = clientEpochSeconds(),
   now = Date.now,
 }) {
   K = Number(normLimit(K));
@@ -604,18 +606,18 @@ export class ShadeTreeClient {
     this.socksIsolation = opts.socksIsolation !== false && process.env.SHADE_TREE_SOCKS_ISOLATION !== "0";
     // Injectable SOCKS client (tests pass a fake); defaults to the real `socks` lib.
     this._socks = opts.socksClient || SocksClient;
-    // Gateway selection: a pinned onion, or a signed directory (fleet rotation).
+    // Gateway selection: a pinned onion, or a signed directory (fleet rotation). Direct SDK
+    // imports do not pass through the CLI, so apply the bundled profile here only after caller
+    // options have established whether discovery is explicit.
     if (opts.network) process.env.SHADE_TREE_NETWORK = String(opts.network);
     if (opts.directoryRefreshMs != null) process.env.SHADE_TREE_DIRECTORY_REFRESH_MS = String(opts.directoryRefreshMs);
     if (opts.rotationSpread != null) process.env.SHADE_TREE_ROTATION_SPREAD = String(opts.rotationSpread);
-    this.onion = (opts.onion || process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "") || null;
-    const bootnode = opts.bootnode || process.env.SHADE_TREE_BOOTNODE_ONION || null;
-    const dir = opts.directory || process.env.SHADE_TREE_DIRECTORY || null;
-    const signer = opts.dirSigner || process.env.SHADE_TREE_DIR_SIGNER || null;
-    // selection.mjs captures these at import; set them BEFORE its (lazy) import.
-    if (bootnode) process.env.SHADE_TREE_BOOTNODE_ONION = bootnode;
-    if (dir) process.env.SHADE_TREE_DIRECTORY = dir;
-    if (signer) process.env.SHADE_TREE_DIR_SIGNER = signer;
+    if (opts.onion) process.env.SHADE_TREE_ONION = String(opts.onion);
+    if (opts.bootnode) process.env.SHADE_TREE_BOOTNODE_ONION = String(opts.bootnode);
+    if (opts.directory) process.env.SHADE_TREE_DIRECTORY = String(opts.directory);
+    if (opts.dirSigner) process.env.SHADE_TREE_DIR_SIGNER = String(opts.dirSigner);
+    applyClientNetworkEnv(process.env);
+    this.onion = (process.env.SHADE_TREE_ONION || "").replace(/\.onion$/, "") || null;
     this._selection = null;
     // Known gateway protocol range (T-FEAT-11), if the caller learned one out-of-band. null =>
     // unknown; the client optimistically sends its max and reacts to any version-reject. A future
@@ -626,6 +628,21 @@ export class ShadeTreeClient {
     // set); `gatewayArtifacts` = a gateway's accepted list learned out-of-band or from a reject.
     this.artifacts = opts.artifacts || null; // null => clientArtifactIds() lazily (loads no circuit)
     this.gatewayArtifacts = opts.gatewayArtifacts || null;
+    const configuredRate = {
+      scope: "grove-v4",
+      window: "fixed",
+      epochSeconds: Number(process.env.SHADE_TREE_EPOCH_SECONDS),
+      previousEpochsAccepted: 1,
+      rootFreshnessSeconds: Number(process.env.SHADE_TREE_ROOT_FRESHNESS_SECONDS),
+      payloadBytesPerSlot: Number(process.env.SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES),
+    };
+    this.ratePolicy = opts.ratePolicy || (
+      Number.isSafeInteger(configuredRate.epochSeconds) && configuredRate.epochSeconds > 0 &&
+      Number.isSafeInteger(configuredRate.rootFreshnessSeconds) && configuredRate.rootFreshnessSeconds > 0 &&
+      Number.isSafeInteger(configuredRate.payloadBytesPerSlot) && configuredRate.payloadBytesPerSlot > 0
+        ? configuredRate
+        : null
+    );
     // Capability rejects belong to the onion that sent them. The legacy singular fields above
     // remain useful for one pinned gateway, but a directory client never lets one candidate's
     // advertisement poison negotiation for every other candidate.
@@ -698,8 +715,9 @@ export class ShadeTreeClient {
       // T-FEAT-9: route only to gateways whose signed policy admits OUR leaf source (fail closed
       // with a precise fleet summary when none does); --max-anon = invited-only gateways only.
       const adm = await this._admission();
-      const cands = await sel.selectCandidates(null, adm, { onEvent });
-      if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null, admits: c.admits || null }));
+      const requirement = this.ratePolicy ? { rate: this.ratePolicy } : null;
+      const cands = await sel.selectCandidates(requirement, adm, { onEvent });
+      if (cands.length) return cands.map((c) => ({ onion: c.onion.replace(/\.onion$/, ""), artifacts: c.artifacts || null, admits: c.admits || null, rate: c.rate || null }));
     }
     try {
       const host = (await readFile(join(HERE, "..", "tor", "hs", "hostname"), "utf8")).trim();

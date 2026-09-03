@@ -13,9 +13,10 @@ node or Grove on a host.
 > [`network/sepolia/`](../network/sepolia/README.md) legacy contract and directory files describe
 > the earlier incompatible pre-v4 deployment; they are not runnable defaults for this Proxy or
 > payments. The directory's separate `deployment.json` records the disposable v4 research Grove,
-> supplies its Elder+Canopy-signer discovery default, and publishes its explicit Sepolia staking
-> path. Invited credentials remain private; staked members provide the published contract and RPC
-> values explicitly.
+> supplies its Elder+Canopy-signer discovery default and the public Sepolia staking path. The
+> bundled client defaults are tier 1 (0.1 Sepolia ETH), a fixed 60-second epoch, and a 40 MiB
+> combined tunnel ceiling. Invited credentials remain private; alternate Groves require explicit
+> membership and discovery inputs.
 
 Everything is one CLI: `shade-tree <command> [--flags]`. Install it:
 
@@ -32,10 +33,21 @@ Agent developers who do not need the repository can use the shorter
 
 ## Path A: connect to an operator's v4 Grove
 
-Ask the operator for a member secret or enrollment path, the exact enrolled tier, and the matching
-membership input. The bundled current-v4 Sepolia Elder+signer handles discovery; an alternate Grove
-must also supply its Elder Tree onion and matching Canopy signer. You need a Tor SOCKS port:
+The bundled public Sepolia path needs a locally generated member secret plus 0.1 Sepolia ETH and
+gas in a separate registration wallet. An alternate Grove must supply its exact tier, membership
+input, Elder Tree onion, and matching Canopy signer. You need a Tor SOCKS port:
 `bash scripts/start-tor-client.sh` starts one on 9260 (or use `--tor-port 9050` with a system Tor).
+
+For the public path, the contract, RPC, deployment block, tier, and rate policy need no flags:
+
+```bash
+commitment="$(shade-tree enroll --commitment-only)"  # copy the secret shown on stderr into the hidden prompt below
+read -s SHADE_TREE_REGISTER_KEY
+SHADE_TREE_REGISTER_KEY="$SHADE_TREE_REGISTER_KEY" shade-tree register-member "$commitment"
+unset SHADE_TREE_REGISTER_KEY
+read -s SHADE_TREE_SECRET && export SHADE_TREE_SECRET
+shade-tree proxy --tor-port 9260
+```
 
 Load the bearer secret without putting it in shell history or process arguments. Enter the
 operator-supplied tier at the second prompt:
@@ -64,8 +76,8 @@ shade-tree proxy --limit "$SHADE_TREE_LIMIT" --leaf-source invited --tor-port 92
 For an alternate Grove, add `--bootnode <v4-elder.onion> --dir-signer
 <matching-v4-canopy-signer-hex>` from the same operator.
 
-If that operator enables paid or staked admission, they must also supply the v4 registrar,
-chain, and contract addresses. Do not substitute the checked-in Sepolia values. Generate an
+If another operator enables paid or staked admission, they must also supply the v4 registrar,
+chain, and contract addresses. Generate an
 identity at their tier, then copy only its secret value into the hidden prompt:
 
 ```bash

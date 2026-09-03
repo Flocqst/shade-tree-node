@@ -160,6 +160,13 @@ async function main() {
     const nodeDef = got.get("etc/systemd/system/shade-tree-gateway.service");
     ok(unitEnv(nodeDef, "SHADE_TREE_GATEWAY_PORT") === "8443", "gateway unit and Tor backend share the default node port");
     ok(unitEnv(nodeDef, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "41943040", "default gateway unit explicitly pins the 40 MiB protocol parameter");
+    ok(unitEnv(nodeDef, "SHADE_TREE_EPOCH_SECONDS") === "120" && unitEnv(hbDef, "SHADE_TREE_EPOCH_SECONDS") === "120", "gateway and heartbeat share the fixed epoch");
+    ok(unitEnv(nodeDef, "SHADE_TREE_TIERS") === "8" && unitEnv(hbDef, "SHADE_TREE_TIERS") === "8", "gateway and heartbeat share the admitted tier table");
+    ok(unitEnv(nodeDef, "SHADE_TREE_ROOT_FRESHNESS_SECONDS") === "120", "gateway pins a wall-clock root freshness bound");
+    const publicRate = render(work, "public-rate", { SHADE_TREE_EPOCH_SECONDS: "60", SHADE_TREE_TIERS: "1,8", SHADE_TREE_ROOT_FRESHNESS_SECONDS: "60" });
+    const publicRateGateway = await readFile(join(publicRate.out, "etc/systemd/system/shade-tree-gateway.service"), "utf8");
+    const publicRateHeartbeat = await readFile(join(publicRate.out, "etc/systemd/system/shade-tree-heartbeat.service"), "utf8");
+    ok(publicRate.status === 0 && [publicRateGateway, publicRateHeartbeat].every((unit) => unitEnv(unit, "SHADE_TREE_EPOCH_SECONDS") === "60" && unitEnv(unit, "SHADE_TREE_TIERS") === "1,8"), "public 60-second tier-1 policy is rendered identically into enforcement and advertisement");
     const payloadOverride = render(work, "payload-override", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: "1048576" });
     const payloadOverrideGateway = await readFile(join(payloadOverride.out, "etc/systemd/system/shade-tree-gateway.service"), "utf8");
     ok(payloadOverride.status === 0 && unitEnv(payloadOverrideGateway, "SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES") === "1048576", "payload ceiling override is rendered verbatim");
@@ -170,6 +177,10 @@ async function main() {
     ]) {
       const bad = render(work, "payload-bad", { SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES: value });
       ok(bad.status !== 0 && re.test(bad.stderr), `bad payload ceiling rejected up front: ${JSON.stringify(value)}`);
+    }
+    for (const [key, value] of [["SHADE_TREE_EPOCH_SECONDS", "0"], ["SHADE_TREE_ROOT_FRESHNESS_SECONDS", "nope"], ["SHADE_TREE_TIERS", "1,,8"]]) {
+      const bad = render(work, `rate-bad-${key}`, { [key]: value });
+      ok(bad.status !== 0 && bad.stderr.includes(key), `bad public rate parameter rejected up front: ${key}=${value}`);
     }
     ok(unitEnv(elderDef, "SHADE_TREE_METRICS_PORT") === "9100" && unitEnv(nodeDef, "SHADE_TREE_METRICS_PORT") === "9101" && unitEnv(hbDef, "SHADE_TREE_HEARTBEAT_METRICS_PORT") === "9103", "default operator metrics use distinct loopback ports for Elder, Node, and heartbeat");
     ok([elderDef, nodeDef, hbDef].every((u) => unitEnv(u, "SHADE_TREE_LOG_LEVEL") === "info" && unitEnv(u, "SHADE_TREE_LOG_FORMAT") === "json" && unitEnv(u, "SHADE_TREE_BANNER") === "never"), "systemd defaults to structured info logs without terminal art");

@@ -668,7 +668,7 @@ mod tests {
         let mut deployment: Value = serde_json::from_str(crate::DEFAULT_DEPLOYMENT).unwrap();
         deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
         let parsed = crate::parse_bundled_deployment(&deployment.to_string()).unwrap();
-        let (_, _, registration_limit) =
+        let (_, _, registration_limit, _) =
             crate::register::registration_defaults_from(parsed).unwrap();
 
         let dir = test_dir("public-default");

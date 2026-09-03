@@ -8,8 +8,10 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
+import { AbiCoder, Interface } from "ethers";
 import { isOnion, isEd25519PubHex, isEthAddress } from "../../lib/config.mjs";
 import { isNetworkName } from "../../lib/network-record.mjs";
+import { jsonRpcCall } from "../../lib/rpc-safety.mjs";
 import { artifactIdOf, isArtifactId } from "../../lib/zk-artifacts.mjs";
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -17,6 +19,45 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
 const SERVICE_NAMES = ["elder", "node", "heartbeat"];
 const ADMISSION_PATHS = ["invited", "staked", "paid"];
+const TX_RE = /^0x[0-9a-fA-F]{64}$/;
+const isPosInt = (value) => Number.isInteger(value) && value > 0;
+const PUBLIC_STAKE_BYTECODE_MANIFEST = "deploy/v4/public-stake-v1-bytecode.json";
+
+function validateRatePolicy(rate, bad, { required }) {
+  if (rate == null) {
+    if (required) bad("ratePolicy", "is required for live staked admission");
+    return;
+  }
+  if (!isObject(rate)) { bad("ratePolicy", "must be an object or null"); return; }
+  if (rate.scope !== "grove-v4") bad("ratePolicy.scope", "must be grove-v4");
+  if (rate.window !== "fixed") bad("ratePolicy.window", "must be fixed");
+  if (!isPosInt(rate.epochSeconds)) bad("ratePolicy.epochSeconds", "must be a positive integer");
+  if (rate.previousEpochsAccepted !== 1) bad("ratePolicy.previousEpochsAccepted", "must be 1 for v4");
+  if (!isPosInt(rate.rootFreshnessSeconds)) bad("ratePolicy.rootFreshnessSeconds", "must be a positive integer");
+  if (!Number.isSafeInteger(rate.payloadBytesPerSlot) || rate.payloadBytesPerSlot <= 0) bad("ratePolicy.payloadBytesPerSlot", "must be a positive safe integer");
+  if (!isPosInt(rate.slashConfirmationSeconds)) bad("ratePolicy.slashConfirmationSeconds", "must be a positive integer");
+}
+
+function validateStakedProfile(root, rate, bad) {
+  if (!isObject(root) || root.profile !== "public-stake-v1") return;
+  const exactTiers = JSON.stringify(root.tiers) === JSON.stringify([
+    { limit: 1, bondWei: "100000000000000000" },
+    { limit: 8, bondWei: "800000000000000000" },
+  ]);
+  if (root.chainId !== 11155111) bad("admission.roots.staked.chainId", "public-stake-v1 is Sepolia-only");
+  if (!TX_RE.test(root.deployTx || "")) bad("admission.roots.staked.deployTx", "must pin the deployment transaction");
+  if (!isEthAddress(root.hasher)) bad("admission.roots.staked.hasher", "must pin the deployed hasher");
+  if (!isEthAddress(root.withdrawVerifier)) bad("admission.roots.staked.withdrawVerifier", "must pin the real exit verifier");
+  if (root.defaultLimit !== 1) bad("admission.roots.staked.defaultLimit", "must be 1");
+  if (!exactTiers) bad("admission.roots.staked.tiers", "must pin tier 1 = 0.1 ETH and tier 8 = 0.8 ETH");
+  if (root.unbondingSeconds !== 86400) bad("admission.roots.staked.unbondingSeconds", "must be 86400");
+  if (rate?.crossGateway !== "best-effort-fleet-tally") bad("ratePolicy.crossGateway", "public-stake-v1 requires best-effort fleet tallying");
+  const derived = isPosInt(rate?.rootFreshnessSeconds) && isPosInt(rate?.epochSeconds) && isPosInt(rate?.slashConfirmationSeconds)
+    ? rate.rootFreshnessSeconds + rate.epochSeconds + rate.slashConfirmationSeconds
+    : null;
+  if (derived !== 3_720 || root.minUnbondingSeconds !== 3_720 || root.unbondingSeconds < 3_720) bad("admission.roots.staked.minUnbondingSeconds", "public-stake-v1 pins root freshness + epoch + slash confirmation to 3720 seconds and requires it to fit inside unbonding");
+  if (rate?.epochSeconds !== 60 || rate?.rootFreshnessSeconds !== 60 || rate?.payloadBytesPerSlot !== 41_943_040 || rate?.slashConfirmationSeconds !== 3_600) bad("ratePolicy", "public-stake-v1 pins 60-second epochs/freshness, 40 MiB per slot, and a 3600-second slash allowance");
+}
 
 function safeRelativePath(value) {
   if (typeof value !== "string" || !value || isAbsolute(value) || value.includes("\\")) return false;
@@ -34,7 +75,7 @@ function safeRepository(value) {
   }
 }
 
-export function validateDeploymentRecord(record, { requireLive = true, repoRoot = null } = {}) {
+export function validateDeploymentRecord(record, { requireLive = true, repoRoot = null, requireStakeProfile = null } = {}) {
   const errors = [];
   const bad = (field, problem) => errors.push({ field, problem });
   if (!isObject(record)) return { ok: false, errors: [{ field: "$", problem: "record must be a JSON object" }] };
@@ -43,6 +84,9 @@ export function validateDeploymentRecord(record, { requireLive = true, repoRoot 
   if (!isNetworkName(record.network)) bad("network", "must be a lowercase network name");
   if (!["pending", "live"].includes(record.status)) bad("status", "must be pending or live");
   if (requireLive && record.status !== "live") bad("status", "must be live before any target is changed");
+  if (requireStakeProfile && record?.admission?.roots?.staked?.profile !== requireStakeProfile) {
+    bad("admission.roots.staked.profile", `this rollout requires ${requireStakeProfile}`);
+  }
 
   if (!isObject(record.protocol)) bad("protocol", "must be { min, max }");
   else {
@@ -51,6 +95,9 @@ export function validateDeploymentRecord(record, { requireLive = true, repoRoot 
       bad("protocol", "must be an integer v4 range with min=4 and 4 <= max <= 255");
     }
   }
+
+  const hasStaked = Array.isArray(record.admission?.paths) && record.admission.paths.includes("staked");
+  validateRatePolicy(record.ratePolicy, bad, { required: requireLive && hasStaked });
 
   if (!isObject(record.elder)) bad("elder", "must be an object");
   else {
@@ -101,6 +148,7 @@ export function validateDeploymentRecord(record, { requireLive = true, repoRoot 
       const canonical = ADMISSION_PATHS.filter((p) => paths.includes(p));
       if (paths.join(",") !== canonical.join(",")) bad("admission.paths", "must use canonical order: invited, staked, paid");
     }
+    if (!record.admission.paths?.includes(record.admission.defaultPath)) bad("admission.defaultPath", "must name one of admission.paths");
     if (!isObject(record.admission.roots)) bad("admission.roots", "must name invited, staked, and paid roots");
     else {
       const roots = record.admission.roots;
@@ -115,6 +163,13 @@ export function validateDeploymentRecord(record, { requireLive = true, repoRoot 
       if (Array.isArray(paths)) for (const path of paths) {
         const root = roots[path];
         if (requireLive && root === null) bad(`admission.roots.${path}`, `is required because ${path} is admitted`);
+      }
+      validateStakedProfile(roots.staked, record.ratePolicy, bad);
+      if (roots.staked?.profile === "public-stake-v1" && record.admission.defaultPath !== "staked") {
+        bad("admission.defaultPath", "public-stake-v1 must be the default admission path");
+      }
+      if (roots.staked?.profile === "public-stake-v1" && !isPosInt(roots.staked.deployBlock)) {
+        bad("admission.roots.staked.deployBlock", "public-stake-v1 requires a positive deployment block");
       }
     }
     const onchain = Array.isArray(paths) && paths.some((p) => p === "staked" || p === "paid");
@@ -199,6 +254,9 @@ export function validatePinnedCheckout(record, { repoRoot }) {
   for (const path of ["bootnode/server.mjs", "gateway/gateway.mjs", "bootnode/heartbeat.mjs", "bootnode/deploy/bootstrap.sh"]) {
     if (git("cat-file", "-e", `${commit}:${path}`).status !== 0) bad("services", `pinned commit does not contain ${path}`);
   }
+  if (record?.admission?.roots?.staked?.profile === "public-stake-v1" && git("cat-file", "-e", `${commit}:${PUBLIC_STAKE_BYTECODE_MANIFEST}`).status !== 0) {
+    bad("services.node.commit", `pinned commit does not contain ${PUBLIC_STAKE_BYTECODE_MANIFEST}`);
+  }
   if (record.security?.proofArtifacts === "trusted-ceremony") {
     const lockBytes = git("show", `${commit}:testdata/zk-artifacts.lock.json`);
     let lock = null;
@@ -221,14 +279,158 @@ export function validatePinnedCheckout(record, { repoRoot }) {
   return { ok: errors.length === 0, errors };
 }
 
+function loadPinnedPublicBytecodeManifest(record, repoRoot) {
+  if (!repoRoot) throw new Error("public-stake-v1 bytecode verification requires --repo-root");
+  const commit = record?.services?.node?.commit;
+  if (!COMMIT_RE.test(commit || "")) throw new Error("public-stake-v1 bytecode verification requires an immutable service commit");
+  const shown = spawnSync("git", ["-C", resolve(repoRoot), "show", `${commit}:${PUBLIC_STAKE_BYTECODE_MANIFEST}`], { encoding: "utf8" });
+  if (shown.status !== 0) throw new Error(`pinned service commit does not contain ${PUBLIC_STAKE_BYTECODE_MANIFEST}`);
+  try { return JSON.parse(shown.stdout); }
+  catch (error) { throw new Error(`pinned ${PUBLIC_STAKE_BYTECODE_MANIFEST} is invalid JSON (${error.message})`); }
+}
+
+function normalizedRuntime(code, spec) {
+  const raw = String(code || "").replace(/^0x/, "").toLowerCase();
+  if (!/^[0-9a-f]+$/.test(raw) || raw.length % 2 !== 0) throw new Error("has no deployed bytecode");
+  if (!isObject(spec) || !Number.isSafeInteger(spec.runtimeBytes) || spec.runtimeBytes <= 0 || !SHA256_RE.test(spec.normalizedSha256 || "") || !Array.isArray(spec.zeroRanges)) {
+    throw new Error("has an invalid pinned bytecode specification");
+  }
+  if (raw.length / 2 !== spec.runtimeBytes) throw new Error(`runtime length ${raw.length / 2} does not match pinned ${spec.runtimeBytes}`);
+  let normalized = raw;
+  for (const range of spec.zeroRanges) {
+    if (!isObject(range) || !Number.isSafeInteger(range.start) || range.start < 0 || !Number.isSafeInteger(range.length) || range.length <= 0 || range.start + range.length > spec.runtimeBytes) {
+      throw new Error("has an invalid pinned normalization range");
+    }
+    normalized = normalized.slice(0, range.start * 2) + "0".repeat(range.length * 2) + normalized.slice((range.start + range.length) * 2);
+  }
+  const digest = createHash("sha256").update(Buffer.from(normalized, "hex")).digest("hex");
+  if (digest !== spec.normalizedSha256) throw new Error(`runtime bytecode digest ${digest} does not match pinned ${spec.normalizedSha256}`);
+  return raw;
+}
+
+function linkedAddress(runtime, ranges, name) {
+  if (!Array.isArray(ranges) || ranges.length === 0) throw new Error(`has no pinned ${name} link references`);
+  const values = ranges.map((range) => {
+    if (!isObject(range) || range.length !== 20 || !Number.isSafeInteger(range.start) || range.start < 0 || (range.start + range.length) * 2 > runtime.length) {
+      throw new Error(`has an invalid pinned ${name} link reference`);
+    }
+    return "0x" + runtime.slice(range.start * 2, (range.start + range.length) * 2);
+  });
+  if (!values.every((value) => value.toLowerCase() === values[0].toLowerCase()) || !isEthAddress(values[0]) || /^0x0{40}$/i.test(values[0])) {
+    throw new Error(`does not consistently link a deployed ${name} library`);
+  }
+  return values[0];
+}
+
+export async function validatePublicStakeOnchain(record, { rpcCall = jsonRpcCall, rpcUrl = null, repoRoot = null, bytecodeManifest = null } = {}) {
+  const root = record?.admission?.roots?.staked;
+  if (root?.profile !== "public-stake-v1") return { ok: true, errors: [] };
+  const errors = [];
+  const bad = (field, problem) => errors.push({ field, problem });
+  const call = (method, params) => rpcCall(rpcUrl || root.rpcUrl, method, params);
+  try {
+    const manifest = bytecodeManifest || loadPinnedPublicBytecodeManifest(record, repoRoot);
+    if (manifest?.schemaVersion !== 1 || manifest?.profile !== "public-stake-v1" || !isObject(manifest.contracts) || !isObject(manifest.libraries)) {
+      throw new Error("pinned public-stake-v1 bytecode manifest has the wrong schema or profile");
+    }
+    if (Object.keys(manifest.contracts).sort().join(",") !== "groth16,hasher,staking,withdrawVerifier" || Object.keys(manifest.libraries).sort().join(",") !== "PoseidonT2,PoseidonT3") {
+      throw new Error("pinned public-stake-v1 bytecode manifest must cover the exact contract and linked-library graph");
+    }
+    const chainId = BigInt(await call("eth_chainId", []));
+    if (chainId !== 11_155_111n) bad("onchain.chainId", `RPC reports ${chainId}, expected Sepolia 11155111`);
+
+    const receipt = await call("eth_getTransactionReceipt", [root.deployTx]);
+    if (!receipt) bad("onchain.deployTx", "deployment receipt is missing");
+    else {
+      if (BigInt(receipt.status ?? 0) !== 1n) bad("onchain.deployTx", "deployment transaction did not succeed");
+      if (BigInt(receipt.blockNumber ?? 0) !== BigInt(root.deployBlock)) bad("onchain.deployBlock", "receipt block does not match the record");
+      if (String(receipt.contractAddress || "").toLowerCase() !== root.contract.toLowerCase()) bad("onchain.contract", "receipt contractAddress does not match the record");
+    }
+
+    const runtimeByRole = {};
+    const roleAddresses = { staking: root.contract, hasher: root.hasher, withdrawVerifier: root.withdrawVerifier };
+    for (const [role, address] of Object.entries(roleAddresses)) {
+      try {
+        const code = await call("eth_getCode", [address, "latest"]);
+        runtimeByRole[role] = normalizedRuntime(code, manifest.contracts[role]);
+      } catch (error) { bad(`onchain.bytecode.${role}`, error.message); }
+    }
+    const linkedLibraries = {};
+    for (const [role, runtime] of Object.entries(runtimeByRole)) {
+      for (const [name, ranges] of Object.entries(manifest.contracts[role]?.links || {})) {
+        try {
+          const address = linkedAddress(runtime, ranges, name);
+          if (linkedLibraries[name] && linkedLibraries[name].toLowerCase() !== address.toLowerCase()) throw new Error(`links ${name} at ${address}, inconsistent with ${linkedLibraries[name]}`);
+          linkedLibraries[name] = address;
+        } catch (error) { bad(`onchain.bytecode.${role}.${name}`, error.message); }
+      }
+    }
+
+    const tx = await call("eth_getTransactionByHash", [root.deployTx]);
+    const constructorArgs = AbiCoder.defaultAbiCoder().encode(
+      ["uint256", "uint256", "uint256", "address", "address", "uint256[]", "uint256[]"],
+      [800_000_000_000_000_000n, 86_400n, 3_720n, root.withdrawVerifier, root.hasher, [1n], [100_000_000_000_000_000n]],
+    ).slice(2).toLowerCase();
+    const input = String(tx?.input || tx?.data || "").toLowerCase();
+    if (!tx || tx.to != null || !input.endsWith(constructorArgs)) {
+      bad("onchain.deployTx", "contract-creation input does not pin the public-stake-v1 constructor parameters");
+    }
+
+    const iface = new Interface([
+      "function BOND() view returns (uint256)",
+      "function UNBONDING() view returns (uint256)",
+      "function bondFor(uint256) view returns (uint256)",
+      "function allowedLimits() view returns (uint256[])",
+      "function hasher() view returns (address)",
+      "function withdrawVerifier() view returns (address)",
+      "function groth16() view returns (address)",
+    ]);
+    const view = async (name, args = []) => {
+      const result = await call("eth_call", [{ to: root.contract, data: iface.encodeFunctionData(name, args) }, "latest"]);
+      return iface.decodeFunctionResult(name, result);
+    };
+    if ((await view("BOND"))[0] !== 800_000_000_000_000_000n) bad("onchain.BOND", "must equal the tier-8 bond (0.8 ETH)");
+    if ((await view("bondFor", [1]))[0] !== 100_000_000_000_000_000n) bad("onchain.bondFor(1)", "must equal 0.1 ETH");
+    if ((await view("bondFor", [8]))[0] !== 800_000_000_000_000_000n) bad("onchain.bondFor(8)", "must equal 0.8 ETH");
+    const limits = Array.from((await view("allowedLimits"))[0], Number);
+    if (limits.join(",") !== "1,8") bad("onchain.allowedLimits", "must equal [1,8]");
+    if ((await view("UNBONDING"))[0] !== 86_400n) bad("onchain.UNBONDING", "must equal 86400 seconds");
+    if (String((await view("hasher"))[0]).toLowerCase() !== root.hasher.toLowerCase()) bad("onchain.hasher", "does not match the record");
+    if (String((await view("withdrawVerifier"))[0]).toLowerCase() !== root.withdrawVerifier.toLowerCase()) bad("onchain.withdrawVerifier", "does not match the record");
+    const wrapperCall = async (name) => {
+      const result = await call("eth_call", [{ to: root.withdrawVerifier, data: iface.encodeFunctionData(name) }, "latest"]);
+      return iface.decodeFunctionResult(name, result);
+    };
+    const groth16 = String((await wrapperCall("groth16"))[0]);
+    if (!isEthAddress(groth16)) bad("onchain.withdrawVerifier.groth16", "wrapper does not point to a valid Groth16 verifier address");
+    else {
+      try { normalizedRuntime(await call("eth_getCode", [groth16, "latest"]), manifest.contracts.groth16); }
+      catch (error) { bad("onchain.bytecode.groth16", error.message); }
+    }
+    for (const [name, spec] of Object.entries(manifest.libraries)) {
+      const address = linkedLibraries[name];
+      if (!address) { bad(`onchain.bytecode.${name}`, "pinned library is not linked by the deployed contract graph"); continue; }
+      try { normalizedRuntime(await call("eth_getCode", [address, "latest"]), spec); }
+      catch (error) { bad(`onchain.bytecode.${name}`, error.message); }
+    }
+  } catch (error) {
+    bad("onchain.rpc", error.message);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 function parseArgs(argv) {
-  const flags = { requireLive: true, repoRoot: null, quiet: false };
+  const flags = { requireLive: true, repoRoot: null, requireStakeProfile: null, rpcUrl: null, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--record") flags.record = argv[++i];
     else if (arg.startsWith("--record=")) flags.record = arg.slice(9);
     else if (arg === "--repo-root") flags.repoRoot = argv[++i];
     else if (arg.startsWith("--repo-root=")) flags.repoRoot = arg.slice(12);
+    else if (arg === "--require-stake-profile") flags.requireStakeProfile = argv[++i];
+    else if (arg.startsWith("--require-stake-profile=")) flags.requireStakeProfile = arg.slice(24);
+    else if (arg === "--rpc-url") flags.rpcUrl = argv[++i];
+    else if (arg.startsWith("--rpc-url=")) flags.rpcUrl = arg.slice(10);
     else if (arg === "--allow-pending") flags.requireLive = false;
     else if (arg === "--quiet") flags.quiet = true;
     else if (arg === "--help") flags.help = true;
@@ -237,18 +439,19 @@ function parseArgs(argv) {
   return flags;
 }
 
-function main() {
+async function main() {
   try {
     const flags = parseArgs(process.argv.slice(2));
     if (flags.help) {
-      console.log("usage: node deploy/v4/preflight.mjs --record <deployment.json> --repo-root <checkout> [--allow-pending] [--quiet]");
+      console.log("usage: node deploy/v4/preflight.mjs --record <deployment.json> --repo-root <checkout> [--require-stake-profile public-stake-v1] [--rpc-url <actual-runtime-rpc>] [--allow-pending] [--quiet]");
       return;
     }
     if (!flags.record) throw new Error("--record <deployment.json> is required");
     const record = loadDeploymentRecord(flags.record);
     const shape = validateDeploymentRecord(record, flags);
     const pin = shape.ok && flags.requireLive ? validatePinnedCheckout(record, flags) : { ok: true, errors: [] };
-    const result = { ok: shape.ok && pin.ok, errors: [...shape.errors, ...pin.errors] };
+    const chain = shape.ok && pin.ok && flags.requireLive ? await validatePublicStakeOnchain(record, { repoRoot: flags.repoRoot, rpcUrl: flags.rpcUrl }) : { ok: true, errors: [] };
+    const result = { ok: shape.ok && pin.ok && chain.ok, errors: [...shape.errors, ...pin.errors, ...chain.errors] };
     if (!result.ok) {
       const lines = result.errors.map((e) => `  ${e.field}: ${e.problem}`).join("\n");
       throw new Error(`${flags.record}: deployment preflight failed\n${lines}`);
@@ -260,4 +463,4 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (import.meta.url === `file://${process.argv[1]}`) await main();

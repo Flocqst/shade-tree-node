@@ -40,10 +40,18 @@ const LEGACY_DEFAULT_LIMIT: u64 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BundledStakedRoot {
+    profile: Option<String>,
     contract: String,
     rpc_url: String,
+    chain_id: Option<u64>,
+    deploy_tx: Option<String>,
     deploy_block: Option<u64>,
+    hasher: Option<String>,
+    withdraw_verifier: Option<String>,
     default_limit: Option<u64>,
+    tiers: Option<Vec<(u64, String)>>,
+    unbonding_seconds: Option<u64>,
+    min_unbonding_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +69,7 @@ struct PublicStakedProfile {
     rate_policy: shade_tree_proto::CanonicalRate,
     contract: String,
     rpc_url: String,
+    chain_id: u64,
     deploy_block: u64,
     default_limit: u64,
 }
@@ -184,11 +193,56 @@ fn parse_bundled_deployment(raw: &str) -> Result<BundledDeployment, String> {
                 .get("rpcUrl")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "bundled staked root has no RPC".to_string())?;
+            let optional_string = |name: &str| {
+                value
+                    .get(name)
+                    .map(|entry| {
+                        entry
+                            .as_str()
+                            .map(str::to_string)
+                            .ok_or_else(|| format!("bundled staked root {name} must be a string"))
+                    })
+                    .transpose()
+            };
+            let tiers = value
+                .get("tiers")
+                .map(|tiers| {
+                    tiers
+                        .as_array()
+                        .ok_or_else(|| "bundled staked root tiers must be an array".to_string())?
+                        .iter()
+                        .map(|tier| {
+                            let limit = tier
+                                .get("limit")
+                                .and_then(serde_json::Value::as_u64)
+                                .ok_or_else(|| {
+                                    "bundled staked tier limit must be an unsigned integer"
+                                        .to_string()
+                                })?;
+                            let bond = tier
+                                .get("bondWei")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or_else(|| {
+                                    "bundled staked tier bondWei must be a string".to_string()
+                                })?;
+                            Ok((limit, bond.to_string()))
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .transpose()?;
             Ok::<_, String>(BundledStakedRoot {
+                profile: optional_string("profile")?,
                 contract: contract.to_string(),
                 rpc_url: rpc_url.to_string(),
+                chain_id: optional_u64(value, "chainId")?,
+                deploy_tx: optional_string("deployTx")?,
                 deploy_block: optional_u64(value, "deployBlock")?,
+                hasher: optional_string("hasher")?,
+                withdraw_verifier: optional_string("withdrawVerifier")?,
                 default_limit: optional_u64(value, "defaultLimit")?,
+                tiers,
+                unbonding_seconds: optional_u64(value, "unbondingSeconds")?,
+                min_unbonding_seconds: optional_u64(value, "minUnbondingSeconds")?,
             })
         })
         .transpose()?;
@@ -259,6 +313,49 @@ fn public_profile_from(deployment: BundledDeployment) -> Result<PublicStakedProf
     let staked = deployment
         .staked
         .ok_or_else(|| "bundled deployment has no staked admission root".to_string())?;
+    if staked.profile.as_deref() != Some("public-stake-v1") {
+        return Err("bundled staking root does not declare profile public-stake-v1".into());
+    }
+    let chain_id = staked
+        .chain_id
+        .filter(|chain_id| *chain_id == 11_155_111)
+        .ok_or_else(|| {
+            "bundled public staking profile must pin Sepolia chainId 11155111".to_string()
+        })?;
+    let exact_tiers = vec![
+        (1, "100000000000000000".to_string()),
+        (8, "800000000000000000".to_string()),
+    ];
+    if staked.tiers.as_ref() != Some(&exact_tiers) {
+        return Err("bundled public staking tiers must equal 1:0.1 ETH and 8:0.8 ETH".into());
+    }
+    let address_is_valid = |value: &Option<String>| {
+        value
+            .as_deref()
+            .and_then(|address| address.strip_prefix("0x"))
+            .is_some_and(|hex_address| {
+                hex_address.len() == 40
+                    && hex::decode(hex_address).is_ok_and(|bytes| bytes.len() == 20)
+            })
+    };
+    if !address_is_valid(&staked.hasher) || !address_is_valid(&staked.withdraw_verifier) {
+        return Err(
+            "bundled public staking profile must pin hasher and withdrawVerifier addresses".into(),
+        );
+    }
+    if staked
+        .deploy_tx
+        .as_deref()
+        .is_none_or(|tx| tx.len() != 66 || !tx.starts_with("0x") || hex::decode(&tx[2..]).is_err())
+    {
+        return Err("bundled public staking profile must pin a deployment transaction".into());
+    }
+    if staked.unbonding_seconds != Some(86_400) || staked.min_unbonding_seconds != Some(3_720) {
+        return Err(
+            "bundled public staking profile must pin 86400/3720-second unbonding safety values"
+                .into(),
+        );
+    }
     let deploy_block = staked
         .deploy_block
         .ok_or_else(|| "bundled staked admission root has no deployBlock".to_string())?;
@@ -276,6 +373,7 @@ fn public_profile_from(deployment: BundledDeployment) -> Result<PublicStakedProf
         rate_policy,
         contract: staked.contract,
         rpc_url: staked.rpc_url,
+        chain_id,
         deploy_block,
         default_limit,
     })
@@ -289,15 +387,7 @@ fn default_public_profile() -> Result<PublicStakedProfile, String> {
 mod default_discovery_tests {
     use serde_json::json;
 
-    #[test]
-    fn bundled_v4_elder_and_signer_are_valid() {
-        let (onion, signer) = super::default_discovery().expect("bundled discovery profile");
-        assert!(onion.ends_with(".onion"));
-        assert_eq!(signer.len(), 64);
-    }
-
-    #[test]
-    fn bundled_profile_schema_parses_public_staking_defaults() {
+    fn public_deployment_fixture() -> serde_json::Value {
         let mut deployment: serde_json::Value =
             serde_json::from_str(super::DEFAULT_DEPLOYMENT).unwrap();
         deployment["ratePolicy"] = json!({
@@ -309,8 +399,33 @@ mod default_discovery_tests {
             "payloadBytesPerSlot": 41_943_040
         });
         deployment["admission"]["defaultPath"] = json!("staked");
-        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
-        deployment["admission"]["roots"]["staked"]["deployBlock"] = json!(12_345);
+        let staked = &mut deployment["admission"]["roots"]["staked"];
+        staked["profile"] = json!("public-stake-v1");
+        staked["chainId"] = json!(11_155_111);
+        staked["deployTx"] = json!(format!("0x{}", "11".repeat(32)));
+        staked["deployBlock"] = json!(12_345);
+        staked["hasher"] = json!("0x1111111111111111111111111111111111111111");
+        staked["withdrawVerifier"] = json!("0x2222222222222222222222222222222222222222");
+        staked["defaultLimit"] = json!(1);
+        staked["tiers"] = json!([
+            { "limit": 1, "bondWei": "100000000000000000" },
+            { "limit": 8, "bondWei": "800000000000000000" }
+        ]);
+        staked["unbondingSeconds"] = json!(86_400);
+        staked["minUnbondingSeconds"] = json!(3_720);
+        deployment
+    }
+
+    #[test]
+    fn bundled_v4_elder_and_signer_are_valid() {
+        let (onion, signer) = super::default_discovery().expect("bundled discovery profile");
+        assert!(onion.ends_with(".onion"));
+        assert_eq!(signer.len(), 64);
+    }
+
+    #[test]
+    fn bundled_profile_schema_parses_public_staking_defaults() {
+        let deployment = public_deployment_fixture();
         let parsed = super::parse_bundled_deployment(&deployment.to_string()).unwrap();
         assert_eq!(parsed.default_path.as_deref(), Some("staked"));
         assert_eq!(parsed.staked.as_ref().unwrap().default_limit, Some(1));
@@ -324,17 +439,18 @@ mod default_discovery_tests {
         let profile = super::public_profile_from(parsed).unwrap();
         assert_eq!(profile.default_path, "staked");
         assert_eq!(profile.default_limit, 1);
+        assert_eq!(profile.chain_id, 11_155_111);
         assert_eq!(profile.deploy_block, 12_345);
         assert_eq!(profile.rate_policy.epoch_seconds, 60);
     }
 
     #[test]
     fn public_profile_rejects_absent_or_different_rate_policy() {
-        let mut deployment: serde_json::Value =
-            serde_json::from_str(super::DEFAULT_DEPLOYMENT).unwrap();
-        deployment["admission"]["defaultPath"] = json!("staked");
-        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
-        deployment["admission"]["roots"]["staked"]["deployBlock"] = json!(12_345);
+        let mut deployment = public_deployment_fixture();
+        deployment.as_object_mut().unwrap().remove("ratePolicy");
+        if let Some(admission) = deployment["admission"].as_object_mut() {
+            admission.remove("ratePolicy");
+        }
 
         let absent = super::parse_bundled_deployment(&deployment.to_string()).unwrap();
         assert!(super::public_profile_from(absent)
@@ -1440,6 +1556,16 @@ mod live {
         }
     }
 
+    fn egress_block_tag_setting(flag: Option<&str>, public_profile: bool) -> String {
+        flag.map(str::to_string).unwrap_or_else(|| {
+            if public_profile {
+                "finalized".into()
+            } else {
+                "latest".into()
+            }
+        })
+    }
+
     // Exact override first; otherwise use the JS-compatible default under the public leaf.
     // Empty/off is rejected: only the explicit slashing-test flag below can bypass safety.
     fn slot_cursor_path(
@@ -1586,32 +1712,19 @@ mod live {
         )
     }
 
-    fn require_public_gateway_rates(
-        gateways: &[shade_tree_proto::GatewayEntry],
+    fn filter_public_gateway_rates(
+        gateways: &mut Vec<shade_tree_proto::GatewayEntry>,
         expected: &shade_tree_proto::CanonicalRate,
-    ) -> Result<(), String> {
-        for gateway in gateways {
-            let actual = gateway
+    ) -> usize {
+        let before = gateways.len();
+        gateways.retain(|gateway| {
+            gateway
                 .caps
                 .as_ref()
-                .and_then(|caps| shade_tree_proto::canonical_caps(caps).rate);
-            match actual {
-                None => {
-                    return Err(format!(
-                        "public-profile-rate-missing:{}: signed caps.rate is required",
-                        gateway.onion.chars().take(12).collect::<String>()
-                    ));
-                }
-                Some(actual) if actual != *expected => {
-                    return Err(format!(
-                        "public-profile-rate-mismatch:{}: signed caps.rate differs from bundled ratePolicy",
-                        gateway.onion.chars().take(12).collect::<String>()
-                    ));
-                }
-                Some(_) => {}
-            }
-        }
-        Ok(())
+                .and_then(|caps| shade_tree_proto::canonical_caps(caps).rate)
+                .is_some_and(|actual| actual == *expected)
+        });
+        before - gateways.len()
     }
 
     // Turn a FRESH directory (a file read, or a bootnode fetch over Tor) into the ordered
@@ -1691,7 +1804,20 @@ mod live {
         // gateway we may dial. Missing/mismatched caps fail here, before identity loading, slot
         // allocation, or proof construction. Custom discovery retains rollout compatibility.
         if let Some(profile) = public_profile {
-            require_public_gateway_rates(&dir.gateways, &profile.rate_policy)?;
+            let before = dir.gateways.len();
+            let removed = filter_public_gateway_rates(&mut dir.gateways, &profile.rate_policy);
+            if dir.gateways.is_empty() {
+                return Err(format!(
+                    "public-profile-rate-unavailable: none of {before} admitted gateway(s) signs the bundled ratePolicy"
+                ));
+            }
+            if removed > 0 {
+                eprintln!(
+                    "egress: public rate filter kept {} of {} gateway(s)",
+                    dir.gateways.len(),
+                    before
+                );
+            }
         }
         let mut rng = mulberry32(default_seed());
         let order = if rotation_spread_enabled(rest) {
@@ -2442,7 +2568,9 @@ mod live {
                 eprintln!("egress (live): invalid --from-block {from:?}");
                 return ExitCode::from(2);
             };
-            let block_tag = take_flag(rest, "--block-tag").unwrap_or_else(|| "latest".into());
+            let block_tag_flag = take_flag(rest, "--block-tag");
+            let block_tag =
+                egress_block_tag_setting(block_tag_flag.as_deref(), plan.profile.is_some());
             let rln_id = take_flag(rest, "--rln-identifier")
                 .unwrap_or_else(|| "1".into())
                 .parse::<u64>()
@@ -2462,7 +2590,7 @@ mod live {
                 .iter()
                 .any(|m| m == &identity.leaf)
             {
-                eprintln!("egress (live): your leaf {}.. is not present in discovered {} ({} live leaves)", identity.leaf.chars().take(12).collect::<String>(), contract, discovered.live_count);
+                eprintln!("egress (live): your leaf {}.. is not present in discovered {} ({} live leaves); for public-stake-v1, wait until the registration block reaches finality", identity.leaf.chars().take(12).collect::<String>(), contract, discovered.live_count);
                 return ExitCode::from(2);
             }
             eprintln!(
@@ -2840,6 +2968,7 @@ mod live {
                 },
                 contract: "0x1111111111111111111111111111111111111111".into(),
                 rpc_url: "https://rpc.example".into(),
+                chain_id: 11_155_111,
                 deploy_block: 12_345,
                 default_limit: 1,
             }
@@ -2888,6 +3017,13 @@ mod live {
                 member_limit_setting(None, None, None, None),
                 Ok(shade_tree_egress::slot::DEFAULT_LIMIT)
             );
+        }
+
+        #[test]
+        fn only_public_egress_defaults_to_finalized_membership_reads() {
+            assert_eq!(egress_block_tag_setting(None, true), "finalized");
+            assert_eq!(egress_block_tag_setting(None, false), "latest");
+            assert_eq!(egress_block_tag_setting(Some("safe"), true), "safe");
         }
 
         #[test]
@@ -2962,26 +3098,34 @@ mod live {
         }
 
         #[test]
-        fn public_gateway_rate_is_required_and_must_match() {
+        fn public_gateway_rate_filters_bad_nodes_without_bricking_the_fleet() {
             let profile = public_profile();
             let matching = gateway_with_rate(Some(public_rate()));
-            require_public_gateway_rates(&[matching], &profile.rate_policy).unwrap();
-
             let missing = gateway_with_rate(None);
-            assert!(
-                require_public_gateway_rates(&[missing], &profile.rate_policy)
-                    .unwrap_err()
-                    .contains("public-profile-rate-missing")
-            );
-
             let mut different = public_rate();
             different.epoch_seconds = 120;
             let mismatch = gateway_with_rate(Some(different));
-            assert!(
-                require_public_gateway_rates(&[mismatch], &profile.rate_policy)
-                    .unwrap_err()
-                    .contains("public-profile-rate-mismatch")
+            let mut mixed = vec![missing, matching.clone(), mismatch];
+            assert_eq!(
+                filter_public_gateway_rates(&mut mixed, &profile.rate_policy),
+                2
             );
+            assert_eq!(mixed.len(), 1);
+            assert_eq!(mixed[0].onion, matching.onion);
+            assert_eq!(
+                mixed[0]
+                    .caps
+                    .as_ref()
+                    .and_then(|caps| shade_tree_proto::canonical_caps(caps).rate),
+                Some(profile.rate_policy.clone())
+            );
+
+            let mut unavailable = vec![gateway_with_rate(None)];
+            assert_eq!(
+                filter_public_gateway_rates(&mut unavailable, &profile.rate_policy),
+                1
+            );
+            assert!(unavailable.is_empty());
         }
 
         #[test]

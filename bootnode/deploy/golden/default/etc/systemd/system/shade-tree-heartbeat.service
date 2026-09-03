@@ -8,6 +8,10 @@ Environment=SHADE_TREE_BOOTNODE_ONION=bootnodeplaceholderplaceholderplaceholderp
 Environment=SHADE_TREE_GW_IDENTITY=/opt/shade-tree/deploy-state/gateway-hs/identity.local.json
 Environment=SHADE_TREE_TOR_PORT=9050
 Environment=SHADE_TREE_ADMIT=invited
+Environment=SHADE_TREE_EPOCH_SECONDS=120
+Environment=SHADE_TREE_TIERS=8
+Environment=SHADE_TREE_ROOT_FRESHNESS_SECONDS=120
+Environment=SHADE_TREE_TUNNEL_MAX_PAYLOAD_BYTES=41943040
 Environment=SHADE_TREE_HEARTBEAT_METRICS_PORT=9103
 Environment=SHADE_TREE_LOG_LEVEL=info
 Environment=SHADE_TREE_LOG_FORMAT=json

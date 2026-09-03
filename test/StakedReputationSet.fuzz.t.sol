@@ -156,30 +156,37 @@ contract StakedReputationSetFuzzTest is FuzzBase {
         assertEq(address(set).balance, BOND);
     }
 
-    // ---- tiers (T-FEAT-8b): a fresh two-tier set per test ---------------------
+    // ---- public tiers (T-FEAT-8b): a fresh 0.1/0.8 ETH set per test -----------
 
-    uint256 constant BOND32 = 4 * BOND;
+    uint256 constant PUBLIC_BOND = 0.1 ether;
+    uint256 constant PUBLIC_DEFAULT_BOND = 0.8 ether;
 
     function _tieredSet() internal returns (StakedReputationSet t) {
         uint256[] memory l = new uint256[](1);
         uint256[] memory b = new uint256[](1);
-        l[0] = 32;
-        b[0] = BOND32;
+        l[0] = 1;
+        b[0] = PUBLIC_BOND;
         t = new StakedReputationSet(
-            BOND, UNBONDING, MIN_UNBONDING, IWithdrawVerifier(address(verifier)), ICommitmentHasher(address(hasher)), l, b
+            PUBLIC_DEFAULT_BOND,
+            UNBONDING,
+            MIN_UNBONDING,
+            IWithdrawVerifier(address(verifier)),
+            ICommitmentHasher(address(hasher)),
+            l,
+            b
         );
     }
 
     /// For ANY secret and either admitted tier: only exactly bondFor(limit) admits, the
     /// recorded limit is the one staked, and the leaf is the tiered hasher's output.
-    function testFuzz_register_tierBondAdmits(uint256 rawSecret, bool tier32, uint256 rawWei) public {
+    function testFuzz_register_tierBondAdmits(uint256 rawSecret, bool tierOne, uint256 rawWei) public {
         StakedReputationSet t = _tieredSet();
         uint256 secret = _secret(rawSecret);
-        uint256 limit = tier32 ? 32 : 8;
+        uint256 limit = tierOne ? 1 : 8;
         uint256 due = t.bondFor(limit);
         uint256 commit = hasher.commitmentOf(secret, limit);
 
-        uint256 wrongWei = _bound(rawWei, 0, 10 * BOND);
+        uint256 wrongWei = _bound(rawWei, 0, 10 * PUBLIC_DEFAULT_BOND);
         vmf.assume(wrongWei != due);
         vm.expectRevert(StakedReputationSet.BadBond.selector);
         t.register{value: wrongWei}(commit, limit);
@@ -192,10 +199,12 @@ contract StakedReputationSetFuzzTest is FuzzBase {
 
     /// For ANY secret and tier: the slash succeeds ONLY at the recorded limit (any other
     /// admitted-or-not limit reverts and changes nothing) and pays exactly that tier's bond.
-    function testFuzz_slash_onlyAtRecordedLimit(uint256 rawSecret, bool tier32, uint256 rawOther, bool exiting) public {
+    function testFuzz_slash_onlyAtRecordedLimit(uint256 rawSecret, bool tierOne, uint256 rawOther, bool exiting)
+        public
+    {
         StakedReputationSet t = _tieredSet();
         uint256 secret = _secret(rawSecret);
-        uint256 limit = tier32 ? 32 : 8;
+        uint256 limit = tierOne ? 1 : 8;
         uint256 due = t.bondFor(limit);
         uint256 commit = hasher.commitmentOf(secret, limit);
         t.register{value: due}(commit, limit);

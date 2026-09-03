@@ -8,7 +8,7 @@ pragma solidity ^0.8.24;
 //   * activeCount always equals the number of currently-active members;
 //   * the contract's ETH balance always equals the sum of live bonds — no wei created or
 //     destroyed across the register/exit/withdraw/slash lifecycle. T-FEAT-8b: the pool mixes
-//     tier-8 (BOND) and tier-32 (4*BOND) members, so this now also proves per-tier bond
+//     public tier-1 (0.1 ether) and tier-8 (0.8 ether) members, so this now also proves per-tier bond
 //     accounting (register takes, slash/withdraw pay, exactly bondFor(limit)) and that a
 //     member's recorded limit is the only limit its slash succeeds at.
 //
@@ -25,20 +25,20 @@ contract SetHandler is Cheats {
     RateCommitmentHasher public hasher;
     MockWithdrawVerifier public verifier;
 
-    uint256 public constant BOND = 0.01 ether;
-    uint256 public constant BOND32 = 4 * BOND; // tier-32 bond
+    uint256 public constant BOND = 0.8 ether; // public profile's default tier-8 bond
+    uint256 public constant BOND1 = 0.1 ether;
     uint256 public constant UNBONDING = 300;
     uint256 public constant MIN_UNBONDING = 270;
 
     address constant SINK = address(0x5151); // EOA payout sink (withdraw recipient + slash receiver)
 
     // Fixed pool of identity secrets and their pinned rate commitments (the tree leaves).
-    // Even indices are tier-8 leaves, odd indices tier-32 leaves (T-FEAT-8b).
+    // Even indices are tier-1 leaves, odd indices tier-8 leaves (public-stake-v1).
     uint256[6] public secrets;
     uint256[6] public commits;
     uint256[6] public limits;
 
-    uint256 public ghostActive;  // active members
+    uint256 public ghostActive; // active members
     uint256 public ghostLiveWei; // bond wei still held (active or exiting), summed per tier
 
     constructor() {
@@ -56,7 +56,7 @@ contract SetHandler is Cheats {
         for (uint256 i = 0; i < 6; i++) {
             uint256 secret = 1_000 + i; // distinct, small secrets => distinct leaves
             secrets[i] = secret;
-            limits[i] = (i % 2 == 0) ? 8 : 32;
+            limits[i] = (i % 2 == 0) ? 1 : 8;
             commits[i] = hasher.commitmentOf(secret, limits[i]);
         }
         vm.deal(address(this), 1_000_000 ether);
@@ -64,12 +64,12 @@ contract SetHandler is Cheats {
 
     function _tierLimits() internal pure returns (uint256[] memory l) {
         l = new uint256[](1);
-        l[0] = 32;
+        l[0] = 1;
     }
 
     function _tierBonds() internal pure returns (uint256[] memory b) {
         b = new uint256[](1);
-        b[0] = BOND32;
+        b[0] = BOND1;
     }
 
     function _pick(uint256 seed) internal view returns (uint256 secret, uint256 commit, uint256 limit) {
@@ -118,8 +118,10 @@ contract SetHandler is Cheats {
         if (bond == 0) return;
 
         // The OTHER tier's claim must always revert (wrong-limit slash) and change nothing.
-        uint256 other = limit == 8 ? 32 : 8;
-        (bool ok,) = address(set).call(abi.encodeWithSignature("slash(uint256,uint256,uint256,address)", commit, secret, other, SINK));
+        uint256 other = limit == 1 ? 8 : 1;
+        (bool ok,) = address(set).call(
+            abi.encodeWithSignature("slash(uint256,uint256,uint256,address)", commit, secret, other, SINK)
+        );
         require(!ok, "wrong-limit slash must revert");
 
         bool wasActive = exitAt == 0;
@@ -160,20 +162,12 @@ contract StakedReputationSetInvariantTest is Cheats {
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 64
     function invariant_activeCountMatchesActiveMembers() public view {
-        assertEq(
-            handler.set().activeCount(),
-            handler.ghostActive(),
-            "activeCount != number of active members"
-        );
+        assertEq(handler.set().activeCount(), handler.ghostActive(), "activeCount != number of active members");
     }
 
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 64
     function invariant_ethEqualsSumOfLiveBonds() public view {
-        assertEq(
-            address(handler.set()).balance,
-            handler.ghostLiveWei(),
-            "contract ETH != sum of live bonds (per tier)"
-        );
+        assertEq(address(handler.set()).balance, handler.ghostLiveWei(), "contract ETH != sum of live bonds (per tier)");
     }
 }

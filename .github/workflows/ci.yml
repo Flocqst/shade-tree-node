@@ -92,6 +92,9 @@ jobs:
       - name: Run contract tests
         run: forge test
 
+      - name: Verify public staking runtime manifest
+        run: node deploy/v4/check-bytecode-manifest.mjs
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
