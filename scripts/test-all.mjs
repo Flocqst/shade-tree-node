@@ -119,7 +119,7 @@ if (fast) {
   console.log(`\n=== foundry contract suite ===\n  SKIP  fast lane (SHADE_TREE_FAST) -- run full 'npm test' for contracts`);
 } else if (!noContracts) {
   console.log(`\n=== foundry contract suite ===`);
-  const forge = spawnSync("forge", ["test"], { cwd: ROOT, encoding: "utf8" });
+  const forge = spawnSync("forge", ["test", "--libraries", "contracts/PoseidonT2.sol:PoseidonT2:0xB511DF6e75870247911cbd2EFC5830928AE49152", "--libraries", "contracts/PoseidonT3.sol:PoseidonT3:0x16d11F36b218eb7CfC5f087d9910AC35C8089aff"], { cwd: ROOT, encoding: "utf8" });
   if (forge.error && forge.error.code === "ENOENT") {
     console.log("  SKIP  forge not installed (run with a foundry toolchain, or --no-contracts)");
   } else {

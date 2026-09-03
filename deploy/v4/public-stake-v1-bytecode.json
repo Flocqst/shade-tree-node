@@ -2,26 +2,30 @@
   "schemaVersion": 1,
   "profile": "public-stake-v1",
   "compiler": { "solc": "0.8.24", "optimizer": true, "runs": 200 },
+  "libraryAddresses": {
+    "PoseidonT2": "0xB511DF6e75870247911cbd2EFC5830928AE49152",
+    "PoseidonT3": "0x16d11F36b218eb7CfC5f087d9910AC35C8089aff"
+  },
   "contracts": {
     "staking": {
       "artifact": "StakedReputationSet.sol/StakedReputationSet.json",
       "runtimeBytes": 5149,
-      "normalizedSha256": "8cc3f9006a42bdd11cf6c4c507b7c9352924678c5ad7af2da6d559604ed2b3d9",
+      "normalizedSha256": "dff3ad6ede9a451f3119e0ec1cbd0e320cfe565396b1834cd838b0ce681ed01e",
       "zeroRanges": [
         { "start": 374, "length": 32 }, { "start": 821, "length": 32 },
         { "start": 987, "length": 32 }, { "start": 1162, "length": 32 },
         { "start": 1525, "length": 32 }, { "start": 1723, "length": 32 },
         { "start": 2286, "length": 32 }, { "start": 2585, "length": 32 },
         { "start": 2874, "length": 32 }, { "start": 3885, "length": 32 },
-        { "start": 4087, "length": 20 }
+        { "start": 4087, "length": 20 }, { "start": 5096, "length": 53 }
       ],
       "links": { "PoseidonT3": [{ "start": 4087, "length": 20 }] }
     },
     "hasher": {
       "artifact": "RateCommitmentHasher.sol/RateCommitmentHasher.json",
       "runtimeBytes": 788,
-      "normalizedSha256": "67eab8f5e94528cbf773a8441cb286b42cdbf47cfe08af2fd2133012d12383ab",
-      "zeroRanges": [{ "start": 312, "length": 20 }, { "start": 450, "length": 20 }],
+      "normalizedSha256": "3e994187b1fd8ab1bda6c492d90676d11a5b72027854a58bb43e14d5b99beda0",
+      "zeroRanges": [{ "start": 312, "length": 20 }, { "start": 450, "length": 20 }, { "start": 735, "length": 53 }],
       "links": {
         "PoseidonT2": [{ "start": 312, "length": 20 }],
         "PoseidonT3": [{ "start": 450, "length": 20 }]
@@ -30,29 +34,29 @@
     "withdrawVerifier": {
       "artifact": "WithdrawVerifier.sol/WithdrawVerifier.json",
       "runtimeBytes": 1458,
-      "normalizedSha256": "feab6669989e5ec4b2fe94f40f350cf381d410d69e14fd54ddf43017466c95a6",
-      "zeroRanges": [{ "start": 141, "length": 32 }, { "start": 373, "length": 32 }, { "start": 548, "length": 20 }],
+      "normalizedSha256": "9567136060539b3677f6fc5f565839fc459b6bd183ada91bad5b20254f7e650f",
+      "zeroRanges": [{ "start": 141, "length": 32 }, { "start": 373, "length": 32 }, { "start": 548, "length": 20 }, { "start": 1405, "length": 53 }],
       "links": { "PoseidonT3": [{ "start": 548, "length": 20 }] }
     },
     "groth16": {
       "artifact": "WithdrawGroth16Verifier.sol/WithdrawGroth16Verifier.json",
       "runtimeBytes": 1439,
-      "normalizedSha256": "2ef60dfc655e82ba2a2911eca5ed8779a078e8609d7a60058c3742eb36be9c37",
-      "zeroRanges": []
+      "normalizedSha256": "bbd87c35664965b741d426b1b9728bbdc6606bd7f374dc3e7f383b22597f58b6",
+      "zeroRanges": [{ "start": 1386, "length": 53 }]
     }
   },
   "libraries": {
     "PoseidonT2": {
       "artifact": "PoseidonT2.sol/PoseidonT2.json",
       "runtimeBytes": 10495,
-      "normalizedSha256": "f1c315806f55988c5451f978822aef58986c74374cfe8697acfa6a0b50b6708c",
-      "zeroRanges": []
+      "normalizedSha256": "a811d3fd822a61f1a854c681b46eb36d4eecff146524562aacf3e0c849c05d88",
+      "zeroRanges": [{ "start": 1, "length": 20 }, { "start": 10442, "length": 53 }]
     },
     "PoseidonT3": {
       "artifact": "PoseidonT3.sol/PoseidonT3.json",
       "runtimeBytes": 16458,
-      "normalizedSha256": "97323ae4aca850bb8ff5f07b27cbdb990c346d02f74c07fa079f2b6a813fd5f4",
-      "zeroRanges": []
+      "normalizedSha256": "ef0cc3c04591e5eb3463a384dbe2126bed60cb20b04fcb36ee751bc931759993",
+      "zeroRanges": [{ "start": 1, "length": 20 }, { "start": 16405, "length": 53 }]
     }
   }
 }
