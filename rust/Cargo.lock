@@ -5491,6 +5491,7 @@ name = "shade-tree-client"
 version = "0.4.1"
 dependencies = [
  "base64",
+ "ethers-core",
  "getrandom 0.3.4",
  "hex",
  "libc",

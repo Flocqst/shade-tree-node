@@ -503,7 +503,7 @@ pub fn cmd_enroll(args: &[String]) -> ExitCode {
                     if count == 1 { "" } else { "s" }
                 );
             } else {
-                eprintln!("  submit the stdout leaf to your Grove operator; no local member set was changed");
+                eprintln!("  stake the stdout leaf with `shade-tree register-member`, or submit it to your Grove operator; no local member set was changed");
             }
             ExitCode::SUCCESS
         }

@@ -78,6 +78,7 @@ shade-tree verify-receipt …
 shade-tree proxy-token …       # requires --features live; generates local Proxy auth
 shade-tree enroll …            # requires --features live; creates a new identity
 shade-tree identity …          # requires --features live; derives from an existing secret
+shade-tree register-member …   # requires --features live; stakes a public leaf on chain
 shade-tree leaves …            # requires --features live; reconstructs an on-chain set
 shade-tree egress …            # requires --features live
 shade-tree proxy …             # requires --features live
@@ -119,6 +120,25 @@ transaction; its optional `--members` flag updates only a local version-2 demo
 set. Use `shade-tree identity` only when deterministically deriving
 from an existing secret. In both cases, `identity.json` contains the member
 secret and must remain local.
+
+The live Rust binary can stake that public leaf without Node.js. It defaults to
+the current bundled Sepolia staking contract and RPC, reads the exact tier bond
+from the contract, signs locally, broadcasts only the signed EIP-1559
+transaction, and waits for a successful receipt:
+
+```sh
+leaf="$(shade-tree enroll --limit 8 --out identity.json)"
+chmod 600 funded-sepolia.key
+shade-tree register-member "$leaf" --limit 8 --key-file funded-sepolia.key
+```
+
+`SHADE_TREE_REGISTER_KEY` is also supported for parity with the JavaScript CLI;
+no raw-key command-line flag is accepted. A key file must be owner-only on Unix,
+and a missing key fails before the first public RPC request. Explicit
+`--contract`/`--rpc-url` flags (or `SHADE_TREE_GROUP_CONTRACT`/
+`SHADE_TREE_RPC_URL`) select another Grove. If receipt lookup fails after
+broadcast, the command retains the locally computed transaction hash in its
+error and requires checking that hash before retrying.
 
 With no transport flag, dynamic discovery uses the current v4 Sepolia Elder and
 signer embedded from `network/sepolia/deployment.json`. Override it with

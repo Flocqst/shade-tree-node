@@ -22,7 +22,7 @@ path = "src/main.rs"
 # (`--circuits` becomes optional; omit it to use the embedded artifacts). The ~8MB of
 # artifacts land only in the `live` build — the default deterministic binary never pulls
 # shade-tree-rln at all, so it stays small.
-live = ["dep:shade-tree-rln", "shade-tree-rln/embedded-artifacts", "dep:shade-tree-egress", "dep:tokio", "dep:reqwest", "dep:num-bigint", "dep:getrandom"]
+live = ["dep:shade-tree-rln", "shade-tree-rln/embedded-artifacts", "dep:shade-tree-egress", "dep:tokio", "dep:reqwest", "dep:num-bigint", "dep:getrandom", "dep:ethers-core"]
 
 [dependencies]
 shade-tree-proto = { path = "../shade-tree-proto" }
@@ -60,6 +60,10 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 num-bigint = { version = "0.4", optional = true }
 getrandom = { version = "0.3", optional = true }
+# Native member registration signs EIP-1559 transactions locally. This crate is
+# live-only and already sits in the RLN prover's dependency graph, so the fast
+# deterministic build remains unchanged.
+ethers-core = { version = "2.0.14", default-features = false, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
