@@ -119,7 +119,10 @@ process. `enroll` does not change a remote member root or submit an on-chain
 transaction; its optional `--members` flag updates only a local version-2 demo
 set. Use `shade-tree identity` only when deterministically deriving
 from an existing secret. In both cases, `identity.json` contains the member
-secret and must remain local.
+secret and must remain local. Omitting `--limit` uses the bundled staked
+`defaultLimit` (1 in the public profile); `SHADE_TREE_LIMIT` or an explicit
+flag selects a custom tier. New identity files always record the exact tier so
+their leaves cannot later be interpreted under a different default.
 
 The live Rust binary can stake that public leaf without Node.js. It defaults to
 the current bundled Sepolia staking contract and RPC, reads the exact tier bond

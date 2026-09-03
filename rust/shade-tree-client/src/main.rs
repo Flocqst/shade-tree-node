@@ -36,6 +36,7 @@ mod slotcursor;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_CLIENT_NETWORK: &str = "sepolia";
 const DEFAULT_DEPLOYMENT: &str = include_str!("../../../network/sepolia/deployment.json");
+const LEGACY_DEFAULT_LIMIT: u64 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BundledStakedRoot {
@@ -207,6 +208,24 @@ fn default_deployment() -> Result<BundledDeployment, String> {
     parse_bundled_deployment(DEFAULT_DEPLOYMENT)
 }
 
+fn staked_default_limit_from(deployment: &BundledDeployment) -> Result<u64, String> {
+    let limit = deployment
+        .staked
+        .as_ref()
+        .ok_or_else(|| "bundled deployment has no live staked admission root".to_string())?
+        .default_limit
+        .unwrap_or(LEGACY_DEFAULT_LIMIT);
+    if !(1..=u16::MAX as u64).contains(&limit) {
+        return Err("bundled staked admission root has an invalid defaultLimit".into());
+    }
+    Ok(limit)
+}
+
+fn default_staked_limit() -> Result<u64, String> {
+    let deployment = default_deployment()?;
+    staked_default_limit_from(&deployment)
+}
+
 fn default_discovery() -> Result<(String, String), String> {
     let deployment = default_deployment()?;
     Ok((deployment.elder_onion, deployment.canopy_signer))
@@ -334,6 +353,20 @@ mod default_discovery_tests {
         assert!(super::public_profile_from(different)
             .unwrap_err()
             .contains("does not match"));
+    }
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn identity_creation_uses_public_default_with_flag_then_env_precedence() {
+        assert_eq!(super::identity_creation_limit_setting(None, None, 1), Ok(1));
+        assert_eq!(
+            super::identity_creation_limit_setting(None, Some("32"), 1),
+            Ok(32)
+        );
+        assert_eq!(
+            super::identity_creation_limit_setting(Some("8"), Some("32"), 1),
+            Ok(8)
+        );
     }
 }
 
@@ -551,7 +584,9 @@ SUBCOMMANDS:
         Generate a new member identity entirely in Rust. The owner-only identity
         file stays local; stdout contains only its public enrollment leaf for a
         Grove operator. --members explicitly adds the leaf to a local version-2
-        demo set. Existing identity files are never overwritten. Requires live.
+        demo set. The default tier is the bundled staked defaultLimit (public: 1);
+        --limit / SHADE_TREE_LIMIT wins for a custom Grove. Existing identity files
+        are never overwritten. Requires live.
 
     proxy-token
         Print a fresh 256-bit URL-safe token for `proxy` and `run`. Requires live.
@@ -560,7 +595,8 @@ SUBCOMMANDS:
         Derive the Rust client's Semaphore-v3 identitySecret and RLN rate-commitment
         leaf natively (no Node.js setup step). Secret fallback order is
         --secret, --secret-file, SHADE_TREE_SECRET, then ./.secret. --out is
-        written owner-only; otherwise the identity JSON is printed to stdout.
+        written owner-only; otherwise the identity JSON is printed to stdout. Tier
+        precedence is --limit, SHADE_TREE_LIMIT, then bundled staked defaultLimit.
         Requires a --features live build.
 
     register-member <commitment> [--limit <n>] [--contract <0xaddress>]
@@ -922,6 +958,25 @@ fn cmd_verify_receipt(args: &[String]) -> ExitCode {
     }
 }
 
+#[cfg(feature = "live")]
+fn identity_creation_limit_setting(
+    flag: Option<&str>,
+    env: Option<&str>,
+    bundled_default: u64,
+) -> Result<u64, String> {
+    let raw = flag.or(env);
+    let limit = match raw {
+        Some(value) => value
+            .parse::<u64>()
+            .map_err(|_| "limit must be an integer".to_string())?,
+        None => bundled_default,
+    };
+    if !(1..=u16::MAX as u64).contains(&limit) {
+        return Err(format!("limit must be in 1..={}", u16::MAX));
+    }
+    Ok(limit)
+}
+
 fn cmd_identity(args: &[String]) -> ExitCode {
     #[cfg(feature = "live")]
     {
@@ -958,15 +1013,25 @@ fn cmd_identity(args: &[String]) -> ExitCode {
                 }
             }
         };
-        let limit = match take_flag(args, "--limit") {
-            Some(v) => match v.parse::<u64>() {
-                Ok(n) => n,
-                Err(_) => {
-                    eprintln!("identity: --limit must be an integer");
-                    return ExitCode::from(2);
-                }
-            },
-            None => shade_tree_egress::slot::DEFAULT_LIMIT,
+        let limit_flag = take_flag(args, "--limit");
+        let limit_env = std::env::var("SHADE_TREE_LIMIT").ok();
+        let bundled_limit = match default_staked_limit() {
+            Ok(limit) => limit,
+            Err(error) => {
+                eprintln!("identity: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        let limit = match identity_creation_limit_setting(
+            limit_flag.as_deref(),
+            limit_env.as_deref(),
+            bundled_limit,
+        ) {
+            Ok(limit) => limit,
+            Err(error) => {
+                eprintln!("identity: {error}");
+                return ExitCode::from(2);
+            }
         };
         let material = match shade_tree_rln::identity::derive_identity(&secret, limit) {
             Ok(value) => value,
@@ -978,7 +1043,9 @@ fn cmd_identity(args: &[String]) -> ExitCode {
         let output = IdentityOutput {
             identity_secret: &material.identity_secret,
             leaf: &material.leaf,
-            limit: (limit != shade_tree_egress::slot::DEFAULT_LIMIT).then_some(limit),
+            // Always persist the tier: the same identity can later be used with
+            // either the bundled limit-1 profile or a custom limit-8 Grove.
+            limit: Some(limit),
         };
         let mut body = serde_json::to_string_pretty(&output).expect("serialize identity");
         body.push('\n');

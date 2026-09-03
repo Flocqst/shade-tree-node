@@ -16,7 +16,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const DEFAULT_LIMIT: u64 = 8;
 const DEFAULT_IDENTITY_PATH: &str = "identity.json";
 const BN254_FIELD: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
@@ -45,7 +44,9 @@ The identity file is secret bearer material and is created owner-only (mode
 0600 on Unix; a protected owner DACL on Windows). Its public leaf is printed
 alone on stdout so it can be sent to a Grove operator.
 Pass --members only for a local/demo version-2 membership set. Existing identity
-files are never overwritten; choose a new path or remove the old credential first."#;
+files are never overwritten; choose a new path or remove the old credential first.
+The tier defaults to the bundled staked root's defaultLimit (1 for the public
+Grove); --limit or SHADE_TREE_LIMIT overrides it."#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnrollOptions {
@@ -78,12 +79,17 @@ fn flag_value(args: &[String], index: &mut usize, name: &str) -> Result<String, 
         .ok_or_else(|| format!("{name} needs a value"))
 }
 
-fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
+fn parse_args_with_defaults(
+    args: &[String],
+    env_limit: Option<&str>,
+    bundled_limit: u64,
+) -> Result<Option<EnrollOptions>, String> {
     let mut options = EnrollOptions {
-        limit: DEFAULT_LIMIT,
+        limit: bundled_limit,
         out: PathBuf::from(DEFAULT_IDENTITY_PATH),
         members: None,
     };
+    let mut cli_limit = false;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -101,6 +107,7 @@ fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
                         options.limit = value
                             .parse::<u64>()
                             .map_err(|_| "--limit must be an integer".to_string())?;
+                        cli_limit = true;
                     }
                     "--out" => options.out = PathBuf::from(value),
                     "--members" => options.members = Some(PathBuf::from(value)),
@@ -111,6 +118,7 @@ fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
                 options.limit = flag_value(args, &mut index, "--limit")?
                     .parse::<u64>()
                     .map_err(|_| "--limit must be an integer".to_string())?;
+                cli_limit = true;
             }
             _ if arg.starts_with("--out=") => {
                 options.out = PathBuf::from(flag_value(args, &mut index, "--out")?);
@@ -122,6 +130,10 @@ fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
         }
         index += 1;
     }
+    if !cli_limit {
+        options.limit = crate::identity_creation_limit_setting(None, env_limit, options.limit)
+            .map_err(|error| format!("SHADE_TREE_LIMIT: {error}"))?;
+    }
     if options.limit == 0 || options.limit > u16::MAX as u64 {
         return Err(format!("--limit must be in 1..={}", u16::MAX));
     }
@@ -129,6 +141,11 @@ fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
         return Err("--out cannot be empty".to_string());
     }
     Ok(Some(options))
+}
+
+fn parse_args(args: &[String]) -> Result<Option<EnrollOptions>, String> {
+    let env_limit = std::env::var("SHADE_TREE_LIMIT").ok();
+    parse_args_with_defaults(args, env_limit.as_deref(), crate::default_staked_limit()?)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -329,7 +346,9 @@ fn write_identity(
     let output = IdentityOutput {
         identity_secret: &material.identity_secret,
         leaf: &material.leaf,
-        limit: (material.limit != DEFAULT_LIMIT).then_some(material.limit),
+        // Persist the exact tier so moving this identity between the public
+        // profile and a custom Grove never silently changes its committed K.
+        limit: Some(material.limit),
     };
     let mut body = serde_json::to_string_pretty(&output).expect("serialize identity");
     body.push('\n');
@@ -617,6 +636,59 @@ mod tests {
         assert_eq!(parsed.members, None);
         assert!(parse_args(&["--limit=0".into()]).is_err());
         assert!(parse_args(&["surprise".into()]).is_err());
+    }
+
+    #[test]
+    fn public_default_and_explicit_limit_precedence_are_unambiguous() {
+        assert_eq!(
+            parse_args_with_defaults(&[], None, 1)
+                .unwrap()
+                .unwrap()
+                .limit,
+            1
+        );
+        assert_eq!(
+            parse_args_with_defaults(&[], Some("32"), 1)
+                .unwrap()
+                .unwrap()
+                .limit,
+            32
+        );
+        assert_eq!(
+            parse_args_with_defaults(&["--limit=8".into()], Some("32"), 1)
+                .unwrap()
+                .unwrap()
+                .limit,
+            8
+        );
+    }
+
+    #[test]
+    fn enroll_and_register_defaults_commit_to_the_same_public_limit() {
+        let mut deployment: Value = serde_json::from_str(crate::DEFAULT_DEPLOYMENT).unwrap();
+        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
+        let parsed = crate::parse_bundled_deployment(&deployment.to_string()).unwrap();
+        let (_, _, registration_limit) =
+            crate::register::registration_defaults_from(parsed).unwrap();
+
+        let dir = test_dir("public-default");
+        let mut options = parse_args_with_defaults(&[], None, registration_limit)
+            .unwrap()
+            .unwrap();
+        options.out = dir.join("identity.json");
+        let secret = format!("0x{}", "5a".repeat(32));
+        let (enrolled_leaf, _) = enroll_with_secret(&options, &secret).unwrap();
+        let registered_tier_leaf =
+            shade_tree_rln::identity::derive_identity(&secret, registration_limit)
+                .unwrap()
+                .leaf;
+        assert_eq!(options.limit, 1);
+        assert_eq!(registration_limit, 1);
+        assert_eq!(enrolled_leaf, registered_tier_leaf);
+        let identity: Value =
+            serde_json::from_str(&fs::read_to_string(&options.out).unwrap()).unwrap();
+        assert_eq!(identity["limit"], 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

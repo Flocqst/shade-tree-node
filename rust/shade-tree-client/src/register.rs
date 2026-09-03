@@ -169,16 +169,13 @@ fn parse_args(args: &[String]) -> Result<Option<CliOptions>, String> {
     Ok(Some(out))
 }
 
-fn registration_defaults_from(
+pub(crate) fn registration_defaults_from(
     deployment: crate::BundledDeployment,
 ) -> Result<(String, String, u64), String> {
+    let default_limit = crate::staked_default_limit_from(&deployment)?;
     let staked = deployment
         .staked
         .ok_or_else(|| "bundled deployment has no live staked admission root".to_string())?;
-    let default_limit = staked.default_limit.unwrap_or(DEFAULT_LIMIT);
-    if !(1..=u16::MAX as u64).contains(&default_limit) {
-        return Err("bundled staked admission root has an invalid defaultLimit".into());
-    }
     Ok((staked.contract, staked.rpc_url, default_limit))
 }
 
