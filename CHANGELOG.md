@@ -24,11 +24,17 @@ reservation system.
   Canopy signer, staking contract, RPC, deployment block, tier, and rate policy.
 - Added onion-signed node rate capabilities and fail-closed client matching for
   the 60-second epoch, 60-second root lifetime, and 40 MiB payload ceiling.
+- Added a pinned runtime-bytecode manifest for the staking set, commitment
+  hasher, exit wrapper, Groth16 verifier, and linked Poseidon libraries; both
+  local release tests and live deployment preflight reject executable drift.
 
 ### Fixed
 
 - Expire superseded membership roots and last-known-good RPC snapshots by wall
   clock even when no later membership event occurs.
+- Reset node and light-client root history after a stale observation gap, and
+  retain only the current root during RPC fallback, so recovery cannot make an
+  old withdrawn-member root fresh again.
 - Keep identity enrollment, registration, and egress on the same explicit tier
   in both implementations, including RPC-only overrides.
 - Sort contract tier tables globally so the new limit-1 tier precedes limit 8.

@@ -90,8 +90,11 @@ jobs:
           version: stable
 
       - name: Run contract tests
+        run: forge test
+
+      - name: Build source-bound Sepolia runtime
         run: >-
-          forge test
+          forge build --force
           --libraries contracts/PoseidonT2.sol:PoseidonT2:0xB511DF6e75870247911cbd2EFC5830928AE49152
           --libraries contracts/PoseidonT3.sol:PoseidonT3:0x16d11F36b218eb7CfC5f087d9910AC35C8089aff
 

@@ -101,6 +101,9 @@ function clientHarness(modes, { ackTimeoutMs = 15, ackMaxBytes = 32 } = {}) {
   };
   const client = new ShadeTreeClient({
     secret: "test-secret",
+    // This harness makes two independent tunnels to test learned per-onion capabilities.
+    // Keep that fixture explicit now that the bundled live public profile correctly defaults to 1.
+    limit: 2,
     socksClient: fakeSocks,
     socksIsolation: false,
     dialAttempts: 1,

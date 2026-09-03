@@ -9,11 +9,12 @@
   "ratePolicy": {
     "scope": "grove-v4",
     "window": "fixed",
-    "epochSeconds": 120,
+    "epochSeconds": 60,
     "previousEpochsAccepted": 1,
-    "rootFreshnessSeconds": 120,
+    "rootFreshnessSeconds": 60,
     "payloadBytesPerSlot": 41943040,
-    "slashConfirmationSeconds": 3600
+    "slashConfirmationSeconds": 3600,
+    "crossGateway": "best-effort-fleet-tally"
   },
   "security": {
     "proofArtifacts": "untrusted-testnet",
@@ -23,15 +24,15 @@
   "services": {
     "elder": {
       "repository": "https://github.com/dmarzzz/shade-tree-node.git",
-      "commit": "43679a74167dfcdc16b65bc6ac8dff51901f8b58"
+      "commit": "37a0f16351da8aa0377364221e3964233730eef4"
     },
     "node": {
       "repository": "https://github.com/dmarzzz/shade-tree-node.git",
-      "commit": "43679a74167dfcdc16b65bc6ac8dff51901f8b58"
+      "commit": "37a0f16351da8aa0377364221e3964233730eef4"
     },
     "heartbeat": {
       "repository": "https://github.com/dmarzzz/shade-tree-node.git",
-      "commit": "43679a74167dfcdc16b65bc6ac8dff51901f8b58"
+      "commit": "37a0f16351da8aa0377364221e3964233730eef4"
     }
   },
   "elder": {
@@ -41,7 +42,7 @@
     "gatewayRegistry": "0x94ECeD0C1c7a8793a5c901c8C1995C8E7039A868"
   },
   "admission": {
-    "defaultPath": "invited",
+    "defaultPath": "staked",
     "paths": [
       "invited",
       "staked"
@@ -51,9 +52,21 @@
         "membersSha256": "809d8fc762937c234650046bfdfa6cc6d9641e42762430a1961c4b8c7ab10898"
       },
       "staked": {
-        "contract": "0xFe48De8b9aCA4386DC31C845d579ae62f04f9d25",
+        "profile": "public-stake-v1",
+        "chainId": 11155111,
+        "contract": "0xEB67Abf066c11D78856BccC63476ed14d51e4275",
+        "deployTx": "0x27d187dc35ea6d333a1cc91effcc78883534964b4818601937f96ce2b7a2719c",
         "rpcUrl": "https://rpc.sepolia.ethpandaops.io",
-        "deployBlock": 11510541
+        "deployBlock": 11624622,
+        "hasher": "0x4Aef86FA47026432567E6F1cE5d5Bb46c62d8d23",
+        "withdrawVerifier": "0x2a905423D252e39d73d37156C28503aD8650C952",
+        "defaultLimit": 1,
+        "tiers": [
+          { "limit": 1, "bondWei": "100000000000000000" },
+          { "limit": 8, "bondWei": "800000000000000000" }
+        ],
+        "unbondingSeconds": 86400,
+        "minUnbondingSeconds": 3720
       },
       "paid": null
     },
@@ -72,6 +85,6 @@
     ],
     "legacy": null
   },
-  "created": "2026-08-25",
-  "note": "Disposable invited-and-staked Protocol v4 research Grove: one stake-gated Elder and three dedicated Shade Tree nodes. Blue/green infrastructure and encrypted operator custody are managed from agent-devops; application services are pinned to 43679a74167dfcdc16b65bc6ac8dff51901f8b58. Contracts and proof artifacts are explicitly untrusted Sepolia testnet material."
+  "created": "2026-09-02",
+  "note": "Disposable public-stake-v1 Protocol v4 research Grove: zero-config clients use the permissionless Sepolia staking path (tier 1 = 0.1 ETH, one 60-second slot, 40 MiB combined tunnel payload); invited admission remains available when selected explicitly. One stake-gated Elder and three dedicated Shade Tree nodes are managed from agent-devops and pinned to 37a0f16351da8aa0377364221e3964233730eef4. Contracts and proof artifacts are explicitly untrusted Sepolia testnet material."
 }

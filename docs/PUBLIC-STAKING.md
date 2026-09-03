@@ -82,7 +82,10 @@ The second local allocation in one epoch fails with
 
 The live deployment record is the source of truth. Its `ratePolicy` and public staking root pin the
 contract receipt, hasher, real testnet exit verifier, tier table, deployment block, clock, payload,
-root lifetime, and unbonding relationship. The deployment preflight rejects drift.
+root lifetime, and unbonding relationship. A manifest in the pinned service commit binds normalized
+runtime bytecode for the set, hasher, exit wrapper, Groth16 verifier, and both linked Poseidon
+libraries. Deployment preflight checks that complete graph through both the public record RPC and
+the operator's exact runtime RPC before changing a host.
 
 Every node must run the same values and advertise the rate policy in its onion-signed capabilities.
 Clients fail closed before proving when a signed node policy is absent or differs from their

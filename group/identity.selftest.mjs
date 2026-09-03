@@ -39,7 +39,14 @@ function cleanEnv(extra = {}) {
   return { ...base, ...extra };
 }
 function run(args, { env = {}, cwd } = {}) {
-  const r = spawnSync(process.execPath, [CLI, "identity", ...args], { encoding: "utf8", env: cleanEnv(env), cwd, timeout: 60_000 });
+  // This interoperability fixture predates the public tier-1 default and intentionally
+  // exercises the legacy limit-8 identity encoding used by egress-derive.mjs.
+  const r = spawnSync(process.execPath, [CLI, "identity", ...args], {
+    encoding: "utf8",
+    env: cleanEnv({ SHADE_TREE_LIMIT: "8", ...env }),
+    cwd,
+    timeout: 60_000,
+  });
   if (r.error) throw r.error;
   return { code: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
 }

@@ -119,7 +119,7 @@ if (fast) {
   console.log(`\n=== foundry contract suite ===\n  SKIP  fast lane (SHADE_TREE_FAST) -- run full 'npm test' for contracts`);
 } else if (!noContracts) {
   console.log(`\n=== foundry contract suite ===`);
-  const forge = spawnSync("forge", ["test", "--libraries", "contracts/PoseidonT2.sol:PoseidonT2:0xB511DF6e75870247911cbd2EFC5830928AE49152", "--libraries", "contracts/PoseidonT3.sol:PoseidonT3:0x16d11F36b218eb7CfC5f087d9910AC35C8089aff"], { cwd: ROOT, encoding: "utf8" });
+  const forge = spawnSync("forge", ["test"], { cwd: ROOT, encoding: "utf8" });
   if (forge.error && forge.error.code === "ENOENT") {
     console.log("  SKIP  forge not installed (run with a foundry toolchain, or --no-contracts)");
   } else {
@@ -128,8 +128,16 @@ if (fast) {
     const summary = (forge.stdout || "").split("\n").filter((l) => /tests? passed|Suite result|failed/.test(l)).slice(-3).join("\n");
     console.log(passed ? summary || "  PASS" : (forge.stdout || forge.stderr));
     if (passed) {
-      const manifest = spawnSync(process.execPath, [join(ROOT, "deploy/v4/check-bytecode-manifest.mjs")], { cwd: ROOT, encoding: "utf8" });
-      const manifestPassed = manifest.status === 0;
+      const linkedBuild = spawnSync("forge", [
+        "build",
+        "--force",
+        "--libraries", "contracts/PoseidonT2.sol:PoseidonT2:0xB511DF6e75870247911cbd2EFC5830928AE49152",
+        "--libraries", "contracts/PoseidonT3.sol:PoseidonT3:0x16d11F36b218eb7CfC5f087d9910AC35C8089aff",
+      ], { cwd: ROOT, encoding: "utf8" });
+      const manifest = linkedBuild.status === 0
+        ? spawnSync(process.execPath, [join(ROOT, "deploy/v4/check-bytecode-manifest.mjs")], { cwd: ROOT, encoding: "utf8" })
+        : linkedBuild;
+      const manifestPassed = linkedBuild.status === 0 && manifest.status === 0;
       results.push({ name: "public-stake-v1 bytecode manifest", passed: manifestPassed });
       console.log(manifestPassed ? `  PASS  ${(manifest.stdout || "").trim()}` : (manifest.stderr || manifest.stdout));
     }
