@@ -18,7 +18,7 @@ use shade_tree_proto::{
     ed25519_verify, onion_to_pubkey, operator_auth_message, pubkey_to_onion, request_signal,
     select_proto_version, sign_receipt, verify_announce, verify_caps_sig, verify_directory,
     verify_directory_threshold, verify_operator_sig, verify_receipt, Announce, Caps, Directory,
-    EnvelopeVersion, GatewayEntry, ProtoCaps, Receipt, REASON_BAD_VERSION,
+    EnvelopeVersion, GatewayEntry, PayCaps, ProtoCaps, RateCaps, Receipt, REASON_BAD_VERSION,
     REASON_NO_MUTUAL_VERSION, REASON_UNSUPPORTED_VERSION,
 };
 
@@ -865,6 +865,77 @@ fn caps_sig_signs_and_verifies() {
         &tampered,
         Some(s(&v["capabilities"], "capsSig"))
     ));
+}
+
+#[test]
+fn fixed_public_rate_caps_follow_pay_and_have_a_pinned_signature() {
+    let v = vectors();
+    let onion = s(&v, "onion");
+    let caps = Caps {
+        admits: Some(vec!["staked".into()]),
+        pay: Some(PayCaps {
+            protocols: Some(vec!["x402".into()]),
+            port: Some(8878),
+            asset: Some("0x1111111111111111111111111111111111111111".into()),
+            chain: Some("eip155:11155111".into()),
+            tiers: Some(vec![("1".into(), "100000".into())]),
+            ..Default::default()
+        }),
+        rate: Some(RateCaps {
+            scope: "grove-v4".into(),
+            window: "fixed".into(),
+            epoch_seconds: 60,
+            previous_epochs_accepted: 1,
+            root_freshness_seconds: 60,
+            payload_bytes_per_slot: 41_943_040,
+        }),
+        ..Default::default()
+    };
+    let expected = format!(
+        "Shade Tree gateway capabilities v1\n{{\"onion\":\"{onion}\",\"caps\":{{\"admits\":[\"staked\"],\"pay\":{{\"protocols\":[\"x402\"],\"port\":8878,\"asset\":\"0x1111111111111111111111111111111111111111\",\"chain\":\"eip155:11155111\",\"tiers\":{{\"1\":\"100000\"}}}},\"rate\":{{\"scope\":\"grove-v4\",\"window\":\"fixed\",\"epochSeconds\":60,\"previousEpochsAccepted\":1,\"rootFreshnessSeconds\":60,\"payloadBytesPerSlot\":41943040}}}}}}"
+    );
+    assert_eq!(canonical_caps_bytes(onion, &caps), expected.as_bytes());
+
+    // Independently pinned with Node's Ed25519 implementation from the vector onionSeed.
+    const SIGNATURE: &str = "ded3e2aa769c1dd7c002511417d1c79d599dab991db29c8aaa3b32a969629ce79761c0bc4851f59b1cee02e8ebf719f8e3a400ccec27f0210ad9aaa5476c740e";
+    assert_eq!(
+        hex::encode(ed25519_sign(
+            &canonical_caps_bytes(onion, &caps),
+            &seed32(s(&v, "onionSeed"))
+        )),
+        SIGNATURE
+    );
+    assert!(verify_caps_sig(onion, &caps, Some(SIGNATURE)));
+
+    let mut changed = caps.clone();
+    changed.rate.as_mut().unwrap().epoch_seconds = 120;
+    assert!(!verify_caps_sig(onion, &changed, Some(SIGNATURE)));
+}
+
+#[test]
+fn invalid_rate_caps_are_omitted_but_valid_rate_only_caps_are_present() {
+    let invalid = Caps {
+        rate: Some(RateCaps {
+            scope: "grove-v4".into(),
+            window: "sliding".into(),
+            epoch_seconds: 60,
+            previous_epochs_accepted: 1,
+            root_freshness_seconds: 60,
+            payload_bytes_per_slot: 41_943_040,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(shade_tree_proto::canonical_caps(&invalid).rate, None);
+    assert!(!shade_tree_proto::has_caps(&invalid));
+
+    let valid = Caps {
+        rate: Some(RateCaps {
+            window: "fixed".into(),
+            ..invalid.rate.unwrap()
+        }),
+        ..Default::default()
+    };
+    assert!(shade_tree_proto::has_caps(&valid));
 }
 
 #[test]

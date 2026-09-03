@@ -42,7 +42,8 @@ locally; it is never accepted as an argument or sent to the RPC. Without an
 explicit contract/RPC, the bundled live Sepolia Grove staking profile is used.
 SHADE_TREE_GROUP_CONTRACT, SHADE_TREE_RPC_URL, SHADE_TREE_LIMIT, and
 SHADE_TREE_BOND are the environment equivalents. A public Anvil development key
-is selected only for a loopback RPC."#;
+is selected only for a loopback RPC. The default tier is the bundled staked
+root's defaultLimit (1 for the public Grove)."#;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CliOptions {
@@ -168,25 +169,21 @@ fn parse_args(args: &[String]) -> Result<Option<CliOptions>, String> {
     Ok(Some(out))
 }
 
-fn bundled_defaults() -> Result<(String, String), String> {
-    let deployment: Value = serde_json::from_str(crate::DEFAULT_DEPLOYMENT)
-        .map_err(|e| format!("bundled deployment is invalid JSON: {e}"))?;
-    if deployment.get("status").and_then(Value::as_str) != Some("live") {
-        return Err("bundled deployment is not live".into());
-    }
+fn registration_defaults_from(
+    deployment: crate::BundledDeployment,
+) -> Result<(String, String, u64), String> {
     let staked = deployment
-        .pointer("/admission/roots/staked")
-        .and_then(Value::as_object)
+        .staked
         .ok_or_else(|| "bundled deployment has no live staked admission root".to_string())?;
-    let contract = staked
-        .get("contract")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "bundled staked admission root has no contract".to_string())?;
-    let rpc_url = staked
-        .get("rpcUrl")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "bundled staked admission root has no RPC".to_string())?;
-    Ok((contract.to_string(), rpc_url.to_string()))
+    let default_limit = staked.default_limit.unwrap_or(DEFAULT_LIMIT);
+    if !(1..=u16::MAX as u64).contains(&default_limit) {
+        return Err("bundled staked admission root has an invalid defaultLimit".into());
+    }
+    Ok((staked.contract, staked.rpc_url, default_limit))
+}
+
+fn bundled_defaults() -> Result<(String, String, u64), String> {
+    registration_defaults_from(crate::default_deployment()?)
 }
 
 fn parse_u256(value: &str, label: &str) -> Result<U256, String> {
@@ -226,7 +223,7 @@ fn read_commitment(cli: &CliOptions) -> Result<String, String> {
 }
 
 fn resolve_registration(cli: &CliOptions) -> Result<Registration, String> {
-    let (bundled_contract, bundled_rpc) = bundled_defaults()?;
+    let (bundled_contract, bundled_rpc, bundled_limit) = bundled_defaults()?;
     let commitment = parse_u256(&read_commitment(cli)?, "commitment")?;
     let field = U256::from_dec_str(BN254_FIELD).expect("BN254 field constant");
     if commitment.is_zero() || commitment >= field {
@@ -236,7 +233,7 @@ fn resolve_registration(cli: &CliOptions) -> Result<Registration, String> {
         .limit
         .clone()
         .or_else(|| std::env::var("SHADE_TREE_LIMIT").ok())
-        .unwrap_or_else(|| DEFAULT_LIMIT.to_string());
+        .unwrap_or_else(|| bundled_limit.to_string());
     let limit = limit_raw
         .parse::<u64>()
         .ok()
@@ -833,10 +830,20 @@ mod tests {
 
     #[test]
     fn bundled_profile_points_at_live_staked_root() {
-        let (contract, rpc) = bundled_defaults().unwrap();
+        let (contract, rpc, default_limit) = bundled_defaults().unwrap();
         assert!(Address::from_str(&contract).is_ok());
         assert!(rpc.starts_with("https://"));
+        assert!((1..=u16::MAX as u64).contains(&default_limit));
         assert!(!rpc_label(&rpc).contains('?'));
+    }
+
+    #[test]
+    fn registration_default_limit_comes_from_the_bundled_staked_root() {
+        let mut deployment: Value = serde_json::from_str(crate::DEFAULT_DEPLOYMENT).unwrap();
+        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
+        let parsed = crate::parse_bundled_deployment(&deployment.to_string()).unwrap();
+        let (_, _, limit) = registration_defaults_from(parsed).unwrap();
+        assert_eq!(limit, 1);
     }
 
     #[test]

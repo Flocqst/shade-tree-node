@@ -37,11 +37,76 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_CLIENT_NETWORK: &str = "sepolia";
 const DEFAULT_DEPLOYMENT: &str = include_str!("../../../network/sepolia/deployment.json");
 
-// Read the bundled deployment record instead of duplicating its trust pair in Rust source. The
-// signed Canopy remains the mutable gateway list; this record pins only the Elder used to fetch it
-// and the signer authorized to update it.
-fn default_discovery() -> Result<(String, String), String> {
-    let deployment: serde_json::Value = serde_json::from_str(DEFAULT_DEPLOYMENT)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BundledStakedRoot {
+    contract: String,
+    rpc_url: String,
+    deploy_block: Option<u64>,
+    default_limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BundledDeployment {
+    elder_onion: String,
+    canopy_signer: String,
+    default_path: Option<String>,
+    rate_policy: Option<shade_tree_proto::CanonicalRate>,
+    staked: Option<BundledStakedRoot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PublicStakedProfile {
+    default_path: String,
+    rate_policy: shade_tree_proto::CanonicalRate,
+    contract: String,
+    rpc_url: String,
+    deploy_block: u64,
+    default_limit: u64,
+}
+
+fn optional_u64(object: &serde_json::Value, name: &str) -> Result<Option<u64>, String> {
+    match object.get(name) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("bundled deployment {name} must be an unsigned integer")),
+    }
+}
+
+fn parse_bundled_rate(
+    value: &serde_json::Value,
+) -> Result<shade_tree_proto::CanonicalRate, String> {
+    let string = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("bundled ratePolicy.{name} is missing or invalid"))
+    };
+    let integer = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|number| *number <= i64::MAX as u64)
+            .map(|number| number as i64)
+            .ok_or_else(|| format!("bundled ratePolicy.{name} is missing or invalid"))
+    };
+    let raw = shade_tree_proto::RateCaps {
+        scope: string("scope")?,
+        window: string("window")?,
+        epoch_seconds: integer("epochSeconds")?,
+        previous_epochs_accepted: integer("previousEpochsAccepted")?,
+        root_freshness_seconds: integer("rootFreshnessSeconds")?,
+        payload_bytes_per_slot: integer("payloadBytesPerSlot")?,
+    };
+    shade_tree_proto::canonical_rate(&raw).ok_or_else(|| {
+        "bundled ratePolicy is outside the supported grove-v4 fixed-window bounds".into()
+    })
+}
+
+fn parse_bundled_deployment(raw: &str) -> Result<BundledDeployment, String> {
+    let deployment: serde_json::Value = serde_json::from_str(raw)
         .map_err(|e| format!("bundled {DEFAULT_CLIENT_NETWORK} deployment is invalid JSON: {e}"))?;
     if deployment.get("status").and_then(serde_json::Value::as_str) != Some("live") {
         return Err(format!(
@@ -90,16 +155,185 @@ fn default_discovery() -> Result<(String, String), String> {
     {
         return Err("bundled deployment has an invalid Canopy signer".into());
     }
-    Ok((onion.to_string(), pins.join(",")))
+    let admission = deployment.get("admission");
+    let default_path = admission
+        .and_then(|value| value.get("defaultPath"))
+        .or_else(|| deployment.get("defaultPath"))
+        .map(|value| {
+            value
+                .as_str()
+                .map(|path| path.to_ascii_lowercase())
+                .ok_or_else(|| "bundled deployment defaultPath must be a string".to_string())
+        })
+        .transpose()?;
+    let rate_policy = deployment
+        .get("ratePolicy")
+        .or_else(|| admission.and_then(|value| value.get("ratePolicy")))
+        .map(parse_bundled_rate)
+        .transpose()?;
+    let staked = admission
+        .and_then(|value| value.pointer("/roots/staked"))
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            let contract = value
+                .get("contract")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "bundled staked root has no contract".to_string())?;
+            let rpc_url = value
+                .get("rpcUrl")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "bundled staked root has no RPC".to_string())?;
+            Ok::<_, String>(BundledStakedRoot {
+                contract: contract.to_string(),
+                rpc_url: rpc_url.to_string(),
+                deploy_block: optional_u64(value, "deployBlock")?,
+                default_limit: optional_u64(value, "defaultLimit")?,
+            })
+        })
+        .transpose()?;
+    Ok(BundledDeployment {
+        elder_onion: onion.to_string(),
+        canopy_signer: pins.join(","),
+        default_path,
+        rate_policy,
+        staked,
+    })
+}
+
+// Read the bundled deployment record instead of duplicating its trust pair in Rust source. The
+// signed Canopy remains the mutable gateway list; this record pins the Elder, its signer, and the
+// public Grove's internally consistent membership/rate defaults.
+fn default_deployment() -> Result<BundledDeployment, String> {
+    parse_bundled_deployment(DEFAULT_DEPLOYMENT)
+}
+
+fn default_discovery() -> Result<(String, String), String> {
+    let deployment = default_deployment()?;
+    Ok((deployment.elder_onion, deployment.canopy_signer))
+}
+
+fn public_profile_from(deployment: BundledDeployment) -> Result<PublicStakedProfile, String> {
+    let default_path = deployment
+        .default_path
+        .ok_or_else(|| "bundled deployment has no admission.defaultPath".to_string())?;
+    if default_path != "staked" {
+        return Err(format!(
+            "bundled deployment defaultPath={default_path:?}; this client profile requires staked"
+        ));
+    }
+    let rate_policy = deployment
+        .rate_policy
+        .ok_or_else(|| "bundled deployment has no ratePolicy".to_string())?;
+    let expected_rate = shade_tree_proto::CanonicalRate {
+        scope: "grove-v4".into(),
+        window: "fixed".into(),
+        epoch_seconds: 60,
+        previous_epochs_accepted: 1,
+        root_freshness_seconds: 60,
+        payload_bytes_per_slot: shade_tree_proto::DEFAULT_TUNNEL_MAX_PAYLOAD_BYTES,
+    };
+    if rate_policy != expected_rate {
+        return Err(
+            "bundled ratePolicy does not match the supported public Grove v4 policy".into(),
+        );
+    }
+    let staked = deployment
+        .staked
+        .ok_or_else(|| "bundled deployment has no staked admission root".to_string())?;
+    let deploy_block = staked
+        .deploy_block
+        .ok_or_else(|| "bundled staked admission root has no deployBlock".to_string())?;
+    let default_limit = staked
+        .default_limit
+        .filter(|limit| (1..=u16::MAX as u64).contains(limit))
+        .ok_or_else(|| "bundled staked admission root has no valid defaultLimit".to_string())?;
+    if default_limit != 1 {
+        return Err(format!(
+            "bundled staked defaultLimit is {default_limit}, expected public tier 1"
+        ));
+    }
+    Ok(PublicStakedProfile {
+        default_path,
+        rate_policy,
+        contract: staked.contract,
+        rpc_url: staked.rpc_url,
+        deploy_block,
+        default_limit,
+    })
+}
+
+fn default_public_profile() -> Result<PublicStakedProfile, String> {
+    public_profile_from(default_deployment()?)
 }
 
 #[cfg(test)]
 mod default_discovery_tests {
+    use serde_json::json;
+
     #[test]
     fn bundled_v4_elder_and_signer_are_valid() {
         let (onion, signer) = super::default_discovery().expect("bundled discovery profile");
         assert!(onion.ends_with(".onion"));
         assert_eq!(signer.len(), 64);
+    }
+
+    #[test]
+    fn bundled_profile_schema_parses_public_staking_defaults() {
+        let mut deployment: serde_json::Value =
+            serde_json::from_str(super::DEFAULT_DEPLOYMENT).unwrap();
+        deployment["ratePolicy"] = json!({
+            "scope": "grove-v4",
+            "window": "fixed",
+            "epochSeconds": 60,
+            "previousEpochsAccepted": 1,
+            "rootFreshnessSeconds": 60,
+            "payloadBytesPerSlot": 41_943_040
+        });
+        deployment["admission"]["defaultPath"] = json!("staked");
+        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
+        deployment["admission"]["roots"]["staked"]["deployBlock"] = json!(12_345);
+        let parsed = super::parse_bundled_deployment(&deployment.to_string()).unwrap();
+        assert_eq!(parsed.default_path.as_deref(), Some("staked"));
+        assert_eq!(parsed.staked.as_ref().unwrap().default_limit, Some(1));
+        assert_eq!(parsed.staked.as_ref().unwrap().deploy_block, Some(12_345));
+        let rate = parsed.rate_policy.as_ref().unwrap();
+        assert_eq!(rate.epoch_seconds, 60);
+        assert_eq!(rate.previous_epochs_accepted, 1);
+        assert_eq!(rate.root_freshness_seconds, 60);
+        assert_eq!(rate.payload_bytes_per_slot, 41_943_040);
+
+        let profile = super::public_profile_from(parsed).unwrap();
+        assert_eq!(profile.default_path, "staked");
+        assert_eq!(profile.default_limit, 1);
+        assert_eq!(profile.deploy_block, 12_345);
+        assert_eq!(profile.rate_policy.epoch_seconds, 60);
+    }
+
+    #[test]
+    fn public_profile_rejects_absent_or_different_rate_policy() {
+        let mut deployment: serde_json::Value =
+            serde_json::from_str(super::DEFAULT_DEPLOYMENT).unwrap();
+        deployment["admission"]["defaultPath"] = json!("staked");
+        deployment["admission"]["roots"]["staked"]["defaultLimit"] = json!(1);
+        deployment["admission"]["roots"]["staked"]["deployBlock"] = json!(12_345);
+
+        let absent = super::parse_bundled_deployment(&deployment.to_string()).unwrap();
+        assert!(super::public_profile_from(absent)
+            .unwrap_err()
+            .contains("no ratePolicy"));
+
+        deployment["ratePolicy"] = json!({
+            "scope": "grove-v4",
+            "window": "fixed",
+            "epochSeconds": 120,
+            "previousEpochsAccepted": 1,
+            "rootFreshnessSeconds": 60,
+            "payloadBytesPerSlot": 41_943_040
+        });
+        let different = super::parse_bundled_deployment(&deployment.to_string()).unwrap();
+        assert!(super::public_profile_from(different)
+            .unwrap_err()
+            .contains("does not match"));
     }
 }
 
@@ -332,9 +566,10 @@ SUBCOMMANDS:
     register-member <commitment> [--limit <n>] [--contract <0xaddress>]
                     [--rpc-url <url>] [--key-file <owner-only-file>]
         Stake a public RLN leaf natively, signing the EIP-1559 transaction locally.
-        Defaults to the bundled live Sepolia staking profile. The funding key comes
-        only from --key-file or SHADE_TREE_REGISTER_KEY (never a raw-key argument)
-        and is never sent to the RPC. Requires a --features live build.
+        Contract, RPC, and --limit default to the bundled live Sepolia staking
+        profile (public defaultLimit=1). The funding key comes only from --key-file
+        or SHADE_TREE_REGISTER_KEY (never a raw-key argument) and is never sent to
+        the RPC. Requires a --features live build.
 
     leaves --contract <0xaddress> [--rpc-url <url>] [--from-block <n>]
            [--block-tag latest|finalized] [--out <f>]
@@ -343,7 +578,7 @@ SUBCOMMANDS:
         consumed by egress. No Node.js exporter is required. Requires live.
 
     egress [TRANSPORT] --identity <f> --target <host:port>
-           (--members <f> | --contract <0xaddress> [--rpc-url <url>])
+           [--members <f> | --contract <0xaddress> [--rpc-url <url>]]
            [--circuits <dir>] [--epoch <n>] [--slot <i>] [--slot-cursor <f>]
            [--rln-identifier <n>] [--k <n>] [--nonce <hex>]
         LIVE egress (requires a `--features live` build). Builds a REAL RLN envelope
@@ -368,7 +603,10 @@ SUBCOMMANDS:
                                           + failover exactly as --directory. Same optional
                                           --cache/--health-cache/--max-age-ms.
           (none)                          Fetch the signed Canopy from the bundled Elder and verify
-                                          it with the signer pinned in the bundled deployment.
+                                          it with the signer pinned in the bundled deployment. With
+                                          no explicit member source, use that deployment's staked
+                                          contract/RPC/deployBlock, 60s epoch, and defaultLimit=1;
+                                          every selected gateway must sign the matching caps.rate.
           --onion <a[:p]>[,<a[:p]>...]    Dial these specific .onion(s) over embedded Tor,
                                           in order (default port 80). Comma = failover list.
           --plain-tcp <h:p>[,<h:p>...]    Escape hatch: dial plain TCP, no Tor, in order
@@ -380,7 +618,7 @@ SUBCOMMANDS:
           --identity  JSON { identitySecret, leaf[, limit] } (the member's derived secret + leaf;
                       create it with Rust `shade-tree enroll`, or derive it from an existing
                       SHADE_TREE_SECRET with Rust `shade-tree identity --out identity.json`;
-                      `limit` = the leaf's reputation-tier userMessageLimit, T-FEAT-8, default 8)
+                      `limit` = the leaf's reputation-tier userMessageLimit, T-FEAT-8)
           --members   JSON { members: [leaf,...] } (the ordered group, same as the gateway).
           --contract  Discover the ordered group natively from on-chain events. For
                       --leaf-source demo, omission uses the validated directory demo.contract;
@@ -395,8 +633,11 @@ SUBCOMMANDS:
                       field; if the selected gateway advertises accepted artifact ids
                       (signed caps.artifacts) that exclude ours, egress fails closed with
                       `no-mutual-artifact:...` BEFORE proving.
-          --epoch     epoch to prove for (default: floor(now/SHADE_TREE_EPOCH_SECONDS), K=120s)
-          --k         userMessageLimit / tier (default: the identity file's `limit`, else 8;
+          --epoch     epoch to prove for (default: floor(now/60s) on the bundled public profile;
+                      explicit SHADE_TREE_EPOCH_SECONDS wins but must match signed caps.rate;
+                      custom discovery keeps the historical 120s fallback)
+          --k         userMessageLimit / tier (explicit flag/env, then identity `limit`, then
+                      bundled public defaultLimit=1; custom discovery keeps fallback 8;
                       must be the leaf's enrolled limit)
           --slot-cursor  exact state-file override (or SHADE_TREE_SLOT_CURSOR). Persistence is
                       default-on under SHADE_TREE_SLOT_STATE_DIR / XDG_STATE_HOME / ~/.local/state,
@@ -975,8 +1216,8 @@ mod live {
 
     use super::{
         admission_from_args, admission_refusal, capability, check_admission, default_discovery,
-        default_seed, dircache, health, mulberry32, now_ms, parse_max_age, read_file, signer_spec,
-        take_flag,
+        default_public_profile, default_seed, dircache, health, mulberry32, now_ms, parse_max_age,
+        read_file, signer_spec, take_flag, PublicStakedProfile,
     };
 
     /// One dial target in the failover order. Plain-TCP is the loop-22 escape hatch;
@@ -1066,6 +1307,10 @@ mod live {
         transports: Vec<Transport>,
         health: Option<HealthCtx>,
         demo: Option<dircache::DemoAdvert>,
+        /// Present only for the zero-configuration bundled public path. Any
+        /// explicit transport/member contract/RPC source keeps legacy custom
+        /// discovery defaults instead.
+        profile: Option<PublicStakedProfile>,
     }
 
     #[derive(Deserialize)]
@@ -1074,7 +1319,8 @@ mod live {
         identity_secret: String,
         leaf: String,
         /// Optional tier limit (T-FEAT-8): the `userMessageLimit` this leaf was enrolled
-        /// with. `shade-tree identity` writes it only for a non-default tier; absent => K_SLOTS.
+        /// with. `shade-tree identity` writes it only for a non-default tier; absent uses the
+        /// bundled public defaultLimit on the zero-config path, otherwise K_SLOTS.
         #[serde(default)]
         limit: Option<u64>,
     }
@@ -1084,23 +1330,47 @@ mod live {
         members: Vec<String>,
     }
 
-    // lib/rln.mjs EPOCH_SECONDS default is 120s; SHADE_TREE_EPOCH_SECONDS overrides to match a
-    // gateway configured otherwise. verifyEnvelope accepts this-or-previous epoch, so a
-    // wall-clock-derived epoch has a full window of slack against the gateway's own clock.
-    fn epoch_seconds() -> u64 {
-        std::env::var("SHADE_TREE_EPOCH_SECONDS")
-            .ok()
-            .and_then(|s| s.parse().ok())
+    fn epoch_seconds_setting(env: Option<&str>, profile: Option<&PublicStakedProfile>) -> u64 {
+        env.and_then(|s| s.parse().ok())
             .filter(|&n: &u64| n > 0)
+            .or_else(|| profile.map(|profile| profile.rate_policy.epoch_seconds))
             .unwrap_or(120)
     }
 
-    fn current_epoch() -> u64 {
+    // Custom discovery retains the historical 120-second fallback. The zero-config bundled
+    // profile takes its signed 60-second window from deployment metadata; an explicit env wins.
+    fn epoch_seconds(profile: Option<&PublicStakedProfile>) -> u64 {
+        epoch_seconds_setting(
+            std::env::var("SHADE_TREE_EPOCH_SECONDS").ok().as_deref(),
+            profile,
+        )
+    }
+
+    fn current_epoch(epoch_seconds: u64) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        now / epoch_seconds()
+        now / epoch_seconds
+    }
+
+    fn member_limit_setting(
+        flag: Option<&str>,
+        env: Option<&str>,
+        identity: Option<u64>,
+        profile: Option<&PublicStakedProfile>,
+    ) -> Result<u64, String> {
+        let raw = flag
+            .map(str::to_string)
+            .or_else(|| env.map(str::to_string))
+            .or_else(|| identity.map(|limit| limit.to_string()))
+            .or_else(|| profile.map(|profile| profile.default_limit.to_string()));
+        match raw {
+            Some(value) => value
+                .parse::<u64>()
+                .map_err(|_| format!("member limit must be an integer (got {value:?})")),
+            None => Ok(shade_tree_egress::slot::DEFAULT_LIMIT),
+        }
     }
 
     // Exact override first; otherwise use the JS-compatible default under the public leaf.
@@ -1210,6 +1480,63 @@ mod live {
         )
     }
 
+    fn has_value_flag(args: &[String], names: &[&str]) -> bool {
+        args.iter().any(|arg| {
+            names
+                .iter()
+                .any(|name| arg == name || arg.starts_with(&format!("{name}=")))
+        })
+    }
+
+    /// True when membership/RPC input is explicitly custom. The bundled public
+    /// profile is deliberately all-or-nothing: mixing its implicit contract with
+    /// a caller's unrelated source would silently combine incompatible defaults.
+    fn has_explicit_member_source(args: &[String]) -> bool {
+        has_value_flag(
+            args,
+            &["--members", "--contract", "--rpc-url", "--leaf-source"],
+        ) || [
+            "SHADE_TREE_GROUP_CONTRACT",
+            "SHADE_TREE_PAID_ACCESS_CONTRACT",
+            "SHADE_TREE_RPC_URL",
+            "SHADE_TREE_LEAF_SOURCE",
+        ]
+        .iter()
+        .any(|name| {
+            std::env::var(name)
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    }
+
+    fn require_public_gateway_rates(
+        gateways: &[shade_tree_proto::GatewayEntry],
+        expected: &shade_tree_proto::CanonicalRate,
+    ) -> Result<(), String> {
+        for gateway in gateways {
+            let actual = gateway
+                .caps
+                .as_ref()
+                .and_then(|caps| shade_tree_proto::canonical_caps(caps).rate);
+            match actual {
+                None => {
+                    return Err(format!(
+                        "public-profile-rate-missing:{}: signed caps.rate is required",
+                        gateway.onion.chars().take(12).collect::<String>()
+                    ));
+                }
+                Some(actual) if actual != *expected => {
+                    return Err(format!(
+                        "public-profile-rate-mismatch:{}: signed caps.rate differs from bundled ratePolicy",
+                        gateway.onion.chars().take(12).collect::<String>()
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     // Turn a FRESH directory (a file read, or a bootnode fetch over Tor) into the ordered
     // onion candidate list for failover — the SAME LKG-cache + guards + weighted
     // selection_order the JS client runs (selection.mjs ensureLoaded -> selectCandidates):
@@ -1228,6 +1555,7 @@ mod live {
         fresh: Result<String, String>,
         rest: &[String],
         signer: &str,
+        public_profile: Option<&PublicStakedProfile>,
     ) -> Result<DirectoryCandidates, String> {
         let cache_path = take_flag(rest, "--cache").map(PathBuf::from);
         let max_age = parse_max_age(rest);
@@ -1260,7 +1588,10 @@ mod live {
 
         // Admission-aware filter (T-FEAT-9): route only to gateways whose signed policy admits
         // this member's leaf source (--leaf-source / SHADE_TREE_LEAF_SOURCE), --max-anon = invited-only.
-        let adm = admission_from_args(rest);
+        let mut adm = admission_from_args(rest);
+        if adm.leaf_source.is_none() {
+            adm.leaf_source = public_profile.map(|profile| profile.default_path.clone());
+        }
         check_admission(&adm)?;
         if adm.is_active() {
             let before = dir.gateways.clone();
@@ -1278,6 +1609,12 @@ mod live {
                 dir.gateways.len(),
                 before.len()
             );
+        }
+        // The zero-config public profile is useful only if the same policy is signed by every
+        // gateway we may dial. Missing/mismatched caps fail here, before identity loading, slot
+        // allocation, or proof construction. Custom discovery retains rollout compatibility.
+        if let Some(profile) = public_profile {
+            require_public_gateway_rates(&dir.gateways, &profile.rate_policy)?;
         }
         let mut rng = mulberry32(default_seed());
         let order = if rotation_spread_enabled(rest) {
@@ -1555,6 +1892,7 @@ mod live {
                 transports,
                 health: None,
                 demo: None,
+                profile: None,
             });
         }
         if let Some(list) = take_flag(rest, "--onion") {
@@ -1574,6 +1912,7 @@ mod live {
                 transports,
                 health: None,
                 demo: None,
+                profile: None,
             });
         }
         if let Some(bootnode) = take_flag(rest, "--bootnode-onion") {
@@ -1583,11 +1922,12 @@ mod live {
             // Discovery over Tor is the FRESH source; a fetch failure still degrades to the
             // verified LKG cache inside directory_candidates (never nothing / never unverified).
             let fresh = fetch_directory_over_tor(&bootnode, client, runtime);
-            let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+            let (transports, health, demo) = directory_candidates(fresh, rest, &signer, None)?;
             return Ok(EgressPlan {
                 transports,
                 health,
                 demo,
+                profile: None,
             });
         }
         if let Some(dirf) = take_flag(rest, "--directory") {
@@ -1595,20 +1935,28 @@ mod live {
                 return Err("--directory needs --signer <hex>".into());
             };
             let fresh = read_file(&dirf); // a read failure -> LKG cache fallback
-            let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+            let (transports, health, demo) = directory_candidates(fresh, rest, &signer, None)?;
             return Ok(EgressPlan {
                 transports,
                 health,
                 demo,
+                profile: None,
             });
         }
         let (bootnode, signer) = default_discovery()?;
+        let profile = if has_explicit_member_source(rest) {
+            None
+        } else {
+            Some(default_public_profile()?)
+        };
         let fresh = fetch_directory_over_tor(&bootnode, client, runtime);
-        let (transports, health, demo) = directory_candidates(fresh, rest, &signer)?;
+        let (transports, health, demo) =
+            directory_candidates(fresh, rest, &signer, profile.as_ref())?;
         Ok(EgressPlan {
             transports,
             health,
             demo,
+            profile,
         })
     }
 
@@ -1936,9 +2284,19 @@ mod live {
                 return ExitCode::from(2);
             }
         };
+        let effective_epoch_seconds = epoch_seconds(plan.profile.as_ref());
+        if let Some(profile) = plan.profile.as_ref() {
+            if effective_epoch_seconds != profile.rate_policy.epoch_seconds {
+                eprintln!(
+                    "egress (live): SHADE_TREE_EPOCH_SECONDS={effective_epoch_seconds} conflicts with the bundled/signed public rate policy ({}); refusing before proving",
+                    profile.rate_policy.epoch_seconds
+                );
+                return ExitCode::from(2);
+            }
+        }
         let epoch = take_flag(rest, "--epoch")
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or_else(current_epoch);
+            .unwrap_or_else(|| current_epoch(effective_epoch_seconds));
         let identity: IdentityFile = match load_json(&identity_path) {
             Ok(v) => v,
             Err(e) => {
@@ -1955,7 +2313,11 @@ mod live {
                 }
             }
         } else {
-            let source = admission_from_args(rest).leaf_source;
+            let source = admission_from_args(rest).leaf_source.or_else(|| {
+                plan.profile
+                    .as_ref()
+                    .map(|profile| profile.default_path.clone())
+            });
             let advertised_demo = source.as_deref() == Some("demo");
             let contract = take_flag(rest, "--contract")
                 .or_else(|| {
@@ -1972,6 +2334,11 @@ mod live {
                     std::env::var("SHADE_TREE_GROUP_CONTRACT")
                         .ok()
                         .and_then(|v| v.split(',').next().map(str::trim).map(str::to_string))
+                })
+                .or_else(|| {
+                    plan.profile
+                        .as_ref()
+                        .map(|profile| profile.contract.clone())
                 });
             let Some(contract) = contract.filter(|s| !s.is_empty()) else {
                 eprintln!("egress (live): no --members file and no on-chain contract source; pass --contract, configure SHADE_TREE_GROUP_CONTRACT/SHADE_TREE_PAID_ACCESS_CONTRACT, or use a valid directory demo advert with --leaf-source demo");
@@ -1979,9 +2346,15 @@ mod live {
             };
             let rpc_url = take_flag(rest, "--rpc-url")
                 .or_else(|| std::env::var("SHADE_TREE_RPC_URL").ok())
+                .or_else(|| plan.profile.as_ref().map(|profile| profile.rpc_url.clone()))
                 .unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
             let from = take_flag(rest, "--from-block")
                 .or_else(|| std::env::var("SHADE_TREE_FROM_BLOCK").ok())
+                .or_else(|| {
+                    plan.profile
+                        .as_ref()
+                        .map(|profile| profile.deploy_block.to_string())
+                })
                 .unwrap_or_else(|| "0".to_string());
             let parsed_from = if let Some(hex) = from.strip_prefix("0x") {
                 u64::from_str_radix(hex, 16)
@@ -2023,21 +2396,24 @@ mod live {
                 members: discovered.document.members,
             }
         };
-        // K = this member's tier limit (T-FEAT-8): `--k` wins, else the identity file's `limit`
-        // (written by `shade-tree identity --limit N` for a non-default tier), else the app default 8.
+        // K = this member's tier limit (T-FEAT-8): `--k`, SHADE_TREE_LIMIT, and an identity's
+        // explicit limit win, in that order. Otherwise use the bundled public defaultLimit (1)
+        // only on its zero-config path; custom discovery keeps the historical app default 8.
         // It MUST be the limit the member's leaf was enrolled with — the prover looks the leaf
         // up in `members`, so a wrong K fails there ("member_leaf not present"), never on the wire.
-        let k = match take_flag(rest, "--k") {
-            Some(s) => match s.parse::<u64>() {
-                Ok(n) => n,
-                Err(_) => {
-                    eprintln!("egress (live): --k must be an integer (got {s:?})");
-                    return ExitCode::from(2);
-                }
-            },
-            None => identity
-                .limit
-                .unwrap_or(shade_tree_egress::slot::DEFAULT_LIMIT),
+        let k_flag = take_flag(rest, "--k");
+        let k_env = std::env::var("SHADE_TREE_LIMIT").ok();
+        let k = match member_limit_setting(
+            k_flag.as_deref(),
+            k_env.as_deref(),
+            identity.limit,
+            plan.profile.as_ref(),
+        ) {
+            Ok(limit) => limit,
+            Err(error) => {
+                eprintln!("egress (live): {error}");
+                return ExitCode::from(2);
+            }
         };
         if !(1..=shade_tree_egress::slot::MAX_LIMIT).contains(&k) {
             eprintln!(
@@ -2373,6 +2749,123 @@ mod live {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn public_profile() -> PublicStakedProfile {
+            PublicStakedProfile {
+                default_path: "staked".into(),
+                rate_policy: shade_tree_proto::CanonicalRate {
+                    scope: "grove-v4".into(),
+                    window: "fixed".into(),
+                    epoch_seconds: 60,
+                    previous_epochs_accepted: 1,
+                    root_freshness_seconds: 60,
+                    payload_bytes_per_slot: 41_943_040,
+                },
+                contract: "0x1111111111111111111111111111111111111111".into(),
+                rpc_url: "https://rpc.example".into(),
+                deploy_block: 12_345,
+                default_limit: 1,
+            }
+        }
+
+        fn gateway_with_rate(
+            rate: Option<shade_tree_proto::RateCaps>,
+        ) -> shade_tree_proto::GatewayEntry {
+            shade_tree_proto::GatewayEntry {
+                onion: "abcdefghijklmnopqrstuvwxabcdefghijklmnopqrstuvwxabcd.onion".into(),
+                pubkey: String::new(),
+                weight: 100,
+                health: "up".into(),
+                operator: None,
+                staked: None,
+                caps: Some(shade_tree_proto::Caps {
+                    admits: Some(vec!["staked".into()]),
+                    rate,
+                    ..Default::default()
+                }),
+                caps_sig: None,
+            }
+        }
+
+        fn public_rate() -> shade_tree_proto::RateCaps {
+            shade_tree_proto::RateCaps {
+                scope: "grove-v4".into(),
+                window: "fixed".into(),
+                epoch_seconds: 60,
+                previous_epochs_accepted: 1,
+                root_freshness_seconds: 60,
+                payload_bytes_per_slot: 41_943_040,
+            }
+        }
+
+        #[test]
+        fn bundled_and_custom_rate_defaults_stay_separate() {
+            let profile = public_profile();
+            assert_eq!(epoch_seconds_setting(None, Some(&profile)), 60);
+            assert_eq!(
+                member_limit_setting(None, None, None, Some(&profile)),
+                Ok(1)
+            );
+            assert_eq!(epoch_seconds_setting(None, None), 120);
+            assert_eq!(
+                member_limit_setting(None, None, None, None),
+                Ok(shade_tree_egress::slot::DEFAULT_LIMIT)
+            );
+        }
+
+        #[test]
+        fn explicit_epoch_and_member_limit_values_win() {
+            let profile = public_profile();
+            assert_eq!(epoch_seconds_setting(Some("90"), Some(&profile)), 90);
+            assert_eq!(
+                member_limit_setting(Some("32"), Some("16"), Some(8), Some(&profile)),
+                Ok(32)
+            );
+            assert_eq!(
+                member_limit_setting(None, Some("16"), Some(8), Some(&profile)),
+                Ok(16)
+            );
+            assert_eq!(
+                member_limit_setting(None, None, Some(8), Some(&profile)),
+                Ok(8)
+            );
+            assert!(member_limit_setting(Some("many"), None, None, Some(&profile)).is_err());
+        }
+
+        #[test]
+        fn explicit_member_inputs_select_the_custom_profile_path() {
+            for args in [
+                vec!["--members".into(), "members.json".into()],
+                vec!["--contract=0x1111".into()],
+                vec!["--rpc-url".into(), "https://rpc.example".into()],
+                vec!["--leaf-source".into(), "invited".into()],
+            ] {
+                assert!(has_explicit_member_source(&args));
+            }
+        }
+
+        #[test]
+        fn public_gateway_rate_is_required_and_must_match() {
+            let profile = public_profile();
+            let matching = gateway_with_rate(Some(public_rate()));
+            require_public_gateway_rates(&[matching], &profile.rate_policy).unwrap();
+
+            let missing = gateway_with_rate(None);
+            assert!(
+                require_public_gateway_rates(&[missing], &profile.rate_policy)
+                    .unwrap_err()
+                    .contains("public-profile-rate-missing")
+            );
+
+            let mut different = public_rate();
+            different.epoch_seconds = 120;
+            let mismatch = gateway_with_rate(Some(different));
+            assert!(
+                require_public_gateway_rates(&[mismatch], &profile.rate_policy)
+                    .unwrap_err()
+                    .contains("public-profile-rate-mismatch")
+            );
+        }
 
         #[test]
         fn smooth_rotation_defaults_on_and_has_explicit_opt_outs() {

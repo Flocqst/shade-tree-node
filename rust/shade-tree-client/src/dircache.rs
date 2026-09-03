@@ -25,7 +25,9 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use shade_tree_proto::{verify_directory_with_signers, Caps, Directory, GatewayEntry, ProtoCaps};
+use shade_tree_proto::{
+    verify_directory_with_signers, Caps, Directory, GatewayEntry, ProtoCaps, RateCaps,
+};
 
 // --------------------------------------------------------------------------
 // Untrusted-JSON DTOs (serde) -> shade-tree-proto Directory (trust-critical checks)
@@ -73,6 +75,21 @@ pub struct CapsDto {
     pub admits: Option<Vec<String>>,
     #[serde(default)]
     pub pay: Option<PayCapsDto>,
+    #[serde(default)]
+    pub rate: Option<RateCapsDto>,
+}
+
+/// Untrusted signed fixed-window rate policy. Structural/range validation stays
+/// in shade-tree-proto so parsing and canonical signature bytes share one rule.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateCapsDto {
+    pub scope: String,
+    pub window: String,
+    pub epoch_seconds: i64,
+    pub previous_epochs_accepted: i64,
+    pub root_freshness_seconds: i64,
+    pub payload_bytes_per_slot: i64,
 }
 
 /// Untrusted `caps.pay` (T-FEAT-9). Lenient: tiers may carry string or integer prices; the
@@ -238,6 +255,14 @@ impl DirectoryDto {
                         artifacts: c.artifacts,
                         admits: c.admits,
                         pay: c.pay.map(|p| p.into_proto()),
+                        rate: c.rate.map(|rate| RateCaps {
+                            scope: rate.scope,
+                            window: rate.window,
+                            epoch_seconds: rate.epoch_seconds,
+                            previous_epochs_accepted: rate.previous_epochs_accepted,
+                            root_freshness_seconds: rate.root_freshness_seconds,
+                            payload_bytes_per_slot: rate.payload_bytes_per_slot,
+                        }),
                     }),
                     caps_sig: g.caps_sig,
                 })
@@ -510,6 +535,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn directory_parser_carries_the_signed_rate_policy_into_proto() {
+        let raw = r#"{
+          "version": 1,
+          "issued": 100,
+          "gateways": [{
+            "onion": "abcdefghijklmnopqrstuvwxabcdefghijklmnopqrstuvwxabcd.onion",
+            "pubkey": "00",
+            "weight": 100,
+            "health": "up",
+            "caps": {"rate": {
+              "scope": "grove-v4",
+              "window": "fixed",
+              "epochSeconds": 60,
+              "previousEpochsAccepted": 1,
+              "rootFreshnessSeconds": 60,
+              "payloadBytesPerSlot": 41943040
+            }}
+          }]
+        }"#;
+        let document = parse_document(raw).unwrap();
+        let rate =
+            shade_tree_proto::canonical_caps(document.dir.gateways[0].caps.as_ref().unwrap())
+                .rate
+                .unwrap();
+        assert_eq!(rate.scope, "grove-v4");
+        assert_eq!(rate.window, "fixed");
+        assert_eq!(rate.epoch_seconds, 60);
+        assert_eq!(rate.previous_epochs_accepted, 1);
+        assert_eq!(rate.root_freshness_seconds, 60);
+        assert_eq!(rate.payload_bytes_per_slot, 41_943_040);
     }
 
     #[test]

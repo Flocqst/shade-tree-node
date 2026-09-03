@@ -348,6 +348,10 @@ pub struct Caps {
     /// T-FEAT-9: the provider's payment advert when it SELLS access (raw; a half/oversized
     /// advert is dropped whole by [`canonical_caps`]). Mirrors `caps.pay`.
     pub pay: Option<PayCaps>,
+    /// Epoch and per-slot payload policy enforced by this gateway. This is signed
+    /// with every other capability and canonicalizes after `pay` so all older
+    /// caps byte strings remain unchanged when it is absent.
+    pub rate: Option<RateCaps>,
 }
 
 /// RAW, untrusted `caps.pay` (T-FEAT-9): `{ protocols, onion?, port, asset, chain, tiers }`.
@@ -377,10 +381,34 @@ pub struct CanonicalPay {
     pub tiers: Vec<(u64, String)>,
 }
 
-/// Canonicalized caps: fixed field order (ports, region, proto, artifacts, admits, pay), ports
-/// deduped + sorted ascending, artifacts deduped + sorted, admits deduped in anonymity order,
-/// pay normalized, only valid fields retained. The value [`canonical_caps_json`] serializes and
-/// [`has_caps`] tests. Mirrors the object `canonicalCaps` returns (`lib/directory.mjs:156`).
+/// RAW, untrusted fixed-window Grove rate policy (`caps.rate`). Signed gateways
+/// use this to bind the client's epoch calculation and per-slot payload budget
+/// to the gateway's actual enforcement settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RateCaps {
+    pub scope: String,
+    pub window: String,
+    pub epoch_seconds: i64,
+    pub previous_epochs_accepted: i64,
+    pub root_freshness_seconds: i64,
+    pub payload_bytes_per_slot: i64,
+}
+
+/// Valid canonical `caps.rate`, serialized in the field order shown here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CanonicalRate {
+    pub scope: String,
+    pub window: String,
+    pub epoch_seconds: u64,
+    pub previous_epochs_accepted: u64,
+    pub root_freshness_seconds: u64,
+    pub payload_bytes_per_slot: u64,
+}
+
+/// Canonicalized caps: fixed field order (ports, region, proto, artifacts, admits, pay, rate),
+/// ports deduped + sorted ascending, artifacts deduped + sorted, admits deduped in anonymity
+/// order, payment/rate policies normalized, only valid fields retained. The value
+/// [`canonical_caps_json`] serializes and [`has_caps`] tests.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CanonicalCaps {
     pub ports: Option<Vec<u64>>,
@@ -389,6 +417,7 @@ pub struct CanonicalCaps {
     pub artifacts: Option<Vec<String>>,
     pub admits: Option<Vec<String>>,
     pub pay: Option<CanonicalPay>,
+    pub rate: Option<CanonicalRate>,
 }
 
 /// Upper bound on advertised artifact ids (`lib/directory.mjs MAX_CAPS_ARTIFACTS`); a longer
@@ -502,6 +531,31 @@ pub fn canonical_pay(pay: &PayCaps) -> Option<CanonicalPay> {
     })
 }
 
+/// Canonicalize the signed fixed-window rate policy. Unknown policy families or
+/// nonsensical/unbounded integer values are omitted, just like the other optional
+/// capability families. Valid policies remain visible even when their values differ
+/// from a client's expected deployment policy, allowing the client to fail closed on
+/// a precise signed mismatch.
+pub fn canonical_rate(rate: &RateCaps) -> Option<CanonicalRate> {
+    if rate.scope != "grove-v4"
+        || rate.window != "fixed"
+        || !(1..=86_400).contains(&rate.epoch_seconds)
+        || !(0..=16).contains(&rate.previous_epochs_accepted)
+        || !(1..=86_400).contains(&rate.root_freshness_seconds)
+        || rate.payload_bytes_per_slot <= 0
+    {
+        return None;
+    }
+    Some(CanonicalRate {
+        scope: rate.scope.clone(),
+        window: rate.window.clone(),
+        epoch_seconds: rate.epoch_seconds as u64,
+        previous_epochs_accepted: rate.previous_epochs_accepted as u64,
+        root_freshness_seconds: rate.root_freshness_seconds as u64,
+        payload_bytes_per_slot: rate.payload_bytes_per_slot as u64,
+    })
+}
+
 /// Normalize raw caps into canonical bucketed form (`lib/directory.mjs:156 canonicalCaps`).
 /// TOTAL: never fails; unknown/invalid fields are dropped; a fully-empty result is returned
 /// when nothing valid remains (which every canonical-bytes builder treats as absent).
@@ -544,7 +598,8 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
             out.artifacts = Some(v);
         }
     }
-    // T-FEAT-9: admission policy + payment advert, appended LAST (in that order), same rule.
+    // T-FEAT-9: admission policy + payment advert. The rate policy is appended after pay so
+    // every caps byte string from before rate negotiation remains byte-identical when absent.
     if let Some(list) = &caps.admits {
         let v = canonical_admits(list);
         if !v.is_empty() {
@@ -553,6 +608,9 @@ pub fn canonical_caps(caps: &Caps) -> CanonicalCaps {
     }
     if let Some(p) = &caps.pay {
         out.pay = canonical_pay(p);
+    }
+    if let Some(rate) = &caps.rate {
+        out.rate = canonical_rate(rate);
     }
     out
 }
@@ -568,6 +626,7 @@ pub fn has_caps(caps: &Caps) -> bool {
         || c.artifacts.is_some()
         || c.admits.is_some()
         || c.pay.is_some()
+        || c.rate.is_some()
 }
 
 /// Serialize canonical caps as the exact `JSON.stringify(canonicalCaps(caps))` bytes:
@@ -668,6 +727,25 @@ fn canonical_caps_json(cc: &CanonicalCaps) -> String {
             push_json_string(&mut s, price);
         }
         s.push_str("}}");
+        first = false;
+    }
+    if let Some(rate) = &cc.rate {
+        if !first {
+            s.push(',');
+        }
+        s.push_str("\"rate\":{\"scope\":");
+        push_json_string(&mut s, &rate.scope);
+        s.push_str(",\"window\":");
+        push_json_string(&mut s, &rate.window);
+        s.push_str(",\"epochSeconds\":");
+        s.push_str(&rate.epoch_seconds.to_string());
+        s.push_str(",\"previousEpochsAccepted\":");
+        s.push_str(&rate.previous_epochs_accepted.to_string());
+        s.push_str(",\"rootFreshnessSeconds\":");
+        s.push_str(&rate.root_freshness_seconds.to_string());
+        s.push_str(",\"payloadBytesPerSlot\":");
+        s.push_str(&rate.payload_bytes_per_slot.to_string());
+        s.push('}');
     }
     s.push('}');
     s

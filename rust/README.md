@@ -127,10 +127,15 @@ from the contract, signs locally, broadcasts only the signed EIP-1559
 transaction, and waits for a successful receipt:
 
 ```sh
-leaf="$(shade-tree enroll --limit 8 --out identity.json)"
+leaf="$(shade-tree enroll --limit 1 --out identity.json)"
 chmod 600 funded-sepolia.key
-shade-tree register-member "$leaf" --limit 8 --key-file funded-sepolia.key
+shade-tree register-member "$leaf" --key-file funded-sepolia.key
 ```
+
+The public identity leaf is derived at limit 1 explicitly; `register-member`
+reads the bundled profile's matching `defaultLimit=1` when `--limit` is omitted.
+For a custom Grove, pass its tier explicitly to both commands—the enrolled and
+registered limits must match.
 
 `SHADE_TREE_REGISTER_KEY` is also supported for parity with the JavaScript CLI;
 no raw-key command-line flag is accepted. A key file must be owner-only on Unix,
@@ -140,8 +145,14 @@ and a missing key fails before the first public RPC request. Explicit
 broadcast, the command retains the locally computed transaction hash in its
 error and requires checking that hash before retrying.
 
-With no transport flag, dynamic discovery uses the current v4 Sepolia Elder and
-signer embedded from `network/sepolia/deployment.json`. Override it with
+With no transport or explicit membership source, dynamic discovery uses the
+current v4 Sepolia Elder, signer, staked contract, RPC, deployment block,
+60-second epoch, and `defaultLimit=1` embedded in
+`network/sepolia/deployment.json`. Each eligible gateway must carry the exact
+matching `caps.rate` in its onion-signed capabilities; a missing or different
+policy fails before proof construction. Explicit membership/RPC configuration
+keeps the custom-Grove defaults of a 120-second epoch and limit 8. Override
+discovery with
 `--directory <file> --signer <hex>`, `--bootnode-onion <onion> --signer <hex>`,
 or `--onion <node.onion>`; see `shade-tree --help` for all egress options.
 Directory-backed tunnels use smooth weighted round-robin for their first gateway
